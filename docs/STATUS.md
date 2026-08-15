@@ -2,8 +2,8 @@
 
 **Project:** Personal OS
 **Current phase:** Phase 0 — Foundation & hardening
-**Implementation status:** Local dev environment and production deployment both done and verified end-to-end. No backup/restore requirement (see `docs/DECISIONS.md` ADR-024). Phase 0 checklist substantively complete — see remaining open items below.
-**Next phase allowed:** No
+**Implementation status:** Phase 0 complete. Local dev environment and production deployment both done and verified end-to-end, including a full OS reboot test. No backup/restore requirement (see `docs/DECISIONS.md` ADR-024).
+**Next phase allowed:** No — Phase 0 is complete, but Phase 1 requires the user's explicit separate approval before starting.
 **Canonical architecture:** `docs/ARCHITECTURE.md`
 
 ## Current objective
@@ -58,7 +58,7 @@ Target: `personal-os` — Ubuntu 26.04 LTS, HP EliteDesk 800 G5, Intel i5-9500T,
 | 9 | API/worker reach Postgres only over the Docker network | `getent hosts postgres` resolves inside the API container (172.18.0.2); `curl 127.0.0.1:5432` from the host fails to connect (nothing published) |
 | 10 | Tailscale Serve HTTPS reachable from the Mac | `curl https://personal-os.tail62a68f.ts.net/health` from the Mac → HTTP 200, `db: "connected"` |
 | 11 | No unintended public exposure | `ss -tln` on the server: API only on `127.0.0.1:3000`; Tailscale's HTTPS listener bound to the tailscale interface IP specifically (`100.117.78.19:443` / the `fd7a:...` IPv6), not `0.0.0.0` — unreachable from LAN or the public internet, tailnet peers only |
-| 12 | Restart behavior correct | `docker compose stop`/`start`/`restart` on api/worker all recover cleanly, confirmed via `/health` after each; Docker's systemd unit confirmed `enabled`+`active` (survives OS boot). **A full `sudo reboot` test was not run** — it needs the user's sudo password, which this session can't supply; strong indirect evidence (restart policy + systemd unit both confirmed) but not a substitute for actually doing it |
+| 12 | Restart behavior correct | `docker compose stop`/`start`/`restart` on api/worker all recover cleanly, confirmed via `/health` after each. **Full OS reboot test actually performed and verified** (2026-08-15): user ran `sudo reboot` (needs their password, outside this session's reach); post-reboot, `uptime -s` confirmed a fresh boot (`2026-08-15 17:43:42`, ~8 minutes prior); `docker compose ps` showed all three containers `Up`/`Up (healthy)` with **no manual intervention**; local `/health` on the server returned `db: "connected"` with a live worker heartbeat; **`https://personal-os.tail62a68f.ts.net/health` from the Mac over Tailscale returned HTTP 200 with `db: "connected"` and a fresh, non-stale heartbeat** — the full stack, including Tailscale Serve, survives an unattended reboot |
 | 13 | Prod config stays separate from dev | `docker-compose.dev.yml` was never referenced in any server-side command this session |
 | 14 | Worker/API lifecycle independence | stopped `api` — `worker` and `postgres` stayed `Up`; confirmed by design too (compose file has no `depends_on` between api and worker) |
 | 15 | lint/typecheck/tests still pass | `pnpm build && pnpm typecheck && pnpm lint && pnpm format:check && pnpm --filter @personal-os/core test` — all clean (Mac side, re-run post-deployment) |
@@ -79,18 +79,21 @@ None. Production deployment is complete and verified. Both environments are up: 
 ## Remaining warnings / technical debt
 
 - **Runtime images aren't pruned of devDependencies.** `apps/api`/`apps/worker`'s Dockerfiles copy the entire built workspace into the runtime stage rather than a slim production-only `node_modules` — a deliberate Phase 0 "correctness over image size" tradeoff, documented in the Dockerfiles themselves. Worth revisiting before this matters (larger attack surface, slower deploys as the repo grows).
-- **Full OS reboot survival is inferred, not directly tested** (see checklist #12) — genuinely worth doing once, at the user's convenience, since it needs their sudo password.
 - **HTTPS Certificates / Serve consent** was a one-time per-tailnet approval, now done — noting it here since it wasn't obvious in advance from `tailscale status` alone (`CertDomains` was empty beforehand) and the CLI's own consent-URL flow is what actually resolved it, not a pre-configured admin console setting.
 - **`docs/PHASE-0-CHECKLIST.md` section E (Tailscale/network foundation)** items are now substantively done (Tailscale installed+authenticated, MagicDNS confirmed working, Serve configured, Postgres inaccessible as a public service) but the checklist file's checkboxes themselves weren't individually ticked in this pass — worth a follow-up pass to mark them, or treat this STATUS.md entry as the record of evidence.
 - No SOPS/age key has actually been generated — remains available but unused, since no secret currently needs to live in the repo.
 
 ## Last verification
 
-Run and passing (2026-08-15) — see the Production deployment table above for the full list. Mac-side: `pnpm install`, `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm --filter @personal-os/core test`. gitleaks pre-commit hook confirmed still blocking a staged fake secret and clean on every real commit made this session.
+Run and passing (2026-08-15) — see the Production deployment table above for the full list, including the full OS reboot test (#12) and its post-reboot HTTPS `/health` check from the Mac. Mac-side: `pnpm install`, `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm --filter @personal-os/core test`. gitleaks pre-commit hook confirmed still blocking a staged fake secret and clean on every real commit made this session.
+
+## Phase 0: complete
+
+All exit criteria in `docs/PHASE-0-CHECKLIST.md` are met: the foundation is reproducible (Mac dev + production both verified independently), security boundaries are in place (least-privilege DB roles verified to reject DDL, Postgres unpublished everywhere, gitleaks active, API scoped to localhost/Tailscale-only), and this file documents the evidence. There is no backup or restore requirement (ADR-024). The one remaining housekeeping item — individually ticking `docs/PHASE-0-CHECKLIST.md`'s checkboxes, left untouched throughout this project in favor of this file as the evidence record — does not block Phase 0 completion.
 
 ## Next action
 
-Phase 0's core infrastructure is in place on both environments. Remaining before Phase 0 can be called fully closed: (1) the user optionally running a full `sudo reboot` test on `personal-os` for complete confidence beyond the indirect evidence already gathered, and (2) a housekeeping pass to tick the individual checkboxes in `docs/PHASE-0-CHECKLIST.md` section E to match the evidence already recorded here. Neither blocks meaningful further work. **Do not begin Phase 1 without explicit user approval.**
+**Phase 0 is done. Do not begin Phase 1 without explicit user approval** — this file being updated does not itself constitute that approval.
 
 ## Handoff rule
 
