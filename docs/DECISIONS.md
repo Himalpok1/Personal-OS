@@ -1,0 +1,41 @@
+# Architecture Decision Log
+
+This file is a compact decision log for agent handoff. The detailed rationale remains in `ARCHITECTURE.md`.
+
+Do not change a **Locked** decision without explicit user approval.
+
+| ID | Decision | Status |
+|---|---|---|
+| ADR-001 | Standalone rebuild rather than extending Jarvis | Locked |
+| ADR-002 | Expo + Expo Router as one universal iOS/Android/web client | Locked |
+| ADR-003 | Dedicated Next.js dashboard deferred | Locked for MVP |
+| ADR-004 | TypeScript backend | Locked |
+| ADR-005 | Fastify for HTTP API | Locked |
+| ADR-006 | Separate `apps/worker` process for background work | Locked |
+| ADR-007 | pg-boss as Postgres-backed queue; no Redis for MVP | Locked |
+| ADR-008 | PostgreSQL + Drizzle | Locked |
+| ADR-009 | Shared Zod schemas in monorepo | Locked |
+| ADR-010 | App owns tasks/reminders/events as system of record | Locked |
+| ADR-011 | Event data model exists early; calendar UI/sync later | Locked |
+| ADR-012 | RFC 5545 RRULE for recurrence | Locked |
+| ADR-013 | Due-date recurrence pre-expanded; completion recurrence lazy | Locked |
+| ADR-014 | In-app push-to-talk + Siri/Google voice entry | Locked |
+| ADR-015 | Cloud STT first, local faster-whisper later | Locked |
+| ADR-016 | Confidence-based auto-file; confirm when uncertain | Locked |
+| ADR-017 | Offline outbox queues writes; no full offline-read sync initially | Locked |
+| ADR-018 | Tailscale-only network access for MVP | Locked |
+| ADR-019 | Primary reminder device explicitly chosen by user | Locked |
+| ADR-020 | Local notifications for scheduled reminders | Locked |
+| ADR-021 | Raw capture persisted before AI parsing | Locked |
+| ADR-022 | Phase 0 requires encrypted backups and a verified manual restore | Locked |
+| ADR-023 | Python only as later sidecars for ML/data-heavy workloads | Locked |
+
+## Open later-phase decisions
+
+These are intentionally deferred:
+
+- Email account scope and whether the app may act on mail.
+- Whether health data is passive or proactively used by the AI layer.
+- Finance source of truth: Copilot export, Plaid/SimpleFIN, Actual Budget, or another ledger.
+- Whether Raspberry Pi wake-word capture remains useful.
+- Whether a dedicated Next.js dashboard becomes necessary.
