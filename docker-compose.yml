@@ -23,13 +23,17 @@ services:
       timeout: 5s
       retries: 10
 
+  # api/worker build their own DATABASE_URL from the same POSTGRES_APP_PASSWORD
+  # rather than reusing the host-facing DATABASE_URL from .env: inside the
+  # compose network Postgres is reachable at the service name `postgres`, not
+  # at the host's 127.0.0.1 that .env's DATABASE_URL points host-side tools at.
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
     environment:
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env}
+      DATABASE_URL: postgresql://posops_app:${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set in .env}@postgres:5432/personalos
       PORT: ${PORT:-3000}
     depends_on:
       postgres:
@@ -43,7 +47,7 @@ services:
       dockerfile: apps/worker/Dockerfile
     restart: unless-stopped
     environment:
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env}
+      DATABASE_URL: postgresql://posops_app:${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set in .env}@postgres:5432/personalos
     depends_on:
       postgres:
         condition: service_healthy
