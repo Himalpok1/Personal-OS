@@ -1,0 +1,13 @@
+# Local-dev-only overlay. Adds localhost-only port bindings for host-side
+# tooling (psql, drizzle-kit, a browser hitting /health). Never used on the
+# production i5 compose invocation (`docker compose -f docker-compose.yml up`).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  api:
+    ports:
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"

@@ -1,0 +1,11 @@
+pnpm-lock.yaml
+docs/**
+AGENTS.md
+CLAUDE.md
+README.md
+**/dist/**
+**/.turbo/**
+**/node_modules/**
+**/coverage/**
+apps/mobile/**
+packages/db/drizzle/**
