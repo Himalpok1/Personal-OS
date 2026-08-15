@@ -1,0 +1,31 @@
+# Production-only: binds the API to 127.0.0.1 so the host's tailscale serve
+# process (outside the Docker network) has a stable target to proxy to.
+# Postgres remains published nowhere, in every scenario — this file never
+# touches it. Not the same file as docker-compose.dev.yml (which also
+# publishes Postgres for Mac-side host tooling) — never use that file here.
+#
+# restart: unless-stopped is already set in the base docker-compose.yml for
+# all three services and is inherited here — repeated explicitly below so
+# this file is self-documenting for an always-on production host, not
+# dependent on cross-referencing the base file to know the restart policy.
+#
+# Docker's local logging driver (built-in rotation/compression, unlike the
+# unbounded-by-default json-file driver) so container logs can't eventually
+# fill the NVMe on a box that's meant to run indefinitely.
+x-logging: &default-logging
+  driver: local
+
+services:
+  postgres:
+    restart: unless-stopped
+    logging: *default-logging
+
+  api:
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  worker:
+    restart: unless-stopped
+    logging: *default-logging
