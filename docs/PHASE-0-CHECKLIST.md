@@ -84,31 +84,7 @@ If target server access is not yet available, mark these as blocked rather than 
 - [ ] Secrets are injected at runtime, not baked into images.
 - [ ] gitleaks check passes.
 
-## G. Backups
-
-- [ ] Nightly `pg_dump --format=custom` backup job designed/configured.
-- [ ] Backup encrypted using age before persistent storage.
-- [ ] Retention: 7 daily / 4 weekly / 6 monthly.
-- [ ] NAS destination configured.
-- [ ] Offsite destination configured (architecture proposes Backblaze B2 via rclone).
-- [ ] Encryption identity key stored separately from backup destinations.
-- [ ] Monthly automated restore-verification job configured.
-- [ ] Restore verification alerts on failure.
-
-## H. Mandatory manual restore gate
-
-This is blocking.
-
-- [ ] Produce a real encrypted backup.
-- [ ] Restore that backup into a throwaway PostgreSQL/container instance.
-- [ ] Verify the restored database is readable.
-- [ ] Run sanity assertions such as row-count/latest-timestamp checks when meaningful.
-- [ ] Record date, commands/procedure, and result in `docs/STATUS.md`.
-- [ ] Destroy the throwaway instance after verification.
-
-**Phase 1 may not begin until this section passes.**
-
-## I. Phase 0 verification
+## G. Phase 0 verification
 
 Before declaring Phase 0 complete:
 
@@ -122,12 +98,10 @@ Before declaring Phase 0 complete:
 - [ ] Postgres connectivity works
 - [ ] migration path works
 - [ ] no secrets are committed
-- [ ] backup job works
-- [ ] manual restore passed
 - [ ] `docs/STATUS.md` updated with exact results
 
 ## Exit criteria
 
-Phase 0 is complete only when the foundation is reproducible, security boundaries are in place, backup/restore has been proven, and the status file documents the evidence.
+Phase 0 is complete only when the foundation is reproducible, security boundaries are in place, and the status file documents the evidence. There is no backup or restore requirement — see `docs/DECISIONS.md` ADR-024.
 
 Then and only then may Phase 1 begin.

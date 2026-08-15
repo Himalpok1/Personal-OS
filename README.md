@@ -8,7 +8,7 @@ The canonical design is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 The repository is at **pre-implementation / Phase 0 start**.
 
-No later phase should begin until Phase 0 is complete, including a real backup restore test.
+No later phase should begin until Phase 0 is complete.
 
 See [`docs/STATUS.md`](docs/STATUS.md).
 
@@ -57,7 +57,7 @@ This app will eventually hold sensitive personal data.
 - Do not expose the application publicly for the MVP.
 - Tailscale is the network perimeter.
 - The app is the system of record.
-- Backups are not considered complete until restore is tested.
+- No backup system in the current architecture — persistent Docker storage on the production server is not a backup.
 
 ## Starting the project
 

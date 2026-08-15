@@ -18,7 +18,7 @@ Single-user, self-hosted life dashboard. Notes, reminders, tasks, calendar, proj
 | Job queue | pg-boss (Postgres-backed, no Redis) |
 | Python services | Later, as sidecars for ML / data-heavy work |
 | Code layout | One monorepo, shared Zod schemas |
-| Server host | Intel i5 micro PC (not the Pi) |
+| Server host | Intel i5 micro PC (not the Pi), native Ubuntu Desktop (hostname `personal-os`) |
 | System of record | This app owns everything |
 | Events/calendar | Data model in Phase 1, UI and sync in Phase 4 |
 | Recurrence | Schema from day one, UI later |
@@ -86,7 +86,6 @@ The API handles HTTP and nothing else. Anything slow, scheduled, retried, or ext
 | Dispatch push notifications | Enqueued + cron sweep |
 | Email polling and digests | Cron (Phase 7) |
 | Uptime / service monitoring | Cron (Phase 7) |
-| Backup restore verification alerts | Cron (Phase 0) |
 | Embedding generation | Enqueued on write (Phase 8) |
 
 **Rules for the split:**
@@ -395,19 +394,10 @@ If a Shortcut fires while the tunnel is genuinely down, it fails and you retry. 
 
 ---
 
-## Backups & secrets (Phase 0, non-negotiable)
+## Secrets
 
-**Automated encrypted backups**
-- Nightly `pg_dump --format=custom` piped through `age` encryption. Never write plaintext dumps to disk.
-- 7 daily, 4 weekly, 6 monthly retention.
-- Two destinations: the NAS and one offsite (Backblaze B2 via rclone). One copy on the same box as the database is not a backup.
-- The age identity key lives **outside** the backup destinations. A key stored with its ciphertext protects nothing.
+Personal OS has no backup system in the current architecture. PostgreSQL uses persistent Docker volume storage on the production server — this is durability against container restarts, not a backup. Backup infrastructure may be added in a future phase only if explicitly requested.
 
-**Tested restore**
-- A monthly cron job restores the newest backup into a throwaway container, runs row-count and latest-timestamp assertions against expected ranges, and alerts on failure.
-- Do one manual full restore before Phase 1. A backup you have never restored is a hypothesis, not a backup.
-
-**Secrets**
 - `.env` files are gitignored; `.env.example` with dummy values is committed.
 - Config that must live in the repo goes through SOPS + age.
 - A `gitleaks` pre-commit hook. Assume you will paste an API key into a config file at 1am eventually.
@@ -431,7 +421,7 @@ If a Shortcut fires while the tunnel is genuinely down, it fails and you retry. 
 ## Phase plan
 
 **Phase 0 — Foundation & hardening (1–2 weekends)**
-Turborepo + pnpm monorepo. Docker Compose on the i5: Postgres (unpublished), Fastify API, **worker container with pg-boss and its heartbeat/staleness alert**. Tailscale Serve with HTTPS, MagicDNS, VPN On Demand. Drizzle migrations in `packages/db`. Shared `schema` package. **Encrypted nightly backups to two destinations, one manual verified restore, SOPS for secrets, gitleaks hook, least-privilege DB role.** Do not proceed until the restore has actually been performed.
+Turborepo + pnpm monorepo. Docker Compose on the i5: Postgres (unpublished), Fastify API, **worker container with pg-boss and its heartbeat/staleness alert**. Tailscale Serve with HTTPS, MagicDNS, VPN On Demand. Drizzle migrations in `packages/db`. Shared `schema` package. SOPS available for secrets if needed, gitleaks hook, least-privilege DB role. No backup system (see "Secrets" above).
 
 **Phase 1 — Capture core, headless (1–2 weekends)**
 `/capture` and the inbox table on the API side. On the worker: LLM parser with tool-calling, confidence scoring, the nightly due-date window expansion, and lazy generation on completion. Tasks, notes, events, occurrences. Drive it entirely with curl against fifty real captures you type yourself. No UI. Get the parser good before you make it pretty.

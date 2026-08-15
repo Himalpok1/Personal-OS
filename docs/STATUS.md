@@ -2,7 +2,7 @@
 
 **Project:** Personal OS
 **Current phase:** Phase 0 — Foundation & hardening
-**Implementation status:** Local + Docker-dependent scaffolding done and verified. Blocked on user-owned infra (Tailscale/i5/NAS/Backblaze) and the mandatory backup/restore gate.
+**Implementation status:** Local + Docker-dependent scaffolding done and verified. i5 production server access now provided (native Ubuntu, hostname `personal-os`) — production deployment in progress. No backup/restore requirement (see `docs/DECISIONS.md` ADR-024).
 **Next phase allowed:** No
 **Canonical architecture:** `docs/ARCHITECTURE.md`
 
@@ -28,30 +28,24 @@ Create the repository and infrastructure foundation exactly as described in the 
 - [x] ESLint (flat config, type-aware, `no-floating-promises`/`no-misused-promises` enforced) + Prettier configured. Verified clean across the whole workspace.
 - [x] Docker Compose **authored and verified**: `docker-compose.yml` (production shape, no published ports) + `docker-compose.dev.yml` (localhost-only overlay for Postgres and the API). Fixed a real bug found during verification: `apps/api`/`apps/worker` were reusing the host-facing `DATABASE_URL` (pointing at `127.0.0.1`), which doesn't resolve from inside their own containers — now they build their own `DATABASE_URL` pointing at the `postgres` service name. `apps/api/Dockerfile` and `apps/worker/Dockerfile` both build and run successfully as containers on the compose network, confirmed against the live database (`/health` → `db: "connected"`, worker heartbeat updating).
 - [x] PostgreSQL development container running and connected to (`postgres:17-alpine`, local dev, healthy).
-- [ ] Tailscale server configuration completed.
-- [ ] encrypted backup automation configured.
-- [ ] offsite backup destination configured.
-- [ ] manual restore test successfully performed and documented.
+- [ ] Tailscale Serve configured on the production server (`personal-os`).
+- [ ] Production Docker deployment verified end-to-end.
 - [ ] Phase 0 verification complete.
 
 ## Blockers / user-provided items
 
-Docker Desktop is now installed and running — no longer a blocker.
+Docker Desktop (Mac) is installed and running — no longer a blocker. Intel i5 production server access is now provided: native Ubuntu 26.04 LTS, hostname `personal-os`, reachable via `ssh personal-os` (SSH key auth already configured), connected to the existing Tailscale tailnet. No backup system in the current architecture (see `docs/DECISIONS.md` ADR-024) — NAS/Backblaze are no longer relevant.
 
-Not yet collected — needed for the remainder of Phase 0:
+Not yet collected:
 
-- final Intel i5 server access details
-- NAS backup destination
-- Backblaze B2 account/bucket credentials if used
-- Tailscale account/tailnet access
-- age/SOPS key handling preference
+- age/SOPS key handling preference, if/when repo-stored encrypted config is actually needed (not currently blocking — no repo-committed secrets require it yet)
 - Apple Developer account is not required until native iOS work, but should be planned for later
 
 Agents must not invent these values.
 
 ## Current work
 
-None. Everything achievable without user-owned infrastructure access is done and verified. Local Postgres (`personalosdashboard-postgres-1`) is left running for continued local dev; `api`/`worker` containers were stopped/removed after verification (run via `docker compose -f docker-compose.yml -f docker-compose.dev.yml up` to bring them back for actual development).
+In progress: deploying the already-verified Docker Compose stack to the production server (`personal-os`) — Docker Engine install, repo transfer, migrations, Tailscale Serve. Local Mac dev environment is untouched and remains healthy; local Postgres (`personalosdashboard-postgres-1`) is left running for continued local dev.
 
 ## Last verification
 
@@ -69,11 +63,11 @@ Run and passing (2026-08-15):
 - `apps/api`/`apps/worker` run as **containers** on the compose network: same successful `/health` and heartbeat result, confirming the `DATABASE_URL` service-name fix
 - gitleaks pre-commit hook — blocks a staged fake secret; clean on real commits
 
-Not yet run — genuinely requires user-provided infra, not just more time: Tailscale Serve setup on the i5, encrypted backup job, offsite (Backblaze) destination, and the mandatory manual restore test.
+Not yet run: full production deployment verification on `personal-os` (Docker install, migrations, Tailscale Serve, end-to-end health/heartbeat checks) — in progress, see Current work.
 
 ## Next action
 
-Stop and wait for the user to provide: Intel i5 server access, NAS backup destination, Backblaze B2 credentials (if used), Tailscale account/tailnet access, and an age/SOPS key handling preference. Once provided, proceed with Tailscale Serve configuration, encrypted nightly backup automation, the offsite destination, and — the blocking gate before Phase 1 — a real manual backup + restore test recorded here with date, procedure, and result.
+Complete the production deployment to `personal-os`: install Docker, transfer the repo, generate a fresh production `.env`, run migrations as `posops_migrator`, bring up the full stack, configure Tailscale Serve, and run the full verification checklist. Record actual results here when done.
 
 ## Handoff rule
 

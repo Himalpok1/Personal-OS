@@ -118,6 +118,6 @@ The project is phase-gated.
 
 **Current starting scope: Phase 0 only.**
 
-Do not start Phase 1 implementation until every blocking Phase 0 item is complete and the manual backup restore has actually been performed and recorded in `docs/STATUS.md`.
+Do not start Phase 1 implementation until every blocking Phase 0 item is complete.
 
-If a Phase 0 task requires credentials, hardware access, NAS details, Backblaze credentials, Tailscale access, or another user-only action, stop at the point where user input is needed and ask for it clearly.
+If a Phase 0 task requires credentials, hardware access, Tailscale access, or another user-only action, stop at the point where user input is needed and ask for it clearly.

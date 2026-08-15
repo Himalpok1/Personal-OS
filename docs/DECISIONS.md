@@ -27,8 +27,10 @@ Do not change a **Locked** decision without explicit user approval.
 | ADR-019 | Primary reminder device explicitly chosen by user | Locked |
 | ADR-020 | Local notifications for scheduled reminders | Locked |
 | ADR-021 | Raw capture persisted before AI parsing | Locked |
-| ADR-022 | Phase 0 requires encrypted backups and a verified manual restore | Locked |
+| ADR-022 | Phase 0 requires encrypted backups and a verified manual restore | Superseded by ADR-024 |
 | ADR-023 | Python only as later sidecars for ML/data-heavy workloads | Locked |
+| ADR-024 | No backup/restore system in current architecture; PostgreSQL persistent Docker storage is not a backup (user-approved 2026-08-15) | Locked |
+| ADR-025 | Production host is native Ubuntu Desktop (hostname `personal-os`), Tailscale installed directly on the OS | Locked |
 
 ## Open later-phase decisions
 
