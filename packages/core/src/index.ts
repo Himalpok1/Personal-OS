@@ -10,3 +10,4 @@ export * from "./recurrence/due-date-window.js";
 export * from "./recurrence/lazy-next-occurrence.js";
 export * from "./parse-confidence.js";
 export * from "./task-lifecycle.js";
+export * from "./device-auth.js";

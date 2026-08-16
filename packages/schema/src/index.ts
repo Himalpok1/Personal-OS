@@ -8,3 +8,4 @@ export * from "./tasks.js";
 export * from "./notes.js";
 export * from "./projects.js";
 export * from "./occurrences.js";
+export * from "./devices.js";

@@ -15,7 +15,11 @@ export const InboxEntityTypeSchema = z.enum(["note", "task", "event"]);
 export const InboxItemSchema = z.object({
   id: z.string().uuid(),
   client_uuid: z.string().uuid().nullable(),
-  raw_text: z.string(),
+  // Nullable: a PTT capture (source: "ptt") has no transcript yet until
+  // ptt.transcribe fills it in. The mobile Inbox screen renders this
+  // three-ways: transcript present -> show it; null + status "pending" ->
+  // "Transcribing..."; null + status "failed" -> "Transcription failed".
+  raw_text: z.string().nullable(),
   source: CaptureSourceSchema,
   captured_at: z.string().datetime({ offset: true }),
   timezone: z.string(),

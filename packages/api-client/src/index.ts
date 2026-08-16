@@ -1,6 +1,15 @@
 import { HealthCheckResponseSchema, type HealthCheckResponse } from "@personal-os/schema";
 import { capture } from "./capture.js";
 import { fetchJson } from "./client.js";
+import {
+  getDevice,
+  listDevices,
+  registerDevice,
+  revokeDevice,
+  setPrimaryDevice,
+  updateDevice,
+  updateDevicePushToken,
+} from "./devices.js";
 import { confirmInboxItem, getInboxItem, listInbox } from "./inbox.js";
 import { archiveNote, createNote, getNote, listNotes, updateNote } from "./notes.js";
 import { completeOccurrence, listOccurrences, skipOccurrence } from "./occurrences.js";
@@ -23,6 +32,7 @@ import {
 } from "./tasks.js";
 
 export { ApiClientError, type ZodLikeSchema } from "./client.js";
+export type { DeviceListParams } from "./devices.js";
 export type { InboxListParams } from "./inbox.js";
 export type { NoteListParams } from "./notes.js";
 export type { ProjectListParams } from "./projects.js";
@@ -67,6 +77,18 @@ export function createApiClient(baseUrl: string) {
     listOccurrences: listOccurrences.bind(null, baseUrl),
     completeOccurrence: completeOccurrence.bind(null, baseUrl),
     skipOccurrence: skipOccurrence.bind(null, baseUrl),
+
+    // Unlike every other method above, these take a device bearer token as
+    // their second argument (after baseUrl) -- registerDevice is the one
+    // exception, since it's the unauthenticated bootstrap call that
+    // produces the token in the first place.
+    registerDevice: registerDevice.bind(null, baseUrl),
+    listDevices: listDevices.bind(null, baseUrl),
+    getDevice: getDevice.bind(null, baseUrl),
+    updateDevice: updateDevice.bind(null, baseUrl),
+    setPrimaryDevice: setPrimaryDevice.bind(null, baseUrl),
+    updateDevicePushToken: updateDevicePushToken.bind(null, baseUrl),
+    revokeDevice: revokeDevice.bind(null, baseUrl),
   };
 }
 

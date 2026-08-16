@@ -15,7 +15,13 @@ function InboxRow({ item }: { item: InboxItem }) {
 
   return (
     <View className="border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
-      <Text className="text-base text-black dark:text-white">{item.raw_text}</Text>
+      <Text className="text-base text-black dark:text-white">
+        {item.raw_text !== null
+          ? item.raw_text
+          : item.status === "failed"
+            ? "Transcription failed"
+            : "Transcribing…"}
+      </Text>
       <View className="mt-1 flex-row items-center justify-between">
         <Text className="text-xs text-neutral-500">
           {STATUS_LABEL[item.status]}

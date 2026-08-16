@@ -9,7 +9,13 @@ export const inboxItems = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     clientUuid: uuid("client_uuid").unique(),
-    rawText: text("raw_text").notNull(),
+    // Nullable: a PTT capture writes this row (source: "ptt") before a
+    // transcript exists -- ptt.transcribe sets raw_text once Groq returns
+    // one, matching the project's write-before-processing capture
+    // philosophy. Every other capture path (text-only) still sets it at
+    // insert time. capture.parse must never run against a null raw_text
+    // row -- see the invariant check in apps/worker/src/jobs/capture-parse.ts.
+    rawText: text("raw_text"),
     source: text("source").notNull(),
     audioPath: text("audio_path"),
     capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),

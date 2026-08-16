@@ -1,4 +1,13 @@
-import { inboxItems, notes, occurrences, projects, tasks } from "@personal-os/db";
+import {
+  devicePairingCodes,
+  devices,
+  inboxItems,
+  notes,
+  notificationDispatchLog,
+  occurrences,
+  projects,
+  tasks,
+} from "@personal-os/db";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 
@@ -21,4 +30,7 @@ export async function truncateTestTables(app: FastifyInstance): Promise<void> {
   await app.db.delete(notes);
   await app.db.delete(projects);
   await app.db.delete(inboxItems);
+  await app.db.delete(devices);
+  await app.db.delete(devicePairingCodes);
+  await app.db.delete(notificationDispatchLog);
 }

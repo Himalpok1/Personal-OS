@@ -9,6 +9,7 @@ import { registerBoss } from "./plugins/boss.js";
 import { registerDb } from "./plugins/db.js";
 import aiConfigRoutes from "./routes/ai-config.js";
 import captureRoutes from "./routes/capture.js";
+import devicesRoutes from "./routes/devices.js";
 import inboxRoutes from "./routes/inbox.js";
 import notesRoutes from "./routes/notes.js";
 import occurrencesRoutes from "./routes/occurrences.js";
@@ -20,9 +21,10 @@ const STALE_AFTER_MS = 5 * 60_000;
 export async function buildServer() {
   const app = Fastify({
     logger: {
-      // AI provider routes accept API keys in the request body -- never
-      // let Fastify's default request logging echo one back out.
-      redact: { paths: ["req.body.api_key"], censor: "[redacted]" },
+      // AI provider routes accept API keys in the request body, and
+      // devices routes accept a bearer token in the Authorization header --
+      // never let Fastify's default request logging echo either back out.
+      redact: { paths: ["req.body.api_key", "req.headers.authorization"], censor: "[redacted]" },
     },
   });
 
@@ -92,6 +94,7 @@ export async function buildServer() {
   await app.register(notesRoutes);
   await app.register(projectsRoutes);
   await app.register(aiConfigRoutes);
+  await app.register(devicesRoutes);
 
   return app;
 }

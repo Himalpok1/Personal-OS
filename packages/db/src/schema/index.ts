@@ -10,3 +10,6 @@ export * from "./notes.js";
 export * from "./tasks.js";
 export * from "./events.js";
 export * from "./occurrences.js";
+export * from "./devices.js";
+export * from "./device-pairing-codes.js";
+export * from "./notification-dispatch-log.js";

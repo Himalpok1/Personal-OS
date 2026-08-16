@@ -141,6 +141,17 @@ async function commitAndUpdate(
 }
 
 async function runAutoParse(db: Db, row: typeof inboxItems.$inferSelect): Promise<void> {
+  // Invariant, not a normal error path: a PTT capture's raw_text is null
+  // until ptt.transcribe fills it in, and that job only ever enqueues
+  // capture.parse *after* setting raw_text (see
+  // apps/worker/src/jobs/ptt-transcribe.ts). A null here means that
+  // invariant was violated elsewhere -- fail loudly rather than silently
+  // passing null into the parser.
+  if (row.rawText === null) {
+    throw new Error(`capture.parse: inbox_items ${row.id} has no raw_text yet`);
+  }
+  const rawText = row.rawText;
+
   let resolved;
   try {
     resolved = await resolveModelForTask(db, TASK_NAME, env.CREDENTIALS_ENCRYPTION_KEY);
@@ -158,12 +169,8 @@ async function runAutoParse(db: Db, row: typeof inboxItems.$inferSelect): Promis
   }
 
   const [sampleA, sampleB] = await Promise.all([
-    callWithFallback(resolved, (model) =>
-      callParser(model, row.rawText, row.capturedAt, row.timezone),
-    ),
-    callWithFallback(resolved, (model) =>
-      callParser(model, row.rawText, row.capturedAt, row.timezone),
-    ),
+    callWithFallback(resolved, (model) => callParser(model, rawText, row.capturedAt, row.timezone)),
+    callWithFallback(resolved, (model) => callParser(model, rawText, row.capturedAt, row.timezone)),
   ]);
 
   if (sampleA.tool === "unclear") {
@@ -182,7 +189,7 @@ async function runAutoParse(db: Db, row: typeof inboxItems.$inferSelect): Promis
 
   const signals: ConfidenceSignals = {
     typeAmbiguous: sampleA.tool !== sampleB.tool,
-    unresolvedDatePhrase: textHasRelativeDatePhrase(row.rawText) && !hasResolvedDate(sampleA),
+    unresolvedDatePhrase: textHasRelativeDatePhrase(rawText) && !hasResolvedDate(sampleA),
     recurrenceInferred: sampleA.tool === "create_task" && Boolean(sampleA.args.rrule),
     degenerateTitle: isDegenerateTitle(sampleA),
     unknownProjectReference,
