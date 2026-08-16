@@ -21,3 +21,4 @@ minimumReleaseAgeExclude:
   - expo-router@57.0.13
   - expo-server@57.0.3
   - expo@57.0.13
+  - "@ai-sdk/xai@4.0.40"

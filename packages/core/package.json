@@ -13,6 +13,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
+  "dependencies": {
+    "date-fns": "^4.4.0",
+    "date-fns-tz": "^3.2.0",
+    "rrule": "^2.8.1"
+  },
   "devDependencies": {
     "vitest": "^4.1.10"
   }

@@ -31,6 +31,8 @@ Do not change a **Locked** decision without explicit user approval.
 | ADR-023 | Python only as later sidecars for ML/data-heavy workloads | Locked |
 | ADR-024 | No backup/restore system in current architecture; PostgreSQL persistent Docker storage is not a backup (user-approved 2026-08-15) | Locked |
 | ADR-025 | Production host is native Ubuntu Desktop (hostname `personal-os`), Tailscale installed directly on the OS | Locked |
+| ADR-026 | Provider-agnostic AI layer: Vercel AI SDK abstraction (`packages/ai-providers`) over user-supplied, DB-stored, encrypted-at-rest API keys — no LLM provider hardcoded, no per-vendor env vars, no silent fallback to an unconfigured provider (user-approved 2026-08-15) | Locked |
+| ADR-027 | `notes` table added to the Phase 1 data model — missing from earlier revisions of `ARCHITECTURE.md` despite `create_note` being one of the four parser tools since Phase 1 (user-approved 2026-08-15) | Locked |
 
 ## Open later-phase decisions
 

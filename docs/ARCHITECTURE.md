@@ -210,6 +210,20 @@ events (
 )
 ```
 
+### Notes
+
+Missing from earlier revisions of this document despite `create_note` being one of the four parser tools and `inbox_items.entity_type` allowing `'note'` since Phase 1 — added 2026-08-15 as the obvious missing piece, not a new decision.
+
+```sql
+notes (
+  id              uuid pk,
+  title           text not null,
+  body            text not null,
+  project_id      uuid,
+  created_at, updated_at
+)
+```
+
 ### Occurrences
 
 ```sql

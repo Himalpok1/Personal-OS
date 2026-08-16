@@ -14,6 +14,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@personal-os/core": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {

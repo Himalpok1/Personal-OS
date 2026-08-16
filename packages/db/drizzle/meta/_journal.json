@@ -8,6 +8,20 @@
       "when": 1786774947491,
       "tag": "0000_strong_nuke",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786836017404,
+      "tag": "0001_foamy_stick",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786837154738,
+      "tag": "0002_dapper_proudstar",
+      "breakpoints": true
     }
   ]
 }
