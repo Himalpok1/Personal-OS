@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isValidTimezone, resolveWallClockToInstant, toWallClockComponents } from "./timezone.js";
+import {
+  isValidTimezone,
+  parseFlexibleDatetime,
+  resolveWallClockToInstant,
+  toWallClockComponents,
+} from "./timezone.js";
 
 describe("isValidTimezone", () => {
   it("accepts a real IANA timezone", () => {
@@ -48,5 +53,28 @@ describe("resolveWallClockToInstant", () => {
     );
     const components = toWallClockComponents(instant, "America/Chicago");
     expect(components).toEqual({ year: 2026, month: 5, day: 20, hour: 14, minute: 45, second: 0 });
+  });
+});
+
+describe("parseFlexibleDatetime", () => {
+  it("parses an offset-bearing datetime directly, ignoring the fallback timezone", () => {
+    const result = parseFlexibleDatetime("2026-08-17T15:00:00-05:00", "Asia/Tokyo");
+    expect(result.toISOString()).toBe("2026-08-17T20:00:00.000Z");
+  });
+
+  it("parses a UTC 'Z' datetime directly", () => {
+    const result = parseFlexibleDatetime("2026-08-17T20:00:00Z", "America/Chicago");
+    expect(result.toISOString()).toBe("2026-08-17T20:00:00.000Z");
+  });
+
+  it("falls back to the given timezone for an offset-less datetime", () => {
+    // What an LLM tool call commonly returns for "tomorrow at 3pm" without
+    // being told to include an offset.
+    const result = parseFlexibleDatetime("2026-08-17T15:00:00", "America/Chicago");
+    expect(result.toISOString()).toBe("2026-08-17T20:00:00.000Z");
+  });
+
+  it("rejects a malformed datetime", () => {
+    expect(() => parseFlexibleDatetime("not-a-date", "America/Chicago")).toThrow();
   });
 });

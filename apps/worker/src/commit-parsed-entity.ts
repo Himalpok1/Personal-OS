@@ -1,4 +1,5 @@
 import {
+  parseFlexibleDatetime,
   toWallClockComponents,
   validateCompletionAnchoredRule,
   wallClockToNaiveDate,
@@ -71,8 +72,12 @@ export async function commitParsedEntity(
         .values({
           title: toolCall.args.title,
           status: "inbox",
-          dueAt: toolCall.args.due_at ? new Date(toolCall.args.due_at) : undefined,
-          remindAt: toolCall.args.remind_at ? new Date(toolCall.args.remind_at) : undefined,
+          dueAt: toolCall.args.due_at
+            ? parseFlexibleDatetime(toolCall.args.due_at, ctx.timezone)
+            : undefined,
+          remindAt: toolCall.args.remind_at
+            ? parseFlexibleDatetime(toolCall.args.remind_at, ctx.timezone)
+            : undefined,
           timezone: ctx.timezone,
           priority: toolCall.args.priority,
           projectId,
@@ -94,7 +99,9 @@ export async function commitParsedEntity(
       // 3 days" with no explicit start reads as "starting now").
       if (toolCall.args.recurrence_anchor === "completion_date" && toolCall.args.rrule) {
         const timezone = toolCall.args.recurrence_timezone ?? ctx.timezone;
-        const firstOccursAt = toolCall.args.due_at ? new Date(toolCall.args.due_at) : new Date();
+        const firstOccursAt = toolCall.args.due_at
+          ? parseFlexibleDatetime(toolCall.args.due_at, timezone)
+          : new Date();
         await db.insert(occurrences).values({
           parentType: "task",
           parentId: row.id,
@@ -125,8 +132,10 @@ export async function commitParsedEntity(
         .values({
           title: toolCall.args.title,
           location: toolCall.args.location,
-          startsAt: new Date(toolCall.args.start),
-          endsAt: toolCall.args.end ? new Date(toolCall.args.end) : undefined,
+          startsAt: parseFlexibleDatetime(toolCall.args.start, ctx.timezone),
+          endsAt: toolCall.args.end
+            ? parseFlexibleDatetime(toolCall.args.end, ctx.timezone)
+            : undefined,
           timezone: ctx.timezone,
           allDay: toolCall.args.all_day ?? false,
           rrule: toolCall.args.rrule,

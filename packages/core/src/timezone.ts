@@ -58,6 +58,45 @@ export function wallClockToNaiveDate(components: WallClockComponents): Date {
   );
 }
 
+const OFFSET_SUFFIX = /(Z|[+-]\d{2}:\d{2})$/;
+const NAIVE_DATETIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/;
+
+// LLM tool-call output isn't guaranteed to include a UTC offset just
+// because the schema asks for one -- a model resolving "tomorrow at 3pm"
+// may return "2026-08-17T15:00:00" with no offset at all. Parsing that
+// directly via `new Date(...)` would silently use the *server process's*
+// system time zone (typically UTC in a container), misinterpreting a
+// Chicago afternoon as a UTC one -- hours off, wrong day at the edges.
+// This resolves offset-bearing strings normally (unambiguous) and falls
+// back to interpreting offset-less strings as wall-clock time in the
+// caller-supplied timezone (the capture's own timezone), using the same
+// DST-safe primitive as everything else.
+export function parseFlexibleDatetime(value: string, fallbackTimezone: string): Date {
+  if (OFFSET_SUFFIX.test(value)) {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error(`invalid datetime "${value}"`);
+    }
+    return parsed;
+  }
+  const match = NAIVE_DATETIME.exec(value);
+  if (!match) {
+    throw new Error(`invalid datetime "${value}"`);
+  }
+  const [, year, month, day, hour, minute, second] = match;
+  return resolveWallClockToInstant(
+    {
+      year: Number(year),
+      month: Number(month),
+      day: Number(day),
+      hour: Number(hour),
+      minute: Number(minute),
+      second: Number(second),
+    },
+    fallbackTimezone,
+  );
+}
+
 // The inverse: what wall-clock date/time this UTC instant displays as in
 // the given zone. Implemented directly against Intl (not date-fns-tz)
 // specifically to avoid any dependency on that library's Date-object getter

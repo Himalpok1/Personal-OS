@@ -2,7 +2,7 @@
 
 **Project:** Personal OS
 **Current phase:** Phase 1 — Capture core, headless
-**Implementation status:** Phase 0 complete (see below). Phase 1 implementation complete, verified on Mac dev, **and deployed to and verified in production (`personal-os`)** — see "Phase 1 implementation (2026-08-15)" and "Phase 1 production deployment (2026-08-15)" below. One user-only step remains: registering a real LLM provider API key via `POST /ai/providers` (production or dev) to exercise the actual LLM-parsing happy path end-to-end (everything up to that boundary is verified in both environments).
+**Implementation status:** Phase 0 complete (see below). Phase 1 implementation complete, verified on Mac dev, deployed to and verified in production (`personal-os`), **and the real LLM-parsing happy path itself is now verified against a live OpenAI key in production** — see "Phase 1 implementation", "Phase 1 production deployment", and "Phase 1 real-LLM verification" (all 2026-08-15) below. No remaining blockers on Phase 1.
 **Next phase allowed:** No — Phase 2 requires the user's explicit separate approval before starting.
 **Canonical architecture:** `docs/ARCHITECTURE.md`
 
@@ -137,9 +137,29 @@ Deployed to `personal-os` the same session, immediately after Mac-dev verificati
 
 All test data (`inbox_items`, the two test tasks + their occurrences, the test `ai_provider_connections` row) deleted from production after verification — production DB is empty of test artifacts, exactly as found before this deployment except for the new, empty Phase 1 tables.
 
+## Phase 1 real-LLM verification (2026-08-15)
+
+The user registered a real OpenAI API key against production via `POST /ai/providers` → `POST /ai/models` (`gpt-4.1`) → `POST /ai/task-routes` (`capture_parser`). The connection test succeeded (`{"success":true}`) — the key is registered correctly. The very first real capture through the pipeline then failed, and **stayed failed on retry** — this was a genuine bug the provider-key milestone surfaced, not a fluke, found by reading `pgboss.job`'s error output directly rather than assuming it would eventually succeed.
+
+**Bug 1 — offset-less datetimes rejected outright.** `packages/schema`'s `due_at`/`remind_at`/`start`/`end` fields required `z.string().datetime({ offset: true })`. GPT-4.1's tool call correctly resolved "tomorrow at 3pm" but returned it without a UTC offset (e.g. `2026-08-17T15:00:00`, no `-05:00`/`Z`) — the model isn't guaranteed to include one just because the schema asks for it. Two compounding causes: the system prompt never told the model what "now" was or what timezone the user was in, so it had no strong anchor or reason to qualify the offset; and the schema rejected an unqualified value outright instead of falling back to interpreting it in the capture's own timezone (something the codebase already had DST-safe machinery for — `resolveWallClockToInstant` — just not wired up to this path).
+
+Fixed with three changes, in order of how much they actually matter: (1) the worker's system prompt now includes the capture's `capturedAt` (as an ISO instant) and `timezone`, and explicitly instructs the model to resolve relative phrases against that anchor and always include a UTC offset; (2) `packages/schema`'s datetime fields relaxed to accept an ISO datetime with an *optional* offset (`FlexibleDatetimeSchema`), so a compliant-but-imperfect response doesn't hard-fail validation; (3) new `packages/core` function `parseFlexibleDatetime(value, fallbackTimezone)` — offset-bearing values parse directly (unambiguous), offset-less values resolve via `resolveWallClockToInstant` against the capture's timezone instead of `new Date(string)`, which would have silently used the *container's* system time zone (typically UTC) and misinterpreted a Chicago afternoon as a UTC one. `commit-parsed-entity.ts`'s four `new Date(...)` call sites (task `due_at`/`remind_at`, event `start`/`end`) all switched to this. 4 new unit tests in `timezone.test.ts`.
+
+**Bug 2 — a false-positive confidence flag.** Once bug 1 was fixed, the same capture ("remind me to call the insurance guy tomorrow at 3pm") correctly resolved a task with `remind_at` set — but still routed to `needs_confirm` with `unresolvedDatePhrase`. `hasResolvedDate()` in `capture-parse.ts` only checked `due_at`; a pure reminder resolves into `remind_at` instead (correctly — that's what "remind me to X tomorrow" *is*), so the signal fired on every correctly-resolved reminder. Fixed to check both fields.
+
+**Verified after both fixes, against the live production deployment with the real key, no mocking:**
+- The originally-failing capture re-run: `status: "parsed"`, auto-committed, `remind_at` = `2026-08-17 20:00:00+00` — 3pm Chicago (CDT, UTC-5) on the correct date, read back directly from the `tasks` row.
+- A note-shaped capture ("Idea: build a habit tracker widget...") → `entity_type: "note"`, auto-committed.
+- An event with a time range ("Team standup meeting tomorrow from 9am to 9:30am") → `entity_type: "event"`, auto-committed; `starts_at`/`ends_at` read back as `14:00`/`14:30` UTC — correct for 9:00/9:30am Chicago.
+- Gibberish ("asdf") → routed to the `unclear` tool with a sensible reason, `status: "needs_confirm"` — the confidence-routing default-to-caution behavior working as designed, not a failure.
+
+All test captures and their resulting entities deleted from production afterward. The real `ai_provider_connections`/`ai_models`/`ai_task_routes` rows (the user's actual OpenAI configuration) were left in place — those aren't test data, they're the intended live configuration.
+
+**Not yet run:** the full ~50-capture pass from `ARCHITECTURE.md`'s Phase 1 description, and the "swap providers mid-test" check proving the abstraction works with a second, different provider type. Both are optional further confidence-building, not blockers — the pipeline is proven correct end-to-end with a real provider.
+
 ## Blockers / user-provided items
 
-**Phase 1:** a real API key for at least one LLM provider (any of OpenAI/Anthropic/Kimi/GLM/xAI/Gemini/NVIDIA NIM/OpenRouter/LM Studio/custom), entered via `POST /ai/providers` + `POST /ai/models` + `POST /ai/task-routes` (`task_name: "capture_parser"`) **against either environment** — Mac dev or production, both are live — needed to run the LLM-parsing happy path and the ~50-capture verification pass called for in `ARCHITECTURE.md`.
+None currently blocking Phase 1. The real-OpenAI-key step is done — see "Phase 1 real-LLM verification" above (provider registered by the user directly via curl, per this repo's rule against Claude handling raw API keys itself; Claude ran the verification captures afterward, which don't involve credential material).
 
 Intel i5 production server access was provided and used for Phase 0 and Phase 1 (native Ubuntu 26.04 LTS, hostname `personal-os`). No backup system in the current architecture (ADR-024) — NAS/Backblaze are no longer relevant.
 
@@ -150,7 +170,7 @@ Not yet collected, not currently blocking anything:
 
 ## Current work
 
-Phase 1 implementation is complete, verified on Mac dev, and deployed + verified in production. Both environments are up and ready for a real LLM provider key. Do not begin Phase 2 without separate explicit user approval.
+Phase 1 is complete: implemented, verified on Mac dev, deployed to production, and now verified end-to-end against a real OpenAI key in production, including two real bugs the live-key milestone surfaced and fixed (offset-less datetime handling, a false-positive confidence flag on reminders). Do not begin Phase 2 without separate explicit user approval.
 
 ## Remaining warnings / technical debt
 
@@ -161,7 +181,9 @@ Phase 1 implementation is complete, verified on Mac dev, and deployed + verified
 
 ## Last verification
 
-Phase 1 production, run and passing (2026-08-15) — see "Phase 1 production deployment" above for the full 14-item table, including the DST-crossing and completion-anchored recurrence tests, the duplicate-prevention safety net, credential encryption, and restart behavior, all run against the live `personal-os` deployment over real Tailscale HTTPS, not just Mac dev. Mac-side `pnpm install`, `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test` (workspace-wide, 51 tests) re-confirmed clean after the Dockerfile/compose fixes. gitleaks confirmed clean on the Phase 1 commit (`f194cc7`); production `.env` (holding the real `CREDENTIALS_ENCRYPTION_KEY`) confirmed untouched by `rsync` (size/mtime/md5 unchanged) and still `chmod 600`.
+Phase 1 real-LLM verification, run and passing (2026-08-15) — see "Phase 1 real-LLM verification" above: a real OpenAI key registered, two real bugs found via `pgboss.job` error inspection (not assumed) and fixed, then a task/note/event/unclear capture each re-verified auto-committing (or correctly routing to `needs_confirm`) with correct DST-safe datetime resolution, read back directly from the `tasks`/`events` rows against production Postgres. `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test` (workspace-wide, 55 tests) all re-confirmed clean after the fixes, before redeploying.
+
+Phase 1 production deployment verification (2026-08-15) remains valid — see "Phase 1 production deployment" above for the full 14-item table, including the DST-crossing and completion-anchored recurrence tests, the duplicate-prevention safety net, credential encryption, and restart behavior, all run against the live `personal-os` deployment over real Tailscale HTTPS. gitleaks confirmed clean on every Phase 1 commit; production `.env` (holding the real `CREDENTIALS_ENCRYPTION_KEY`) confirmed untouched by `rsync` (size/mtime/md5 unchanged) and still `chmod 600` throughout.
 
 Phase 1 Mac-dev verification (2026-08-15) remains valid — see "Phase 1 implementation" above.
 
@@ -171,13 +193,13 @@ Phase 0's last verification (2026-08-15) remains valid — see the Production de
 
 All exit criteria in `docs/PHASE-0-CHECKLIST.md` are met: the foundation is reproducible (Mac dev + production both verified independently), security boundaries are in place (least-privilege DB roles verified to reject DDL, Postgres unpublished everywhere, gitleaks active, API scoped to localhost/Tailscale-only), and this file documents the evidence. There is no backup or restore requirement (ADR-024). The one remaining housekeeping item — individually ticking `docs/PHASE-0-CHECKLIST.md`'s checkboxes, left untouched throughout this project in favor of this file as the evidence record — does not block Phase 0 completion.
 
-## Phase 1: complete, deployed to production, one user step remaining
+## Phase 1: complete, deployed to production, verified end-to-end with a real LLM
 
-Every Phase 1 deliverable in `docs/ARCHITECTURE.md` is implemented, verified on Mac dev, and deployed to and verified in production (`personal-os`) — data model, recurrence engine (both anchors), provider-agnostic AI layer, capture/inbox/occurrence/AI-config API routes, and the three new worker jobs — with the pipeline proven end-to-end up to the LLM call boundary in both environments. What's left is not implementation or deployment: the user registers a real LLM provider key so the actual parsing happy path and the ~50-capture verification pass can run. Phase 2 does not begin until the user explicitly approves it separately.
+Every Phase 1 deliverable in `docs/ARCHITECTURE.md` is implemented, verified on Mac dev, deployed to production (`personal-os`), and now verified against a real OpenAI key end-to-end — data model, recurrence engine (both anchors), provider-agnostic AI layer, capture/inbox/occurrence/AI-config API routes, the three new worker jobs, and the LLM-parsing happy path itself (task/note/event/unclear classification, DST-safe datetime resolution, confidence routing). No remaining implementation, deployment, or verification gaps. Phase 2 does not begin until the user explicitly approves it separately.
 
 ## Next action
 
-**Register a real LLM provider key** (`POST /ai/providers` → `POST /ai/models` → `POST /ai/task-routes` with `task_name: "capture_parser"`) against either Mac dev or production so the LLM-parsing happy path can be verified. **Do not begin Phase 2 without explicit user approval** — this file being updated does not itself constitute that approval.
+Nothing blocking. Optional further confidence-building (not required to consider Phase 1 done): the full ~50-capture pass from `ARCHITECTURE.md`'s Phase 1 description, and registering a second, different provider type to prove the abstraction isn't secretly single-vendor. **Do not begin Phase 2 without explicit user approval** — this file being updated does not itself constitute that approval.
 
 ## Handoff rule
 
