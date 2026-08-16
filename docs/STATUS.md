@@ -2,7 +2,7 @@
 
 **Project:** Personal OS
 **Current phase:** Phase 1 — Capture core, headless
-**Implementation status:** Phase 0 complete (see below). Phase 1 implementation complete and verified on the Mac dev environment (data model, packages/schema, packages/core recurrence engine, new packages/ai-providers, apps/api routes, apps/worker jobs) — see "Phase 1 implementation (2026-08-15)" below. Not yet deployed to production (`personal-os`). One user-only step remains: registering a real LLM provider API key via `POST /ai/providers` to exercise the actual LLM-parsing happy path end-to-end (everything up to that boundary is verified).
+**Implementation status:** Phase 0 complete (see below). Phase 1 implementation complete, verified on Mac dev, **and deployed to and verified in production (`personal-os`)** — see "Phase 1 implementation (2026-08-15)" and "Phase 1 production deployment (2026-08-15)" below. One user-only step remains: registering a real LLM provider API key via `POST /ai/providers` (production or dev) to exercise the actual LLM-parsing happy path end-to-end (everything up to that boundary is verified in both environments).
 **Next phase allowed:** No — Phase 2 requires the user's explicit separate approval before starting.
 **Canonical architecture:** `docs/ARCHITECTURE.md`
 
@@ -29,7 +29,7 @@ Implement Phase 1 (capture core, headless): `/capture` + inbox, LLM parser with 
 - [x] Docker Compose authored and verified, both locally (Mac dev via `docker-compose.dev.yml`) and in production (Ubuntu server via `docker-compose.prod.yml`).
 - [x] **No backup system** — removed as a Phase 0 requirement per user-approved architecture decision (`docs/DECISIONS.md` ADR-024). Persistent Docker volume storage is not a backup.
 - [x] **Production deployment to native Ubuntu i5 (`personal-os`) — done and verified end-to-end.** Full details below.
-- [x] **Phase 1 implementation — data model, recurrence engine, provider-agnostic AI layer, API routes, worker jobs — done and verified on Mac dev.** Full details below.
+- [x] **Phase 1 implementation — data model, recurrence engine, provider-agnostic AI layer, API routes, worker jobs — done, verified on Mac dev, and deployed to and verified in production (`personal-os`).** Full details below.
 
 ## Production deployment (2026-08-15)
 
@@ -96,13 +96,52 @@ Plan approved via plan mode (see the "provider-agnostic AI layer" discussion) be
 
 **Not yet run (needs a real LLM provider key from the user):** the actual LLM-parsing happy path — registering a real provider, running the ~50 hand-typed captures from `ARCHITECTURE.md`'s Phase 1 description, and the "swap providers mid-test" check that proves the abstraction isn't secretly single-vendor. Everything up to the LLM call boundary (steps 4–6 above) is verified; the call itself needs credentials this session doesn't have.
 
-**Not yet done:** production deployment of Phase 1 (still only verified on Mac dev); individually ticking `docs/PHASE-0-CHECKLIST.md`'s Phase 0 boxes (pre-existing housekeeping item, unrelated to Phase 1).
+**Not yet done (at Mac-dev-verification time):** production deployment; individually ticking `docs/PHASE-0-CHECKLIST.md`'s Phase 0 boxes (pre-existing housekeeping item, unrelated to Phase 1). **Both since resolved — see "Phase 1 production deployment" below for the first; the checklist item remains open.**
+
+## Phase 1 production deployment (2026-08-15)
+
+Deployed to `personal-os` the same session, immediately after Mac-dev verification and a local commit (`f194cc7`) checkpointing the verified state first.
+
+**A real bug caught only by attempting the production build, not by anything on Mac dev:** `apps/api/Dockerfile` and `apps/worker/Dockerfile` hardcoded an explicit package build order (`pnpm --filter @personal-os/schema build && pnpm --filter @personal-os/db build && ...`) predating Phase 1 — it had no entry for the two new packages (`@personal-os/core`, `@personal-os/ai-providers`) that `@personal-os/schema` and both apps now depend on, so the production image build failed with `Cannot find module '@personal-os/core'`. This class of bug can't reproduce on Mac dev, where `pnpm build`/`turbo run build` already resolve the dependency graph correctly — only the Docker build path had a hand-maintained, now-stale chain. Fixed by replacing the hardcoded chain with `pnpm exec turbo run build --filter=api...` / `--filter=worker...`, which resolves the graph itself and won't go stale the next time a package dependency is added.
+
+**A second gap, caught before it could bite:** `docker-compose.yml`'s `api`/`worker` service blocks only pass through `DATABASE_URL`/`PORT` explicitly to containers — Compose does not auto-inject arbitrary `.env` variables. `CREDENTIALS_ENCRYPTION_KEY` (new in Phase 1, required by both apps' `env.ts`) would have been invisible inside the containers even with it correctly set in `.env`, causing an immediate crash-loop on startup. Fixed by adding `CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?...}` to both services' `environment:` blocks in `docker-compose.yml` (shared by dev and prod), verified with `docker compose config` locally (both dev and prod overlays) before touching the server.
+
+**What was done, in order:**
+1. Inspected production state first: 3 containers healthy, exactly one published port (`127.0.0.1:3000`, the API), `.env` present (600 perms, 6 vars, none touched), no `.git` on the server (repo lives there via `rsync`, matching the Phase 0 precedent, not `git pull`), only migration `0000` (the Phase 0 `worker_heartbeat` table) applied.
+2. Re-confirmed both new migrations (`0001_foamy_stick.sql`, `0002_dapper_proudstar.sql`) contain only `CREATE TABLE` / `CREATE INDEX` / `ALTER TABLE ... ADD CONSTRAINT` on brand-new tables — no `DROP`/`ALTER ... DROP`/`DELETE`/`TRUNCATE` anywhere, nothing touches `worker_heartbeat` or any existing row. Forward-only, no downtime required.
+3. `rsync`'d the updated repo to `personal-os` with the same exclusions as the Phase 0 deployment (`node_modules`, `.git`, `.env`, build caches, `apps/mobile`) — confirmed `.env`'s size/mtime/md5 unchanged immediately after.
+4. Generated a fresh `CREDENTIALS_ENCRYPTION_KEY` **on the server itself** via `openssl rand -base64 32` (never copied from the Mac's dev key, same principle as the other secrets) and appended it as a new line to the existing `.env` — the original 6 variables and their values were not touched.
+5. Hit the two Docker/Compose gaps above; fixed both, verified locally, `rsync`'d just the 3 changed files (`apps/api/Dockerfile`, `apps/worker/Dockerfile`, `docker-compose.yml`) to the server.
+6. Rebuilt `api`/`worker` images on the server — succeeded.
+7. Ran the Drizzle migration as `posops_migrator` via an ephemeral `docker compose run --rm --entrypoint sh api -c "pnpm --filter @personal-os/db db:migrate"`, with `MIGRATIONS_DATABASE_URL` constructed server-side (`postgres:5432` service hostname + the existing `POSTGRES_MIGRATOR_PASSWORD` read from `.env` in-shell, never printed) — Postgres's port was never published, even transiently.
+8. `docker compose up -d api worker` — recreated only `api`/`worker` (confirmed `postgres` stayed `Running`/`Healthy`, untouched, zero DB downtime).
+
+**Verification actually run, against the live production deployment:**
+
+| # | Check | Result |
+|---|---|---|
+| 1 | All containers healthy | `api`/`worker`/`postgres` all `Up`, `postgres` `(healthy)`, no restart loops |
+| 2 | API health over real Tailscale HTTPS | `curl https://personal-os.tail62a68f.ts.net/health` from the Mac → `{"status":"ok","db":"connected","worker":{"stale":false}}` |
+| 3 | New migrations applied | `\dt` on production Postgres lists all 12 tables: `ai_models`, `ai_provider_connections`, `ai_task_routes`, `events`, `inbox_items`, `item_tags`, `notes`, `occurrences`, `projects`, `tags`, `tasks`, `worker_heartbeat` |
+| 4 | `posops_app` still has no DDL | Direct `CREATE TABLE should_fail (...)` as `posops_app` on production → `ERROR: permission denied for schema public`, re-confirmed **after** the migration |
+| 5 | `capture.parse` worker job runs | Real `POST /capture` over Tailscale HTTPS → row written → enqueued → worker picked it up within seconds → `NoProviderConfiguredError` handled correctly (`status: 'failed'`, clear message, no retry loop) — proves the pipeline wiring end-to-end in production |
+| 6 | Recurrence jobs — DST-crossing due-date rule | Inserted a real `FREQ=WEEKLY;INTERVAL=1` task via psql (9am `America/Chicago`, straddling 2026-11-01), manually enqueued `occurrences.expand-window` on the live worker: Oct 25 → `14:00 UTC` (CDT), Nov 1/Nov 8 → `15:00 UTC` (CST) — identical behavior to Mac dev |
+| 7 | `/occurrences/:id/complete` and `/skip` | Both called for real over Tailscale HTTPS against a completion-anchored task with a seed occurrence backdated 10 days: the generated successor was anchored from the actual completion/skip instant (+3 days), not the stale backdated one |
+| 8 | Lazy generation + duplicate prevention | Directly attempted a second open lazy occurrence for the same parent via SQL → `ERROR: duplicate key value violates unique constraint "one_open_occurrence_per_lazy_parent"` — the exact safety net the job handler's catch block relies on, confirmed live |
+| 9 | AI provider credentials encrypted at rest | `POST /ai/providers` with a fake key on production → direct psql query confirmed `api_key_ciphertext` bytes do not contain the plaintext key, correct AES-256-GCM ciphertext/IV/auth-tag lengths |
+| 10 | API keys never returned or logged | `GET /ai/providers` response contains no key material; `docker compose logs api \| grep <the fake key>` → no match |
+| 11 | Graceful behavior with no AI provider configured | Same as #5 — `NoProviderConfiguredError` → `status: 'failed'`, no crash, no retry storm |
+| 12 | Restart behavior | `docker compose restart api worker` → both recovered cleanly; `/health` over Tailscale HTTPS returned a fresh, non-stale heartbeat within seconds |
+| 13 | No new host ports exposed | `ss -tln` on the server before vs. after: identical port set (`127.0.0.1:3000` API, Tailscale's `443`/tailnet-interface-only, `22` SSH, unrelated local system services) — no `0.0.0.0:3000`, Postgres still unpublished |
+| 14 | Mac-side build/typecheck/lint/format/test | Re-run after the Dockerfile/compose fixes: all clean, same 51 tests passing |
+
+All test data (`inbox_items`, the two test tasks + their occurrences, the test `ai_provider_connections` row) deleted from production after verification — production DB is empty of test artifacts, exactly as found before this deployment except for the new, empty Phase 1 tables.
 
 ## Blockers / user-provided items
 
-**Phase 1:** a real API key for at least one LLM provider (any of OpenAI/Anthropic/Kimi/GLM/xAI/Gemini/NVIDIA NIM/OpenRouter/LM Studio/custom), entered via `POST /ai/providers` + `POST /ai/models` + `POST /ai/task-routes` (`task_name: "capture_parser"`), needed to run the LLM-parsing happy path and the ~50-capture verification pass called for in `ARCHITECTURE.md`.
+**Phase 1:** a real API key for at least one LLM provider (any of OpenAI/Anthropic/Kimi/GLM/xAI/Gemini/NVIDIA NIM/OpenRouter/LM Studio/custom), entered via `POST /ai/providers` + `POST /ai/models` + `POST /ai/task-routes` (`task_name: "capture_parser"`) **against either environment** — Mac dev or production, both are live — needed to run the LLM-parsing happy path and the ~50-capture verification pass called for in `ARCHITECTURE.md`.
 
-Intel i5 production server access was provided and used for Phase 0 (native Ubuntu 26.04 LTS, hostname `personal-os`). No backup system in the current architecture (ADR-024) — NAS/Backblaze are no longer relevant.
+Intel i5 production server access was provided and used for Phase 0 and Phase 1 (native Ubuntu 26.04 LTS, hostname `personal-os`). No backup system in the current architecture (ADR-024) — NAS/Backblaze are no longer relevant.
 
 Not yet collected, not currently blocking anything:
 
@@ -111,7 +150,7 @@ Not yet collected, not currently blocking anything:
 
 ## Current work
 
-Phase 1 implementation is complete and verified on Mac dev, pending the user supplying a real LLM provider key for the final LLM-parsing verification pass, and pending a decision on whether/when to deploy Phase 1 to production (`personal-os`). Do not begin Phase 2 without separate explicit user approval.
+Phase 1 implementation is complete, verified on Mac dev, and deployed + verified in production. Both environments are up and ready for a real LLM provider key. Do not begin Phase 2 without separate explicit user approval.
 
 ## Remaining warnings / technical debt
 
@@ -122,7 +161,9 @@ Phase 1 implementation is complete and verified on Mac dev, pending the user sup
 
 ## Last verification
 
-Phase 1, run and passing (2026-08-15) — see "Phase 1 implementation" above for the full table, including the full-stack DST-crossing and completion-anchored recurrence tests and the graceful-failure-with-no-provider test, all run against the real running `apps/api`/`apps/worker` processes, not just unit tests. `pnpm install`, `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test` (workspace-wide, 51 tests) all clean. gitleaks confirmed `.env` (holding the real `CREDENTIALS_ENCRYPTION_KEY`) stays gitignored and untracked.
+Phase 1 production, run and passing (2026-08-15) — see "Phase 1 production deployment" above for the full 14-item table, including the DST-crossing and completion-anchored recurrence tests, the duplicate-prevention safety net, credential encryption, and restart behavior, all run against the live `personal-os` deployment over real Tailscale HTTPS, not just Mac dev. Mac-side `pnpm install`, `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test` (workspace-wide, 51 tests) re-confirmed clean after the Dockerfile/compose fixes. gitleaks confirmed clean on the Phase 1 commit (`f194cc7`); production `.env` (holding the real `CREDENTIALS_ENCRYPTION_KEY`) confirmed untouched by `rsync` (size/mtime/md5 unchanged) and still `chmod 600`.
+
+Phase 1 Mac-dev verification (2026-08-15) remains valid — see "Phase 1 implementation" above.
 
 Phase 0's last verification (2026-08-15) remains valid — see the Production deployment table above for the full list, including the full OS reboot test (#12) and its post-reboot HTTPS `/health` check from the Mac.
 
@@ -130,13 +171,13 @@ Phase 0's last verification (2026-08-15) remains valid — see the Production de
 
 All exit criteria in `docs/PHASE-0-CHECKLIST.md` are met: the foundation is reproducible (Mac dev + production both verified independently), security boundaries are in place (least-privilege DB roles verified to reject DDL, Postgres unpublished everywhere, gitleaks active, API scoped to localhost/Tailscale-only), and this file documents the evidence. There is no backup or restore requirement (ADR-024). The one remaining housekeeping item — individually ticking `docs/PHASE-0-CHECKLIST.md`'s checkboxes, left untouched throughout this project in favor of this file as the evidence record — does not block Phase 0 completion.
 
-## Phase 1: implementation complete, one user step remaining
+## Phase 1: complete, deployed to production, one user step remaining
 
-Every Phase 1 deliverable in `docs/ARCHITECTURE.md` is implemented and verified on Mac dev — data model, recurrence engine (both anchors), provider-agnostic AI layer, capture/inbox/occurrence/AI-config API routes, and the three new worker jobs — with the pipeline proven end-to-end up to the LLM call boundary. What's left is not implementation: (1) the user registers a real LLM provider key so the actual parsing happy path and the ~50-capture verification pass can run, and (2) a decision on deploying Phase 1 to production. Phase 2 does not begin until the user explicitly approves it separately.
+Every Phase 1 deliverable in `docs/ARCHITECTURE.md` is implemented, verified on Mac dev, and deployed to and verified in production (`personal-os`) — data model, recurrence engine (both anchors), provider-agnostic AI layer, capture/inbox/occurrence/AI-config API routes, and the three new worker jobs — with the pipeline proven end-to-end up to the LLM call boundary in both environments. What's left is not implementation or deployment: the user registers a real LLM provider key so the actual parsing happy path and the ~50-capture verification pass can run. Phase 2 does not begin until the user explicitly approves it separately.
 
 ## Next action
 
-**Register a real LLM provider key** (`POST /ai/providers` → `POST /ai/models` → `POST /ai/task-routes` with `task_name: "capture_parser"`) so the LLM-parsing happy path can be verified, then decide on deploying Phase 1 to production. **Do not begin Phase 2 without explicit user approval** — this file being updated does not itself constitute that approval.
+**Register a real LLM provider key** (`POST /ai/providers` → `POST /ai/models` → `POST /ai/task-routes` with `task_name: "capture_parser"`) against either Mac dev or production so the LLM-parsing happy path can be verified. **Do not begin Phase 2 without explicit user approval** — this file being updated does not itself constitute that approval.
 
 ## Handoff rule
 

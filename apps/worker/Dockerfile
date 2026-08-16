@@ -8,9 +8,11 @@ FROM base AS build
 WORKDIR /repo
 COPY . .
 RUN pnpm install --frozen-lockfile
-RUN pnpm --filter @personal-os/schema build \
- && pnpm --filter @personal-os/db build \
- && pnpm --filter worker build
+# Turbo resolves the dependency graph itself (schema/db/core/ai-providers)
+# rather than a hand-maintained chain that silently goes stale every time a
+# new package dependency is added -- see the Phase 1 packages/core and
+# packages/ai-providers additions that broke the old hardcoded chain.
+RUN pnpm exec turbo run build --filter=worker...
 
 FROM base AS runtime
 WORKDIR /repo

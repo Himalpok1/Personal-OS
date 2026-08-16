@@ -35,6 +35,7 @@ services:
     environment:
       DATABASE_URL: postgresql://posops_app:${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set in .env}@postgres:5432/personalos
       PORT: ${PORT:-3000}
+      CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?CREDENTIALS_ENCRYPTION_KEY must be set in .env}
     depends_on:
       postgres:
         condition: service_healthy
@@ -48,6 +49,7 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://posops_app:${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set in .env}@postgres:5432/personalos
+      CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?CREDENTIALS_ENCRYPTION_KEY must be set in .env}
     depends_on:
       postgres:
         condition: service_healthy
