@@ -7,7 +7,7 @@ import { z } from "zod";
 // rejecting that outright throws away a perfectly resolvable answer.
 // packages/core's parseFlexibleDatetime is what actually resolves an
 // offset-less value, against the capture's own timezone.
-const FlexibleDatetimeSchema = z
+export const FlexibleDatetimeSchema = z
   .string()
   .regex(
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/,

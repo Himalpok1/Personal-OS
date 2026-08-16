@@ -37,3 +37,10 @@ export const InboxConfirmRequestSchema = z.object({
 });
 
 export type InboxConfirmRequest = z.infer<typeof InboxConfirmRequestSchema>;
+
+export const InboxListQuerySchema = z.object({
+  status: InboxItemStatusSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+export type InboxListQuery = z.infer<typeof InboxListQuerySchema>;

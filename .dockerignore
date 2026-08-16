@@ -7,6 +7,5 @@ node_modules
 .env
 .env.*
 !.env.example
-apps/mobile
 .claude
 *.log

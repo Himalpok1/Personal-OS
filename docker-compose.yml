@@ -36,6 +36,10 @@ services:
       DATABASE_URL: postgresql://posops_app:${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set in .env}@postgres:5432/personalos
       PORT: ${PORT:-3000}
       CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?CREDENTIALS_ENCRYPTION_KEY must be set in .env}
+      # Defaults to the local Metro dev-server ports so a Mac-side docker
+      # compose run works with no extra .env changes; production overrides
+      # this to the deployed web service's real Tailscale Serve origin.
+      WEB_APP_ORIGIN: ${WEB_APP_ORIGIN:-http://localhost:8081,http://localhost:8082,http://localhost:19006}
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,6 +57,20 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - personalos
+
+  # Static SPA build (see apps/mobile/Dockerfile) -- no Postgres dependency
+  # at all, just a build-time API URL and a static file server. Not part of
+  # Phase 0/1; added in Phase 2 for the always-on web deployment (see
+  # docs/STATUS.md's Phase 2 entry, decision 6).
+  web:
+    build:
+      context: .
+      dockerfile: apps/mobile/Dockerfile
+      args:
+        EXPO_PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set in .env}
+    restart: unless-stopped
     networks:
       - personalos
 

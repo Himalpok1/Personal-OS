@@ -53,5 +53,10 @@ export const events = pgTable(
     index("events_recurrence_due_idx")
       .on(table.rrule)
       .where(sql`${table.rrule} is not null`),
+    // No event API/UI ships in Phase 2 -- added now (free additive DDL at
+    // near-zero row counts) so Phase 4's calendar UI doesn't need a second
+    // migration to close the same indexing gap tasks/notes had.
+    index("events_project_id_idx").on(table.projectId),
+    index("events_starts_at_idx").on(table.startsAt),
   ],
 );

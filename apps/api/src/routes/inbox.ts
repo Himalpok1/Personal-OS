@@ -1,14 +1,62 @@
 import { inboxItems } from "@personal-os/db";
-import { InboxConfirmRequestSchema, InboxItemSchema } from "@personal-os/schema";
-import { eq } from "drizzle-orm";
+import {
+  InboxConfirmRequestSchema,
+  InboxItemSchema,
+  InboxListQuerySchema,
+} from "@personal-os/schema";
+import { count, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { CAPTURE_PARSE_QUEUE } from "../queue-names.js";
+
+function toInboxItemResponse(row: typeof inboxItems.$inferSelect) {
+  return InboxItemSchema.parse({
+    id: row.id,
+    client_uuid: row.clientUuid,
+    raw_text: row.rawText,
+    source: row.source,
+    captured_at: row.capturedAt.toISOString(),
+    timezone: row.timezone,
+    status: row.status,
+    parse_result: row.parseResult,
+    confidence: row.confidence,
+    entity_type: row.entityType,
+    entity_id: row.entityId,
+    created_at: row.createdAt.toISOString(),
+  });
+}
 
 // Read-only inspection + confirmation, existing purely so the Phase 1
 // curl-driven verification plan can exercise the needs_confirm path without
 // reaching into psql directly (see docs/ARCHITECTURE.md's Phase 1
 // description).
 export default function inboxRoutes(app: FastifyInstance): void {
+  // Powers the Inbox triage screen (Phase 2) -- listing captures, most
+  // recent first, is the one endpoint Phase 1's curl-only verification never
+  // needed (a single known inbox_id was always enough).
+  app.get<{ Querystring: Record<string, string> }>("/inbox", async (request) => {
+    const query = InboxListQuerySchema.parse(request.query);
+    const where = query.status ? eq(inboxItems.status, query.status) : undefined;
+
+    const [rows, totalRows] = await Promise.all([
+      app.db
+        .select()
+        .from(inboxItems)
+        .where(where)
+        .orderBy(desc(inboxItems.createdAt))
+        .limit(query.limit)
+        .offset(query.offset),
+      app.db.select({ total: count() }).from(inboxItems).where(where),
+    ]);
+    const total = totalRows[0]?.total ?? 0;
+
+    return {
+      items: rows.map(toInboxItemResponse),
+      limit: query.limit,
+      offset: query.offset,
+      total,
+    };
+  });
+
   app.get<{ Params: { id: string } }>("/inbox/:id", async (request, reply) => {
     const [row] = await app.db
       .select()
@@ -17,20 +65,7 @@ export default function inboxRoutes(app: FastifyInstance): void {
     if (!row) {
       return reply.code(404).send({ error: "not_found" });
     }
-    return InboxItemSchema.parse({
-      id: row.id,
-      client_uuid: row.clientUuid,
-      raw_text: row.rawText,
-      source: row.source,
-      captured_at: row.capturedAt.toISOString(),
-      timezone: row.timezone,
-      status: row.status,
-      parse_result: row.parseResult,
-      confidence: row.confidence,
-      entity_type: row.entityType,
-      entity_id: row.entityId,
-      created_at: row.createdAt.toISOString(),
-    });
+    return toInboxItemResponse(row);
   });
 
   // The API never creates entities inline (see docs/ARCHITECTURE.md: "The

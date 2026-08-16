@@ -3,3 +3,8 @@ export * from "./capture.js";
 export * from "./inbox.js";
 export * from "./parser-tools.js";
 export * from "./ai-provider.js";
+export * from "./pagination.js";
+export * from "./tasks.js";
+export * from "./notes.js";
+export * from "./projects.js";
+export * from "./occurrences.js";

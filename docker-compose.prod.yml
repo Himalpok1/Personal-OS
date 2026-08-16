@@ -29,3 +29,13 @@ services:
   worker:
     restart: unless-stopped
     logging: *default-logging
+
+  # Bound to 127.0.0.1 only, same pattern as the API -- the host's
+  # `tailscale serve` process proxies a separate public HTTPS port
+  # (see docs/STATUS.md's Phase 2 entry) to this local target. No new
+  # public port; still Tailscale-only per ADR-018.
+  web:
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "127.0.0.1:8081:8080"

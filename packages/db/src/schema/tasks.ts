@@ -42,6 +42,12 @@ export const tasks = pgTable(
     recurrenceExdates: date("recurrence_exdates").array(),
     parentTaskId: uuid("parent_task_id").references((): AnyPgColumn => tasks.id),
     originalDueAt: timestamp("original_due_at", { withTimezone: true }),
+    // Soft-delete: set by POST /tasks/:id/archive, cleared by nothing yet
+    // (no restore endpoint ships in Phase 2). Independent of `status` --
+    // an archived task keeps whatever lifecycle status it had. Default list
+    // queries filter `archived_at is null`; occurrences/item_tags/inbox
+    // lineage are never touched by archiving.
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -56,5 +62,12 @@ export const tasks = pgTable(
     index("tasks_recurrence_due_idx")
       .on(table.recurrenceAnchor)
       .where(sql`${table.rrule} is not null`),
+    index("tasks_project_id_idx").on(table.projectId),
+    // Serves the task-list's dominant query shape (open tasks ordered by due
+    // date); partial on archived_at since every default list query carries
+    // that predicate too.
+    index("tasks_status_due_at_idx")
+      .on(table.status, table.dueAt)
+      .where(sql`${table.archivedAt} is null`),
   ],
 );

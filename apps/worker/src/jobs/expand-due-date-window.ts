@@ -5,7 +5,7 @@ import {
   type DueDateRecurrenceRule,
 } from "@personal-os/core";
 import { events, occurrences, tasks, type Db } from "@personal-os/db";
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, ne } from "drizzle-orm";
 
 // Rolling window per docs/ARCHITECTURE.md: "Never materialize infinite
 // rows. Expand a rolling 90-day window into occurrences."
@@ -61,13 +61,29 @@ async function upsertOccurrences(
 // section: "the window expansion job must filter these out entirely").
 // Events have no recurrence_anchor column at all; a recurring event is
 // always due-date-style.
+//
+// `status != 'dropped'` and `archived_at is null` (Phase 2): before Phase 2
+// nothing could ever change a task's status or archive it, so this filter
+// didn't exist and was never needed. POST /tasks/:id/drop and
+// POST /tasks/:id/archive are the first code paths that can -- without this,
+// the cron would keep silently regenerating occurrences for a task the user
+// just dropped or archived. 'done' is unreachable for a recurring task in
+// Phase 2 (POST /tasks/:id/complete rejects those with 409), so the status
+// half of this only needs to exclude 'dropped'.
 export async function expandDueDateWindowJob(db: Db): Promise<void> {
   const now = new Date();
 
   const dueDateTasks = await db
     .select()
     .from(tasks)
-    .where(and(eq(tasks.recurrenceAnchor, "due_date"), isNotNull(tasks.rrule)));
+    .where(
+      and(
+        eq(tasks.recurrenceAnchor, "due_date"),
+        isNotNull(tasks.rrule),
+        ne(tasks.status, "dropped"),
+        isNull(tasks.archivedAt),
+      ),
+    );
 
   for (const task of dueDateTasks) {
     if (!task.rrule || !task.recurrenceTimezone || !task.dueAt) continue;

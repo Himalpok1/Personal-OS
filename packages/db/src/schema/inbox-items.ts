@@ -17,6 +17,10 @@ export const inboxItems = pgTable(
     status: text("status").notNull().default("pending"),
     parseResult: jsonb("parse_result"),
     confidence: real("confidence"),
+    // entity_id is polymorphic (task|note|event, selected by entity_type)
+    // and deliberately not a foreign key -- same trade-off as
+    // occurrences.parent_id and item_tags.item_id, enforced at the
+    // application layer rather than the database.
     entityType: text("entity_type"),
     entityId: uuid("entity_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

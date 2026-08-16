@@ -1,4 +1,14 @@
-import { isValidTimezone } from "@personal-os/core";
+// Deep import, not the package barrel (`@personal-os/core`): the barrel's
+// index.ts re-exports the recurrence module, which uses
+// `createRequire(import.meta.url)` as a Node-only workaround for a
+// rrule@2.8.1 CJS/ESM interop bug (see packages/core/src/recurrence).
+// apps/mobile bundles this package transitively via packages/schema for
+// web, and Metro pulls in whatever a barrel import statically reaches --
+// `createRequire`/`import.meta.url` don't exist in a browser and crash the
+// bundle at runtime. Importing only the specific submodule this file
+// actually needs keeps rrule (and the Node-only workaround) out of the web
+// bundle's graph entirely.
+import { isValidTimezone } from "@personal-os/core/timezone";
 import { z } from "zod";
 
 // Matches the /capture contract in docs/ARCHITECTURE.md. text is capped to
