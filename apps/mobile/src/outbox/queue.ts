@@ -1,61 +1,133 @@
-import type { CaptureRequest } from "@personal-os/schema";
+import { ApiClientError } from "@personal-os/api-client";
+import {
+  CaptureRequestSchema,
+  type CaptureRequest,
+  type CaptureResponse,
+} from "@personal-os/schema";
 import { api } from "@/queries/client";
-import { getOutboxDb } from "./db";
+import { getOutboxRepository } from "./db";
+import type { OutboxRepository, OutboxRow } from "./types";
 
-interface OutboxRow {
-  client_uuid: string;
-  endpoint: string;
-  payload: string;
-  created_at: string;
-  attempts: number;
-  last_error: string | null;
+const BASE_RETRY_DELAY_MS = 5_000;
+const MAX_RETRY_DELAY_MS = 5 * 60_000;
+
+let operationChain: Promise<void> = Promise.resolve();
+
+function serialize<T>(operation: () => Promise<T>): Promise<T> {
+  const result = operationChain.then(operation, operation);
+  operationChain = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
 }
 
-// Queues a capture for later delivery. INSERT OR IGNORE on the client_uuid
-// primary key -- an offline-retry of the same capture (e.g. the user tapped
-// submit twice while offline) is a silent no-op here, matching the same
-// client_uuid-dedupe contract POST /capture itself already provides
-// server-side.
-export async function enqueueCapture(body: CaptureRequest): Promise<void> {
-  const db = await getOutboxDb();
-  await db.runAsync(
-    "INSERT OR IGNORE INTO outbox (client_uuid, endpoint, payload, created_at, attempts, last_error) VALUES (?, ?, ?, ?, 0, NULL)",
-    [body.client_uuid, "/capture", JSON.stringify(body), new Date().toISOString()],
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isPermanentDeliveryError(error: unknown): boolean {
+  return (
+    error instanceof ApiClientError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 408 &&
+    error.status !== 429
   );
 }
 
-export async function getOutboxCount(): Promise<number> {
-  const db = await getOutboxDb();
-  const rows = await db.getAllAsync<{ count: number }>("SELECT COUNT(*) as count FROM outbox");
-  return rows[0]?.count ?? 0;
+function nextAttemptAt(attempts: number): string {
+  const delay = Math.min(BASE_RETRY_DELAY_MS * 2 ** attempts, MAX_RETRY_DELAY_MS);
+  return new Date(Date.now() + delay).toISOString();
 }
 
-// Attempts to deliver every queued row, oldest first. A row is removed only
-// on a real server acknowledgement -- a failed attempt increments
-// `attempts`/records `last_error` and stays queued for the next flush
-// (triggered by reconnect or app foreground; see
-// use-outbox-flush-on-reconnect.ts). Delivery reuses client_uuid dedupe, so
-// a row that actually succeeded server-side on a prior attempt but whose
-// response was lost (e.g. connection dropped mid-flush) is not
-// double-captured on retry.
-export async function flushOutbox(): Promise<{ flushed: number; remaining: number }> {
-  const db = await getOutboxDb();
-  const rows = await db.getAllAsync<OutboxRow>("SELECT * FROM outbox ORDER BY created_at ASC");
+type AttemptResult =
+  | { status: "sent"; response: CaptureResponse }
+  | { status: "retry" }
+  | { status: "permanent"; error: unknown };
 
-  let flushed = 0;
-  for (const row of rows) {
-    try {
-      const body = JSON.parse(row.payload) as CaptureRequest;
-      await api.capture(body);
-      await db.runAsync("DELETE FROM outbox WHERE client_uuid = ?", [row.client_uuid]);
-      flushed++;
-    } catch (err) {
-      await db.runAsync(
-        "UPDATE outbox SET attempts = attempts + 1, last_error = ? WHERE client_uuid = ?",
-        [err instanceof Error ? err.message : String(err), row.client_uuid],
-      );
-    }
+async function attemptRow(
+  repository: OutboxRepository,
+  row: OutboxRow,
+): Promise<AttemptResult> {
+  if (row.endpoint !== "/capture") {
+    const error = new Error(`Unsupported outbox endpoint: ${row.endpoint}`);
+    await repository.markFailure(row.client_uuid, error.message, null, true);
+    return { status: "permanent", error };
   }
 
-  return { flushed, remaining: await getOutboxCount() };
+  let body: CaptureRequest;
+  try {
+    body = CaptureRequestSchema.parse(JSON.parse(row.payload));
+  } catch (error) {
+    await repository.markFailure(row.client_uuid, errorMessage(error), null, true);
+    return { status: "permanent", error };
+  }
+
+  try {
+    const response = await api.capture(body);
+    await repository.delete(row.client_uuid);
+    return { status: "sent", response };
+  } catch (error) {
+    const permanent = isPermanentDeliveryError(error);
+    await repository.markFailure(
+      row.client_uuid,
+      errorMessage(error),
+      permanent ? null : nextAttemptAt(row.attempts),
+      permanent,
+    );
+    return permanent ? { status: "permanent", error } : { status: "retry" };
+  }
+}
+
+// Persist-before-send is the capture durability boundary. Even if the app
+// dies after this insert and before the HTTP response, restart flushing
+// replays the same client_uuid and the server returns the existing row.
+export function enqueueAndAttemptCapture(
+  body: CaptureRequest,
+): Promise<{ status: "sent"; inbox_id: string } | { status: "queued" }> {
+  return serialize(async () => {
+    const repository = await getOutboxRepository();
+    await repository.enqueue(body);
+    const row = (await repository.listReady(new Date().toISOString())).find(
+      (candidate) => candidate.client_uuid === body.client_uuid,
+    );
+    if (!row) return { status: "queued" };
+
+    const result = await attemptRow(repository, row);
+    if (result.status === "sent") {
+      return { status: "sent", inbox_id: result.response.inbox_id };
+    }
+    if (result.status === "permanent") throw result.error;
+    return { status: "queued" };
+  });
+}
+
+export function flushOutbox(options: { ignoreBackoff?: boolean } = {}): Promise<{
+  flushed: number;
+  remaining: number;
+  failed: number;
+}> {
+  return serialize(async () => {
+    const repository = await getOutboxRepository();
+    const rows = options.ignoreBackoff
+      ? await repository.listPending()
+      : await repository.listReady(new Date().toISOString());
+    let flushed = 0;
+    for (const row of rows) {
+      const result = await attemptRow(repository, row);
+      if (result.status === "sent") flushed += 1;
+    }
+    const counts = await repository.count();
+    return { flushed, remaining: counts.pending, failed: counts.failed };
+  });
+}
+
+export async function getOutboxStats(): Promise<{ pending: number; failed: number }> {
+  return (await getOutboxRepository()).count();
+}
+
+export async function getOutboxCount(): Promise<number> {
+  const { pending, failed } = await getOutboxStats();
+  return pending + failed;
 }

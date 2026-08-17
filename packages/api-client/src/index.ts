@@ -6,6 +6,7 @@ import {
   listDevices,
   registerDevice,
   revokeDevice,
+  sendTestNotification,
   setPrimaryDevice,
   updateDevice,
   updateDevicePushToken,
@@ -92,6 +93,7 @@ export function createApiClient(baseUrl: string) {
     setPrimaryDevice: setPrimaryDevice.bind(null, baseUrl),
     updateDevicePushToken: updateDevicePushToken.bind(null, baseUrl),
     revokeDevice: revokeDevice.bind(null, baseUrl),
+    sendTestNotification: sendTestNotification.bind(null, baseUrl),
   };
 }
 

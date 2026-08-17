@@ -271,7 +271,25 @@ devices (
   quiet_hours_end             time,
   quiet_hours_timezone        text,
   last_seen_at                timestamptz,       -- diagnostic only, NOT a heartbeat
+  revoked_at                  timestamptz,
   created_at                  timestamptz default now()
+)
+
+device_pairing_codes (
+  id            uuid pk,
+  code_hash     text not null unique,
+  expires_at    timestamptz not null,
+  consumed_at   timestamptz,
+  created_at    timestamptz default now()
+)
+
+notification_dispatch_log (
+  dedupe_key      text pk,
+  status          text not null,       -- pending|accepted|failed
+  attempted_at    timestamptz not null,
+  accepted_at     timestamptz,
+  last_error      text,
+  expo_ticket_id  text
 )
 
 -- exactly one primary device, enforced by the database
@@ -357,10 +375,11 @@ Put an **OpenAI-compatible `/v1/audio/transcriptions` shape** in front of the ST
 
 ```
 -- expo-sqlite, on device
-outbox (client_uuid, endpoint, payload, created_at, attempts, last_error)
+outbox (client_uuid, endpoint, payload, created_at, attempts, last_error,
+        next_attempt_at, permanent)
 ```
 
-Every write goes to the outbox first, then optimistically into local UI state. A flush loop drains it whenever the network is reachable. The server dedupes on `client_uuid`, so retries are free.
+Capture/quick-add writes go to the outbox first, before the first HTTP attempt. A flush loop drains pending rows on startup, foregrounding, connectivity changes, and a bounded interval. It does not treat public-internet reachability as authoritative because the API is deliberately private over Tailscale. Transient failures use persisted exponential backoff; permanent 4xx failures remain visible for attention. The server dedupes on `client_uuid`, so a replay after an ambiguous response or app restart returns the existing Inbox row instead of creating a duplicate.
 
 Reads stay online-only for now. That's the deliberate scope cut — full bidirectional sync is genuinely hard and you don't need it to capture a thought on a bad cell connection.
 
@@ -393,6 +412,16 @@ Make switching primary a one-tap action in settings so recovery takes seconds. `
 
 Local scheduling on the primary device is the important half — a reminder for a 6am flight must not depend on the i5 being awake.
 
+On Android, Personal OS uses `expo-notifications`' built-in boot receiver and
+stored-notification rescheduling. This mechanism was verified on the physical
+Rabbit R1: after scheduling a reminder and rebooting, the same exact alarm was
+restored after `BOOT_COMPLETED` and fired without opening the app. The planned
+custom Headless JS receiver is therefore not part of the shipped design.
+
+Remote notification rows use `accepted`, not `sent`: an Expo ticket with
+`status: "ok"` proves only that Expo accepted the delivery request. It does not
+prove FCM or the device received it; receipt polling remains outside the MVP.
+
 ---
 
 ## Network & security
@@ -400,7 +429,7 @@ Local scheduling on the primary device is the important half — a reminder for 
 - Run `tailscale serve` on the i5 for **real HTTPS certs** on `https://hub.<tailnet>.ts.net`. iOS is increasingly hostile to plain HTTP and Shortcuts is picky; this makes the problem disappear.
 - Enable **MagicDNS** so nothing hardcodes an IP.
 - Enable **VPN On Demand** in the Tailscale iOS app so the tunnel is up before Shortcuts fires. Android: enable Always-on VPN in system settings.
-- Tailscale ACLs are the perimeter, but still issue a **per-device bearer token** in `expo-secure-store`. A lost device means revoking one row, not re-keying the tailnet.
+- Tailscale ACLs remain the perimeter for the general API. Device registration requires a short-lived, atomically single-use pairing code generated via trusted server CLI access; the raw code and raw bearer token are never stored server-side. The bearer token in `expo-secure-store` protects only device/notification-specific endpoints. Revoking its row does **not** revoke `/tasks`, `/capture`, the web UI, or other Tailscale-perimeter routes; a lost device must also be removed from the tailnet for full access revocation.
 - **PostgreSQL is never published.** No `ports:` entry in compose — it exists only on the internal Docker network. Admin access goes over Tailscale SSH or a tunnel, never a bound public port.
 - The app connects as a **least-privilege role**, not `postgres`. No superuser, no `CREATE`, migrations run as a separate role.
 

@@ -21,6 +21,9 @@ export interface NotificationsDispatchJobData {
   // is this suffixed with `:${deviceId}`, so each target device's delivery
   // attempt is tracked and deduped independently of every other target's.
   dedupeKey: string;
+  // Diagnostics can target the requesting device. Production confirmation
+  // jobs omit this and use normal category-based fan-out.
+  deviceId?: string;
 }
 
 // Reminders never appear here -- they're scheduled locally on the primary
@@ -44,7 +47,6 @@ const NOTIFY_COLUMN_BY_CATEGORY = {
 const PERMANENT_TICKET_ERRORS = new Set([
   "DeviceNotRegistered",
   "MessageTooBig",
-  "MessageRateExceeded",
   "InvalidCredentials",
 ]);
 
@@ -74,6 +76,7 @@ async function resolveTargets(
         eq(notifyColumn, true),
         eq(devices.notificationsEnabled, true),
         isNull(devices.revokedAt),
+        data.deviceId ? eq(devices.id, data.deviceId) : undefined,
       ),
     );
 
@@ -102,9 +105,9 @@ async function resolveTargets(
 }
 
 // Claims a target for this attempt: a fresh insert, or an existing row
-// still 'pending'/'failed' (a prior crashed or failed attempt), are both
-// claimable. An existing 'accepted' row means this delivery already
-// completed -- skip it, this is a genuine duplicate of finished work. This
+// still 'pending' (a prior crashed or transiently failed attempt), is
+// claimable. Existing terminal rows ('accepted' or permanently 'failed')
+// are skipped. This
 // is the crash-safety fix: a bare row's existence never implied delivery
 // on its own, only status = 'accepted' does.
 async function claimTarget(db: Db, dedupeKey: string): Promise<boolean> {
@@ -119,7 +122,7 @@ async function claimTarget(db: Db, dedupeKey: string): Promise<boolean> {
     .select({ status: notificationDispatchLog.status })
     .from(notificationDispatchLog)
     .where(eq(notificationDispatchLog.dedupeKey, dedupeKey));
-  return existing?.status === "pending" || existing?.status === "failed";
+  return existing?.status === "pending";
 }
 
 const expo = new Expo();
@@ -197,6 +200,19 @@ export function createNotificationsDispatchHandler(db: Db) {
           .set({ lastError: ticket.message })
           .where(eq(notificationDispatchLog.dedupeKey, target.dedupeKey));
         anyTransient = true;
+      }
+
+      // Expo should return one ticket per message. Treat a short response
+      // as transient rather than silently completing with rows stranded in
+      // pending state.
+      if (tickets.length !== claimed.length) {
+        anyTransient = true;
+        for (const target of claimed.slice(tickets.length)) {
+          await db
+            .update(notificationDispatchLog)
+            .set({ lastError: "Expo returned no ticket for this message" })
+            .where(eq(notificationDispatchLog.dedupeKey, target.dedupeKey));
+        }
       }
 
       if (anyTransient) {

@@ -4,9 +4,12 @@ import { QuickAddFab } from "@/components/quick-add-fab";
 import { DeviceIdentityProvider, useDeviceIdentity } from "@/device-identity/provider";
 import { PairingScreen } from "@/device-identity/pairing-screen";
 import { useReminderReconciliation } from "@/notifications/use-reminder-reconciliation";
+import { useNotificationLifecycle } from "@/notifications/use-notification-lifecycle";
+import { usePushTokenRegistration } from "@/notifications/use-push-token-registration";
 import { useOutboxFlushOnReconnect } from "@/outbox/use-outbox-flush-on-reconnect";
 import { PttButton } from "@/ptt/ptt-button";
 import { queryClient } from "@/queries/client";
+import { useQueryLifecycle } from "@/queries/use-query-lifecycle";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
 // NativeWind's own useColorScheme, not react-native's -- under the default
@@ -39,7 +42,10 @@ function RootContent() {
   // of hooks -- the hook itself is a no-op until identity/tasks are
   // available (see use-reminder-reconciliation.ts).
   useReminderReconciliation();
+  useNotificationLifecycle();
+  usePushTokenRegistration();
   useOutboxFlushOnReconnect();
+  useQueryLifecycle();
 
   if (isLoading) {
     return (

@@ -7,7 +7,9 @@ import { Pressable, SafeAreaView, ScrollView, Switch, Text, View } from "react-n
 import { useDeviceIdentity } from "@/device-identity/provider";
 import { REMINDERS_CHANNEL_ID, ensureNotificationPermission, ensureReminderChannel } from "@/notifications/channel";
 import { registerForPushNotifications } from "@/notifications/push-token";
-import { flushOutbox, getOutboxCount } from "@/outbox/queue";
+import { cancelOwnedReminders } from "@/notifications/scheduler";
+import { flushOutbox, getOutboxStats } from "@/outbox/queue";
+import { api } from "@/queries/client";
 import {
   useDevices,
   useRevokeDevice,
@@ -18,9 +20,9 @@ import {
 
 function OutboxDiagnostics() {
   const queryClient = useQueryClient();
-  const { data: count } = useQuery({
-    queryKey: ["outbox", "count"],
-    queryFn: getOutboxCount,
+  const { data: stats } = useQuery({
+    queryKey: ["outbox", "stats"],
+    queryFn: getOutboxStats,
     refetchInterval: 5000,
   });
   const [flushResult, setFlushResult] = useState<string | null>(null);
@@ -29,13 +31,16 @@ function OutboxDiagnostics() {
     <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
       <Text className="mb-2 text-base font-bold text-black dark:text-white">Offline outbox</Text>
       <Text className="mb-2 text-sm text-black dark:text-white">
-        Pending captures: {count ?? "…"}
+        Pending captures: {stats?.pending ?? "…"}
+        {stats?.failed ? ` · Needs attention: ${stats.failed}` : ""}
       </Text>
       <Pressable
         onPress={async () => {
-          const { flushed, remaining } = await flushOutbox();
-          setFlushResult(`Flushed ${flushed}, ${remaining} remaining`);
-          void queryClient.invalidateQueries({ queryKey: ["outbox", "count"] });
+          const { flushed, remaining, failed } = await flushOutbox();
+          setFlushResult(
+            `Flushed ${flushed}, ${remaining} pending${failed ? `, ${failed} need attention` : ""}`,
+          );
+          void queryClient.invalidateQueries({ queryKey: ["outbox"] });
           void queryClient.invalidateQueries({ queryKey: ["inbox"] });
         }}
         className="rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
@@ -57,6 +62,7 @@ function NotificationDiagnostics() {
   const [exactAlarmOk, setExactAlarmOk] = useState<boolean | null>(null);
   const [pushResult, setPushResult] = useState<string | null>(null);
   const [testScheduled, setTestScheduled] = useState<string | null>(null);
+  const [remoteTestResult, setRemoteTestResult] = useState<string | null>(null);
 
   return (
     <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
@@ -90,7 +96,10 @@ function NotificationDiagnostics() {
           try {
             const expoPushToken = await registerForPushNotifications();
             if (identity) {
-              updatePushToken.mutate({ id: identity.deviceId, body: { push_token: expoPushToken } });
+              await updatePushToken.mutateAsync({
+                id: identity.deviceId,
+                body: { push_token: expoPushToken },
+              });
             }
             setPushResult(`Got token: ${expoPushToken.slice(0, 24)}...`);
           } catch (err) {
@@ -104,6 +113,29 @@ function NotificationDiagnostics() {
         </Text>
       </Pressable>
       {pushResult ? <Text className="mb-2 text-xs text-neutral-500">{pushResult}</Text> : null}
+
+      <Pressable
+        onPress={async () => {
+          if (!identity) return;
+          setRemoteTestResult("Queueing…");
+          try {
+            await api.sendTestNotification(identity.token, identity.deviceId);
+            setRemoteTestResult("Queued for this device.");
+          } catch (error) {
+            setRemoteTestResult(
+              `Failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }}
+        className="mb-1 rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+      >
+        <Text className="text-center text-sm text-black dark:text-white">
+          Send remote test notification
+        </Text>
+      </Pressable>
+      {remoteTestResult ? (
+        <Text className="mb-2 text-xs text-neutral-500">{remoteTestResult}</Text>
+      ) : null}
 
       <Pressable
         onPress={async () => {
@@ -130,6 +162,36 @@ function NotificationDiagnostics() {
         </Text>
       </Pressable>
       {testScheduled ? <Text className="mt-1 text-xs text-neutral-500">{testScheduled}</Text> : null}
+
+      <Pressable
+        onPress={async () => {
+          await ensureReminderChannel();
+          const granted = await ensureNotificationPermission();
+          if (!granted) {
+            setTestScheduled("Permission not granted.");
+            return;
+          }
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: "Reboot survival test",
+              body: "Delivered without reopening Personal OS",
+            },
+            trigger: {
+              type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+              seconds: 120,
+              channelId: REMINDERS_CHANNEL_ID,
+            },
+          });
+          setTestScheduled(
+            `Reboot test scheduled for ${new Date(Date.now() + 120_000).toLocaleTimeString()}`,
+          );
+        }}
+        className="mt-1 rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+      >
+        <Text className="text-center text-sm text-black dark:text-white">
+          Schedule reboot test (2m)
+        </Text>
+      </Pressable>
     </View>
   );
 }
@@ -151,7 +213,15 @@ function NotifyToggle({
   );
 }
 
-function DeviceCard({ device, isThisDevice }: { device: Device; isThisDevice: boolean }) {
+function DeviceCard({
+  device,
+  isThisDevice,
+  onThisDeviceRevoked,
+}: {
+  device: Device;
+  isThisDevice: boolean;
+  onThisDeviceRevoked: () => Promise<void>;
+}) {
   const setPrimary = useSetPrimaryDevice();
   const updateDevice = useUpdateDevice();
   const revokeDevice = useRevokeDevice();
@@ -199,7 +269,13 @@ function DeviceCard({ device, isThisDevice }: { device: Device; isThisDevice: bo
       />
 
       <Pressable
-        onPress={() => revokeDevice.mutate(device.id)}
+        onPress={() =>
+          revokeDevice.mutate(device.id, {
+            onSuccess: () => {
+              if (isThisDevice) void onThisDeviceRevoked();
+            },
+          })
+        }
         disabled={revokeDevice.isPending || Boolean(device.revoked_at)}
         className="mt-2 rounded bg-red-100 px-3 py-2 dark:bg-red-950"
       >
@@ -227,10 +303,24 @@ export default function SettingsScreen() {
         {isError ? <Text className="text-red-600">Couldn&apos;t load devices.</Text> : null}
 
         {data?.items.map((device) => (
-          <DeviceCard key={device.id} device={device} isThisDevice={device.id === identity?.deviceId} />
+          <DeviceCard
+            key={device.id}
+            device={device}
+            isThisDevice={device.id === identity?.deviceId}
+            onThisDeviceRevoked={async () => {
+              await cancelOwnedReminders();
+              await clearIdentity();
+            }}
+          />
         ))}
 
-        <Pressable onPress={() => clearIdentity()} className="mt-4 rounded bg-neutral-200 px-3 py-3 dark:bg-neutral-800">
+        <Pressable
+          onPress={async () => {
+            await cancelOwnedReminders();
+            await clearIdentity();
+          }}
+          className="mt-4 rounded bg-neutral-200 px-3 py-3 dark:bg-neutral-800"
+        >
           <Text className="text-center text-black dark:text-white">Forget this device</Text>
         </Pressable>
       </ScrollView>

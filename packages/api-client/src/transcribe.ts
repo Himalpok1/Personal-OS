@@ -6,17 +6,11 @@ import {
 } from "@personal-os/schema";
 import { postMultipart } from "./client.js";
 
-// Duck-typed rather than DOM's File/Blob -- React Native's FormData accepts
-// {uri, name, type} objects directly (its own extension, not a web
-// standard), and that's the only shape expo-audio's recorder output can
-// produce without an extra file-read step. Framework-agnostic in the sense
-// that matters for this package: no react-native import, just an interface
-// shaped for how RN's fetch/FormData actually consume a local file.
-export interface TranscribeAudioFile {
-  uri: string;
-  name: string;
-  type: string;
-}
+// Standard Blob keeps the client framework-agnostic. Expo SDK 57's fetch
+// implementation deliberately rejects React Native's legacy {uri, name,
+// type} FormData extension, while expo-file-system's File implements Blob
+// (and supplies bytes() without first copying the recording into JS memory).
+export type TranscribeAudioFile = Blob & { readonly name?: string };
 
 export async function transcribe(
   baseUrl: string,
@@ -26,10 +20,7 @@ export async function transcribe(
   const parsed = TranscribeFieldsSchema.parse(fields);
 
   const form = new FormData();
-  // @types/node's FormData.append accepts an unknown value -- React
-  // Native's own FormData accepts a {uri, name, type} object at runtime
-  // (see TranscribeAudioFile's doc comment), so no cast is needed here.
-  form.append("audio", file, file.name);
+  form.append("audio", file, file.name ?? "audio");
   form.append("client_uuid", parsed.client_uuid);
   form.append("captured_at", parsed.captured_at);
   form.append("timezone", parsed.timezone);

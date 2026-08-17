@@ -145,6 +145,73 @@ describe("notifications.dispatch", () => {
     expect(row?.status).toBe("pending");
   });
 
+  it("MessageRateExceeded is transient and triggers pg-boss backoff", async () => {
+    const deviceId = await insertDevice(db);
+    sendPushNotificationsAsyncMock.mockResolvedValue([
+      { status: "error", message: "slow down", details: { error: "MessageRateExceeded" } },
+    ]);
+
+    await expect(
+      createNotificationsDispatchHandler(db)([
+        fakeJob({
+          category: "confirmation",
+          title: "t",
+          body: "b",
+          dedupeKey: "confirmation:rate-limited",
+        }),
+      ]),
+    ).rejects.toThrow(/transient failure/);
+
+    expect((await dispatchLogRow(db, `confirmation:rate-limited:${deviceId}`))?.status).toBe(
+      "pending",
+    );
+  });
+
+  it("a permanently failed row is terminal and is not claimed again", async () => {
+    const deviceId = await insertDevice(db);
+    await db.insert(notificationDispatchLog).values({
+      dedupeKey: `confirmation:permanent:${deviceId}`,
+      status: "failed",
+      lastError: "MessageTooBig",
+    });
+
+    await createNotificationsDispatchHandler(db)([
+      fakeJob({
+        category: "confirmation",
+        title: "t",
+        body: "b",
+        dedupeKey: "confirmation:permanent",
+      }),
+    ]);
+
+    expect(sendPushNotificationsAsyncMock).not.toHaveBeenCalled();
+  });
+
+  it("retries when Expo returns fewer tickets than claimed messages", async () => {
+    const firstDeviceId = await insertDevice(db);
+    const secondDeviceId = await insertDevice(db);
+    sendPushNotificationsAsyncMock.mockResolvedValue([{ status: "ok", id: "ticket-one" }]);
+
+    await expect(
+      createNotificationsDispatchHandler(db)([
+        fakeJob({
+          category: "confirmation",
+          title: "t",
+          body: "b",
+          dedupeKey: "confirmation:short-response",
+        }),
+      ]),
+    ).rejects.toThrow(/transient failure/);
+
+    const statuses = await Promise.all(
+      [firstDeviceId, secondDeviceId].map(async (deviceId) =>
+        dispatchLogRow(db, `confirmation:short-response:${deviceId}`),
+      ),
+    );
+    expect(statuses.map((row) => row?.status).sort()).toEqual(["accepted", "pending"]);
+    expect(statuses.find((row) => row?.status === "pending")?.lastError).toMatch(/no ticket/);
+  });
+
   it("a network-level failure (sendPushNotificationsAsync throws) leaves the row 'pending' and rethrows", async () => {
     const deviceId = await insertDevice(db);
     sendPushNotificationsAsyncMock.mockRejectedValue(new Error("fetch failed"));
@@ -233,6 +300,26 @@ describe("notifications.dispatch", () => {
     ]);
 
     expect(sendPushNotificationsAsyncMock).not.toHaveBeenCalled();
+  });
+
+  it("can target one device for a diagnostic notification", async () => {
+    const targetDeviceId = await insertDevice(db, { pushToken: "ExponentPushToken[target]" });
+    await insertDevice(db, { pushToken: "ExponentPushToken[other]" });
+    sendPushNotificationsAsyncMock.mockResolvedValue([{ status: "ok", id: "target-ticket" }]);
+
+    await createNotificationsDispatchHandler(db)([
+      fakeJob({
+        category: "alert",
+        title: "test",
+        body: "test",
+        dedupeKey: "test:one-device",
+        deviceId: targetDeviceId,
+      }),
+    ]);
+
+    expect(sendPushNotificationsAsyncMock).toHaveBeenCalledWith([
+      expect.objectContaining({ to: "ExponentPushToken[target]" }),
+    ]);
   });
 
   describe("quiet hours", () => {

@@ -30,8 +30,8 @@ export default defineConfig({
     // All route test files share one physical database (personalos_test)
     // and each truncates its tables in beforeEach -- running files in
     // parallel (vitest's default) causes one file's truncation to wipe out
-    // rows another file just inserted. Sequential execution trades speed
-    // (there's little to lose at this suite's size) for correctness.
+    // rows another file just inserted. The root test script also serializes
+    // Turbo package tasks because apps/worker shares this same database.
     fileParallelism: false,
   },
 });

@@ -1,55 +1,114 @@
+import { ApiClientError } from "@personal-os/api-client";
+import type { Task } from "@personal-os/schema";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { AppState, Platform } from "react-native";
+import ExactAlarmStatus from "../../modules/exact-alarm-status";
 import { useDeviceIdentity } from "@/device-identity/provider";
 import { api } from "@/queries/client";
-import { useTasks } from "@/queries/tasks";
 import { ensureNotificationPermission, ensureReminderChannel } from "./channel";
-import { applyReminderReconciliation } from "./scheduler";
+import { applyReminderReconciliation, cancelOwnedReminders } from "./scheduler";
 
-// Mounted once in the root layout. Re-runs whenever the active/inbox task
-// list changes -- which is every time, since every task mutation
-// (create/update/complete/drop/archive) already invalidates the ["tasks"]
-// query key (see queries/tasks.ts), so this hook needs no extra wiring
-// beyond subscribing to the same query every other screen already uses.
-//
-// "Only the primary reminder device schedules reminders" (per
-// docs/ARCHITECTURE.md's notification routing table): every device syncs
-// task data, but only the one marked is_primary_reminder_device ever calls
-// expo-notifications' scheduling API.
+const REMINDER_PAGE_SIZE = 200;
+
+async function listAllReminderTasks(): Promise<Task[]> {
+  const items: Task[] = [];
+  let offset = 0;
+
+  for (;;) {
+    const page = await api.listTasks({
+      status: ["inbox", "active"],
+      limit: REMINDER_PAGE_SIZE,
+      offset,
+    });
+    items.push(...page.items);
+    offset += page.items.length;
+    if (page.items.length === 0 || offset >= page.total) return items;
+  }
+}
+
+// Existing OS schedules remain authoritative while the API or tailnet is
+// unavailable. They are cancelled only when device state authoritatively
+// says this install may no longer own them.
 export function useReminderReconciliation(): void {
   const { identity } = useDeviceIdentity();
+  const [foregroundEpoch, setForegroundEpoch] = useState(0);
+  const previousIdentity = useRef(identity);
 
-  const { data: device } = useQuery({
+  const deviceQuery = useQuery({
     queryKey: ["devices", "self", identity?.deviceId],
     queryFn: () => api.getDevice(identity!.token, identity!.deviceId),
-    enabled: identity !== null,
-    // last_seen_at is diagnostic only (see docs/ARCHITECTURE.md) but this
-    // read still shouldn't go stale for minutes at a time -- primary
-    // status can change from the settings screen on another device.
+    enabled: identity !== null && Platform.OS !== "web",
     staleTime: 30_000,
+    refetchInterval: 60_000,
   });
 
-  const { data: tasksPage } = useTasks({ status: ["inbox", "active"], limit: 200 });
-
-  const channelReady = useRef(false);
+  const tasksQuery = useQuery({
+    queryKey: ["tasks", "reminders"],
+    queryFn: listAllReminderTasks,
+    enabled: identity !== null && Platform.OS !== "web",
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
 
   useEffect(() => {
-    if (device?.is_primary_reminder_device !== true) return;
-    if (!tasksPage) return;
+    if (Platform.OS === "web") return;
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") setForegroundEpoch((value) => value + 1);
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    const lostIdentity = previousIdentity.current !== null && identity === null;
+    previousIdentity.current = identity;
+    if (lostIdentity) void cancelOwnedReminders();
+  }, [identity]);
+
+  useEffect(() => {
+    if (Platform.OS === "web" || identity === null) return;
+
+    const device = deviceQuery.data;
+    const unauthorized =
+      deviceQuery.error instanceof ApiClientError && deviceQuery.error.status === 401;
+    const ineligible =
+      unauthorized ||
+      (device !== undefined &&
+        (device.revoked_at !== null ||
+          !device.notifications_enabled ||
+          !device.is_primary_reminder_device));
+
+    if (ineligible) {
+      void cancelOwnedReminders().catch((error: unknown) => {
+        console.warn("Failed to cancel local reminders for an ineligible device", error);
+      });
+      return;
+    }
+
+    // Generic fetch failures intentionally preserve already-scheduled
+    // alarms so reminders still work while the server is unreachable.
+    if (!device || !tasksQuery.data || !device.is_primary_reminder_device) return;
 
     let cancelled = false;
     void (async () => {
-      if (!channelReady.current) {
-        await ensureReminderChannel();
-        await ensureNotificationPermission();
-        channelReady.current = true;
-      }
-      if (cancelled) return;
-      await applyReminderReconciliation(tasksPage.items);
-    })();
+      await ensureReminderChannel();
+      const permissionGranted = await ensureNotificationPermission();
+      if (!permissionGranted || cancelled) return;
+      const exactAlarmCapable =
+        Platform.OS !== "android" || ExactAlarmStatus.canScheduleExactAlarms();
+      await applyReminderReconciliation(tasksQuery.data, exactAlarmCapable);
+    })().catch((error: unknown) => {
+      console.warn("Local reminder reconciliation failed", error);
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [device?.is_primary_reminder_device, tasksPage]);
+  }, [
+    deviceQuery.data,
+    deviceQuery.error,
+    foregroundEpoch,
+    identity,
+    tasksQuery.data,
+  ]);
 }

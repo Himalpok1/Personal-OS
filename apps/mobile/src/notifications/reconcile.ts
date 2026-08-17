@@ -30,6 +30,7 @@ export interface ScheduledReminder {
   taskId: string;
   notificationId: string;
   remindAt: string;
+  exactAlarmCapable?: boolean;
 }
 
 export interface ReconcileResult {
@@ -57,8 +58,10 @@ export function diffScheduledReminders(
   tasks: ReminderTask[],
   currentlyScheduled: ScheduledReminder[],
   now: Date,
+  exactAlarmCapable?: boolean,
 ): ReconcileResult {
   const scheduledByTaskId = new Map(currentlyScheduled.map((s) => [s.taskId, s]));
+  const tasksById = new Map(tasks.map((task) => [task.id, task]));
   const eligibleTaskIds = new Set<string>();
 
   const toSchedule: ReminderTask[] = [];
@@ -69,7 +72,12 @@ export function diffScheduledReminders(
     // No existing schedule, or the task's remind_at moved (an edit) since
     // it was last scheduled -- either way the stale/missing entry needs a
     // fresh notification.
-    if (!existing || existing.remindAt !== task.remind_at) {
+    if (
+      !existing ||
+      existing.remindAt !== task.remind_at ||
+      (exactAlarmCapable !== undefined &&
+        existing.exactAlarmCapable !== exactAlarmCapable)
+    ) {
       toSchedule.push(task);
     }
   }
@@ -82,8 +90,13 @@ export function diffScheduledReminders(
     }
     // Still eligible, but the reschedule case above needs the stale
     // notification cancelled too, or the task would end up with two.
-    const task = tasks.find((t) => t.id === scheduled.taskId);
-    if (task && task.remind_at !== scheduled.remindAt) {
+    const task = tasksById.get(scheduled.taskId);
+    if (
+      task &&
+      (task.remind_at !== scheduled.remindAt ||
+        (exactAlarmCapable !== undefined &&
+          scheduled.exactAlarmCapable !== exactAlarmCapable))
+    ) {
       toCancel.push(scheduled);
     }
   }

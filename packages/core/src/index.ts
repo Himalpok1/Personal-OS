@@ -12,3 +12,4 @@ export * from "./parse-confidence.js";
 export * from "./task-lifecycle.js";
 export * from "./device-auth.js";
 export * from "./quiet-hours.js";
+export * from "./transcription-confidence.js";

@@ -32,6 +32,20 @@ describe("diffScheduledReminders", () => {
     expect(result.toCancel).toEqual([]);
   });
 
+  it("re-schedules when exact-alarm capability changes", () => {
+    const scheduled: ScheduledReminder[] = [
+      {
+        taskId: "task-1",
+        notificationId: "n1",
+        remindAt: FUTURE,
+        exactAlarmCapable: false,
+      },
+    ];
+    const result = diffScheduledReminders([task()], scheduled, NOW, true);
+    expect(result.toSchedule).toEqual([task()]);
+    expect(result.toCancel).toEqual(scheduled);
+  });
+
   it("cancels and re-schedules when remind_at changes", () => {
     const scheduled: ScheduledReminder[] = [
       { taskId: "task-1", notificationId: "n1", remindAt: PAST },

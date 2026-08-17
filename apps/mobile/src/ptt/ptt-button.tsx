@@ -3,7 +3,9 @@ import { usePttRecorder } from "./use-ptt-recorder";
 
 const LABEL_BY_STATUS: Record<string, string> = {
   idle: "🎙️",
+  preparing: "…",
   recording: "⏹",
+  stopping: "…",
   uploading: "…",
   transcribing: "…",
   done: "✓",
@@ -18,7 +20,11 @@ const LABEL_BY_STATUS: Record<string, string> = {
 // at all.
 export function PttButton() {
   const ptt = usePttRecorder();
-  const busy = ptt.status === "uploading" || ptt.status === "transcribing";
+  const busy =
+    ptt.status === "preparing" ||
+    ptt.status === "stopping" ||
+    ptt.status === "uploading" ||
+    ptt.status === "transcribing";
 
   const onPress = () => {
     if (ptt.status === "idle" || ptt.status === "done") {
@@ -26,7 +32,8 @@ export function PttButton() {
     } else if (ptt.status === "recording") {
       void ptt.stopRecording();
     } else if (ptt.status === "failed") {
-      ptt.dismiss();
+      if (ptt.canRetry) void ptt.retryUpload();
+      else ptt.dismiss();
     }
   };
 
@@ -65,7 +72,7 @@ export function PttButton() {
       ) : null}
       {ptt.status === "failed" ? (
         <Text className="mt-1 max-w-[140px] text-xs text-red-600">
-          {ptt.error ?? "Failed"} (tap to dismiss)
+          {ptt.error ?? "Failed"} ({ptt.canRetry ? "tap to retry" : "tap to dismiss"})
         </Text>
       ) : null}
     </View>

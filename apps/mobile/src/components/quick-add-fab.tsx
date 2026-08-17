@@ -1,5 +1,16 @@
 import { useState } from "react";
-import { Alert, Modal, Pressable, Text, TextInput, View } from "react-native";
+import { randomUUID } from "expo-crypto";
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useCapture } from "@/queries/capture";
 
 // Mounted once in the root layout (per decision 5: quick-add is global, not
@@ -17,7 +28,7 @@ export function QuickAddFab() {
       {
         text: trimmed,
         source: "web",
-        client_uuid: crypto.randomUUID(),
+        client_uuid: randomUUID(),
         captured_at: new Date().toISOString(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
@@ -55,45 +66,52 @@ export function QuickAddFab() {
       </Pressable>
 
       <Modal visible={open} animationType="slide" transparent onRequestClose={() => setOpen(false)}>
-        <View className="flex-1 justify-end bg-black/40">
-          <View className="rounded-t-2xl bg-white p-4 dark:bg-neutral-900">
-            <Text className="mb-2 text-lg font-semibold text-black dark:text-white">
-              Quick capture
-            </Text>
-            <TextInput
-              value={text}
-              onChangeText={setText}
-              placeholder="Remind me to... / Idea: ... / Meeting tomorrow at..."
-              placeholderTextColor="#888"
-              multiline
-              autoFocus
-              className="min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-            />
-            {capture.isError ? (
-              <Text className="mt-2 text-red-600">
-                Couldn&apos;t save that -- check your connection and try again.
-              </Text>
-            ) : null}
-            <View className="mt-3 flex-row justify-end gap-2">
-              <Pressable
-                onPress={() => setOpen(false)}
-                className="rounded-lg px-4 py-2"
-                disabled={capture.isPending}
-              >
-                <Text className="text-neutral-500">Cancel</Text>
-              </Pressable>
-              <Pressable
-                onPress={submit}
-                className="rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-                disabled={capture.isPending || text.trim().length === 0}
-              >
-                <Text className="font-semibold text-white">
-                  {capture.isPending ? "Saving..." : "Capture"}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          className="flex-1"
+        >
+          <View className="flex-1 justify-end bg-black/40">
+            <SafeAreaView edges={["bottom"]} className="rounded-t-2xl bg-white dark:bg-neutral-900">
+              <View className="p-4">
+                <Text className="mb-2 text-lg font-semibold text-black dark:text-white">
+                  Quick capture
                 </Text>
-              </Pressable>
-            </View>
+                <TextInput
+                  value={text}
+                  onChangeText={setText}
+                  placeholder="Remind me to... / Idea: ... / Meeting tomorrow at..."
+                  placeholderTextColor="#888"
+                  multiline
+                  autoFocus
+                  className="min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+                />
+                {capture.isError ? (
+                  <Text className="mt-2 text-red-600">
+                    Couldn&apos;t save that -- check your connection and try again.
+                  </Text>
+                ) : null}
+                <View className="mt-3 flex-row justify-end gap-2">
+                  <Pressable
+                    onPress={() => setOpen(false)}
+                    className="rounded-lg px-4 py-2"
+                    disabled={capture.isPending}
+                  >
+                    <Text className="text-neutral-500">Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={submit}
+                    className="rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+                    disabled={capture.isPending || text.trim().length === 0}
+                  >
+                    <Text className="font-semibold text-white">
+                      {capture.isPending ? "Saving..." : "Capture"}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            </SafeAreaView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </>
   );

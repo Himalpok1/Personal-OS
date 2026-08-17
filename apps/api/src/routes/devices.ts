@@ -11,6 +11,7 @@ import {
 import { and, eq, gt, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { deviceAuthPreHandler } from "../plugins/device-auth.js";
+import { NOTIFICATIONS_DISPATCH_QUEUE } from "../queue-names.js";
 
 function toDeviceResponse(row: typeof devices.$inferSelect) {
   return DeviceSchema.parse({
@@ -174,6 +175,30 @@ export default function devicesRoutes(app: FastifyInstance): void {
       if (!row) return reply.code(404).send({ error: "not_found" });
       return toDeviceResponse(row);
     });
+
+    authed.post<{ Params: { id: string } }>(
+      "/devices/:id/test-notification",
+      async (request, reply) => {
+        if (request.device?.id !== request.params.id) {
+          return reply.code(403).send({ error: "forbidden_device_mismatch" });
+        }
+        const device = await findDevice(app, request.params.id);
+        if (!device) return reply.code(404).send({ error: "not_found" });
+        if (!device.pushToken) return reply.code(409).send({ error: "push_token_missing" });
+        if (!app.bossReady) return reply.code(503).send({ error: "queue_unavailable" });
+
+        const dedupeKey = `test:${device.id}:${Date.now()}`;
+        await app.boss.send(NOTIFICATIONS_DISPATCH_QUEUE, {
+          category: "alert",
+          title: "Personal OS test",
+          body: "Remote notifications are configured for this device.",
+          data: { test: true },
+          dedupeKey,
+          deviceId: device.id,
+        });
+        return reply.code(202).send({ queued: true });
+      },
+    );
 
     // Idempotent: revoking an already-revoked device is a no-op, not an
     // error. Does NOT auto-promote a new primary -- no automatic promotion

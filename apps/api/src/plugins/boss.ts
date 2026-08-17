@@ -3,7 +3,10 @@ import { PgBoss } from "pg-boss";
 import { env } from "../env.js";
 import {
   CAPTURE_PARSE_QUEUE,
+  NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
+  NOTIFICATIONS_DISPATCH_QUEUE,
   OCCURRENCES_GENERATE_LAZY_QUEUE,
+  PTT_TRANSCRIBE_DEAD_QUEUE,
   PTT_TRANSCRIBE_QUEUE,
   QUEUE_RETRY_OPTIONS,
 } from "../queue-names.js";
@@ -63,10 +66,23 @@ export async function registerBoss(app: FastifyInstance): Promise<void> {
       OCCURRENCES_GENERATE_LAZY_QUEUE,
       QUEUE_RETRY_OPTIONS[OCCURRENCES_GENERATE_LAZY_QUEUE],
     );
-    await boss.createQueue(PTT_TRANSCRIBE_QUEUE, QUEUE_RETRY_OPTIONS[PTT_TRANSCRIBE_QUEUE]);
+    // The dead-letter queue must exist before its primary queue because
+    // pg-boss enforces a foreign key from queue.dead_letter to queue.name.
+    // API and worker both create these identically so startup order cannot
+    // silently remove terminal-failure handling.
+    await boss.createQueue(PTT_TRANSCRIBE_DEAD_QUEUE);
+    await boss.createQueue(PTT_TRANSCRIBE_QUEUE, {
+      ...QUEUE_RETRY_OPTIONS[PTT_TRANSCRIBE_QUEUE],
+      deadLetter: PTT_TRANSCRIBE_DEAD_QUEUE,
+    });
+    await boss.createQueue(NOTIFICATIONS_DISPATCH_DEAD_QUEUE);
+    await boss.createQueue(NOTIFICATIONS_DISPATCH_QUEUE, {
+      ...QUEUE_RETRY_OPTIONS[NOTIFICATIONS_DISPATCH_QUEUE],
+      deadLetter: NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
+    });
   } else {
     app.log.error(
-      "pg-boss did not start after retries; capture/occurrence jobs will not be enqueued",
+      "pg-boss did not start after retries; capture/occurrence/transcription/notification jobs will not be enqueued",
     );
   }
 

@@ -69,7 +69,13 @@ export const DeviceUpdateSchema = z
   });
 export type DeviceUpdate = z.infer<typeof DeviceUpdateSchema>;
 
-export const DevicePushTokenSchema = z.object({ push_token: z.string().min(1) }).strict();
+export const DevicePushTokenSchema = z
+  .object({
+    push_token: z
+      .string()
+      .regex(/^Expo(?:nent)?PushToken\[[A-Za-z0-9_-]+\]$/, "invalid Expo push token"),
+  })
+  .strict();
 export type DevicePushToken = z.infer<typeof DevicePushTokenSchema>;
 
 export const DeviceListQuerySchema = z.object({

@@ -13,6 +13,7 @@ import { z } from "zod";
 import { buildQuery, fetchJson } from "./client.js";
 
 const DeviceListResponseSchema = z.object({ items: z.array(DeviceSchema) });
+const TestNotificationResponseSchema = z.object({ queued: z.literal(true) });
 
 export interface DeviceListParams {
   include_revoked?: boolean;
@@ -81,6 +82,17 @@ export async function updateDevicePushToken(
 
 export async function revokeDevice(baseUrl: string, token: string, id: string): Promise<Device> {
   return fetchJson(baseUrl, `/devices/${id}/revoke`, DeviceSchema, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function sendTestNotification(
+  baseUrl: string,
+  token: string,
+  id: string,
+): Promise<{ queued: true }> {
+  return fetchJson(baseUrl, `/devices/${id}/test-notification`, TestNotificationResponseSchema, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
   });

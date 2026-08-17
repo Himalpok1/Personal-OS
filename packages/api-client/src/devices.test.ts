@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { registerDevice, revokeDevice } from "./devices.js";
+import { registerDevice, revokeDevice, sendTestNotification } from "./devices.js";
 
 const deviceRow = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -62,6 +62,29 @@ describe("revokeDevice", () => {
     await revokeDevice("http://localhost:3000", "my-device-token", deviceRow.id);
 
     const [, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect((init.headers as Record<string, string>)["Authorization"]).toBe(
+      "Bearer my-device-token",
+    );
+  });
+});
+
+describe("sendTestNotification", () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("targets the authenticated device test endpoint", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ queued: true }), { status: 202 }));
+    global.fetch = fetchMock;
+
+    await sendTestNotification("http://localhost:3000", "my-device-token", deviceRow.id);
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe(`http://localhost:3000/devices/${deviceRow.id}/test-notification`);
+    expect(init.method).toBe("POST");
     expect((init.headers as Record<string, string>)["Authorization"]).toBe(
       "Bearer my-device-token",
     );

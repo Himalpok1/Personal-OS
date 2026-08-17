@@ -5,132 +5,262 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from "expo-audio";
-import { useCallback, useRef, useState } from "react";
+import { randomUUID } from "expo-crypto";
+import { File } from "expo-file-system";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AppState } from "react-native";
 import { api } from "@/queries/client";
 
-// Touch-based tap-to-start/tap-to-stop is the primary interaction (per the
-// Phase 3 plan's explicit exclusion of any side-button dependency) -- this
-// hook has no knowledge of hardware input at all, matching the
-// hardware-input isolation rule established in Checkpoint 3.
-export type PttStatus = "idle" | "recording" | "uploading" | "transcribing" | "done" | "failed";
+export type PttStatus =
+  | "idle"
+  | "preparing"
+  | "recording"
+  | "stopping"
+  | "uploading"
+  | "transcribing"
+  | "done"
+  | "failed";
 
 interface PttState {
   status: PttStatus;
   error: string | null;
+  canRetry: boolean;
 }
 
-// Bounds how long we'll poll GET /inbox/:id waiting for the ptt.transcribe
-// job to fill in raw_text before giving up and surfacing a failure -- the
-// capture itself is never lost (it's already committed server-side), this
-// only bounds how long the UI keeps showing "Transcribing...".
+interface UploadAttempt {
+  uri: string;
+  clientUuid: string;
+  capturedAt: string;
+}
+
 const TRANSCRIBING_POLL_MS = 1500;
 const TRANSCRIBING_TIMEOUT_MS = 60_000;
+const MAX_RECORDING_MS = 2 * 60_000;
 
 export function usePttRecorder() {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 250);
-  const [state, setState] = useState<PttState>({ status: "idle", error: null });
-  // One client_uuid per recording attempt, generated at record-start and
-  // held for the life of that attempt -- matches quick-add-fab's pattern
-  // and is what makes a retried upload of the same recording idempotent
-  // server-side (POST /transcribe dedupes on client_uuid).
-  const clientUuidRef = useRef<string | null>(null);
-  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollDeadline = useRef(0);
+  const [state, setState] = useState<PttState>({
+    status: "idle",
+    error: null,
+    canRetry: false,
+  });
+  const stateRef = useRef(state);
+  const mountedRef = useRef(true);
+  const uploadAttemptRef = useRef<UploadAttempt | null>(null);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollGeneration = useRef(0);
+
+  const updateState = useCallback((next: PttState) => {
+    stateRef.current = next;
+    if (mountedRef.current) setState(next);
+  }, []);
 
   const stopPolling = useCallback(() => {
+    pollGeneration.current += 1;
     if (pollTimer.current !== null) {
-      clearInterval(pollTimer.current);
+      clearTimeout(pollTimer.current);
       pollTimer.current = null;
     }
   }, []);
 
-  const startRecording = useCallback(async () => {
-    const permission = await requestRecordingPermissionsAsync();
-    if (!permission.granted) {
-      setState({ status: "failed", error: "Microphone permission was not granted." });
-      return;
+  const clearDoneTimer = useCallback(() => {
+    if (doneTimer.current !== null) {
+      clearTimeout(doneTimer.current);
+      doneTimer.current = null;
     }
-    await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
-    clientUuidRef.current = crypto.randomUUID();
-    await recorder.prepareToRecordAsync();
-    recorder.record();
-    setState({ status: "recording", error: null });
-  }, [recorder]);
+  }, []);
 
   const pollTranscription = useCallback(
     (inboxId: string) => {
-      pollDeadline.current = Date.now() + TRANSCRIBING_TIMEOUT_MS;
-      pollTimer.current = setInterval(() => {
-        api
-          .getInboxItem(inboxId)
-          .then((item) => {
-            if (item.raw_text !== null) {
-              stopPolling();
-              setState({ status: "done", error: null });
-              setTimeout(() => setState({ status: "idle", error: null }), 1500);
-              return;
-            }
-            if (item.status === "failed") {
-              stopPolling();
-              setState({ status: "failed", error: "Transcription failed." });
-              return;
-            }
-            if (Date.now() > pollDeadline.current) {
-              stopPolling();
-              setState({
-                status: "failed",
-                error: "Transcription is taking longer than expected.",
-              });
-            }
-          })
-          .catch(() => {
-            // Transient poll failure -- the inbox row and its audio are
-            // already safely committed server-side, so we just keep
-            // polling until TRANSCRIBING_TIMEOUT_MS.
-          });
-      }, TRANSCRIBING_POLL_MS);
+      stopPolling();
+      const generation = pollGeneration.current;
+      const deadline = Date.now() + TRANSCRIBING_TIMEOUT_MS;
+
+      const failIfTimedOut = (): boolean => {
+        if (Date.now() <= deadline) return false;
+        stopPolling();
+        updateState({
+          status: "failed",
+          error: "Transcription is taking longer than expected.",
+          canRetry: false,
+        });
+        return true;
+      };
+
+      const poll = async () => {
+        if (!mountedRef.current || generation !== pollGeneration.current || failIfTimedOut()) {
+          return;
+        }
+        try {
+          const item = await api.getInboxItem(inboxId);
+          if (!mountedRef.current || generation !== pollGeneration.current) return;
+          if (item.raw_text !== null) {
+            stopPolling();
+            uploadAttemptRef.current = null;
+            updateState({ status: "done", error: null, canRetry: false });
+            clearDoneTimer();
+            doneTimer.current = setTimeout(() => {
+              updateState({ status: "idle", error: null, canRetry: false });
+            }, 1500);
+            return;
+          }
+          if (item.status === "failed") {
+            stopPolling();
+            uploadAttemptRef.current = null;
+            updateState({
+              status: "failed",
+              error: "Transcription failed.",
+              canRetry: false,
+            });
+            return;
+          }
+        } catch {
+          // The row is already durable on the server. Keep trying until
+          // the same wall-clock deadline, including during network errors.
+        }
+        if (failIfTimedOut()) return;
+        pollTimer.current = setTimeout(poll, TRANSCRIBING_POLL_MS);
+      };
+
+      pollTimer.current = setTimeout(poll, 0);
     },
-    [stopPolling],
+    [clearDoneTimer, stopPolling, updateState],
   );
 
-  const stopRecording = useCallback(async () => {
-    if (state.status !== "recording") return;
-    await recorder.stop();
-    const uri = recorder.uri;
-    const clientUuid = clientUuidRef.current;
-    if (!uri || !clientUuid) {
-      setState({ status: "failed", error: "No recording was captured." });
-      return;
-    }
-    setState({ status: "uploading", error: null });
+  const uploadRecording = useCallback(
+    async (attempt: UploadAttempt) => {
+      updateState({ status: "uploading", error: null, canRetry: false });
+      try {
+        const { inbox_id } = await api.transcribe(new File(attempt.uri), {
+            client_uuid: attempt.clientUuid,
+            captured_at: attempt.capturedAt,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        });
+        if (!mountedRef.current) return;
+        updateState({ status: "transcribing", error: null, canRetry: false });
+        pollTranscription(inbox_id);
+      } catch (error) {
+        console.warn("PTT upload failed", error);
+        updateState({
+          status: "failed",
+          error: "Upload failed — check your connection.",
+          canRetry: true,
+        });
+      }
+    },
+    [pollTranscription, updateState],
+  );
+
+  const startRecording = useCallback(async () => {
+    if (stateRef.current.status !== "idle" && stateRef.current.status !== "done") return;
+    clearDoneTimer();
+    stopPolling();
+    uploadAttemptRef.current = null;
+    updateState({ status: "preparing", error: null, canRetry: false });
     try {
-      const { inbox_id } = await api.transcribe(
-        { uri, name: "ptt.m4a", type: "audio/m4a" },
-        {
-          client_uuid: clientUuid,
-          captured_at: new Date().toISOString(),
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        },
-      );
-      setState({ status: "transcribing", error: null });
-      pollTranscription(inbox_id);
-    } catch {
-      setState({ status: "failed", error: "Upload failed -- check your connection." });
+      const permission = await requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        updateState({
+          status: "failed",
+          error: "Microphone permission was not granted.",
+          canRetry: false,
+        });
+        return;
+      }
+      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+      const attempt: UploadAttempt = {
+        uri: "",
+        clientUuid: randomUUID(),
+        capturedAt: new Date().toISOString(),
+      };
+      uploadAttemptRef.current = attempt;
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      updateState({ status: "recording", error: null, canRetry: false });
+    } catch (error) {
+      updateState({
+        status: "failed",
+        error: error instanceof Error ? error.message : "Could not start recording.",
+        canRetry: false,
+      });
     }
-  }, [recorder, state.status, pollTranscription]);
+  }, [clearDoneTimer, recorder, stopPolling, updateState]);
+
+  const stopRecording = useCallback(async () => {
+    if (stateRef.current.status !== "recording") return;
+    updateState({ status: "stopping", error: null, canRetry: false });
+    try {
+      await recorder.stop();
+      await setAudioModeAsync({ allowsRecording: false });
+      const uri = recorder.uri;
+      const attempt = uploadAttemptRef.current;
+      if (!uri || !attempt) {
+        updateState({ status: "failed", error: "No recording was captured.", canRetry: false });
+        return;
+      }
+      const completedAttempt = { ...attempt, uri };
+      uploadAttemptRef.current = completedAttempt;
+      await uploadRecording(completedAttempt);
+    } catch (error) {
+      updateState({
+        status: "failed",
+        error: error instanceof Error ? error.message : "Could not stop recording.",
+        canRetry: false,
+      });
+    }
+  }, [recorder, updateState, uploadRecording]);
+
+  const retryUpload = useCallback(async () => {
+    if (stateRef.current.status !== "failed" || !stateRef.current.canRetry) return;
+    const attempt = uploadAttemptRef.current;
+    if (attempt) await uploadRecording(attempt);
+  }, [uploadRecording]);
 
   const dismiss = useCallback(() => {
     stopPolling();
-    setState({ status: "idle", error: null });
-  }, [stopPolling]);
+    clearDoneTimer();
+    uploadAttemptRef.current = null;
+    updateState({ status: "idle", error: null, canRetry: false });
+  }, [clearDoneTimer, stopPolling, updateState]);
+
+  useEffect(() => {
+    if (state.status === "recording" && recorderState.durationMillis >= MAX_RECORDING_MS) {
+      void stopRecording();
+    }
+  }, [recorderState.durationMillis, state.status, stopRecording]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (appState) => {
+      if (appState !== "active" && stateRef.current.status === "recording") {
+        void stopRecording();
+      }
+    });
+    return () => subscription.remove();
+  }, [stopRecording]);
+
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+      stopPolling();
+      clearDoneTimer();
+      if (stateRef.current.status === "recording") {
+        void recorder.stop().catch(() => undefined);
+      }
+      void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
+    },
+    [clearDoneTimer, recorder, stopPolling],
+  );
 
   return {
     status: state.status,
     error: state.error,
+    canRetry: state.canRetry,
     durationMillis: recorderState.durationMillis,
     startRecording,
     stopRecording,
+    retryUpload,
     dismiss,
   };
 }

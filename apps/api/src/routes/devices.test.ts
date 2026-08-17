@@ -2,7 +2,7 @@ import { generatePairingCode, hashPairingCode } from "@personal-os/core";
 import { devicePairingCodes } from "@personal-os/db";
 import type { Device, DeviceRegisterResponse } from "@personal-os/schema";
 import type { FastifyInstance } from "fastify";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
 import type { ErrorBody } from "../test/types.js";
 
@@ -34,6 +34,7 @@ describe("devices routes", () => {
   });
 
   beforeEach(async () => {
+    vi.restoreAllMocks();
     await truncateTestTables(app);
   });
 
@@ -213,6 +214,48 @@ describe("devices routes", () => {
       });
       expect(other.statusCode).toBe(403);
       expect(other.json<ErrorBody>().error).toBe("forbidden_device_mismatch");
+    });
+
+    it("test-notification targets the authenticated device after token registration", async () => {
+      const { token, device } = await registerAndGetToken(app, "Rabbit R1");
+      await app.inject({
+        method: "POST",
+        url: `/devices/${device.id}/push-token`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { push_token: "ExponentPushToken[abc]" },
+      });
+      const sendSpy = vi.spyOn(app.boss, "send").mockResolvedValue("notification-job");
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/devices/${device.id}/test-notification`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+      expect(response.statusCode).toBe(202);
+      expect(sendSpy).toHaveBeenCalledWith(
+        "notifications.dispatch",
+        expect.objectContaining({ category: "alert", deviceId: device.id }),
+      );
+    });
+
+    it("test-notification rejects another device and a device without a push token", async () => {
+      const { token, device } = await registerAndGetToken(app, "A");
+      const { device: other } = await registerAndGetToken(app, "B");
+
+      const missing = await app.inject({
+        method: "POST",
+        url: `/devices/${device.id}/test-notification`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(missing.statusCode).toBe(409);
+
+      const forbidden = await app.inject({
+        method: "POST",
+        url: `/devices/${other.id}/test-notification`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(forbidden.statusCode).toBe(403);
     });
 
     it("revoke is idempotent", async () => {

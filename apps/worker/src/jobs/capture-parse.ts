@@ -3,7 +3,11 @@ import {
   NoProviderConfiguredError,
   resolveModelForTask,
 } from "@personal-os/ai-providers";
-import { computeConfidence, type ConfidenceSignals } from "@personal-os/core";
+import {
+  computeConfidence,
+  isLowTranscriptionConfidence,
+  type ConfidenceSignals,
+} from "@personal-os/core";
 import { inboxItems, type Db } from "@personal-os/db";
 import {
   CreateEventToolSchema,
@@ -15,9 +19,11 @@ import {
 } from "@personal-os/schema";
 import { generateText, tool, type LanguageModel } from "ai";
 import { eq } from "drizzle-orm";
-import type { Job } from "pg-boss";
+import type { Job, PgBoss } from "pg-boss";
 import { commitParsedEntity, hasKnownProject } from "../commit-parsed-entity.js";
 import { env } from "../env.js";
+import { NOTIFICATIONS_DISPATCH_QUEUE } from "../queue-names.js";
+import type { NotificationsDispatchJobData } from "./notifications-dispatch.js";
 
 export const TASK_NAME = "capture_parser";
 
@@ -26,7 +32,6 @@ export const TASK_NAME = "capture_parser";
 // the same temperature -- the signal is *disagreement between samples*, not
 // a single low-temperature call.
 const CONFIDENCE_SAMPLE_TEMPERATURE = 0.3;
-
 const RELATIVE_DATE_PHRASES = [
   "today",
   "tomorrow",
@@ -140,7 +145,7 @@ async function commitAndUpdate(
     .where(eq(inboxItems.id, inboxId));
 }
 
-async function runAutoParse(db: Db, row: typeof inboxItems.$inferSelect): Promise<void> {
+async function runAutoParse(db: Db, row: typeof inboxItems.$inferSelect): Promise<boolean> {
   // Invariant, not a normal error path: a PTT capture's raw_text is null
   // until ptt.transcribe fills it in, and that job only ever enqueues
   // capture.parse *after* setting raw_text (see
@@ -163,7 +168,7 @@ async function runAutoParse(db: Db, row: typeof inboxItems.$inferSelect): Promis
         .update(inboxItems)
         .set({ status: "failed", parseResult: { error: err.message } })
         .where(eq(inboxItems.id, row.id));
-      return;
+      return false;
     }
     throw err;
   }
@@ -182,7 +187,7 @@ async function runAutoParse(db: Db, row: typeof inboxItems.$inferSelect): Promis
       .update(inboxItems)
       .set({ status: "needs_confirm", parseResult: storedResult, confidence: 0 })
       .where(eq(inboxItems.id, row.id));
-    return;
+    return true;
   }
 
   const unknownProjectReference = !(await hasKnownProject(db, projectNameOf(sampleA)));
@@ -193,15 +198,13 @@ async function runAutoParse(db: Db, row: typeof inboxItems.$inferSelect): Promis
     recurrenceInferred: sampleA.tool === "create_task" && Boolean(sampleA.args.rrule),
     degenerateTitle: isDegenerateTitle(sampleA),
     unknownProjectReference,
-    // No STT integration in Phase 1 (voice capture is Phase 3) -- this
-    // signal can never fire yet.
-    lowTranscriptionConfidence: false,
+    lowTranscriptionConfidence: isLowTranscriptionConfidence(row.source, row.confidence),
   };
   const { level, flags } = computeConfidence(signals);
 
   if (level === "high") {
     await commitAndUpdate(db, row.id, sampleA, row.timezone, "parsed");
-    return;
+    return false;
   }
 
   const storedResult: StoredParseResult = { toolCall: sampleA, confidenceFlags: flags };
@@ -209,6 +212,7 @@ async function runAutoParse(db: Db, row: typeof inboxItems.$inferSelect): Promis
     .update(inboxItems)
     .set({ status: "needs_confirm", parseResult: storedResult, confidence: 0 })
     .where(eq(inboxItems.id, row.id));
+  return true;
 }
 
 async function runConfirm(db: Db, row: typeof inboxItems.$inferSelect): Promise<void> {
@@ -225,7 +229,21 @@ export interface CaptureParseJobData {
   mode?: "confirm";
 }
 
-export function createCaptureParseHandler(db: Db) {
+async function enqueueConfirmationPush(
+  boss: PgBoss,
+  row: typeof inboxItems.$inferSelect,
+): Promise<void> {
+  const data: NotificationsDispatchJobData = {
+    category: "confirmation",
+    title: "Capture needs confirmation",
+    body: row.rawText ?? "A voice capture needs your review.",
+    data: { inboxId: row.id },
+    dedupeKey: `confirmation:${row.id}`,
+  };
+  await boss.send(NOTIFICATIONS_DISPATCH_QUEUE, data, { singletonKey: `confirmation:${row.id}` });
+}
+
+export function createCaptureParseHandler(db: Db, boss: PgBoss) {
   return async function handleCaptureParse(jobs: Job<CaptureParseJobData>[]): Promise<void> {
     for (const job of jobs) {
       const { inboxId, mode } = job.data;
@@ -241,10 +259,18 @@ export function createCaptureParseHandler(db: Db) {
         if (row.status !== "needs_confirm") continue;
         await runConfirm(db, row);
       } else {
+        // A prior attempt may have committed needs_confirm and then failed
+        // before enqueueing its push. Re-enqueue from durable row state;
+        // notifications.dispatch's per-device dedupe prevents duplicates.
+        if (row.status === "needs_confirm") {
+          await enqueueConfirmationPush(boss, row);
+          continue;
+        }
         // Idempotency guard: a duplicate delivery of an already-processed
         // capture is a no-op.
         if (row.status !== "pending") continue;
-        await runAutoParse(db, row);
+        const needsConfirmation = await runAutoParse(db, row);
+        if (needsConfirmation) await enqueueConfirmationPush(boss, row);
       }
     }
   };

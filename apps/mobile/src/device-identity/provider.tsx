@@ -27,11 +27,17 @@ export function DeviceIdentityProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    getStoredDeviceCredentials().then((stored) => {
-      if (cancelled) return;
-      setIdentityState(stored);
-      setIsLoading(false);
-    });
+    getStoredDeviceCredentials()
+      .then((stored) => {
+        if (cancelled) return;
+        setIdentityState(stored);
+      })
+      .catch((error: unknown) => {
+        console.warn("Failed to load device credentials", error);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
     return () => {
       cancelled = true;
     };

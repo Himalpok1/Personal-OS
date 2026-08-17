@@ -33,6 +33,10 @@ Do not change a **Locked** decision without explicit user approval.
 | ADR-025 | Production host is native Ubuntu Desktop (hostname `personal-os`), Tailscale installed directly on the OS | Locked |
 | ADR-026 | Provider-agnostic AI layer: Vercel AI SDK abstraction (`packages/ai-providers`) over user-supplied, DB-stored, encrypted-at-rest API keys — no LLM provider hardcoded, no per-vendor env vars, no silent fallback to an unconfigured provider (user-approved 2026-08-15) | Locked |
 | ADR-027 | `notes` table added to the Phase 1 data model — missing from earlier revisions of `ARCHITECTURE.md` despite `create_note` being one of the four parser tools since Phase 1 (user-approved 2026-08-15) | Locked |
+| ADR-028 | Device registration requires a 15-minute, atomically single-use pairing code generated only through trusted server CLI access; device bearer tokens are hash-only server-side and stored in SecureStore on-device | Locked |
+| ADR-029 | Device-token auth is scoped to device/notification endpoints. General API access remains Tailscale-perimeter-only; full lost-device revocation still requires tailnet removal | Locked |
+| ADR-030 | Notification dispatch status `accepted` means Expo accepted the request, not confirmed device delivery; receipt polling is deferred | Locked for MVP |
+| ADR-031 | Android reminder reboot survival uses Expo Notifications' built-in boot rescheduling, verified on the physical Rabbit R1 without opening the app after reboot; no parallel Headless JS scheduler is added | Locked for current Android build |
 
 ## Open later-phase decisions
 

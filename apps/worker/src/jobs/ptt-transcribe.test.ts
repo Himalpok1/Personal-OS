@@ -122,6 +122,7 @@ describe("ptt.transcribe", () => {
 
     const [row] = await db.select().from(inboxItems).where(eq(inboxItems.id, inboxId));
     expect(row?.rawText).toBe("call the insurance guy tomorrow");
+    expect(row?.confidence).toBe(-0.1);
     expect(row?.audioPath).toBeNull();
     await expect(readFile(audioPath)).rejects.toThrow();
     expect(bossSend).toHaveBeenCalledWith("capture.parse", { inboxId }, { singletonKey: inboxId });

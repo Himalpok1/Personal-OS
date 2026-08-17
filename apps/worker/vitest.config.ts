@@ -2,7 +2,8 @@ import path from "node:path";
 import { defineConfig } from "vitest/config";
 
 // See apps/api/vitest.config.ts for the rationale -- same shared test
-// database (personalos_test), same reason for overriding DATABASE_URL.
+// database (personalos_test), same reason for overriding DATABASE_URL and
+// for the root test script serializing Turbo package tasks.
 process.loadEnvFile(path.resolve(import.meta.dirname, "../../.env"));
 
 export default defineConfig({

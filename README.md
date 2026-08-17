@@ -6,9 +6,11 @@ The canonical design is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Current state
 
-The repository is at **pre-implementation / Phase 0 start**.
-
-No later phase should begin until Phase 0 is complete.
+Phases 0, 1, and 2 are complete and production-verified. **Phase 3 is in
+progress**: device auth/pairing, native Android foundations, transcription
+workers, local reminders, the capture outbox, and touch-driven PTT are
+implemented. Production has not been modified for the in-progress Phase 3
+work.
 
 See [`docs/STATUS.md`](docs/STATUS.md).
 

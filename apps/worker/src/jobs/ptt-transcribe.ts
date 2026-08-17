@@ -105,7 +105,7 @@ export function createPttTranscribeHandler(db: Db, boss: PgBoss) {
       // transcript with no recoverable audio.
       await db
         .update(inboxItems)
-        .set({ rawText: result.text, audioPath: null })
+        .set({ rawText: result.text, confidence: result.avgLogprob, audioPath: null })
         .where(eq(inboxItems.id, inboxId));
 
       await unlink(audioPath).catch((err: unknown) => {

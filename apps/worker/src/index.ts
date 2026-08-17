@@ -74,7 +74,7 @@ async function main(): Promise<void> {
   // unless overridden per-send. See QUEUE_RETRY_OPTIONS for why apps/api
   // must create these same two shared queues with identical options.
   await boss.createQueue(CAPTURE_PARSE_QUEUE, QUEUE_RETRY_OPTIONS[CAPTURE_PARSE_QUEUE]);
-  await boss.work(CAPTURE_PARSE_QUEUE, createCaptureParseHandler(db));
+  await boss.work(CAPTURE_PARSE_QUEUE, createCaptureParseHandler(db, boss));
 
   await boss.createQueue(
     OCCURRENCES_EXPAND_WINDOW_QUEUE,
