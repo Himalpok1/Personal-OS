@@ -18,6 +18,26 @@ const { applyReminderReconciliation, cancelOwnedReminders } = await import("./sc
 
 const FUTURE = new Date(Date.now() + 60_000).toISOString();
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+function reminderTask(id: string) {
+  return {
+    id,
+    title: `Task ${id}`,
+    remind_at: FUTURE,
+    status: "active" as const,
+    archived_at: null,
+  };
+}
+
 describe("local reminder scheduler", () => {
   beforeEach(() => {
     cancelMock.mockReset().mockResolvedValue(undefined);
@@ -92,5 +112,55 @@ describe("local reminder scheduler", () => {
 
     expect(cancelMock).toHaveBeenCalledWith("old");
     expect(scheduleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("repairs duplicate owned reminders without cancelling unrelated notifications", async () => {
+    getAllMock.mockResolvedValue([
+      {
+        identifier: "retained",
+        content: {
+          data: { taskId: "task-1", remindAt: FUTURE, exactAlarmCapable: true },
+        },
+      },
+      {
+        identifier: "duplicate",
+        content: {
+          data: { taskId: "task-1", remindAt: FUTURE, exactAlarmCapable: true },
+        },
+      },
+      {
+        identifier: "unrelated",
+        content: { data: { source: "another-app" } },
+      },
+    ]);
+
+    await applyReminderReconciliation([reminderTask("task-1")], true);
+
+    expect(cancelMock).toHaveBeenCalledTimes(1);
+    expect(cancelMock).toHaveBeenCalledWith("duplicate");
+    expect(scheduleMock).not.toHaveBeenCalled();
+  });
+
+  it("serializes overlapping reconciliations and continues after an earlier failure", async () => {
+    const firstSchedule = deferred<string>();
+    scheduleMock
+      .mockImplementationOnce(() => firstSchedule.promise)
+      .mockResolvedValueOnce("notification-2");
+
+    const first = applyReminderReconciliation([reminderTask("task-1")]);
+    const second = applyReminderReconciliation([reminderTask("task-2")]);
+
+    await vi.waitFor(() => expect(scheduleMock).toHaveBeenCalledTimes(1));
+    expect(getAllMock).toHaveBeenCalledTimes(1);
+    expect(scheduleMock.mock.calls[0]?.[0].content.data).toMatchObject({ taskId: "task-1" });
+
+    firstSchedule.reject(new Error("first reconciliation failed"));
+
+    await expect(first).rejects.toThrow("first reconciliation failed");
+    await expect(second).resolves.toBeUndefined();
+    expect(getAllMock).toHaveBeenCalledTimes(2);
+    expect(
+      scheduleMock.mock.calls.map(([request]) => request.content.data["taskId"]),
+    ).toEqual(["task-1", "task-2"]);
   });
 });

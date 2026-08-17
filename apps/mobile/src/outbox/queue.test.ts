@@ -21,6 +21,22 @@ const BODY: CaptureRequest = {
   timezone: "America/Chicago",
 };
 
+const SECOND_BODY: CaptureRequest = {
+  ...BODY,
+  text: "Buy milk",
+  client_uuid: "33333333-3333-4333-8333-333333333333",
+};
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
 function memoryRepository(): { repository: OutboxRepository; rows: Map<string, OutboxRow> } {
   const rows = new Map<string, OutboxRow>();
   const repository: OutboxRepository = {
@@ -142,5 +158,35 @@ describe("capture outbox", () => {
       remaining: 0,
     });
     expect(captureMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes overlapping operations and continues after an earlier failure", async () => {
+    const firstDelivery = deferred<{ inbox_id: string }>();
+    const { repository, rows } = memoryRepository();
+    getRepositoryMock.mockResolvedValue(repository);
+    captureMock
+      .mockImplementationOnce(() => firstDelivery.promise)
+      .mockResolvedValueOnce({ inbox_id: "44444444-4444-4444-8444-444444444444" });
+
+    const first = enqueueAndAttemptCapture(BODY);
+    const second = enqueueAndAttemptCapture(SECOND_BODY);
+
+    await vi.waitFor(() => expect(captureMock).toHaveBeenCalledTimes(1));
+    expect([...rows.keys()]).toEqual([BODY.client_uuid]);
+    expect(captureMock.mock.calls[0]?.[0].client_uuid).toBe(BODY.client_uuid);
+
+    firstDelivery.reject(new ApiClientError(400, "first_failed"));
+
+    await expect(first).rejects.toThrow(/first_failed/);
+    await expect(second).resolves.toEqual({
+      status: "sent",
+      inbox_id: "44444444-4444-4444-8444-444444444444",
+    });
+    expect(captureMock.mock.calls.map(([body]) => body.client_uuid)).toEqual([
+      BODY.client_uuid,
+      SECOND_BODY.client_uuid,
+    ]);
+    expect(rows.get(BODY.client_uuid)?.permanent).toBe(1);
+    expect(rows.has(SECOND_BODY.client_uuid)).toBe(false);
   });
 });

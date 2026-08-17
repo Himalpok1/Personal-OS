@@ -382,9 +382,31 @@ Implementation began only after explicit user approval. Production was not acces
 | PTT record/upload/poll | Physical touch start/stop and retry states worked; SDK-57 multipart upload reached `/transcribe`; with no local STT route, the worker's deliberate terminal failure rendered “Transcription failed” rather than a network error or indefinite spinner |
 | Offline outbox restart/replay | With API reachability removed: saved offline → force-stop/restart → Settings showed one pending capture. Restoring reachability flushed to zero and Inbox showed “Offline outbox checkpoint” exactly once |
 | Exact-alarm bridge | The ROM's package/app-op reports are internally inconsistent, but actual scheduled alarms carry Android's exact-permission reason and deliver exactly; runtime behavior is the deciding evidence |
-| Automated workspace gate | Build, typecheck, and lint pass. 197 tests pass when DB-backed API and worker packages are serialized; the root test command now enforces this because both suites intentionally share `personalos_test` |
+| Automated workspace gate | Build, typecheck, and lint pass. 200 tests pass when DB-backed API and worker packages are serialized; the root test command now enforces this because both suites intentionally share `personalos_test` |
 | Formatting | `pnpm format:check` passes |
 | Web regression | `expo export --platform web` succeeds |
+
+### Checkpoint 4 hardening follow-up (2026-08-17)
+
+Implemented only the four post-audit hardening items approved after commit
+`76b314c`: the PTT lifecycle effect now explicitly restores its mounted ref
+when mounted (including StrictMode development effect re-invocation); direct
+deferred-promise concurrency tests prove reminder reconciliation and capture
+outbox operations remain serialized, preserve call order, execute exactly once,
+and continue after an earlier operation fails; reminder reconciliation now
+self-heals duplicate Personal OS alarms by retaining exactly one matching alarm
+and cancelling only the owned extras; and the temporary
+`inbox_items.confidence` PTT `avg_logprob` handoff semantics plus the future
+dedicated-field cleanup are documented without a migration or routing change.
+
+Verification for this follow-up: `pnpm build`, `pnpm typecheck`, `pnpm lint`,
+`pnpm format:check`, and the full serialized `pnpm test` suite all pass (200
+tests total, including 22 mobile tests). `pnpm --filter mobile exec expo export
+--platform web` succeeds. The touched native PTT/notification paths warranted
+an Android check, and `./gradlew assembleDebug` succeeds with JDK 17 (489 tasks;
+only existing Gradle deprecation notices and cross-volume hard-link fallbacks).
+No credentials were configured, no migration was added, production was not
+accessed, and no later checkpoint work began.
 
 ### Still open before Checkpoint 4 can be called complete
 
@@ -416,13 +438,13 @@ Phase 0, Phase 1, and Phase 2 are complete. Phase 3 Checkpoints 1–3 are comple
 - **`docs/PHASE-0-CHECKLIST.md` section E (Tailscale/network foundation)** items are now substantively done (Tailscale installed+authenticated, MagicDNS confirmed working, Serve configured, Postgres inaccessible as a public service) but the checklist file's checkboxes themselves weren't individually ticked in this pass — worth a follow-up pass to mark them, or treat this STATUS.md entry as the record of evidence.
 - No SOPS/age key has actually been generated — remains available but unused, since no secret currently needs to live in the repo.
 - **The web app's `EXPO_PUBLIC_API_URL` is baked in at Docker build time**, not read at runtime — changing the API's public URL later means rebuilding the `web` image, not just restarting the container or editing `.env`. Documented in `apps/mobile/Dockerfile` and accepted as reasonable for a single-deployment personal app in the Phase 2 plan.
-- **Mobile UI still has no component/E2E harness**, but it now has 19 focused unit tests covering reminder diff/scheduling and durable-outbox behavior. Native lifecycle and small-screen behavior are verified on the physical Rabbit rather than simulated.
+- **Mobile UI still has no component/E2E harness**, but it now has 22 focused unit tests covering reminder diff/scheduling and durable-outbox behavior. Native lifecycle and small-screen behavior are verified on the physical Rabbit rather than simulated.
 - **A minor non-blocking React warning** ("Can't perform a React state update on a component that hasn't mounted yet") appears once during the Checkpoint 3 pairing → main-app transition — functionally harmless, not chased down (see "Phase 3 Checkpoint 3" above).
 - **`apps/api`/`apps/worker` runtime images still aren't pruned of devDependencies** (unchanged from Phase 0/1 — see the entry above); Phase 2's new `apps/mobile/Dockerfile` follows a different, already-minimal pattern (only the static `dist/` output plus a fresh `serve` install in the runtime stage), so this only remains relevant to the two original images.
 
 ## Last verification
 
-Phase 3 Checkpoint 4 in-progress verification, run and passing for every non-credential gate (2026-08-17) — see the Checkpoint 4 section above: workspace build/typecheck/lint/format clean; 197 tests passing; Expo web export successful; Android debug build successful; physical Rabbit verification of foreground exact delivery, unattended reboot survival, SDK-57 PTT upload and terminal-failure UI, small-screen quick-capture safe-area behavior, and SQLite outbox persistence/replay across a force-stop restart. Not yet verified and not claimed: real Expo Push delivery (missing Firebase/FCM configuration), real STT happy path (missing `voice_transcribe` provider), full Checkpoint 5 lifecycle matrix, or any Phase 3 production deployment.
+Phase 3 Checkpoint 4 in-progress verification, including the post-`76b314c` hardening follow-up, is passing for every non-credential gate (2026-08-17) — see the Checkpoint 4 section above: workspace build/typecheck/lint/format clean; 200 tests passing, including direct serialization and duplicate-repair coverage; Expo web export successful; Android debug build successful; physical Rabbit verification of foreground exact delivery, unattended reboot survival, SDK-57 PTT upload and terminal-failure UI, small-screen quick-capture safe-area behavior, and SQLite outbox persistence/replay across a force-stop restart. Not yet verified and not claimed: real Expo Push delivery (missing Firebase/FCM configuration), real STT happy path (missing `voice_transcribe` provider), full Checkpoint 5 lifecycle matrix, or any Phase 3 production deployment.
 
 Phase 3 Checkpoint 3 verification, run and passing (2026-08-17) — see "Phase 3 Checkpoint 3" above for the full 7-item table: workspace-wide build/typecheck/lint/format clean (after fixing two real, previously-latent bugs the first-ever native build surfaced — a stale `babel-preset-expo` version and Hermes's missing `Intl.supportedValuesOf`), 165 tests passing (unchanged count, no new automated coverage this checkpoint by design), and — the strongest evidence — a full live registration → SecureStore-persistence-across-restart → primary-device-selection → notification-settings cycle run directly on the physical Rabbit R1, plus the KEY_POWER and scroll-wheel hardware spikes, both run live on the same device with a 90-second logcat capture and recorded as conclusively negative rather than assumed either way.
 

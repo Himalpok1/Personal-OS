@@ -25,6 +25,10 @@ export const InboxItemSchema = z.object({
   timezone: z.string(),
   status: InboxItemStatusSchema,
   parse_result: z.unknown().nullable(),
+  // For a pending PTT item this temporarily exposes transcription
+  // avg_logprob until capture parsing consumes it. After parsing, interpret
+  // it only within the existing parse/confirmation semantics alongside
+  // status and parse_result; it is not a durable standalone STT field.
   confidence: z.number().nullable(),
   entity_type: InboxEntityTypeSchema.nullable(),
   entity_id: z.string().uuid().nullable(),

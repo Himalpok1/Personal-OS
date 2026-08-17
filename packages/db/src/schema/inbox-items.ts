@@ -22,6 +22,13 @@ export const inboxItems = pgTable(
     timezone: text("timezone").notNull(),
     status: text("status").notNull().default("pending"),
     parseResult: jsonb("parse_result"),
+    // Temporary PTT handoff overload: until capture.parse runs, this holds
+    // the transcription provider's mean avg_logprob so low-confidence
+    // speech can route to confirmation. Once parsing consumes that signal,
+    // status/parse_result and the existing parse/confirmation confidence
+    // semantics are authoritative. A future schema migration should add a
+    // dedicated transcription-confidence field when another migration
+    // justifies the cleanup; do not migrate solely for this split.
     confidence: real("confidence"),
     // entity_id is polymorphic (task|note|event, selected by entity_type)
     // and deliberately not a foreign key -- same trade-off as

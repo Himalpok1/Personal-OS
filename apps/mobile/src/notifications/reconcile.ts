@@ -60,25 +60,34 @@ export function diffScheduledReminders(
   now: Date,
   exactAlarmCapable?: boolean,
 ): ReconcileResult {
-  const scheduledByTaskId = new Map(currentlyScheduled.map((s) => [s.taskId, s]));
-  const tasksById = new Map(tasks.map((task) => [task.id, task]));
+  const scheduledByTaskId = new Map<string, ScheduledReminder[]>();
+  for (const scheduled of currentlyScheduled) {
+    const reminders = scheduledByTaskId.get(scheduled.taskId) ?? [];
+    reminders.push(scheduled);
+    scheduledByTaskId.set(scheduled.taskId, reminders);
+  }
   const eligibleTaskIds = new Set<string>();
+  const retainedNotificationIds = new Set<string>();
 
   const toSchedule: ReminderTask[] = [];
   for (const task of tasks) {
     if (!isEligible(task, now)) continue;
     eligibleTaskIds.add(task.id);
-    const existing = scheduledByTaskId.get(task.id);
+    const existing = scheduledByTaskId.get(task.id)?.find(
+      (scheduled) =>
+        scheduled.remindAt === task.remind_at &&
+        (exactAlarmCapable === undefined ||
+          scheduled.exactAlarmCapable === exactAlarmCapable),
+    );
     // No existing schedule, or the task's remind_at moved (an edit) since
     // it was last scheduled -- either way the stale/missing entry needs a
     // fresh notification.
-    if (
-      !existing ||
-      existing.remindAt !== task.remind_at ||
-      (exactAlarmCapable !== undefined &&
-        existing.exactAlarmCapable !== exactAlarmCapable)
-    ) {
+    if (!existing) {
       toSchedule.push(task);
+    } else {
+      // Retain exactly one matching notification. Any duplicate matching
+      // entries, plus stale entries for this task, are repaired below.
+      retainedNotificationIds.add(existing.notificationId);
     }
   }
 
@@ -88,15 +97,10 @@ export function diffScheduledReminders(
       toCancel.push(scheduled);
       continue;
     }
-    // Still eligible, but the reschedule case above needs the stale
-    // notification cancelled too, or the task would end up with two.
-    const task = tasksById.get(scheduled.taskId);
-    if (
-      task &&
-      (task.remind_at !== scheduled.remindAt ||
-        (exactAlarmCapable !== undefined &&
-          scheduled.exactAlarmCapable !== exactAlarmCapable))
-    ) {
+    // Still eligible, but only the single matching notification selected
+    // above is retained. This cancels both stale entries and duplicate
+    // copies of the same intended reminder.
+    if (!retainedNotificationIds.has(scheduled.notificationId)) {
       toCancel.push(scheduled);
     }
   }

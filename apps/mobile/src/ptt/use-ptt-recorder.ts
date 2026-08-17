@@ -240,8 +240,9 @@ export function usePttRecorder() {
     return () => subscription.remove();
   }, [stopRecording]);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
       mountedRef.current = false;
       stopPolling();
       clearDoneTimer();
@@ -249,9 +250,8 @@ export function usePttRecorder() {
         void recorder.stop().catch(() => undefined);
       }
       void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
-    },
-    [clearDoneTimer, recorder, stopPolling],
-  );
+    };
+  }, [clearDoneTimer, recorder, stopPolling]);
 
   return {
     status: state.status,

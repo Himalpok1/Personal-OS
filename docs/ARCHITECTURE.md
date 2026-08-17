@@ -137,12 +137,22 @@ inbox_items (
   timezone        text not null,
   status          text not null,      -- pending|parsed|needs_confirm|confirmed|failed
   parse_result    jsonb,
-  confidence      real,
+  confidence      real,               -- temporarily PTT avg_logprob; see below
   entity_type     text,               -- note|task|event
   entity_id       uuid,
   created_at      timestamptz default now()
 )
 ```
+
+`inbox_items.confidence` is temporarily overloaded during the PTT handoff.
+After transcription and before capture parsing, it carries the transcription
+provider's mean `avg_logprob` so a weak transcript can trigger the existing
+confirmation path. Once `capture.parse` consumes that signal, the existing
+parse/confirmation semantics (`status`, `parse_result`, and their confidence
+routing) take over; consumers must not treat the column as a durable,
+general-purpose transcription-confidence field. If a later feature already
+justifies another schema migration, clean this up by adding a dedicated
+transcription-confidence field. Do not add a migration solely for that split.
 
 ### Tasks
 
