@@ -1,8 +1,22 @@
-import { Tabs } from "expo-router";
+import { Link, Tabs } from "expo-router";
+import { Pressable, Text } from "react-native";
+
+// A header icon, not a 6th tab -- on the Rabbit R1's 480px-wide screen a
+// five/six-item tab bar is cramped (see docs/STATUS.md's Phase 3 plan).
+// Shared across every tab via screenOptions rather than repeated per screen.
+function SettingsHeaderButton() {
+  return (
+    <Link href="/settings" asChild>
+      <Pressable hitSlop={12} className="px-3">
+        <Text className="text-xl">⚙️</Text>
+      </Pressable>
+    </Link>
+  );
+}
 
 export default function TabsLayout() {
   return (
-    <Tabs>
+    <Tabs screenOptions={{ headerRight: SettingsHeaderButton }}>
       <Tabs.Screen name="index" options={{ title: "Tasks" }} />
       <Tabs.Screen name="inbox" options={{ title: "Inbox" }} />
       <Tabs.Screen name="notes" options={{ title: "Notes" }} />

@@ -1,9 +1,24 @@
 import { fromZonedTime } from "date-fns-tz";
 
-const supportedTimeZones = new Set(Intl.supportedValuesOf("timeZone"));
-
+// Deliberately not Intl.supportedValuesOf("timeZone") -- that's an ES2022
+// addition Hermes (React Native's JS engine on Android/iOS) does not
+// implement, even though Node and every browser do. This package is shared
+// by the backend (Node) and, since Phase 3's native build, apps/mobile
+// running on-device -- calling an unsupported Intl method there throws
+// "undefined is not a function" and silently blanks every screen that
+// imports this package transitively (discovered via the Checkpoint 3
+// hardware spike, the first time this codebase ever ran on Hermes rather
+// than Node or a browser). Intl.DateTimeFormat's `timeZone` option, in
+// contrast, is a long-standing ES2015-era Intl feature and throws a
+// RangeError for an invalid IANA zone -- a portable validity check that
+// works identically across Node, browsers, and Hermes.
 export function isValidTimezone(tz: string): boolean {
-  return supportedTimeZones.has(tz);
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export interface WallClockComponents {
