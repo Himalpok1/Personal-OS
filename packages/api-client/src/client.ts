@@ -56,6 +56,29 @@ export async function fetchJson<T>(
   return schema.parse(body);
 }
 
+// Multipart uploads (POST /transcribe) can't go through fetchJson: it
+// force-sets Content-Type: application/json whenever a body is present,
+// which would strip the multipart boundary fetch/RN's FormData otherwise
+// sets automatically. No headers are passed here for the same reason --
+// letting the runtime set Content-Type itself is the only correct option.
+export async function postMultipart<T>(
+  baseUrl: string,
+  path: string,
+  schema: ZodLikeSchema<T>,
+  form: FormData,
+): Promise<T> {
+  const response = await fetch(new URL(path, baseUrl), { method: "POST", body: form });
+
+  const body: unknown = await response.json().catch(() => undefined);
+
+  if (!response.ok) {
+    const errorBody = body as { error?: string } | undefined;
+    throw new ApiClientError(response.status, errorBody?.error ?? "unknown_error", body);
+  }
+
+  return schema.parse(body);
+}
+
 type QueryValue = string | number | boolean | readonly string[] | undefined;
 
 // Generic rather than `Record<string, QueryValue>` so a plain params

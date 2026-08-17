@@ -1,5 +1,5 @@
 import type { DeviceListParams } from "@personal-os/api-client";
-import type { DeviceRegister, DeviceUpdate } from "@personal-os/schema";
+import type { DeviceRegister, DevicePushToken, DeviceUpdate } from "@personal-os/schema";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDeviceIdentity } from "@/device-identity/provider";
 import { api } from "./client";
@@ -46,6 +46,16 @@ export function useSetPrimaryDevice() {
   const invalidate = useInvalidateDevices();
   return useMutation({
     mutationFn: (id: string) => api.setPrimaryDevice(token!, id),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateDevicePushToken() {
+  const token = useDeviceToken();
+  const invalidate = useInvalidateDevices();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: DevicePushToken }) =>
+      api.updateDevicePushToken(token!, id, body),
     onSuccess: invalidate,
   });
 }

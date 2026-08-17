@@ -30,8 +30,10 @@ import {
   listTasks,
   updateTask,
 } from "./tasks.js";
+import { transcribe } from "./transcribe.js";
 
 export { ApiClientError, type ZodLikeSchema } from "./client.js";
+export type { TranscribeAudioFile } from "./transcribe.js";
 export type { DeviceListParams } from "./devices.js";
 export type { InboxListParams } from "./inbox.js";
 export type { NoteListParams } from "./notes.js";
@@ -48,6 +50,7 @@ export function createApiClient(baseUrl: string) {
       fetchJson(baseUrl, "/health", HealthCheckResponseSchema),
 
     capture: capture.bind(null, baseUrl),
+    transcribe: transcribe.bind(null, baseUrl),
 
     listInbox: listInbox.bind(null, baseUrl),
     getInboxItem: getInboxItem.bind(null, baseUrl),

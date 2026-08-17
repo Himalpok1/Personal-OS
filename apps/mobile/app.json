@@ -11,7 +11,7 @@
       "icon": "./assets/expo.icon"
     },
     "android": {
-      "package": "com.personalos.devspike",
+      "package": "com.himal.personalos",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -35,11 +35,21 @@
         }
       ],
       "./plugins/withHardwareInputBridge.ts",
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-audio",
+      "expo-sqlite",
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "b704be80-5b01-411e-9239-fa0cea642783"
+      }
+    },
+    "owner": "himal_pok"
   }
 }

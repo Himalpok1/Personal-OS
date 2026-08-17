@@ -3,6 +3,9 @@ import "@/global.css";
 import { QuickAddFab } from "@/components/quick-add-fab";
 import { DeviceIdentityProvider, useDeviceIdentity } from "@/device-identity/provider";
 import { PairingScreen } from "@/device-identity/pairing-screen";
+import { useReminderReconciliation } from "@/notifications/use-reminder-reconciliation";
+import { useOutboxFlushOnReconnect } from "@/outbox/use-outbox-flush-on-reconnect";
+import { PttButton } from "@/ptt/ptt-button";
 import { queryClient } from "@/queries/client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
@@ -32,6 +35,11 @@ export default function RootLayout() {
 // navigator. See device-identity/provider.tsx.
 function RootContent() {
   const { identity, isLoading } = useDeviceIdentity();
+  // Called unconditionally, above the early returns below, per the rules
+  // of hooks -- the hook itself is a no-op until identity/tasks are
+  // available (see use-reminder-reconciliation.ts).
+  useReminderReconciliation();
+  useOutboxFlushOnReconnect();
 
   if (isLoading) {
     return (
@@ -61,6 +69,7 @@ function RootContent() {
       {/* Global, reachable from every screen -- see decision 5 in
           docs/STATUS.md's Phase 2 entry. */}
       <QuickAddFab />
+      <PttButton />
     </View>
   );
 }

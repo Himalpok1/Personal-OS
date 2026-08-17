@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Modal, Pressable, Text, TextInput, View } from "react-native";
+import { Alert, Modal, Pressable, Text, TextInput, View } from "react-native";
 import { useCapture } from "@/queries/capture";
 
 // Mounted once in the root layout (per decision 5: quick-add is global, not
@@ -22,9 +22,16 @@ export function QuickAddFab() {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
       {
-        onSuccess: () => {
+        onSuccess: (result) => {
           setText("");
           setOpen(false);
+          if (result.status === "queued") {
+            // Best-effort: the outbox already persisted it to SQLite and
+            // will flush automatically on reconnect (see
+            // use-outbox-flush-on-reconnect.ts) -- this alert is purely
+            // informational, not a retry affordance.
+            Alert.alert("Saved offline", "This will be sent automatically once you're back online.");
+          }
         },
       },
     );
@@ -34,7 +41,14 @@ export function QuickAddFab() {
     <>
       <Pressable
         onPress={() => setOpen(true)}
-        className="absolute bottom-6 right-6 h-14 w-14 items-center justify-center rounded-full bg-blue-600 shadow-lg active:bg-blue-700"
+        // bottom-40 (not bottom-6) -- this button is mounted globally,
+        // above the tab navigator, so it renders on every screen including
+        // tab screens with their own bottom tab bar. On the R1's 640px-tall
+        // screen the tab bar alone takes up close to a fifth of the height,
+        // and the Tasks tab additionally has its own flow-positioned "New
+        // task" button sitting just above that tab bar -- bottom-40 clears
+        // both, verified live on the physical device.
+        className="absolute bottom-40 right-6 h-14 w-14 items-center justify-center rounded-full bg-blue-600 shadow-lg active:bg-blue-700"
         accessibilityLabel="Quick add"
       >
         <Text className="text-2xl font-bold text-white">+</Text>

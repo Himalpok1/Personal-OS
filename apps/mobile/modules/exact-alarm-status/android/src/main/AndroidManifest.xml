@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- A "special" permission: declaring it here is necessary but not
+         sufficient. There is no runtime request dialog for it; the user
+         must grant it manually via the settings screen this module's
+         openExactAlarmSettings() deep-links to. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+</manifest>
