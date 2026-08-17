@@ -1,4 +1,5 @@
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import { workerHeartbeat } from "@personal-os/db";
 import { HealthCheckResponseSchema, type HealthCheckResponse } from "@personal-os/schema";
 import { sql } from "drizzle-orm";
@@ -15,6 +16,7 @@ import notesRoutes from "./routes/notes.js";
 import occurrencesRoutes from "./routes/occurrences.js";
 import projectsRoutes from "./routes/projects.js";
 import tasksRoutes from "./routes/tasks.js";
+import transcribeRoutes from "./routes/transcribe.js";
 
 const STALE_AFTER_MS = 5 * 60_000;
 
@@ -35,6 +37,7 @@ export async function buildServer() {
   // the worker never send an Origin header, so they're unaffected either
   // way.
   await app.register(cors, { origin: env.WEB_APP_ORIGIN });
+  await app.register(multipart);
 
   app.setErrorHandler((err, request, reply) => {
     if (err instanceof ZodError) {
@@ -95,6 +98,7 @@ export async function buildServer() {
   await app.register(projectsRoutes);
   await app.register(aiConfigRoutes);
   await app.register(devicesRoutes);
+  await app.register(transcribeRoutes);
 
   return app;
 }

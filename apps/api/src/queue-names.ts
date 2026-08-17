@@ -4,6 +4,7 @@
 // apps/worker's existing HEARTBEAT_QUEUE) rather than a shared package.
 export const CAPTURE_PARSE_QUEUE = "capture.parse";
 export const OCCURRENCES_GENERATE_LAZY_QUEUE = "occurrences.generate-lazy";
+export const PTT_TRANSCRIBE_QUEUE = "ptt.transcribe";
 
 // pg-boss's create_queue is INSERT ... ON CONFLICT DO NOTHING: whichever
 // process calls createQueue() first wins, and later calls with different
@@ -13,4 +14,5 @@ export const OCCURRENCES_GENERATE_LAZY_QUEUE = "occurrences.generate-lazy";
 export const QUEUE_RETRY_OPTIONS = {
   [CAPTURE_PARSE_QUEUE]: { retryLimit: 5, retryDelay: 30, retryBackoff: true },
   [OCCURRENCES_GENERATE_LAZY_QUEUE]: { retryLimit: 5, retryDelay: 15, retryBackoff: true },
+  [PTT_TRANSCRIBE_QUEUE]: { retryLimit: 3, retryDelay: 30, retryBackoff: true },
 } as const;

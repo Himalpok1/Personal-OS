@@ -3,14 +3,29 @@ import { PgBoss } from "pg-boss";
 import { createCaptureParseHandler } from "./jobs/capture-parse.js";
 import { expandDueDateWindowJob } from "./jobs/expand-due-date-window.js";
 import { createGenerateLazyOccurrenceHandler } from "./jobs/generate-lazy-occurrence.js";
+import {
+  createNotificationsDispatchDeadLetterHandler,
+  createNotificationsDispatchHandler,
+} from "./jobs/notifications-dispatch.js";
+import {
+  createPttTranscribeDeadLetterHandler,
+  createPttTranscribeHandler,
+} from "./jobs/ptt-transcribe.js";
+import { sweepOrphanAudioJob } from "./jobs/sweep-orphan-audio.js";
 import { env } from "./env.js";
 import { recordHeartbeat } from "./heartbeat.js";
 import {
   CAPTURE_PARSE_QUEUE,
+  NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
+  NOTIFICATIONS_DISPATCH_QUEUE,
   OCCURRENCES_EXPAND_WINDOW_QUEUE,
   OCCURRENCES_GENERATE_LAZY_QUEUE,
+  PTT_TRANSCRIBE_DEAD_QUEUE,
+  PTT_TRANSCRIBE_QUEUE,
   QUEUE_RETRY_OPTIONS,
 } from "./queue-names.js";
+
+const SWEEP_ORPHAN_AUDIO_QUEUE = "audio.sweep-orphan";
 
 const HEARTBEAT_QUEUE = "bootstrap.heartbeat";
 const RETRY_DELAY_MS = 5000;
@@ -79,8 +94,38 @@ async function main(): Promise<void> {
   );
   await boss.work(OCCURRENCES_GENERATE_LAZY_QUEUE, createGenerateLazyOccurrenceHandler(db));
 
+  // Dead-letter queues must exist before the primary queue that points at
+  // them -- pg-boss's dead_letter column is a foreign key against
+  // queue.name (verified directly against the installed pg-boss@12.27.0
+  // source), not an auto-created convenience.
+  await boss.createQueue(PTT_TRANSCRIBE_DEAD_QUEUE);
+  await boss.work(PTT_TRANSCRIBE_DEAD_QUEUE, createPttTranscribeDeadLetterHandler(db));
+  await boss.createQueue(PTT_TRANSCRIBE_QUEUE, {
+    ...QUEUE_RETRY_OPTIONS[PTT_TRANSCRIBE_QUEUE],
+    deadLetter: PTT_TRANSCRIBE_DEAD_QUEUE,
+  });
+  await boss.work(PTT_TRANSCRIBE_QUEUE, createPttTranscribeHandler(db, boss));
+
+  await boss.createQueue(NOTIFICATIONS_DISPATCH_DEAD_QUEUE);
+  await boss.work(
+    NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
+    createNotificationsDispatchDeadLetterHandler(db),
+  );
+  await boss.createQueue(NOTIFICATIONS_DISPATCH_QUEUE, {
+    ...QUEUE_RETRY_OPTIONS[NOTIFICATIONS_DISPATCH_QUEUE],
+    deadLetter: NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
+  });
+  await boss.work(NOTIFICATIONS_DISPATCH_QUEUE, createNotificationsDispatchHandler(db));
+
+  await boss.createQueue(SWEEP_ORPHAN_AUDIO_QUEUE);
+  await boss.work(SWEEP_ORPHAN_AUDIO_QUEUE, async () => {
+    await sweepOrphanAudioJob(db);
+  });
+  // Hourly -- generous relative to the 2h orphan threshold, cheap to run.
+  await boss.schedule(SWEEP_ORPHAN_AUDIO_QUEUE, "0 * * * *");
+
   console.log(
-    `worker started: ${HEARTBEAT_QUEUE} scheduled every minute, ${OCCURRENCES_EXPAND_WINDOW_QUEUE} scheduled nightly, ${CAPTURE_PARSE_QUEUE}/${OCCURRENCES_GENERATE_LAZY_QUEUE} listening`,
+    `worker started: ${HEARTBEAT_QUEUE} scheduled every minute, ${OCCURRENCES_EXPAND_WINDOW_QUEUE} scheduled nightly, ${SWEEP_ORPHAN_AUDIO_QUEUE} scheduled hourly, ${CAPTURE_PARSE_QUEUE}/${OCCURRENCES_GENERATE_LAZY_QUEUE}/${PTT_TRANSCRIBE_QUEUE}/${NOTIFICATIONS_DISPATCH_QUEUE} listening`,
   );
 }
 

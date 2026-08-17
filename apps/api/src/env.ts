@@ -18,6 +18,14 @@ const EnvSchema = z.object({
     .string()
     .default("http://localhost:8081,http://localhost:8082,http://localhost:19006")
     .transform((value) => value.split(",").map((origin) => origin.trim())),
+  // Shared filesystem between apps/api and apps/worker -- POST /transcribe
+  // writes a PTT recording here, apps/worker's ptt.transcribe job reads and
+  // then deletes it once a transcript is committed (or on permanent
+  // failure/orphan sweep). Must resolve to the same physical location in
+  // both processes: locally that's trivially true (same machine), in
+  // production it's the audio_data named volume mounted into both
+  // containers at this same path -- see docker-compose.yml.
+  AUDIO_STORAGE_PATH: z.string().min(1).default("/tmp/personal-os-audio"),
 });
 
 // Fail fast on missing config. This is distinct from DB *reachability*,

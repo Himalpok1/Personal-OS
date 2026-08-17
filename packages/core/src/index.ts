@@ -11,3 +11,4 @@ export * from "./recurrence/lazy-next-occurrence.js";
 export * from "./parse-confidence.js";
 export * from "./task-lifecycle.js";
 export * from "./device-auth.js";
+export * from "./quiet-hours.js";

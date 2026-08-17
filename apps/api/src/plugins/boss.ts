@@ -4,6 +4,7 @@ import { env } from "../env.js";
 import {
   CAPTURE_PARSE_QUEUE,
   OCCURRENCES_GENERATE_LAZY_QUEUE,
+  PTT_TRANSCRIBE_QUEUE,
   QUEUE_RETRY_OPTIONS,
 } from "../queue-names.js";
 
@@ -62,6 +63,7 @@ export async function registerBoss(app: FastifyInstance): Promise<void> {
       OCCURRENCES_GENERATE_LAZY_QUEUE,
       QUEUE_RETRY_OPTIONS[OCCURRENCES_GENERATE_LAZY_QUEUE],
     );
+    await boss.createQueue(PTT_TRANSCRIBE_QUEUE, QUEUE_RETRY_OPTIONS[PTT_TRANSCRIBE_QUEUE]);
   } else {
     app.log.error(
       "pg-boss did not start after retries; capture/occurrence jobs will not be enqueued",

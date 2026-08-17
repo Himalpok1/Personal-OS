@@ -17,6 +17,12 @@ export default defineConfig({
     // database instead of dev.
     env: {
       DATABASE_URL: process.env["TEST_DATABASE_URL"],
+      // Isolated from the real default (/tmp/personal-os-audio) -- POST
+      // /transcribe's route handler writes real files to disk, and without
+      // this override the automated test suite would litter whatever
+      // directory a real local dev run also uses. transcribe.test.ts's
+      // afterAll removes this directory entirely once tests finish.
+      AUDIO_STORAGE_PATH: "/tmp/personal-os-audio-test-api",
     },
     // Fastify + pg-boss startup (registerBoss retries on connect) is slow
     // enough that the default 5s hook timeout can flake under load.

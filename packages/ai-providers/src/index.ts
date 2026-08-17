@@ -12,3 +12,13 @@ export {
   type ResolvedModel,
 } from "./resolve-model.js";
 export { callWithFallback } from "./call-with-fallback.js";
+export {
+  transcribeAudio,
+  type TranscriptionAudio,
+  type TranscriptionConnection,
+  type TranscriptionResult,
+} from "./transcription-client.js";
+export {
+  resolveTranscriptionConnectionForTask,
+  type ResolvedTranscriptionConnection,
+} from "./resolve-transcription-connection.js";

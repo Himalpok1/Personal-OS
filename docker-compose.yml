@@ -40,6 +40,9 @@ services:
       # compose run works with no extra .env changes; production overrides
       # this to the deployed web service's real Tailscale Serve origin.
       WEB_APP_ORIGIN: ${WEB_APP_ORIGIN:-http://localhost:8081,http://localhost:8082,http://localhost:19006}
+      AUDIO_STORAGE_PATH: /data/audio
+    volumes:
+      - audio_data:/data/audio
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,6 +57,9 @@ services:
     environment:
       DATABASE_URL: postgresql://posops_app:${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set in .env}@postgres:5432/personalos
       CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?CREDENTIALS_ENCRYPTION_KEY must be set in .env}
+      AUDIO_STORAGE_PATH: /data/audio
+    volumes:
+      - audio_data:/data/audio
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,3 +85,6 @@ networks:
 
 volumes:
   postgres_data:
+  # Shared between api and worker -- see AUDIO_STORAGE_PATH in
+  # apps/api/src/env.ts's comment for why they need the same mount point.
+  audio_data:

@@ -32,3 +32,14 @@ export const CaptureResponseSchema = z.object({
 });
 
 export type CaptureResponse = z.infer<typeof CaptureResponseSchema>;
+
+// POST /transcribe's non-file multipart fields. source is deliberately
+// absent -- the route hardcodes it to "ptt" server-side, never
+// client-supplied (see apps/api/src/routes/transcribe.ts).
+export const TranscribeFieldsSchema = z.object({
+  client_uuid: z.string().uuid(),
+  captured_at: z.string().datetime({ offset: true }),
+  timezone: z.string().refine(isValidTimezone, { message: "unknown IANA timezone" }),
+});
+
+export type TranscribeFields = z.infer<typeof TranscribeFieldsSchema>;
