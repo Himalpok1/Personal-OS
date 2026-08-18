@@ -41,3 +41,12 @@ example
 # generated native folders
 /ios
 /android
+
+# Firebase Android client config. Google formally treats this as non-secret
+# (it ships inside the APK), but it embeds a Google API key, so it is kept
+# out of Git as defense in depth -- consistent with this repo's handling of
+# every other credential-bearing file. Local `expo run:android` reads it
+# from this path via app.json's android.googleServicesFile. For EAS Build,
+# supply it as a file-type EAS environment variable rather than committing
+# it (that step also requires moving app.json to a dynamic app.config.ts).
+google-services.json

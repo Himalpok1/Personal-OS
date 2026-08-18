@@ -37,6 +37,9 @@ Do not change a **Locked** decision without explicit user approval.
 | ADR-029 | Device-token auth is scoped to device/notification endpoints. General API access remains Tailscale-perimeter-only; full lost-device revocation still requires tailnet removal | Locked |
 | ADR-030 | Notification dispatch status `accepted` means Expo accepted the request, not confirmed device delivery; receipt polling is deferred | Locked for MVP |
 | ADR-031 | Android reminder reboot survival uses Expo Notifications' built-in boot rescheduling, verified on the physical Rabbit R1 without opening the app after reboot; no parallel Headless JS scheduler is added | Locked for current Android build |
+| ADR-032 | `apps/mobile/google-services.json` is git-ignored rather than committed. Google treats it as non-secret (it ships inside the APK), but it embeds a Google API key, so it is excluded as defense in depth. Local `expo run:android` reads it from that path via `android.googleServicesFile`; EAS Build must supply it as a file-type EAS environment variable, which additionally requires migrating `app.json` to a dynamic `app.config.ts` | Locked |
+| ADR-033 | The FCM V1 service-account private key is never stored in the repository, `.env`, or any agent-accessible path. It is uploaded directly by the user from their own terminal to the EAS credential store (`eas credentials` → Google Service Account → FCM V1) and deleted locally afterwards. No Android upload keystore is created, because local debug builds sign with Android's own debug keystore and EAS cloud builds are out of MVP scope | Locked |
+| ADR-034 | Firebase/FCM and Groq AI-provider configuration exist in **local development only**. Production has neither; provisioning production is a separate, deliberate step | Locked for MVP |
 
 ## Open later-phase decisions
 

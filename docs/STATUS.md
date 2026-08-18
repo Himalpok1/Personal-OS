@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 3 — Native builds, voice, notifications — **Checkpoint 4 of 6 (PTT + notifications + reboot survival) in progress** (2026-08-17)
-**Implementation status:** Phases 0–2 and Phase 3 Checkpoints 1–3 are complete. Checkpoint 4's application code is implemented and its highest-risk local behaviors are verified on the physical Rabbit R1: foreground/exact local delivery, unattended reboot survival through Expo's built-in boot rescheduling, SDK-57-compatible PTT upload and failure-state UI, and a SQLite capture surviving force-stop/restart offline before replaying exactly once. **The real `voice_transcribe` STT gate is now CLOSED** — the complete R1-microphone → Groq `whisper-large-v3-turbo` → `capture.parse` → entity path is verified end to end against a real provider in local development. Real Expo Push delivery remains blocked on Firebase/FCM configuration supplied outside this repository, and is the only remaining Checkpoint 4 gate; no Phase 3 code has been deployed.
-**Next phase allowed:** N/A — mid-Phase-3. Finish the credential-dependent Checkpoint 4 push verification, then run Checkpoint 5's complete real-device lifecycle matrix. Do not deploy or begin Phase 4.
+**Current phase:** Phase 3 — Native builds, voice, notifications — **Checkpoint 4 of 6 (PTT + notifications + reboot survival) COMPLETE** (2026-08-18). Checkpoint 5 not started.
+**Implementation status:** Phases 0–2 and Phase 3 Checkpoints 1–4 are complete. Checkpoint 4 is verified end to end on the physical Rabbit R1: foreground/exact local delivery, unattended reboot survival, SDK-57 PTT upload, and offline-outbox persistence/replay; the **real `voice_transcribe` STT path** (R1 microphone → Groq `whisper-large-v3-turbo` → real `avg_logprob` → `capture.parse` → entity); and **real Expo Push** (Firebase `personal-os-196cf` → FCM V1 → physical R1 receipt in both foreground and background). No Phase 3 code has been deployed to production.
+**Next phase allowed:** N/A — mid-Phase-3. Checkpoint 4 is complete; Checkpoint 5's complete real-device lifecycle matrix is next and requires explicit approval. Do not deploy or begin Phase 4.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md` (not part of this repo — a local Claude Code plan file; the summary below is the durable, repo-tracked record). **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Current objective
@@ -509,14 +509,98 @@ that returns before the transcription-confidence signal is computed. The signal
 itself is verified by `packages/core`'s unit tests; with this provider the
 `-0.8` threshold appears effectively unreachable in practice.
 
+### Real Expo Push gate — CLOSED (2026-08-18)
+
+Verified on the physical Rabbit R1 against real Firebase/FCM V1 credentials.
+Local development only: production was never accessed, nothing was deployed, no
+migration was added, and no unrelated secret was rotated.
+
+**Configuration.** Firebase project `personal-os-196cf` (project number
+`868049601968`); Android app registered against the confirmed permanent package
+`com.himal.personalos` (mobilesdk app id
+`1:868049601968:android:bbaaedd77bfc0417a10275`). `google-services.json` is
+placed at `apps/mobile/google-services.json`, referenced by
+`android.googleServicesFile`, and **git-ignored** — Google formally treats it as
+non-secret since it ships inside the APK, but it embeds a Google API key, so it
+is excluded as defense in depth consistent with this repo's posture. Prebuild
+copies it to `android/app/` and applies `com.google.gms.google-services`.
+
+The FCM V1 **service-account key** was uploaded by the user directly from their
+own terminal via `eas credentials` → Android → Google Service Account → *Manage
+your Google Service Account Key for Push Notifications (FCM V1)*, so the private
+key never passed through this session, the repository, or any log. EAS reported
+`Google Service Account Key assigned to com.himal.personalos for FCM V1`. The
+EAS project is `@himal_pok/mobile` (`b704be80-5b01-411e-9239-fa0cea642783`).
+No Android upload keystore was created: the browser wizard demands one, but the
+CLI path does not, and local `expo run:android` builds are signed with Android's
+own debug keystore, so a keystore would have been an unnecessary credential.
+
+**Rebuild was mandatory and performed.** `google-services.json` is compile-time
+native configuration, so the previously installed build could not acquire FCM
+under any runtime action. Full `expo prebuild --clean` + local native build +
+install on the R1. After it, logcat shows `FirebaseApp initialization
+successful` — the previous blocker (`Default FirebaseApp is not initialized`)
+is gone.
+
+**A real, non-obvious failure was diagnosed rather than misattributed.** The
+first token attempt after the correct rebuild still failed, with
+`FirebaseMessaging: Failed to get FIS auth token` /
+`java.io.IOException: SERVICE_NOT_AVAILABLE`. This was **not** an FCM or
+CipherOS limitation: `dumpsys connectivity` reported `Active default network:
+none` and `ping` returned `Network is unreachable`. The R1's Wi-Fi had been left
+disabled since the Checkpoint 3 hardware spike, so the device reached the API
+only through `adb reverse` port tunnels and had no route to
+`firebaseinstallations.googleapis.com`. Enabling Wi-Fi (it auto-joined a saved
+network; 9.7 ms to 8.8.8.8) resolved it immediately.
+
+**CipherOS GMS support is confirmed, not assumed:** `com.google.android.gms`
+(Play Services **26.30.32**), `com.android.vending` and
+`com.google.android.gsf` are all installed and enabled. The earlier open
+question about whether this community ROM could support FCM is answered
+affirmatively by real delivery.
+
+**Real ExpoPushToken acquired and persisted.** Device row
+`15017e8f-ddc0-4aa0-aa57-67ad808482b1` holds a token matching
+`^Expo(nent)?PushToken\[[A-Za-z0-9_-]+\]$` (41 chars), written through the
+existing self-only `POST /devices/:id/push-token` endpoint. The full token is
+deliberately not recorded here.
+
+| # | Test | Expo request | Ticket | `notification_dispatch_log` | Physically received | Presentation |
+|---|---|---|---|---|---|---|
+| 1 | Self-targeted diagnostic (`POST /devices/:id/test-notification`, `deviceId` targeting) | attempted | `01a0133c-532e-71ec-a43a-8f6c33b4f05c` | `accepted` | **yes** — "Personal OS test / Remote notifications are configured for this device." | **foreground** (app open on Settings; presented via `setNotificationHandler`) |
+| 2 | Real `notifications.dispatch` worker path | exercised by both rows below/above — test 1 via explicit `deviceId`, test 3 via category fan-out with no `deviceId` | — | — | — | — |
+| 3 | Real capture → `needs_confirm` → confirmation push | attempted | `01a0133d-a3ad-7798-…` | `accepted` | **yes** — "Capture needs confirmation / asdf qwerty zzz" | **background** (app backgrounded via HOME) |
+
+Dispatch health across the session: 7 `notifications.dispatch` jobs, all
+`completed`, zero retries and zero failures; 2 dispatch-log rows, both
+`accepted` with a ticket and no `last_error` — per-device dedupe produced no
+duplicate sends. Per ADR-030 the ticket only proves Expo accepted the request;
+the physical receipt above is the actual happy-path evidence, and it was
+obtained for both foreground and background.
+
+**Honest gaps recorded, not fixed in this gate:**
+
+- **Confirmation notifications are inert on tap.** `capture-parse.ts` publishes
+  `data: { inboxId }`, but `use-notification-lifecycle.ts` routes only on
+  `data.taskId`. Tapping a confirmation notification brings the app forward but
+  navigates nowhere. Local *reminder* notifications do carry `taskId` and route
+  correctly, so this affects the confirmation category only. Deliberately not
+  changed here: choosing the destination is a product decision, and there is no
+  `inbox/[id]` route today — only the Inbox tab.
+- Logcat notes `Missing Default Notification Channel metadata in
+  AndroidManifest. Default value will be used.` Delivery is unaffected;
+  `expo-notifications`' `defaultChannel` plugin option would silence it.
+
 ### Still open before Checkpoint 4 can be called complete
 
-- **Real Expo Push token and remote delivery:** the physical build has no Firebase `google-services.json`, so FirebaseApp/FCM cannot initialize. The app reports this accurately at registration (confirmed again during this session: `E_REGISTRATION_FAILED` / "Default FirebaseApp is not initialized"). Completion needs user-supplied Firebase Android configuration plus the corresponding Expo/EAS FCM V1 credential; no credential or placeholder secret will be fabricated or committed.
-- Checkpoint 5 still owns the complete lifecycle matrix (foreground/background/swiped-away/Force-Stop), real remote push, revoke/security-boundary recheck, and any fixes that matrix finds. The exact/reboot/outbox/PTT device checks above reduce that work but do not rename it as complete.
+Nothing. Both credential-dependent gates are now closed. Checkpoint 5 still owns
+the complete lifecycle matrix (foreground/background/swiped-away/Force-Stop),
+revoke/security-boundary recheck, and any fixes that matrix finds — that is
+Checkpoint 5 scope, not an open Checkpoint 4 item.
 
 ## Blockers / user-provided items
 
-**Phase 3 Checkpoint 4:** Firebase Android configuration (`google-services.json`) and an Expo/EAS FCM V1 credential are required for real remote push — this is now the **only** remaining Checkpoint 4 gate. The STT provider/task-route blocker is resolved: a real Groq `voice_transcribe` route is configured in local development and the full transcription path is verified on the physical R1 (see "Real `voice_transcribe` STT gate — CLOSED" above). Production has no Groq configuration; that remains a separate, deliberate step.
+**Phase 3 Checkpoint 4:** none — both credential-dependent gates are closed. Firebase (`personal-os-196cf`) and the EAS FCM V1 service-account credential are configured, and a real Groq `voice_transcribe`/`capture_parser` route is configured, **both in local development only**. Production has neither the Groq configuration nor the Firebase configuration; provisioning production is a separate, deliberate step that has not been taken.
 
 Phase 0–2: none. Phase 2 is complete with no open blockers. The real-OpenAI-key step from Phase 1 is done — see "Phase 1 real-LLM verification" above (provider registered by the user directly via curl, per this repo's rule against Claude handling raw API keys itself; Claude ran the verification captures afterward, which don't involve credential material).
 
