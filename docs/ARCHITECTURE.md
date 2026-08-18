@@ -428,6 +428,16 @@ Rabbit R1: after scheduling a reminder and rebooting, the same exact alarm was
 restored after `BOOT_COMPLETED` and fired without opening the app. The planned
 custom Headless JS receiver is therefore not part of the shipped design.
 
+Reminders are scheduled only on the device the user has explicitly marked
+primary, and are cancelled on any device that is revoked, has notifications
+disabled, or is not primary. Because ADR-019 forbids automatic promotion, that
+correct behaviour is otherwise silent: rebuilding the app wipes SecureStore,
+which forces a re-pair, which mints a new device row and leaves primary status
+stranded on the old one — after which the device in the user's hand schedules
+nothing at all. Phase 3 Checkpoint 5 observed exactly this on the Rabbit R1 and
+added a Settings banner naming the blocking reason. Revocation likewise does
+not clear the primary flag, so a revoked row can continue to hold it.
+
 Remote notification rows use `accepted`, not `sent`: an Expo ticket with
 `status: "ok"` proves only that Expo accepted the delivery request. It does not
 prove FCM or the device received it; receipt polling remains outside the MVP.
@@ -465,7 +475,7 @@ Personal OS has no backup system in the current architecture. PostgreSQL uses pe
 3. **DST and recurrence.** Covered above, and worth the discipline — it's the bug that erodes trust in the whole system.
 4. **Apple Developer account.** $99/yr. Without it, iOS builds expire every 7 days. It gates the entire iOS path including Health in Phase 6.
 5. **EAS build times.** Native module changes require a real rebuild. Develop on the web target and batch native work.
-6. **`expo-notifications` on Android 13+.** Needs runtime notification permission *and* exact-alarm permission for precise scheduling. Request both during onboarding.
+6. **`expo-notifications` on Android 13+.** Needs runtime notification permission *and* exact-alarm permission for precise scheduling. Request both during onboarding. Both are now requested (Phase 3 Checkpoint 5). The exact-alarm half is easy to get wrong and expensive to miss: the app targets SDK 36 and declares `SCHEDULE_EXACT_ALARM` without `USE_EXACT_ALARM`, so Android 14+ does **not** auto-grant it, there is no in-app dialog for it (the only route is a deep link into system settings), and the grant **does not survive reinstall**. Without it Android silently schedules reminders with a one-hour delivery window — verified on the physical Rabbit R1 in `dumpsys alarm` as `window=+1h0m0s0ms` with no `exactAllowReason`, versus `window=0 exactAllowReason=permission` once granted. A short test reminder delivers promptly either way, so this cannot be verified with a two-minute alarm; inspect the scheduled alarm itself.
 7. **Expo web is not Next.js.** No SSR, no file-based API routes, larger bundle. Fine for a single-user dashboard behind Tailscale; the tradeoff to accept knowingly.
 8. **Don't let the AI layer write unattended** until the parser has earned trust over a few hundred captures.
 

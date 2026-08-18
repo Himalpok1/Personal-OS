@@ -22,7 +22,13 @@ export function useNotificationLifecycle(): void {
     const responseSubscription = Notifications.addNotificationResponseReceivedListener(
       (response) => {
         const route = resolveNotificationRoute(response.notification.request.content.data);
-        if (route !== null) router.push(route);
+        if (route === null) return;
+        // A pushed screen (Settings, a task detail) sits on top of the root
+        // stack. Navigating straight to a tab route switches the tab
+        // underneath it, so the tap appears to do nothing -- dismiss back to
+        // the root first, then navigate.
+        if (router.canDismiss()) router.dismissAll();
+        router.navigate(route);
       },
     );
 

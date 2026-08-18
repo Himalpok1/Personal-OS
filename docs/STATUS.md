@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 3 — Native builds, voice, notifications — **Checkpoint 4 of 6 (PTT + notifications + reboot survival) COMPLETE** (2026-08-18). Checkpoint 5 not started.
-**Implementation status:** Phases 0–2 and Phase 3 Checkpoints 1–4 are complete. Checkpoint 4 is verified end to end on the physical Rabbit R1: foreground/exact local delivery, unattended reboot survival, SDK-57 PTT upload, and offline-outbox persistence/replay; the **real `voice_transcribe` STT path** (R1 microphone → Groq `whisper-large-v3-turbo` → real `avg_logprob` → `capture.parse` → entity); and **real Expo Push** (Firebase `personal-os-196cf` → FCM V1 → physical R1 receipt in both foreground and background). No Phase 3 code has been deployed to production.
-**Next phase allowed:** N/A — mid-Phase-3. Checkpoint 4 is complete; Checkpoint 5's complete real-device lifecycle matrix is next and requires explicit approval. Do not deploy or begin Phase 4.
+**Current phase:** Phase 3 — Native builds, voice, notifications — **Checkpoint 5 of 6 (real-device lifecycle verification) COMPLETE except PTT** (2026-08-18). Checkpoint 6 (production deployment) not started.
+**Implementation status:** Phases 0–2 and Phase 3 Checkpoints 1–4 are complete. Checkpoint 5 is complete apart from the PTT stage, which needs the user at the Rabbit's microphone. Checkpoint 5 ran the full lifecycle matrix from a **fresh install** on the physical Rabbit R1 — all five states (foreground, background, swiped-away, reboot, Force Stop), the primary-device/revocation/re-pair matrix, task eligibility, the offline-capture matrix, real Expo Push in both foreground and background, network transitions, small-screen UX, and a web regression pass — and found **five defects, four of which are fixed and re-verified on the device**. No Phase 3 code has been deployed to production.
+**Next phase allowed:** N/A — mid-Phase-3. Checkpoint 5's PTT stage still needs the user's microphone pass; Checkpoint 6 (production deployment) requires separate explicit approval. Do not deploy or begin Phase 4.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md` (not part of this repo — a local Claude Code plan file; the summary below is the durable, repo-tracked record). **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Current objective
@@ -39,6 +39,7 @@ Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, 
 - [x] **Phase 3 Checkpoint 2 — API + worker behavior: crash-safe `notifications.dispatch` with an explicit pending/accepted/failed state machine and permanent-vs-transient Expo error classification, a provider-agnostic transcription client reusing the existing encrypted AI-provider tables, `POST /transcribe`, the `ptt.transcribe` job with `deadLetter`-driven terminal cleanup, and a required orphan-audio sweep cron — implemented and verified with a live curl-driven `/transcribe` → worker → graceful-degradation cycle against a real running server.** Full details below under "Phase 3 Checkpoint 2", including exactly what remains unverified pending real provider/push credentials.
 - [x] **Phase 3 Checkpoint 3 — native app foundation: the Rabbit R1 hardware spike (KEY_POWER and the scroll wheel both conclusively confirmed unusable at the app level, recorded honestly rather than assumed), two real latent bugs fixed by the first-ever native build of this codebase, `expo-secure-store`-backed device credential persistence, pairing-code onboarding, device settings, primary-device selection, and an isolated hardware-input abstraction — implemented and verified live on the physical device, including SecureStore persistence across a real app restart.** Full details below under "Phase 3 Checkpoint 3".
 - [x] **Phase 3 Checkpoint 4 — PTT + notifications + reboot survival: implemented, hardened, and verified end to end on the physical Rabbit R1, including both credential-dependent gates (real Groq `voice_transcribe` STT and real Expo Push via Firebase/FCM V1) — local development only, nothing deployed.** Full details below under "Phase 3 Checkpoint 4".
+- [x] **Phase 3 Checkpoint 5 — real-device lifecycle verification: the full five-state lifecycle matrix, primary-device/revocation/re-pair, task eligibility, offline-capture durability, real foreground and background push, network transitions, small-screen UX and a web regression pass — all run from a fresh install on the physical Rabbit R1, surfacing five defects of which four are fixed and re-verified. PTT (Stage H) is deferred to a user-run microphone pass.** Full details below under "Phase 3 Checkpoint 5".
 
 ## Production deployment (2026-08-15)
 
@@ -598,6 +599,269 @@ the complete lifecycle matrix (foreground/background/swiped-away/Force-Stop),
 revoke/security-boundary recheck, and any fixes that matrix finds — that is
 Checkpoint 5 scope, not an open Checkpoint 4 item.
 
+## Phase 3 Checkpoint 5: real-device lifecycle verification (COMPLETE except PTT, 2026-08-18)
+
+Checkpoint 5 is a verification-and-defect-fixing checkpoint, not feature
+development. Everything below was run against the **physical Rabbit R1** on
+**local development only** — production was never accessed, nothing was
+deployed, and no migration was added. Where a result is automated, mocked, or
+inferred rather than physically observed, it says so.
+
+The session began from a **fresh install** (`adb uninstall` → clean local
+`expo run:android`), so every result reflects first-run state rather than
+accumulated device state from Checkpoint 4.
+
+### Documentation drift repaired first
+
+`926ac3f` marked Checkpoint 4 complete in this file's header and in its
+"Still open … Nothing" section, but four other places still described it as
+in progress: the "Current objective" paragraph, the unchecked Checkpoint 4
+box in "Completed", the Checkpoint 4 section heading, and both "Current work"
+and "Next action". Those were documentation drift, not missing work — the
+items they described as pending are documented as done, with device-level
+evidence, further down the same file. All four were corrected.
+
+### Defects found and fixed
+
+Five findings. Four are fixed and re-verified on the device; one is recorded
+as debt.
+
+**1. Confirmation notifications were inert on tap.** `capture-parse.ts`
+publishes `data: { inboxId }`, but `use-notification-lifecycle.ts` routed only
+on `data.taskId`, so tapping a confirmation foregrounded the app and navigated
+nowhere. Routing now goes through a pure `resolveNotificationRoute` helper and
+sends confirmations to the Inbox tab (there is no `inbox/[id]` route; `taskId`
+keeps priority). Fixed and verified live.
+
+**2. Notification taps did nothing while a pushed screen was on top.** Found
+while verifying fix 1: with Settings (or a task detail) on the root stack,
+navigating to a tab route switched the tab *underneath* the pushed screen, so
+the tap appeared to do nothing. This affected reminder taps too, not only
+confirmations. The handler now dismisses to the root first
+(`router.canDismiss()` → `dismissAll()`) and then navigates. Reproduced and
+re-verified with Settings deliberately on top.
+
+**3. Primary-device drift silently disabled all local reminders.** The live
+state at the start of this checkpoint: three device rows all named
+`rabbit r1`, the running install (`15017e8f`, holder of the real push token)
+**not** primary, and the primary flag stranded on `f93e5ef9`, dead since
+2026-08-17 13:45. Observed consequence: two eligible tasks with future
+`remind_at`, app running, and **zero** Personal OS alarms registered with
+Android. Root cause is not a logic bug — `use-reminder-reconciliation.ts`
+correctly cancels owned alarms on a non-primary device, and ADR-019 forbids
+auto-promotion — it is that rebuilding wipes SecureStore, which forces a
+re-pair, which mints a new device row and strands primary status on the old
+one, with nothing surfacing it. Settings now renders a banner naming the exact
+blocking reason, driven by a pure `describeReminderEligibility`.
+
+A related observation, recorded rather than changed: **revoking a device does
+not clear its primary flag**, so a revoked row can continue to hold primary
+and no device schedules reminders until primary is reassigned. The new banner
+surfaces this on whichever device the user is holding.
+
+**4. Exact-alarm permission was never requested, so a fresh install scheduled
+reminders with a one-hour delivery window.** `targetSdk` is 36 and the app
+declares `SCHEDULE_EXACT_ALARM` without `USE_EXACT_ALARM`, so Android 14+ does
+not auto-grant it, and the grant does not survive reinstall. Observed directly
+in `dumpsys alarm`: `window=+1h0m0s0ms` with **no** `exactAllowReason`, versus
+`window=0 exactAllowReason=permission` after granting — other apps' alarms on
+the same device showed the granted form throughout, which is what made the
+difference legible. The app's own diagnostic reported "NOT granted".
+
+This closes the exact-alarm half of `ARCHITECTURE.md`'s gotcha #6 ("Needs
+runtime notification permission *and* exact-alarm permission for precise
+scheduling. Request both during onboarding"), which had never been
+implemented. Onboarding now prompts once per app run and deep-links to the
+system page; the banner reports this degraded state distinctly from a blocked
+one, since reminders *are* scheduled, just imprecisely.
+
+Capability detection and alarm replacement needed no changes — both were
+already correct. Granting the permission mid-session was observed replacing
+the inexact alarms with exact ones on the next reconciliation pass, and
+revoking it replaced them in the other direction.
+
+This also **corrects a Checkpoint 4 claim**. That checkpoint recorded
+"actual scheduled alarms carry Android's exact-permission reason and deliver
+exactly". That is not true on a fresh install. Checkpoint 4 verified with a
+two-minute test reminder, which Android delivers promptly regardless of
+exactness, and was most likely running with the permission already granted by
+hand.
+
+**5. On the 480×640 screen the Quick capture modal was unusable with the
+keyboard open.** `KeyboardAvoidingView`'s `behavior="height"` does not work
+inside an Android `Modal` (the modal gets its own window, so the activity's
+`adjustResize` never applies), which pushed the entire sheet — text field
+included — off the bottom of the display. The user could not see what they
+were typing and could not reach Capture or Cancel without first hiding the
+keyboard by hand; pressing Back to do so dismisses the whole modal and
+discards the draft. Checkpoint 4's safe-area fix addressed the navigation-bar
+inset, not the keyboard inset. Replaced with explicit padding by the measured
+keyboard height, which works on Android and iOS and is inert on web
+(`react-native-web` exports `Keyboard.addListener`). Verified by typing and
+tapping Capture with the keyboard still open — previously impossible.
+
+### Recorded as debt, not fixed
+
+- **`remind_at` has no create/update API path.** Neither `TaskCreateSchema`
+  nor `TaskUpdateSchema` accepts it, so a reminder time can only be set by AI
+  capture — there is no manual way to add or change one. This is why the
+  Checkpoint 5 brief hedges "reminder-time change *where supported*". Building
+  it is feature work, deliberately not done inside a verification checkpoint.
+  This checkpoint drove `remind_at` via SQL, which is what capture writes
+  anyway.
+- **`quick-add-fab.tsx:30` hardcodes `source: "web"`**, so captures made from
+  the Android app are recorded with `source = "web"`.
+- A dev-build LogBox toast (a `SafeAreaView` deprecation warning from
+  `react-native-safe-area-context`) overlays the bottom of the screen and
+  covered the Quick capture buttons during testing. Development-only, absent
+  from a production build, but it made the small-screen defect above harder to
+  see.
+
+### Lifecycle matrix — all five states, physical Rabbit R1
+
+| State | Result |
+|---|---|
+| **Foreground** | Fired on time with the app focused; exactly one notification posted; tap routed to the task detail screen |
+| **Background** | Fired with the launcher focused; exactly one notification |
+| **Swiped from Recents** | Performed as the real gesture in the Recents UI (`am task remove` no longer exists on Android 16). Confirmed true swipe-away state — process killed, `stopped=false`, distinct from Force Stop — alarms survived and the reminder fired; expo's broadcast receiver woke the process to post it |
+| **Reboot** | Schedule → `adb reboot` → **app never manually opened** (focus stayed on the lock screen throughout) → alarms restored as **exact** and the reminder fired. Re-confirms ADR-031 on a fresh install, and additionally shows restoration preserves exactness |
+| **Force Stop** | Android cancels every Personal OS alarm (`stopped=true`, zero registered) and the reminder does **not** fire. This is expected Android platform semantics, **not** a Personal OS defect. Manual relaunch restores `stopped=false` and reschedules every still-eligible alarm |
+
+An alarm whose time elapses **while the device is powered off** does not fire
+on boot — observed once when a reboot window straddled the target time. This is
+Android behaviour plus the deliberate `isEligible` rule excluding past
+`remind_at` (which exists so a device that was off does not fire a burst of
+stale reminders on next launch).
+
+### Primary-device, notification-settings and revocation matrix
+
+| Check | Result |
+|---|---|
+| Demotion (another device claims primary) | Owned alarms cancelled |
+| Re-promotion | Alarms restored as exact, ~60s (the device query's refetch interval) |
+| `notifications_enabled` false | Alarms cancelled |
+| `notifications_enabled` true again | Alarms restored |
+| Authoritative revocation (`revoked_at` set server-side) | App noticed via 401 and cancelled every owned alarm; Settings showed "Couldn't load devices." |
+| Device-scoped route with a dead/bogus token | `401 invalid_token` |
+| **ADR-029 boundary** | With the device revoked, `GET /tasks` → 200, `GET /inbox` → 200, `POST /capture` → 202, **with no `Authorization` header at all**. The documented boundary is accurate, not merely asserted: device-token revocation does not revoke the Tailscale-perimeter API, and a lost device still requires tailnet removal |
+| Revoke → re-pair recovery (previously never exercised) | "Forget this device" → new pairing code → paired as a new device row → push token re-registered automatically → promoted to primary → reminders scheduling again as exact alarms |
+| Stale device rows | Five rows now exist, all named `rabbit r1`; exactly one primary throughout, and no duplicate alarms were ever observed. Rows were **not** deleted to simplify testing |
+
+### Task/reminder eligibility
+
+Three tasks with future `remind_at` were created, confirmed scheduled, then
+completed / dropped / archived respectively: alarm count went 6 → 3 and each
+task reached the correct state. No stale reminder fired for an ineligible task
+at any point in the session. Reminder-time changes were observed replacing the
+alarm cleanly (tracked across three successive `remind_at` values, always
+exactly one alarm for the task). Duplicate-repair remains covered by
+`reconcile.test.ts` rather than physically injected; the "exactly one alarm per
+task" invariant held across every reconciliation pass observed today.
+
+### Foreground/background synchronization
+
+Verified through the matrices above rather than as a separate pass: primary
+changes, `notifications_enabled` changes, exact-alarm capability changes,
+revocation, and server-side task state changes (complete/drop/archive) were
+each noticed and acted on, via the foreground `AppState` trigger and the 60s
+poll. Reconciliation continued to preserve already-scheduled alarms while the
+API was unreachable.
+
+### Offline capture matrix
+
+Run with the **API process stopped** rather than by removing the `adb reverse`
+tunnel. Removing the tunnel proved unreliable: an established keep-alive
+socket survived it and captures still reached the server, so that method does
+not actually simulate an unreachable API. Throughout the real test the device
+kept Wi-Fi and public internet (18 ms to 8.8.8.8) — this is exactly the
+"public internet available but Personal OS API unavailable" case.
+
+| Step | Result |
+|---|---|
+| Capture with API down | "Saved offline — This will be sent automatically once you're back online."; `Pending captures: 1` |
+| Force-stop and relaunch | Still `Pending captures: 1` — durable across real process death |
+| API restored, **no connectivity transition** | Flushed automatically ~75s later on persisted-backoff expiry, with no manual action and no network change. This is the designed behaviour: the HTTP attempt is authoritative, not a reachability probe |
+| Server rows | Exactly **1** |
+| Manual "Flush now" + two foreground cycles afterwards | Still exactly 1 — no duplicate; `Pending captures: 0` |
+
+### Real remote push
+
+| Check | Result |
+|---|---|
+| Foreground push (self-targeted diagnostic) | Physically received; `notification_dispatch_log` `accepted` with a ticket and no error |
+| Background push | Physically received with the launcher focused (count 0 → 1) |
+| Real confirmation push | A real `needs_confirm` capture produced a confirmation push, physically received |
+| Confirmation tap → Inbox tab | Verified, including from a pushed screen after fix 2 |
+| Duplicates | None across the session |
+
+Per ADR-030 an `accepted` ticket proves only that Expo accepted the request;
+the physical receipts above are the delivery evidence.
+
+### Network transitions
+
+Distinguished explicitly: Wi-Fi up and validated (`dumpsys connectivity`
+showed the network `VALIDATED`); API unreachable with internet up; API
+restored without any connectivity transition. No failure in this session was
+attributed to FCM or GMS without first checking the device's default network.
+
+### Small-screen UX (480×640)
+
+Exercised throughout via real taps driven from `uiautomator` bounds. Quick
+capture's keyboard defect is fix 5 above. Otherwise: the pairing form, the
+settings screen and its diagnostics, the device cards, the Inbox list with
+long parse-result text, the task detail screen, the tab bar, notification
+navigation, and the new eligibility banner all rendered within the 480×640
+content area with no clipped primary controls.
+
+### Web regression
+
+`expo export --platform web` succeeds and emits SPA output (exactly one
+`index.html`). Served with `serve -s dist`: `/`, `/tasks`, `/notes`,
+`/projects` and a UUID deep link (`/tasks/<uuid>`) all return 200. Loaded in a
+real browser: the app boots with **zero console errors** and renders the
+pairing screen, confirming the SecureStore and SQLite web adapters work and
+that no native notification API is reached on web. `react-native-web` exports
+`Keyboard.addListener`, so fix 5's hook is web-safe.
+
+### Not covered — PTT (Stage H)
+
+Deferred by explicit user decision: PTT verification requires speaking into
+the Rabbit's microphone, which this session cannot do. The transcription
+pipeline itself remains verified by the Checkpoint 4 STT gate (five real
+captures through real Groq). The `capture_parser` leg **was** exercised again
+here — several real text captures routed to `needs_confirm` with real
+confidence flags, and one parsed successfully — but the `voice_transcribe`
+leg, PTT recording states, upload retry, polling-timeout UX and audio cleanup
+were **not** re-run in this checkpoint and are not claimed.
+
+Per the brief, the `lowTranscriptionConfidence` threshold was deliberately not
+chased; it remains covered by `packages/core`'s unit tests.
+
+### Automated verification
+
+| Check | Result |
+|---|---|
+| `pnpm build` | Clean |
+| `pnpm typecheck` | Clean |
+| `pnpm lint` | Clean |
+| `pnpm format:check` | Clean |
+| `pnpm test` | **214 tests pass**, 12/12 turbo tasks — `packages/core` 53, `packages/ai-providers` 20, `packages/schema` 11, `packages/api-client` 11, `apps/api` 50, `apps/worker` 33, `apps/mobile` **36** (+14: `resolve-notification-route.test.ts` 5, `reminder-eligibility.test.ts` 9) |
+| `expo export --platform web` | Succeeds |
+| `./gradlew assembleDebug` (JDK 17) | Succeeds, 490 tasks |
+
+One process note worth recording: an intermediate "gate green" reading during
+this checkpoint was wrong. The command grepped only the passing-count line and
+hid a failing suite — `scheduler.test.ts` was failing with
+`ReferenceError: __DEV__ is not defined` because a new `requireNativeModule()`
+import had been added to `channel.ts`, which `scheduler.ts` imports. Fixed by
+moving the exact-alarm prompt into its own leaf module
+(`notifications/exact-alarm.ts`), preserving the plain-vitest testability the
+rest of that directory depends on. Gate commands afterwards surfaced the
+overall task status, not just the passing count.
+
+All Checkpoint 5 test tasks and inbox items were deleted from the dev database
+afterward. Device rows were deliberately left in place.
+
 ## Blockers / user-provided items
 
 **Phase 3 Checkpoint 4:** none — both credential-dependent gates are closed. Firebase (`personal-os-196cf`) and the EAS FCM V1 service-account credential are configured, and a real Groq `voice_transcribe`/`capture_parser` route is configured, **both in local development only**. Production has neither the Groq configuration nor the Firebase configuration; provisioning production is a separate, deliberate step that has not been taken.
@@ -613,10 +877,15 @@ Not yet collected, not currently blocking anything:
 
 ## Current work
 
-Phase 0, Phase 1, and Phase 2 are complete. Phase 3 Checkpoints 1–4 are complete, including both credential-dependent gates (real Groq STT and real Expo Push), all verified on the physical Rabbit R1 in local development. Checkpoint 5 — the real-device lifecycle verification matrix — is underway. No production deployment has occurred; Checkpoint 6 and Phase 4 remain out of scope.
+Phase 0, Phase 1, and Phase 2 are complete. Phase 3 Checkpoints 1–4 are complete, including both credential-dependent gates (real Groq STT and real Expo Push). Checkpoint 5 is complete apart from Stage H (PTT), which is deferred to a user-run pass at the Rabbit's microphone: everything else in the lifecycle matrix was exercised from a fresh install on the physical device, and the four fixable defects it surfaced are fixed, regression-tested and re-verified. No production deployment has occurred; Checkpoint 6 and Phase 4 remain out of scope.
 
 ## Remaining warnings / technical debt
 
+- **`remind_at` cannot be set or changed through the API.** Neither `TaskCreateSchema` nor `TaskUpdateSchema` accepts it, so a reminder time can only originate from AI capture. Found in Checkpoint 5; deliberately not built there, since adding it is feature work rather than lifecycle verification.
+- **Android captures are labelled `source: "web"`** — `apps/mobile/src/components/quick-add-fab.tsx` hardcodes it regardless of platform.
+- **Revoking a device does not clear its `is_primary_reminder_device` flag**, so a revoked row can keep holding primary and no device schedules reminders until primary is reassigned. ADR-019 forbids auto-promotion, so Checkpoint 5 surfaced this in the UI (the Settings eligibility banner) rather than changing the rule.
+- **The exact-alarm grant does not survive reinstall.** Every rebuild silently returns the app to inexact (one-hour-window) reminders until the user re-grants "Alarms & reminders". Checkpoint 5 added the onboarding prompt and the banner, but the underlying Android behaviour is unavoidable and worth remembering during native development.
+- **Duplicate-alarm repair is covered by unit tests only.** `reconcile.test.ts` exercises the retain-one-cancel-the-rest path; Checkpoint 5 never physically injected a duplicate OS notification, relying instead on the observed "exactly one alarm per task" invariant across every reconciliation pass.
 - **Runtime images aren't pruned of devDependencies.** `apps/api`/`apps/worker`'s Dockerfiles copy the entire built workspace into the runtime stage rather than a slim production-only `node_modules` — a deliberate Phase 0 "correctness over image size" tradeoff, documented in the Dockerfiles themselves. Worth revisiting before this matters (larger attack surface, slower deploys as the repo grows).
 - **HTTPS Certificates / Serve consent** was a one-time per-tailnet approval, now done — noting it here since it wasn't obvious in advance from `tailscale status` alone (`CertDomains` was empty beforehand) and the CLI's own consent-URL flow is what actually resolved it, not a pre-configured admin console setting.
 - **`docs/PHASE-0-CHECKLIST.md` section E (Tailscale/network foundation)** items are now substantively done (Tailscale installed+authenticated, MagicDNS confirmed working, Serve configured, Postgres inaccessible as a public service) but the checklist file's checkboxes themselves weren't individually ticked in this pass — worth a follow-up pass to mark them, or treat this STATUS.md entry as the record of evidence.
@@ -627,6 +896,8 @@ Phase 0, Phase 1, and Phase 2 are complete. Phase 3 Checkpoints 1–4 are comple
 - **`apps/api`/`apps/worker` runtime images still aren't pruned of devDependencies** (unchanged from Phase 0/1 — see the entry above); Phase 2's new `apps/mobile/Dockerfile` follows a different, already-minimal pattern (only the static `dist/` output plus a fresh `serve` install in the runtime stage), so this only remains relevant to the two original images.
 
 ## Last verification
+
+Phase 3 Checkpoint 5 verification, run and passing (2026-08-18) — see "Phase 3 Checkpoint 5" above for the full matrices. Strongest evidence: the complete five-state lifecycle matrix run from a **fresh install** on the physical Rabbit R1, including a reboot test where the app was never manually opened (focus stayed on the lock screen) and the alarm was restored as **exact** before firing; the ADR-029 security boundary demonstrated live (device revoked → `401` on device routes, while `/tasks`, `/inbox` and `/capture` still answered 200/200/202 with **no** `Authorization` header); the revoke → re-pair recovery path exercised for the first time; and the offline outbox surviving a real force-stop and then flushing automatically on backoff expiry with **no** connectivity transition, producing exactly one server row across repeated flushes. `pnpm build`/`typecheck`/`lint`/`format:check` clean; **214 tests** pass (12/12 turbo tasks, mobile 36); `expo export --platform web` succeeds and the export boots in a real browser with zero console errors; `./gradlew assembleDebug` succeeds. Explicitly **not** verified and not claimed: the PTT/`voice_transcribe` leg (Stage H, deferred to a user microphone pass) and anything in production — Checkpoint 5 was local development only.
 
 Real `voice_transcribe` STT gate verification (2026-08-17) — see "Real `voice_transcribe` STT gate — CLOSED" above: a real Groq provider/model/task-route configured in local development through the existing encrypted-credential endpoints, and five real captures driven through the physical Rabbit R1's actual microphone, each exercising R1 mic → `expo-audio` → multipart `POST /transcribe` → persisted temporary audio → `ptt.transcribe` → real Groq `whisper-large-v3-turbo` → transcript and real `avg_logprob` (observed values `-0.1592956` and `-0.21939197`) → `capture.parse` → real `openai/gpt-oss-20b` → committed task or `needs_confirm` with real confidence flags (`typeAmbiguous`, `modelUnclear`). Audio cleanup, no-duplicate-Inbox-row, retry-without-duplication, and confirmation-dispatch enqueue all verified per capture; the full MIME chain was recorded and the feared `.bin` storage outcome did not occur. No application code required changes, so none were made. Not verified and not claimed: real Expo Push delivery (missing Firebase/FCM configuration), the `lowTranscriptionConfidence` routing threshold (never reached by real Groq audio — see above), full Checkpoint 5 lifecycle matrix, or any Phase 3 production deployment.
 
@@ -664,7 +935,11 @@ Every Phase 2 deliverable is implemented, verified on Mac dev, deployed to produ
 
 ## Next action
 
-Run Checkpoint 5's complete real-device lifecycle/security matrix on the physical Rabbit R1: the five lifecycle states (foreground, background, swiped-away, reboot, Force Stop), the primary-device and revocation/re-pair matrix, the task/reminder eligibility matrix, foreground/background synchronization, the offline-capture matrix, the PTT lifecycle, real remote push in both foreground and background, network-transition permutations, small-screen UX, and a web regression pass — fixing genuine defects it surfaces. Do not deploy, do not begin Checkpoint 6, and do not begin Phase 4.
+Run Checkpoint 5's remaining Stage H (PTT) pass at the physical Rabbit's microphone: normal record → stop → upload → transcription, repeated recordings, rapid/double-tap protection, backgrounding mid-recording, upload failure and retry, the bounded-polling timeout UX, cleanup after success, and no duplicate Inbox rows. Everything else in Checkpoint 5 is done.
+
+Two items are recorded as debt and are a product decision, not a defect to fix silently: `remind_at` has no create/update API path (reminder times can only be set by AI capture), and `quick-add-fab.tsx` labels Android captures `source: "web"`.
+
+Do not deploy, do not begin Checkpoint 6, and do not begin Phase 4.
 
 Optional further confidence-building left over from Phase 1 (not required to consider Phase 1 done, still open): the full ~50-capture pass from `ARCHITECTURE.md`'s Phase 1 description, and registering a second, different provider type to prove the abstraction isn't secretly single-vendor.
 
