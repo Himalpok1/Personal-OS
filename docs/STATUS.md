@@ -1,14 +1,14 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 3 — Native builds, voice, notifications — **Checkpoint 5 of 6 (real-device lifecycle verification) COMPLETE except PTT** (2026-08-18). Checkpoint 6 (production deployment) not started.
-**Implementation status:** Phases 0–2 and Phase 3 Checkpoints 1–4 are complete. Checkpoint 5 is complete apart from the PTT stage, which needs the user at the Rabbit's microphone. Checkpoint 5 ran the full lifecycle matrix from a **fresh install** on the physical Rabbit R1 — all five states (foreground, background, swiped-away, reboot, Force Stop), the primary-device/revocation/re-pair matrix, task eligibility, the offline-capture matrix, real Expo Push in both foreground and background, network transitions, small-screen UX, and a web regression pass — and found **five defects, four of which are fixed and re-verified on the device**. No Phase 3 code has been deployed to production.
-**Next phase allowed:** N/A — mid-Phase-3. Checkpoint 5's PTT stage still needs the user's microphone pass; Checkpoint 6 (production deployment) requires separate explicit approval. Do not deploy or begin Phase 4.
+**Current phase:** Phase 3 — Native builds, voice, notifications — **Checkpoint 5 of 6 (real-device lifecycle verification) COMPLETE** (2026-08-18). Checkpoint 6 (production deployment) not started.
+**Implementation status:** Phases 0–2 and all of Phase 3 Checkpoints 1–5 are complete. Checkpoint 5 ran the full lifecycle matrix from a **fresh install** on the physical Rabbit R1 — all five states (foreground, background, swiped-away, reboot, Force Stop), the primary-device/revocation/re-pair matrix, task eligibility, the offline-capture matrix, real Expo Push in both foreground and background, network transitions, small-screen UX, a web regression pass, and finally the full PTT lifecycle (Stage H) driven by the user's real voice through the Rabbit's microphone — and found **five defects, four of which are fixed and re-verified on the device**; Stage H itself found zero application defects. No Phase 3 code has been deployed to production.
+**Next phase allowed:** N/A — mid-Phase-3. Checkpoint 5 is complete; Checkpoint 6 (production deployment) requires separate explicit approval. Do not deploy or begin Phase 4.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md` (not part of this repo — a local Claude Code plan file; the summary below is the durable, repo-tracked record). **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Current objective
 
-Phase 3 (native builds, voice, notifications — end of Phase 3 is the MVP, per `docs/ARCHITECTURE.md`'s Phase plan) is underway, targeting a Rabbit R1 running CipherOS as the native device. Checkpoints 1–4 are complete; Checkpoint 5 (real-device lifecycle verification) is underway. Local Android work uses package `com.himal.personalos` and local `expo run:android` builds; an EAS login is not required for that workflow. Firebase Android configuration and the corresponding Expo/EAS FCM V1 credential are configured **in local development only**, and real Expo Push token registration and remote delivery are verified on the physical R1.
+Phase 3 (native builds, voice, notifications — end of Phase 3 is the MVP, per `docs/ARCHITECTURE.md`'s Phase plan) is underway, targeting a Rabbit R1 running CipherOS as the native device. Checkpoints 1–4 are complete and Checkpoint 5 is complete except its Stage H (PTT) pass. Local Android work uses package `com.himal.personalos` and local `expo run:android` builds; an EAS login is not required for that workflow. Firebase Android configuration and the corresponding Expo/EAS FCM V1 credential are configured **in local development only**, and real Expo Push token registration and remote delivery are verified on the physical R1.
 
 Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, task list, notes, project view, per `docs/ARCHITECTURE.md`'s Phase plan. Full manual CRUD for tasks/notes/projects (not just AI capture), TanStack Query on a rebuilt `packages/api-client`, soft-delete/archive semantics (`archived_at`, no hard deletes), a real `inbox → active` task transition, a global quick-add reachable from every screen, and an always-on production web deployment (not just a local dev server) with explicit SPA-fallback routing for the app's UUID-keyed dynamic routes (`tasks/[id]`, `notes/[id]`, `projects/[id]`) — all implemented, deployed to `personal-os`, and verified against the live deployment in a real browser.
 
@@ -39,7 +39,7 @@ Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, 
 - [x] **Phase 3 Checkpoint 2 — API + worker behavior: crash-safe `notifications.dispatch` with an explicit pending/accepted/failed state machine and permanent-vs-transient Expo error classification, a provider-agnostic transcription client reusing the existing encrypted AI-provider tables, `POST /transcribe`, the `ptt.transcribe` job with `deadLetter`-driven terminal cleanup, and a required orphan-audio sweep cron — implemented and verified with a live curl-driven `/transcribe` → worker → graceful-degradation cycle against a real running server.** Full details below under "Phase 3 Checkpoint 2", including exactly what remains unverified pending real provider/push credentials.
 - [x] **Phase 3 Checkpoint 3 — native app foundation: the Rabbit R1 hardware spike (KEY_POWER and the scroll wheel both conclusively confirmed unusable at the app level, recorded honestly rather than assumed), two real latent bugs fixed by the first-ever native build of this codebase, `expo-secure-store`-backed device credential persistence, pairing-code onboarding, device settings, primary-device selection, and an isolated hardware-input abstraction — implemented and verified live on the physical device, including SecureStore persistence across a real app restart.** Full details below under "Phase 3 Checkpoint 3".
 - [x] **Phase 3 Checkpoint 4 — PTT + notifications + reboot survival: implemented, hardened, and verified end to end on the physical Rabbit R1, including both credential-dependent gates (real Groq `voice_transcribe` STT and real Expo Push via Firebase/FCM V1) — local development only, nothing deployed.** Full details below under "Phase 3 Checkpoint 4".
-- [x] **Phase 3 Checkpoint 5 — real-device lifecycle verification: the full five-state lifecycle matrix, primary-device/revocation/re-pair, task eligibility, offline-capture durability, real foreground and background push, network transitions, small-screen UX and a web regression pass — all run from a fresh install on the physical Rabbit R1, surfacing five defects of which four are fixed and re-verified. PTT (Stage H) is deferred to a user-run microphone pass.** Full details below under "Phase 3 Checkpoint 5".
+- [x] **Phase 3 Checkpoint 5 — real-device lifecycle verification: the full five-state lifecycle matrix, primary-device/revocation/re-pair, task eligibility, offline-capture durability, real foreground and background push, network transitions, small-screen UX, a web regression pass, and the full PTT lifecycle driven by the user's real voice — all run on the physical Rabbit R1, surfacing five defects of which four are fixed and re-verified; Stage H found zero application defects.** Full details below under "Phase 3 Checkpoint 5".
 
 ## Production deployment (2026-08-15)
 
@@ -599,7 +599,7 @@ the complete lifecycle matrix (foreground/background/swiped-away/Force-Stop),
 revoke/security-boundary recheck, and any fixes that matrix finds — that is
 Checkpoint 5 scope, not an open Checkpoint 4 item.
 
-## Phase 3 Checkpoint 5: real-device lifecycle verification (COMPLETE except PTT, 2026-08-18)
+## Phase 3 Checkpoint 5: real-device lifecycle verification (COMPLETE, 2026-08-18)
 
 Checkpoint 5 is a verification-and-defect-fixing checkpoint, not feature
 development. Everything below was run against the **physical Rabbit R1** on
@@ -823,19 +823,65 @@ pairing screen, confirming the SecureStore and SQLite web adapters work and
 that no native notification API is reached on web. `react-native-web` exports
 `Keyboard.addListener`, so fix 5's hook is web-safe.
 
-### Not covered — PTT (Stage H)
+### Stage H — PTT lifecycle (COMPLETE, 2026-08-18)
 
-Deferred by explicit user decision: PTT verification requires speaking into
-the Rabbit's microphone, which this session cannot do. The transcription
-pipeline itself remains verified by the Checkpoint 4 STT gate (five real
-captures through real Groq). The `capture_parser` leg **was** exercised again
-here — several real text captures routed to `needs_confirm` with real
-confidence flags, and one parsed successfully — but the `voice_transcribe`
-leg, PTT recording states, upload retry, polling-timeout UX and audio cleanup
-were **not** re-run in this checkpoint and are not claimed.
+Run with the user physically at the Rabbit R1's microphone, driving every
+touch and speech action themselves; this session drove the API/worker/DB
+side and read back real evidence after each one. Real Groq
+`voice_transcribe`/`capture_parser`, no mocking. **Zero application defects
+found** — every scenario behaved as designed. The one issue encountered was
+in this session's own test method for H6 (below), not in the app.
 
-Per the brief, the `lowTranscriptionConfidence` threshold was deliberately not
-chased; it remains covered by `packages/core`'s unit tests.
+| Sub-stage | What was exercised | Result |
+|---|---|---|
+| H1 — normal happy path | "Remind me to water the plants tomorrow." | Real transcript, `avg_logprob -0.43343338`, `parsed` → task "Water the plants", `remind_at` correctly resolved to 9am America/Chicago the next day, audio cleaned, exactly 1 row |
+| H2 — consecutive recordings | Two independent recordings back-to-back | Distinct `client_uuid`s, no state leak between them (each transcript contains only what was spoken in that recording); recording 1 → task "Send money and call Karan"; recording 2 (two intents in one utterance, "coffee shop" + "Meeting with Sarah") → correctly flagged `typeAmbiguous`, routed to `needs_confirm` |
+| H3 — rapid/double-tap | Double-tap start, double-tap stop, then start→stop→start in quick succession | No crash, no duplicate upload — four short/near-silent recordings each got a distinct `client_uuid` and exactly one row; PTT remained fully usable afterward (idle icon, no stuck state) |
+| H4 — background during recording | Start recording, background the app mid-speech via Home | The `AppState` listener (`use-ptt-recorder.ts`) stops recording the instant the app leaves `active` — confirmed by design read and by the near-silent transcript, since the user's speech continued only *after* backgrounding. Correctly classified `unclear`/`modelUnclear`, no orphaned recorder, no duplicate, audio cleaned, app returned usable |
+| H5 — upload failure + retry | API process killed outright (not just `adb reverse` removal — Checkpoint 5's offline-outbox stage already found a removed tunnel alone can leave an established socket usable) | "Upload Failed — check your connection (tap to retry)"; confirmed **zero** server-side row while the API was down; API restored; retry reused the same `client_uuid`, succeeded, exactly one row and zero phantom rows across the whole failure window, task created |
+| H6 — polling timeout while server work eventually succeeds | Worker paused before recording, held past the client's 60s polling bound, then resumed | See below — genuine reproduction, including a real methodology bug this session found and fixed mid-test |
+| H7 — cleanup/audio lifecycle | Consolidated check across all 11 distinct captures from the session | Every row's `audio_path` cleared, `/tmp/personal-os-audio` fully empty at every checkpoint, including through the failure/retry and timeout/resume paths |
+| H8 — idempotency | Consolidated check across all 11 captures | 11 distinct `client_uuid`s, each with exactly 1 `inbox_items` row and exactly 1 `ptt.transcribe` job (verified directly against `pgboss.job`, zero `inboxId`s with more than one job) |
+| H9 — confidence sanity | Real `avg_logprob` observed across the session: `-0.43343338`, `-0.12421312`, `-0.5018217`, `-0.23860362` | Consistent with Checkpoint 4's finding — Whisper stays confident even on short/degraded audio, so `-0.8` was not reached. Real `typeAmbiguous` and `modelUnclear` confirmation flags both exercised for real ambiguous/unclear speech. Threshold left untouched, per the brief — `packages/core`'s unit tests remain authoritative for it |
+| H10 — final usability sanity | One clean recording ("Buy milk tomorrow") after every stress scenario above | Parsed cleanly, PTT fully usable, no stale timers/poll generations, small-screen layout intact |
+
+**H6 in detail, including a real test-methodology bug this session found and
+fixed before the test was valid.** The worker runs under `tsx watch`, which
+spawns a separate child process to execute the actual script — the first
+attempt at "pause the worker" sent `SIGSTOP` to the `tsx watch` supervisor
+PID, which does **not** propagate to its child; the child kept running
+completely unaffected, and the job processed normally in under a second
+despite the supervisor showing `T` (stopped) in `ps`. This was caught by
+checking `pgboss.job`'s `started_on`/`completed_on` timestamps against when
+`SIGSTOP` was actually sent, then confirmed by inspecting the process tree
+(`pgrep -P`) and finding the unaffected child PID. Corrected by resuming the
+supervisors and instead pausing the actual child processes. With the real
+worker processes confirmed `T` and the pg-boss job confirmed `created` with
+no `started_on`, a new recording was made and left untouched for 65+ seconds
+— past the client's `TRANSCRIBING_TIMEOUT_MS = 60_000` bound. The UI showed
+"Transcription is taking longer than expected. (tap to dismiss)", the audio
+file remained on disk untouched, and the pg-boss job stayed `created`,
+confirming the server-side work is genuinely durable while the client gives
+up polling. The workers were then resumed; the job completed within seconds
+into a real note, the Notes tab reflected the eventual result on refetch with
+zero duplication, and PTT was immediately usable again after dismiss.
+
+The wording itself ("Transcription is taking longer than expected") does not
+claim failure, so per the brief it was left unchanged — it shares red/`!`
+styling with genuine failures, but "tap to dismiss" (this path always has
+`canRetry: false`) simply returns to idle rather than retrying, and the
+result still lands correctly once the relevant screen next refetches. This is
+the same behaviour Checkpoint 4 first observed with a real Groq retry; Stage
+H reproduces it deliberately and confirms no data loss and no duplication
+across it.
+
+Stage H found **zero application defects** — no code changes were made as a
+result, so no regression test was added and the automated suite is unchanged
+at 214 tests (confirmed by a fresh `pnpm test` run after Stage H, same
+count as before it). All Stage H test tasks/notes/events/inbox rows were
+deleted from the dev database afterward; the pre-existing Checkpoint 4 STT
+captures ("Call insurance company", "Buy printer paper") and the
+"Checkpoint 4 local-reminder test" task were left in place, unchanged.
 
 ### Automated verification
 
@@ -877,7 +923,7 @@ Not yet collected, not currently blocking anything:
 
 ## Current work
 
-Phase 0, Phase 1, and Phase 2 are complete. Phase 3 Checkpoints 1–4 are complete, including both credential-dependent gates (real Groq STT and real Expo Push). Checkpoint 5 is complete apart from Stage H (PTT), which is deferred to a user-run pass at the Rabbit's microphone: everything else in the lifecycle matrix was exercised from a fresh install on the physical device, and the four fixable defects it surfaced are fixed, regression-tested and re-verified. No production deployment has occurred; Checkpoint 6 and Phase 4 remain out of scope.
+Phase 0, Phase 1, Phase 2, and all of Phase 3 Checkpoints 1–5 are complete, including both credential-dependent gates (real Groq STT and real Expo Push). Checkpoint 5's full lifecycle matrix was exercised on the physical Rabbit R1 — the fixable defects it surfaced are fixed, regression-tested and re-verified, and its final stage (PTT, driven by the user's real voice) found zero application defects. No production deployment has occurred; Checkpoint 6 and Phase 4 remain out of scope.
 
 ## Remaining warnings / technical debt
 
@@ -897,7 +943,7 @@ Phase 0, Phase 1, and Phase 2 are complete. Phase 3 Checkpoints 1–4 are comple
 
 ## Last verification
 
-Phase 3 Checkpoint 5 verification, run and passing (2026-08-18) — see "Phase 3 Checkpoint 5" above for the full matrices. Strongest evidence: the complete five-state lifecycle matrix run from a **fresh install** on the physical Rabbit R1, including a reboot test where the app was never manually opened (focus stayed on the lock screen) and the alarm was restored as **exact** before firing; the ADR-029 security boundary demonstrated live (device revoked → `401` on device routes, while `/tasks`, `/inbox` and `/capture` still answered 200/200/202 with **no** `Authorization` header); the revoke → re-pair recovery path exercised for the first time; and the offline outbox surviving a real force-stop and then flushing automatically on backoff expiry with **no** connectivity transition, producing exactly one server row across repeated flushes. `pnpm build`/`typecheck`/`lint`/`format:check` clean; **214 tests** pass (12/12 turbo tasks, mobile 36); `expo export --platform web` succeeds and the export boots in a real browser with zero console errors; `./gradlew assembleDebug` succeeds. Explicitly **not** verified and not claimed: the PTT/`voice_transcribe` leg (Stage H, deferred to a user microphone pass) and anything in production — Checkpoint 5 was local development only.
+Phase 3 Checkpoint 5 verification, complete and passing (2026-08-18) — see "Phase 3 Checkpoint 5" above for the full matrices, including Stage H. Strongest evidence: the complete five-state lifecycle matrix run from a **fresh install** on the physical Rabbit R1, including a reboot test where the app was never manually opened (focus stayed on the lock screen) and the alarm was restored as **exact** before firing; the ADR-029 security boundary demonstrated live (device revoked → `401` on device routes, while `/tasks`, `/inbox` and `/capture` still answered 200/200/202 with **no** `Authorization` header); the revoke → re-pair recovery path exercised for the first time; the offline outbox surviving a real force-stop and then flushing automatically on backoff expiry with **no** connectivity transition, producing exactly one server row across repeated flushes; and Stage H's full real-voice PTT pass through the physical microphone — happy path, consecutive recordings, rapid-tap protection, backgrounding mid-recording, a genuine upload-failure-and-retry cycle (API process killed, not just the tunnel), and a genuine polling-timeout-then-eventual-success cycle (workers paused via the correct child PIDs, held past the 60s client bound, then resumed) — finding zero application defects across eleven distinct real captures. `pnpm build`/`typecheck`/`lint`/`format:check` clean; **214 tests** pass (12/12 turbo tasks, mobile 36, unchanged since Stage H made no code changes); `expo export --platform web` succeeds and the export boots in a real browser with zero console errors; `./gradlew assembleDebug` succeeds. Everything was local development only — Checkpoint 5 never touched production.
 
 Real `voice_transcribe` STT gate verification (2026-08-17) — see "Real `voice_transcribe` STT gate — CLOSED" above: a real Groq provider/model/task-route configured in local development through the existing encrypted-credential endpoints, and five real captures driven through the physical Rabbit R1's actual microphone, each exercising R1 mic → `expo-audio` → multipart `POST /transcribe` → persisted temporary audio → `ptt.transcribe` → real Groq `whisper-large-v3-turbo` → transcript and real `avg_logprob` (observed values `-0.1592956` and `-0.21939197`) → `capture.parse` → real `openai/gpt-oss-20b` → committed task or `needs_confirm` with real confidence flags (`typeAmbiguous`, `modelUnclear`). Audio cleanup, no-duplicate-Inbox-row, retry-without-duplication, and confirmation-dispatch enqueue all verified per capture; the full MIME chain was recorded and the feared `.bin` storage outcome did not occur. No application code required changes, so none were made. Not verified and not claimed: real Expo Push delivery (missing Firebase/FCM configuration), the `lowTranscriptionConfidence` routing threshold (never reached by real Groq audio — see above), full Checkpoint 5 lifecycle matrix, or any Phase 3 production deployment.
 
@@ -935,11 +981,9 @@ Every Phase 2 deliverable is implemented, verified on Mac dev, deployed to produ
 
 ## Next action
 
-Run Checkpoint 5's remaining Stage H (PTT) pass at the physical Rabbit's microphone: normal record → stop → upload → transcription, repeated recordings, rapid/double-tap protection, backgrounding mid-recording, upload failure and retry, the bounded-polling timeout UX, cleanup after success, and no duplicate Inbox rows. Everything else in Checkpoint 5 is done.
+Checkpoint 5 is complete. Checkpoint 6 (production deployment) requires separate explicit user approval before starting — do not begin it or Phase 4 without that approval.
 
-Two items are recorded as debt and are a product decision, not a defect to fix silently: `remind_at` has no create/update API path (reminder times can only be set by AI capture), and `quick-add-fab.tsx` labels Android captures `source: "web"`.
-
-Do not deploy, do not begin Checkpoint 6, and do not begin Phase 4.
+Four items are recorded as debt and are product decisions, not defects to fix silently: `remind_at` has no create/update API path (reminder times can only be set by AI capture); `quick-add-fab.tsx` labels Android captures `source: "web"`; revoking a device does not clear its `is_primary_reminder_device` flag; and duplicate-alarm repair is covered by unit tests only, never physically injected.
 
 Optional further confidence-building left over from Phase 1 (not required to consider Phase 1 done, still open): the full ~50-capture pass from `ARCHITECTURE.md`'s Phase 1 description, and registering a second, different provider type to prove the abstraction isn't secretly single-vendor.
 
