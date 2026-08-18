@@ -2,7 +2,7 @@
 
 **Project:** Personal OS
 **Current phase:** Phase 3 — Native builds, voice, notifications — **Checkpoint 4 of 6 (PTT + notifications + reboot survival) in progress** (2026-08-17)
-**Implementation status:** Phases 0–2 and Phase 3 Checkpoints 1–3 are complete. Checkpoint 4's application code is implemented and its highest-risk local behaviors are verified on the physical Rabbit R1: foreground/exact local delivery, unattended reboot survival through Expo's built-in boot rescheduling, SDK-57-compatible PTT upload and failure-state UI, and a SQLite capture surviving force-stop/restart offline before replaying exactly once. Real Expo Push delivery remains blocked on Firebase/FCM configuration supplied outside this repository; no Phase 3 code has been deployed.
+**Implementation status:** Phases 0–2 and Phase 3 Checkpoints 1–3 are complete. Checkpoint 4's application code is implemented and its highest-risk local behaviors are verified on the physical Rabbit R1: foreground/exact local delivery, unattended reboot survival through Expo's built-in boot rescheduling, SDK-57-compatible PTT upload and failure-state UI, and a SQLite capture surviving force-stop/restart offline before replaying exactly once. **The real `voice_transcribe` STT gate is now CLOSED** — the complete R1-microphone → Groq `whisper-large-v3-turbo` → `capture.parse` → entity path is verified end to end against a real provider in local development. Real Expo Push delivery remains blocked on Firebase/FCM configuration supplied outside this repository, and is the only remaining Checkpoint 4 gate; no Phase 3 code has been deployed.
 **Next phase allowed:** N/A — mid-Phase-3. Finish the credential-dependent Checkpoint 4 push verification, then run Checkpoint 5's complete real-device lifecycle matrix. Do not deploy or begin Phase 4.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md` (not part of this repo — a local Claude Code plan file; the summary below is the durable, repo-tracked record). **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
@@ -408,15 +408,115 @@ only existing Gradle deprecation notices and cross-volume hard-link fallbacks).
 No credentials were configured, no migration was added, production was not
 accessed, and no later checkpoint work began.
 
+### Real `voice_transcribe` STT gate — CLOSED (2026-08-17)
+
+Verified against a real Groq account on **local development only** (production
+untouched, nothing deployed, no migration). The user enabled
+`whisper-large-v3-turbo` and `openai/gpt-oss-20b` on the Groq project
+mid-session after both were initially blocked at the project level.
+
+Configured through the existing `/ai/providers` → `/ai/models` →
+`/ai/task-routes` endpoints and the existing AES-256-GCM credential
+encryption — no direct database writes, no key in `.env`, the repository, or
+any log. Non-secret identifiers: provider `09016fd3-081c-46e6-8c61-8a74bb84693c`
+(`openai_compatible`, `https://api.groq.com/openai/v1`); models
+`496bf3e9-52ff-4c89-a6f4-164c69d294f3` (`whisper-large-v3-turbo`) and
+`153271de-b227-4a87-bc57-6209d27ffed2` (`openai/gpt-oss-20b`); routes
+`1020f76b-ce2d-46a7-a876-91ac40bd3767` (`voice_transcribe`) and
+`cd2d8104-10d6-415e-9e19-e772f2558c51` (`capture_parser`), both with no
+fallback. Credential-safety re-checked after configuration: the stored row is
+real AES-256-GCM (56B ciphertext / 12B IV / 16B auth tag) and does not contain
+the plaintext in any encoding; `GET /ai/providers` exposes no key material; no
+local log, tracked file, or untracked repo file contains the key.
+
+**Five real captures were run on the physical Rabbit R1**, driven through the
+device's actual microphone (speech played acoustically into the unit), not by
+injecting an audio file. The complete path was exercised: R1 mic → `expo-audio`
+→ multipart `POST /transcribe` → persisted temporary audio → `ptt.transcribe` →
+real Groq `whisper-large-v3-turbo` → transcript + `avg_logprob` → `capture.parse`
+→ real `openai/gpt-oss-20b` → entity or `needs_confirm`.
+
+| Capture | Transcript (real) | `avg_logprob` | Outcome |
+|---|---|---|---|
+| clear task | " Remind me to call the insurance company tomorrow at 3 p.m." | **-0.1592956** | `parsed` → task "Call insurance company", `remind_at` 2026-08-18T20:00Z (3pm CDT — DST-correct) |
+| note-shaped | " . Idea, build a weekly review dashboard for the home server." | (overwritten) | `needs_confirm`, flag `typeAmbiguous` — the two temperature-0.3 samples genuinely disagreed; parsed as `create_note` |
+| gibberish | " The Farris Quandary Bramblewick 16 Thistle Apparatus Mumble…" | (overwritten) | `needs_confirm`, flag `modelUnclear` (`unclear` tool) |
+| near-silent | " ." | (overwritten) | `needs_confirm`, flag `modelUnclear` |
+| quiet task | " Remind me to buy printer paper on Thursday afternoon." | **-0.21939197** | `parsed` → task "Buy printer paper" |
+
+`avg_logprob` **is** returned by `whisper-large-v3-turbo` and is genuinely
+propagated: on the last capture the raw value was observed in
+`inbox_items.confidence` while the row was still `pending` (before
+`capture.parse` ran) and survived unchanged into `parsed`, which is exactly the
+temporary-overload behaviour documented for that column. Rows routed to
+`needs_confirm` have it overwritten with `0`, also as documented.
+
+Also verified per capture: audio cleanup succeeded (`audio_path` cleared and
+`/tmp/personal-os-audio` empty after every capture), no duplicate Inbox row was
+produced (zero `client_uuid` collisions across all PTT captures), and a
+confirmation `notifications.dispatch` job was enqueued and completed for a
+`needs_confirm` capture — writing no `notification_dispatch_log` rows because
+the device still has no push token, which is the correct no-eligible-target
+behaviour rather than a failure.
+
+**Observed MIME chain** (the previously identified residual risk, resolved by
+observation rather than by a speculative change):
+
+| Stage | Observed value |
+|---|---|
+| Rabbit recording | `.m4a` (expo-audio `RecordingPresets.HIGH_QUALITY`, Android `mpeg4`/`aac`) |
+| `expo-file-system` `File.type` | a MIME the API maps to `.mp3`, i.e. `audio/mpeg` (Android `MimeTypeMap`'s mapping for `.m4a`); `audio/mpeg` and `audio/mp3` are indistinguishable from the stored extension alone |
+| multipart file MIME | as above |
+| multipart original filename | `"audio"` — expo's `File` implements `Blob` but exposes no `name`, so `transcribe.ts`'s `file.name ?? "audio"` fallback applies |
+| API-selected storage extension | `.mp3` |
+| stored temporary filename | e.g. `daaa840f-da00-486c-9ef0-c6bea2639da9.mp3` |
+| worker-derived MIME | `audio/mpeg` (from `.mp3`) |
+| filename/MIME sent to Groq | `<uuid>.mp3` + `audio/mpeg` |
+
+The feared `.bin` outcome did **not** occur. The bytes are MPEG-4/AAC but are
+labelled `.mp3`/`audio/mpeg` end to end, and Groq's Whisper endpoint accepted
+and transcribed them correctly on every capture — it decodes by content, not by
+the declared extension. No MIME/extension fallback was implemented, because
+nothing failed; per the standing instruction, a speculative change was not made.
+This remains a latent fragility worth revisiting only if a future STT provider
+validates by extension.
+
+Two further real observations, neither requiring a code change:
+
+- The first capture's Groq request hit a transient IPv6 connect timeout
+  (`UND_ERR_CONNECT_TIMEOUT` against `2a06:98c1:...:443`) on a dual-stack path.
+  pg-boss retried and the second attempt succeeded, which incidentally proved
+  the transcription retry path, the fact that source audio is preserved across a
+  failed attempt, and that the retry produced no duplicate Inbox row.
+- Because that retry pushed end-to-end latency past 60s, the PTT button's
+  bounded polling reported "Transcription is taking longer than expected" for a
+  capture that had in fact succeeded server-side. The row was durable and
+  correct throughout; this is the implemented bounded-polling policy behaving as
+  designed, not data loss, but the wording can read as failure.
+
+The parser leg was also exercised for real: `openai/gpt-oss-20b` produced
+correct tool calls and DST-correct datetimes. One accuracy miss worth recording
+honestly — "Thursday afternoon" resolved to Wednesday 2026-08-19 rather than
+Thursday 2026-08-20. That is model quality, not a pipeline defect, and no
+confidence signal flags it because a date *was* resolved.
+
+Not exercised, reported honestly: the `lowTranscriptionConfidence` routing
+threshold (`avg_logprob < -0.8`) was never reached across five real captures.
+`whisper-large-v3-turbo` stayed confident even on deliberately quiet, fast and
+nonsense audio (worst observed `-0.219`), and audio degraded far enough to score
+worse instead produced text the parser terminated as `unclear` first — a branch
+that returns before the transcription-confidence signal is computed. The signal
+itself is verified by `packages/core`'s unit tests; with this provider the
+`-0.8` threshold appears effectively unreachable in practice.
+
 ### Still open before Checkpoint 4 can be called complete
 
-- **Real Expo Push token and remote delivery:** the physical build has no Firebase `google-services.json`, so FirebaseApp/FCM cannot initialize. The app reports this accurately at registration. Completion needs user-supplied Firebase Android configuration plus the corresponding Expo/EAS FCM V1 credential; no credential or placeholder secret will be fabricated or committed.
-- **Real STT happy path and measured confidence:** the supported upload and failure path are verified, but a configured `voice_transcribe` provider is still needed to exercise an actual transcript and its real `avg_logprob` end to end.
+- **Real Expo Push token and remote delivery:** the physical build has no Firebase `google-services.json`, so FirebaseApp/FCM cannot initialize. The app reports this accurately at registration (confirmed again during this session: `E_REGISTRATION_FAILED` / "Default FirebaseApp is not initialized"). Completion needs user-supplied Firebase Android configuration plus the corresponding Expo/EAS FCM V1 credential; no credential or placeholder secret will be fabricated or committed.
 - Checkpoint 5 still owns the complete lifecycle matrix (foreground/background/swiped-away/Force-Stop), real remote push, revoke/security-boundary recheck, and any fixes that matrix finds. The exact/reboot/outbox/PTT device checks above reduce that work but do not rename it as complete.
 
 ## Blockers / user-provided items
 
-**Phase 3 Checkpoint 4:** Firebase Android configuration (`google-services.json`) and an Expo/EAS FCM V1 credential are required for real remote push. A real STT provider/task route is required for the transcription happy path. Local builds and every non-credential behavior above remain unblocked.
+**Phase 3 Checkpoint 4:** Firebase Android configuration (`google-services.json`) and an Expo/EAS FCM V1 credential are required for real remote push — this is now the **only** remaining Checkpoint 4 gate. The STT provider/task-route blocker is resolved: a real Groq `voice_transcribe` route is configured in local development and the full transcription path is verified on the physical R1 (see "Real `voice_transcribe` STT gate — CLOSED" above). Production has no Groq configuration; that remains a separate, deliberate step.
 
 Phase 0–2: none. Phase 2 is complete with no open blockers. The real-OpenAI-key step from Phase 1 is done — see "Phase 1 real-LLM verification" above (provider registered by the user directly via curl, per this repo's rule against Claude handling raw API keys itself; Claude ran the verification captures afterward, which don't involve credential material).
 
@@ -444,7 +544,9 @@ Phase 0, Phase 1, and Phase 2 are complete. Phase 3 Checkpoints 1–3 are comple
 
 ## Last verification
 
-Phase 3 Checkpoint 4 in-progress verification, including the post-`76b314c` hardening follow-up, is passing for every non-credential gate (2026-08-17) — see the Checkpoint 4 section above: workspace build/typecheck/lint/format clean; 200 tests passing, including direct serialization and duplicate-repair coverage; Expo web export successful; Android debug build successful; physical Rabbit verification of foreground exact delivery, unattended reboot survival, SDK-57 PTT upload and terminal-failure UI, small-screen quick-capture safe-area behavior, and SQLite outbox persistence/replay across a force-stop restart. Not yet verified and not claimed: real Expo Push delivery (missing Firebase/FCM configuration), real STT happy path (missing `voice_transcribe` provider), full Checkpoint 5 lifecycle matrix, or any Phase 3 production deployment.
+Real `voice_transcribe` STT gate verification (2026-08-17) — see "Real `voice_transcribe` STT gate — CLOSED" above: a real Groq provider/model/task-route configured in local development through the existing encrypted-credential endpoints, and five real captures driven through the physical Rabbit R1's actual microphone, each exercising R1 mic → `expo-audio` → multipart `POST /transcribe` → persisted temporary audio → `ptt.transcribe` → real Groq `whisper-large-v3-turbo` → transcript and real `avg_logprob` (observed values `-0.1592956` and `-0.21939197`) → `capture.parse` → real `openai/gpt-oss-20b` → committed task or `needs_confirm` with real confidence flags (`typeAmbiguous`, `modelUnclear`). Audio cleanup, no-duplicate-Inbox-row, retry-without-duplication, and confirmation-dispatch enqueue all verified per capture; the full MIME chain was recorded and the feared `.bin` storage outcome did not occur. No application code required changes, so none were made. Not verified and not claimed: real Expo Push delivery (missing Firebase/FCM configuration), the `lowTranscriptionConfidence` routing threshold (never reached by real Groq audio — see above), full Checkpoint 5 lifecycle matrix, or any Phase 3 production deployment.
+
+Phase 3 Checkpoint 4 in-progress verification, including the post-`76b314c` hardening follow-up, is passing for every non-credential gate (2026-08-17) — see the Checkpoint 4 section above: workspace build/typecheck/lint/format clean; 200 tests passing, including direct serialization and duplicate-repair coverage; Expo web export successful; Android debug build successful; physical Rabbit verification of foreground exact delivery, unattended reboot survival, SDK-57 PTT upload and terminal-failure UI, small-screen quick-capture safe-area behavior, and SQLite outbox persistence/replay across a force-stop restart.
 
 Phase 3 Checkpoint 3 verification, run and passing (2026-08-17) — see "Phase 3 Checkpoint 3" above for the full 7-item table: workspace-wide build/typecheck/lint/format clean (after fixing two real, previously-latent bugs the first-ever native build surfaced — a stale `babel-preset-expo` version and Hermes's missing `Intl.supportedValuesOf`), 165 tests passing (unchanged count, no new automated coverage this checkpoint by design), and — the strongest evidence — a full live registration → SecureStore-persistence-across-restart → primary-device-selection → notification-settings cycle run directly on the physical Rabbit R1, plus the KEY_POWER and scroll-wheel hardware spikes, both run live on the same device with a 90-second logcat capture and recorded as conclusively negative rather than assumed either way.
 
