@@ -2,6 +2,7 @@ import * as Notifications from "expo-notifications";
 import { useRouter } from "expo-router";
 import { useEffect } from "react";
 import { Platform } from "react-native";
+import { resolveNotificationRoute } from "./resolve-notification-route";
 
 export function useNotificationLifecycle(): void {
   const router = useRouter();
@@ -20,8 +21,8 @@ export function useNotificationLifecycle(): void {
 
     const responseSubscription = Notifications.addNotificationResponseReceivedListener(
       (response) => {
-        const taskId = response.notification.request.content.data?.["taskId"];
-        if (typeof taskId === "string") router.push(`/tasks/${taskId}`);
+        const route = resolveNotificationRoute(response.notification.request.content.data);
+        if (route !== null) router.push(route);
       },
     );
 

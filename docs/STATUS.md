@@ -8,7 +8,7 @@
 
 ## Current objective
 
-Phase 3 (native builds, voice, notifications — end of Phase 3 is the MVP, per `docs/ARCHITECTURE.md`'s Phase plan) is underway, targeting a Rabbit R1 running CipherOS as the native device. Checkpoints 1–3 are complete and Checkpoint 4 is in progress. Local Android work uses package `com.himal.personalos` and local `expo run:android` builds; an EAS login is not required for that workflow. Firebase Android configuration and the corresponding Expo/EAS FCM V1 credential are required before a real Expo Push token and remote delivery can be verified.
+Phase 3 (native builds, voice, notifications — end of Phase 3 is the MVP, per `docs/ARCHITECTURE.md`'s Phase plan) is underway, targeting a Rabbit R1 running CipherOS as the native device. Checkpoints 1–4 are complete; Checkpoint 5 (real-device lifecycle verification) is underway. Local Android work uses package `com.himal.personalos` and local `expo run:android` builds; an EAS login is not required for that workflow. Firebase Android configuration and the corresponding Expo/EAS FCM V1 credential are configured **in local development only**, and real Expo Push token registration and remote delivery are verified on the physical R1.
 
 Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, task list, notes, project view, per `docs/ARCHITECTURE.md`'s Phase plan. Full manual CRUD for tasks/notes/projects (not just AI capture), TanStack Query on a rebuilt `packages/api-client`, soft-delete/archive semantics (`archived_at`, no hard deletes), a real `inbox → active` task transition, a global quick-add reachable from every screen, and an always-on production web deployment (not just a local dev server) with explicit SPA-fallback routing for the app's UUID-keyed dynamic routes (`tasks/[id]`, `notes/[id]`, `projects/[id]`) — all implemented, deployed to `personal-os`, and verified against the live deployment in a real browser.
 
@@ -38,7 +38,7 @@ Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, 
 - [x] **Phase 3 Checkpoint 1 — schema + auth foundation: `devices`/`device_pairing_codes`/`notification_dispatch_log` tables, pairing-code-gated device registration, scoped bearer-token auth with an explicit documented security boundary, nullable `inbox_items.raw_text` propagated through every consuming layer — implemented and verified with a live curl-driven pairing/registration/auth/revoke cycle against a real running server.** Full details below under "Phase 3 Checkpoint 1".
 - [x] **Phase 3 Checkpoint 2 — API + worker behavior: crash-safe `notifications.dispatch` with an explicit pending/accepted/failed state machine and permanent-vs-transient Expo error classification, a provider-agnostic transcription client reusing the existing encrypted AI-provider tables, `POST /transcribe`, the `ptt.transcribe` job with `deadLetter`-driven terminal cleanup, and a required orphan-audio sweep cron — implemented and verified with a live curl-driven `/transcribe` → worker → graceful-degradation cycle against a real running server.** Full details below under "Phase 3 Checkpoint 2", including exactly what remains unverified pending real provider/push credentials.
 - [x] **Phase 3 Checkpoint 3 — native app foundation: the Rabbit R1 hardware spike (KEY_POWER and the scroll wheel both conclusively confirmed unusable at the app level, recorded honestly rather than assumed), two real latent bugs fixed by the first-ever native build of this codebase, `expo-secure-store`-backed device credential persistence, pairing-code onboarding, device settings, primary-device selection, and an isolated hardware-input abstraction — implemented and verified live on the physical device, including SecureStore persistence across a real app restart.** Full details below under "Phase 3 Checkpoint 3".
-- [ ] **Phase 3 Checkpoint 4 — PTT + notifications + reboot survival: implementation and local-device verification substantially complete; real Expo Push token registration/delivery is pending Firebase/FCM credentials.** Full details below under "Phase 3 Checkpoint 4".
+- [x] **Phase 3 Checkpoint 4 — PTT + notifications + reboot survival: implemented, hardened, and verified end to end on the physical Rabbit R1, including both credential-dependent gates (real Groq `voice_transcribe` STT and real Expo Push via Firebase/FCM V1) — local development only, nothing deployed.** Full details below under "Phase 3 Checkpoint 4".
 
 ## Production deployment (2026-08-15)
 
@@ -356,7 +356,7 @@ The registered device (`rabbit r1`, this session's real pairing) was left in pla
 - **No Expo/EAS account is logged in** (`eas-cli whoami` → "Not logged in", checked read-only, no login attempted). Neither this nor the package-name gate blocked anything this checkpoint; both remain open items for whenever an EAS-based build actually becomes necessary.
 - A minor, non-blocking React warning ("Can't perform a React state update on a component that hasn't mounted yet") appears once during the pairing → main-app transition — functionally harmless (every subsequent action verified working correctly); most likely `PairingScreen` unmounting immediately after its mutation resolves. Not chased down further — doesn't affect any required behavior.
 
-## Phase 3 Checkpoint 4: PTT + notifications + reboot survival (in progress, 2026-08-17)
+## Phase 3 Checkpoint 4: PTT + notifications + reboot survival (COMPLETE, 2026-08-18)
 
 Implementation began only after explicit user approval. Production was not accessed or modified. No migration was added or changed.
 
@@ -613,7 +613,7 @@ Not yet collected, not currently blocking anything:
 
 ## Current work
 
-Phase 0, Phase 1, and Phase 2 are complete. Phase 3 Checkpoints 1–3 are complete; Checkpoint 4 is in progress with its implementation and highest-risk local Rabbit behaviors verified. Its remaining gate is credential-dependent real push (and, for full voice evidence, a real STT route). No production deployment has occurred; Phase 4 remains out of scope.
+Phase 0, Phase 1, and Phase 2 are complete. Phase 3 Checkpoints 1–4 are complete, including both credential-dependent gates (real Groq STT and real Expo Push), all verified on the physical Rabbit R1 in local development. Checkpoint 5 — the real-device lifecycle verification matrix — is underway. No production deployment has occurred; Checkpoint 6 and Phase 4 remain out of scope.
 
 ## Remaining warnings / technical debt
 
@@ -664,7 +664,7 @@ Every Phase 2 deliverable is implemented, verified on Mac dev, deployed to produ
 
 ## Next action
 
-Finish Checkpoint 4 by supplying Firebase Android/FCM configuration and verifying a real Expo Push token plus the self-targeted remote notification path. A real Groq (or other compatible STT) connection and `voice_transcribe` route would also close the actual transcription/confidence happy-path gap. Then run Checkpoint 5's complete real-device lifecycle/security matrix. Do not deploy Checkpoint 4 automatically, and do not begin Phase 4.
+Run Checkpoint 5's complete real-device lifecycle/security matrix on the physical Rabbit R1: the five lifecycle states (foreground, background, swiped-away, reboot, Force Stop), the primary-device and revocation/re-pair matrix, the task/reminder eligibility matrix, foreground/background synchronization, the offline-capture matrix, the PTT lifecycle, real remote push in both foreground and background, network-transition permutations, small-screen UX, and a web regression pass — fixing genuine defects it surfaces. Do not deploy, do not begin Checkpoint 6, and do not begin Phase 4.
 
 Optional further confidence-building left over from Phase 1 (not required to consider Phase 1 done, still open): the full ~50-capture pass from `ARCHITECTURE.md`'s Phase 1 description, and registering a second, different provider type to prove the abstraction isn't secretly single-vendor.
 

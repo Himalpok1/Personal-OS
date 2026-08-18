@@ -3,10 +3,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ExactAlarmStatus from "../../modules/exact-alarm-status";
 import * as Notifications from "expo-notifications";
 import { useState } from "react";
-import { Pressable, SafeAreaView, ScrollView, Switch, Text, View } from "react-native";
+import { Platform, Pressable, SafeAreaView, ScrollView, Switch, Text, View } from "react-native";
 import { useDeviceIdentity } from "@/device-identity/provider";
 import { REMINDERS_CHANNEL_ID, ensureNotificationPermission, ensureReminderChannel } from "@/notifications/channel";
 import { registerForPushNotifications } from "@/notifications/push-token";
+import { describeReminderEligibility } from "@/notifications/reminder-eligibility";
 import { cancelOwnedReminders } from "@/notifications/scheduler";
 import { flushOutbox, getOutboxStats } from "@/outbox/queue";
 import { api } from "@/queries/client";
@@ -287,15 +288,44 @@ function DeviceCard({
   );
 }
 
+// Local reminders are the MVP's core property, and every condition that
+// stops them being scheduled is otherwise silent -- see
+// reminder-eligibility.ts for the failure mode this surfaces.
+function ReminderEligibilityBanner({ device }: { device: Device | undefined }) {
+  const exactAlarmCapable =
+    Platform.OS !== "android" || ExactAlarmStatus.canScheduleExactAlarms();
+  const { kind, title, warning } = describeReminderEligibility(device, exactAlarmCapable);
+  if (warning === null) return null;
+
+  return (
+    <View className="mb-4 rounded border border-amber-500 bg-amber-50 p-3 dark:bg-amber-950">
+      <Text className="mb-1 text-sm font-bold text-amber-900 dark:text-amber-200">{title}</Text>
+      <Text className="text-xs text-amber-900 dark:text-amber-200">{warning}</Text>
+      {kind === "degraded" ? (
+        <Pressable
+          onPress={() => ExactAlarmStatus.openExactAlarmSettings()}
+          className="mt-2 rounded bg-amber-200 px-3 py-2 dark:bg-amber-900"
+        >
+          <Text className="text-center text-sm text-amber-900 dark:text-amber-100">
+            Open exact-alarm settings
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 export default function SettingsScreen() {
   const { identity, clearIdentity } = useDeviceIdentity();
   const { data, isLoading, isError } = useDevices();
+  const thisDevice = data?.items.find((device) => device.id === identity?.deviceId);
 
   return (
     <SafeAreaView className="flex-1 bg-white dark:bg-black">
       <ScrollView className="flex-1 px-4 py-4">
         <Text className="mb-4 text-xl font-bold text-black dark:text-white">Devices</Text>
 
+        <ReminderEligibilityBanner device={thisDevice} />
         <NotificationDiagnostics />
         <OutboxDiagnostics />
 

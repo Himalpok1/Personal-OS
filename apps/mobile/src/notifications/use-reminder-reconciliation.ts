@@ -3,10 +3,10 @@ import type { Task } from "@personal-os/schema";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
-import ExactAlarmStatus from "../../modules/exact-alarm-status";
 import { useDeviceIdentity } from "@/device-identity/provider";
 import { api } from "@/queries/client";
 import { ensureNotificationPermission, ensureReminderChannel } from "./channel";
+import { ensureExactAlarmPermission } from "./exact-alarm";
 import { applyReminderReconciliation, cancelOwnedReminders } from "./scheduler";
 
 const REMINDER_PAGE_SIZE = 200;
@@ -94,8 +94,10 @@ export function useReminderReconciliation(): void {
       await ensureReminderChannel();
       const permissionGranted = await ensureNotificationPermission();
       if (!permissionGranted || cancelled) return;
-      const exactAlarmCapable =
-        Platform.OS !== "android" || ExactAlarmStatus.canScheduleExactAlarms();
+      // Prompts once per run when the permission is missing, then schedules
+      // with whatever capability is actually available -- an inexact
+      // reminder still beats no reminder.
+      const exactAlarmCapable = ensureExactAlarmPermission();
       await applyReminderReconciliation(tasksQuery.data, exactAlarmCapable);
     })().catch((error: unknown) => {
       console.warn("Local reminder reconciliation failed", error);
