@@ -52,6 +52,7 @@
     "vitest": "^4.1.10"
   },
   "scripts": {
+    "postinstall": "pnpm --filter '@personal-os/api-client...' build",
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",
