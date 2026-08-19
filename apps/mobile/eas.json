@@ -16,6 +16,15 @@
         "buildType": "apk"
       }
     },
+    "production-internal": {
+      "distribution": "internal",
+      "environment": "production",
+      "credentialsSource": "remote",
+      "autoIncrement": true,
+      "android": {
+        "buildType": "apk"
+      }
+    },
     "production": {}
   }
 }
