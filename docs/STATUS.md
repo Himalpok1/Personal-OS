@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 3 — Native builds, voice, notifications — **Checkpoint 5 of 6 (real-device lifecycle verification) COMPLETE** (2026-08-18). Checkpoint 6 Stage 2A (stable Android artifact preparation and verification) is complete; production deployment mutations have not started.
+**Current phase:** Phase 3 — Native builds, voice, notifications — **Checkpoint 5 of 6 (real-device lifecycle verification) COMPLETE** (2026-08-18). Checkpoint 6 is in delegated execution after Stage 3B migration; API/worker and web rollout plus production voice configuration remain gated by verification.
 **Implementation status:** Phases 0–2 and all of Phase 3 Checkpoints 1–5 are complete. Checkpoint 5 ran the full lifecycle matrix from a **fresh install** on the physical Rabbit R1 — all five states (foreground, background, swiped-away, reboot, Force Stop), the primary-device/revocation/re-pair matrix, task eligibility, the offline-capture matrix, real Expo Push in both foreground and background, network transitions, small-screen UX, a web regression pass, and finally the full PTT lifecycle (Stage H) driven by the user's real voice through the Rabbit's microphone — and found **five defects, all five of which are fixed and re-verified on the device**; Stage H itself found zero application defects. No Phase 3 code has been deployed to production.
-**Next phase allowed:** N/A — mid-Phase-3. Checkpoint 6 is authorized only through its staged gates; the next gate is the read-only Stage 2B deletion-manifest review. Do not begin Phase 4.
+**Next phase allowed:** N/A — mid-Phase-3. Checkpoint 6 delegated execution is active through Stage 6; stop before Stage 7/Rabbit transition. Do not begin Phase 4.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md` (not part of this repo — a local Claude Code plan file; the summary below is the durable, repo-tracked record). **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Current objective
@@ -64,6 +64,14 @@ This is a mandatory hard stop under the Checkpoint 6 deletion gate. No exclusion
 The approved amended read-only rerun used current deployment HEAD `398ad515a19891b84f69477bdda205565c7db944` and added protect/exclude rules only for `/.husky/_/***` and `/apps/mobile/expo-env.d.ts` (the existing protections for `.env`, mobile env files, `google-services.json`, and `.claude` remained unchanged). The Git-derived expected deletion set from `0c6112e` to `398ad51` is exactly `apps/mobile/app.json`; the new itemized rsync manifest is exactly that one path with SHA-256 `0d8e40c9a006eb8bdf693bf3bd04b312cd9784fb3fde977b3777acecabf757d9`. The full audit is saved outside the repository at `/Users/himalpokhrel/.codex/deployment-artifacts/personal-os/checkpoint-6/stage-2b-20260819T162710Z-head-398ad51/`. No `.env`, mobile env file, `google-services.json`, `.claude`, `.husky/_/***`, `apps/mobile/expo-env.d.ts`, runtime/generated state, logs, credentials, or other unexpected path is proposed for deletion; `.env` owner, mode, size, mtime, and SHA-256 are unchanged before and after the dry run.
 
 The approved APK remains provenance-bound to application-code commit `59aa29326329509f4bb286b2d731220e470c15b9`. Current deployment HEAD `398ad51` differs only by Checkpoint 6 documentation/evidence commits and does not invalidate the APK build provenance. The real rsync transfer remains pending explicit approval of this exact one-path manifest.
+
+### Stage 3B migration and accepted Compose volume side effect (2026-08-19)
+
+Migration `0004_eminent_moondragon.sql` was applied once with `posops_migrator` using the reviewed two-file Compose `run --rm --no-deps` command. Its SHA-256 is `6fb71f0de872a0a220119d0000058be16c5d418cfd331cf1c7a009b08a022fd4`; the journal now contains only migrations 0000–0004, the three Phase 3 tables/index are present, and `inbox_items.raw_text` is nullable.
+
+Expected Compose side effect discovered during Stage 3B: the one-off API migration container materialized the API service's declared `personal-os_audio_data` named volume. This did not start dependencies, restart services, alter PostgreSQL, or mount the volume into any persistent service. The volume is accepted as the Stage 4 shared audio volume and has identity `personal-os_audio_data`, local driver, Compose project `personal-os`, Compose volume `audio_data`, created `2026-08-19T15:50:54-05:00`, and was empty at verification.
+
+For the remainder of Checkpoint 6, creation of this exact declared `personal-os_audio_data` volume during the completed Stage 3B migration is accepted. Any different or newly unexpected volume remains a hard stop; replacement or identity change of `personal-os_audio_data` is a hard stop; any change to `personal-os_postgres_data` remains an immediate hard stop.
 
 ## Production deployment (2026-08-15)
 
