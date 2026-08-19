@@ -61,6 +61,10 @@ The first hardened `rsync --delete` dry run was read-only and was saved outside 
 
 This is a mandatory hard stop under the Checkpoint 6 deletion gate. No exclusion was added, no manifest was approved, and no real rsync transfer was run. The generated/server-only paths require explicit classification and an amended read-only dry run before any transfer can be considered. Production services, database, AI configuration, Rabbit state, and the production `.env` remain untouched.
 
+The approved amended read-only rerun used current deployment HEAD `398ad515a19891b84f69477bdda205565c7db944` and added protect/exclude rules only for `/.husky/_/***` and `/apps/mobile/expo-env.d.ts` (the existing protections for `.env`, mobile env files, `google-services.json`, and `.claude` remained unchanged). The Git-derived expected deletion set from `0c6112e` to `398ad51` is exactly `apps/mobile/app.json`; the new itemized rsync manifest is exactly that one path with SHA-256 `0d8e40c9a006eb8bdf693bf3bd04b312cd9784fb3fde977b3777acecabf757d9`. The full audit is saved outside the repository at `/Users/himalpokhrel/.codex/deployment-artifacts/personal-os/checkpoint-6/stage-2b-20260819T162710Z-head-398ad51/`. No `.env`, mobile env file, `google-services.json`, `.claude`, `.husky/_/***`, `apps/mobile/expo-env.d.ts`, runtime/generated state, logs, credentials, or other unexpected path is proposed for deletion; `.env` owner, mode, size, mtime, and SHA-256 are unchanged before and after the dry run.
+
+The approved APK remains provenance-bound to application-code commit `59aa29326329509f4bb286b2d731220e470c15b9`. Current deployment HEAD `398ad51` differs only by Checkpoint 6 documentation/evidence commits and does not invalidate the APK build provenance. The real rsync transfer remains pending explicit approval of this exact one-path manifest.
+
 ## Production deployment (2026-08-15)
 
 Target: `personal-os` — Ubuntu 26.04 LTS, HP EliteDesk 800 G5, Intel i5-9500T, 30GB RAM, reachable via `ssh personal-os` (key auth), on the same tailnet as this Mac.
