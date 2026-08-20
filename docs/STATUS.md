@@ -1218,6 +1218,30 @@ this spike will need reconnection after that window. This is expected and
 untouched by this session; the production publishing-status decision is deferred
 to Checkpoint 4.7.
 
+## Phase 4 Checkpoint 4.5 Stage B — in-progress record (paused 2026-08-20, session time limit)
+
+The user approved Stage A and gave a fully-specified Stage B implementation order with 10 locked architecture corrections (per-link conflict baseline, explicit outbound-only linking, non-destructive disconnect, frozen `events.list` request shape, full-resync reconciliation, etc. — all already reflected in the code below, not open questions). This session executed B1–B3 via three sequential/parallel background agents plus direct integration work, then dispatched B4 and was told to stop before B4's result could be reviewed.
+
+**Committed and verified (commits `a63d49e`..`681fa1d`):**
+
+1. **B1 — schema, migration, Zod contracts.** Four new tables: `calendar_connections` (nullable encrypted-token columns so disconnect can wipe credentials without deleting the row), `calendar_connection_calendars` (per-calendar sync opt-in), `event_external_links` (top-level events/masters, `unique(event_id)`, `unique(connection_id, google_calendar_id, google_event_id)`), `calendar_event_instances` (occurrence-level detached/cancelled exceptions — the model B4.4's own detach/cancel-occurrence logic couldn't represent with a single `event_id`-keyed table). Migrations `0007` and `0008` (the latter added mid-session, see item 3), both purely additive/relaxing, applied to local dev and test Postgres, `posops_app` DML-only re-confirmed. Zod contracts never expose token material.
+2. **B2 — `@personal-os/calendar-providers`.** `exchangeAuthCode`/`refreshAccessToken` (no `redirect_uri` — a real bug in the first draft, fixed by the integration owner using direct Stage A evidence, not assumption), a typed `GoogleCalendarClient` + fake, and pure translation (`googleAllDayToLocal`/`localAllDayToGoogle` exclusive↔inclusive conversion, RRULE UNTIL/COUNT stripping + EXDATE extraction, master/detached/cancelled classification into a `LocalMutationIntent` union). 39 tests.
+3. **B3 — API routes + worker jobs, plus an integration-owner follow-up fix.** Routes: `POST /calendar-connections/google`, list, available-calendars, PATCH .../calendars, sync-now, non-destructive disconnect. Worker queues `calendar.google.{refresh-token,sync-calendar,push-event}` with dead-letters, per-calendar singleton serialization, full+incremental sync via `nextSyncToken`, 410-triggered full resync with seen/not-seen reconciliation committed only after success. **A real gap B3 itself flagged** — `event_external_links.google_event_id` was `NOT NULL`, but Decision 9's outbound flow (a brand-new local event explicitly linked to Google) has no Google id until its first push — was fixed directly: migration `0008` (nullable), new `POST /events/:id/link-google-calendar` route (the only way a new event starts syncing out, no `project_id` inference anywhere), and `calendar.google.push-event` now calls `insertEvent` on first push. 123 `api` tests + 56 `worker` tests, all passing.
+4. A small `packages/api-client` barrel-wiring fix (`linkEventToGoogleCalendar` was defined but never bound into `createApiClient`'s method bag).
+
+Every commit passed `gitleaks protect --staged` individually. Root `pnpm lint` and `pnpm format:check` were both clean as of the last commit.
+
+**Dispatched, NOT yet reviewed/committed:** B4 (mobile Settings "Connected Calendars" UI, calendar picker, sync-now/disconnect, and the explicit event-linking picker on create/edit screens) was sent to a background agent with a fully self-contained prompt (exact hook/component/file plan, exact api-client method signatures, exact native-module usage) just before this session paused. **Its output has not been read, integrated, tested, or committed** — the next session must retrieve that agent's result (or re-run B4 fresh if the result is unusable/stale) before proceeding.
+
+**Not started:** B5 (independent read-only audit against the locked architecture list, full workspace `build`/`typecheck`/`lint`/`format`/`test`/web-export/Android-release gates, and the real-Google-account manual round-trip verification list the user specified — one-off event both directions, recurring master, moved/cancelled occurrence, all-day roundtrip, incremental sync, duplicate-retry idempotency, true conflict, 410 resync if simulatable, token refresh, disconnect/reconnect without duplicate import, no plaintext OAuth material anywhere).
+
+**Resume checklist for the next session:**
+- Check whether background agent `a8da0ca88a71af42a` (B4) is still retrievable/completed; review its diff before trusting any of its claims.
+- Run the full verification gate list above (build/typecheck/lint/format/test/web export/Android release build/gitleaks/clean-worktree) once B4 is integrated.
+- Run B5's independent audit against the 10 locked corrections (a fresh read-only pass, not a rubber stamp).
+- Only then attempt the real-Google-account manual round-trip list — this needs the same Google Cloud dev credentials already in `.env` (Testing-mode 7-day refresh-token expiry applies, per Correction 10 — reconnect if it's been a week).
+- Do not begin Checkpoint 4.6 (CalDAV). Do not touch production.
+
 ## Blockers / user-provided items
 
 **Phase 3:** none. Firebase (`personal-os-196cf`) and the EAS FCM V1 credential are configured for the production Rabbit build; production Groq is configured only for `voice_transcribe`; the protected production OpenAI `gpt-4.1` route remains the capture parser.
@@ -1233,7 +1257,7 @@ Not yet collected, not currently blocking anything:
 
 ## Current work
 
-Phases 0–3 are complete and production-deployed (Checkpoint 6). Phase 4 Checkpoints 4.1–4.4 are complete in local development, isolated-device-verified, with production proven unchanged. Checkpoint 4.5 Stage A (Google Calendar OAuth spike) is complete — the real native `AuthorizationClient` flow, server-side token exchange, both calendar scopes, and an immediate refresh-token grant were all verified live against the physical Rabbit R1's side-by-side dev identity, with production untouched throughout. Checkpoint 4.5 Stage B (the full sync schema/worker/UI implementation) has not begun and awaits the user's review of this Stage A closure.
+Phases 0–3 are complete and production-deployed (Checkpoint 6). Phase 4 Checkpoints 4.1–4.4 are complete in local development. Checkpoint 4.5 Stage A (Google OAuth spike) is complete and approved. **Checkpoint 4.5 Stage B is IN PROGRESS, session paused mid-flight (2026-08-20) due to a session time limit, not a blocker.** B1 (schema/migration/Zod contracts), B2 (Google OAuth + Calendar API client + translation package), and B3 (API routes + worker jobs), plus a B3 follow-up fix (explicit outbound-linking route + nullable `google_event_id`) and an api-client barrel-wiring fix, are all **implemented, tested, and committed** (commits `a63d49e` through `681fa1d`). **B4 (mobile Settings UI + event-linking UI) was dispatched to a background agent and was still running when this session paused** — its result has not yet been reviewed, integrated, or committed. B5 (independent audit, full workspace gates, real-account round-trip verification) has not started. See "Phase 4 Checkpoint 4.5 Stage B — in-progress record" below for the exact resume state.
 
 ## Remaining warnings / technical debt
 
