@@ -4,6 +4,7 @@ import {
   aiTaskRoutes,
   createDbClient,
   devices,
+  events,
   inboxItems,
   notificationDispatchLog,
   occurrences,
@@ -20,6 +21,7 @@ export function buildTestDb(): Db {
 
 export async function truncateTestTables(db: Db): Promise<void> {
   await db.delete(occurrences);
+  await db.delete(events);
   await db.delete(tasks);
   await db.delete(inboxItems);
   await db.delete(devices);

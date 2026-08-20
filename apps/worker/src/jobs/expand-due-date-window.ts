@@ -70,6 +70,12 @@ async function upsertOccurrences(
 // just dropped or archived. 'done' is unreachable for a recurring task in
 // Phase 2 (POST /tasks/:id/complete rejects those with 409), so the status
 // half of this only needs to exclude 'dropped'.
+//
+// `archived_at is null` on events (Checkpoint 4.1): mirrors the same fix for
+// events now that they have their own archive axis -- without it, the cron
+// would keep silently regenerating occurrences for an archived recurring
+// event. Events have no status/drop concept, so this is the only filter
+// needed on top of `isNotNull(events.rrule)`.
 export async function expandDueDateWindowJob(db: Db): Promise<void> {
   const now = new Date();
 
@@ -99,7 +105,10 @@ export async function expandDueDateWindowJob(db: Db): Promise<void> {
     await upsertOccurrences(db, "task", task.id, generated);
   }
 
-  const recurringEvents = await db.select().from(events).where(isNotNull(events.rrule));
+  const recurringEvents = await db
+    .select()
+    .from(events)
+    .where(and(isNotNull(events.rrule), isNull(events.archivedAt)));
 
   for (const event of recurringEvents) {
     if (!event.rrule || !event.recurrenceTimezone || !event.startsAt) continue;

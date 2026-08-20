@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { booleanQueryParam } from "./pagination.js";
 
 export const ProjectSchema = z.object({
   id: z.string().uuid(),
@@ -33,6 +34,6 @@ export const ProjectUpdateSchema = z
 export type ProjectUpdate = z.infer<typeof ProjectUpdateSchema>;
 
 export const ProjectListQuerySchema = z.object({
-  include_archived: z.coerce.boolean().default(false),
+  include_archived: booleanQueryParam(false),
 });
 export type ProjectListQuery = z.infer<typeof ProjectListQuerySchema>;

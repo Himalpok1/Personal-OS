@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { booleanQueryParam } from "./pagination.js";
 
 export const DevicePlatformSchema = z.enum(["ios", "android", "web"]);
 export type DevicePlatform = z.infer<typeof DevicePlatformSchema>;
@@ -79,6 +80,6 @@ export const DevicePushTokenSchema = z
 export type DevicePushToken = z.infer<typeof DevicePushTokenSchema>;
 
 export const DeviceListQuerySchema = z.object({
-  include_revoked: z.coerce.boolean().default(false),
+  include_revoked: booleanQueryParam(false),
 });
 export type DeviceListQuery = z.infer<typeof DeviceListQuerySchema>;

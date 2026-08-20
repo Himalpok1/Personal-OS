@@ -4,6 +4,7 @@
 import { isValidTimezone } from "@personal-os/core/timezone";
 import { z } from "zod";
 import { FlexibleDatetimeSchema } from "./parser-tools.js";
+import { booleanQueryParam } from "./pagination.js";
 
 export const TaskStatusSchema = z.enum(["inbox", "active", "done", "dropped"]);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
@@ -68,7 +69,7 @@ export type TaskUpdate = z.infer<typeof TaskUpdateSchema>;
 export const TaskListQuerySchema = z.object({
   status: CommaSeparatedTaskStatuses.optional(),
   project_id: z.string().uuid().optional(),
-  include_archived: z.coerce.boolean().default(false),
+  include_archived: booleanQueryParam(false),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });

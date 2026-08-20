@@ -61,17 +61,25 @@ function fromFloatingDate(date: Date): WallClockComponents {
 // generated instance is resolved to a real timestamptz only at the very
 // end, per-occurrence, through recurrenceTimezone. Expanding from a single
 // pre-resolved UTC dtstart would drift an hour across DST (see
-// docs/ARCHITECTURE.md's recurrence design section) -- this function exists
+// docs/ARCHITECTURE.md's recurrence design section) -- this helper exists
 // specifically to avoid that.
-export function expandDueDateWindow(
+//
+// This is the shared expansion core for both expandDueDateWindow (the
+// nightly cron's forward-only, now-floored window) and
+// expandRecurrenceInRange (an arbitrary, possibly-past-inclusive real
+// instant range, e.g. for a calendar view). It takes explicit from/to real
+// instant bounds with no "now" floor and no forced forward-only assumption
+// -- any now-specific behavior belongs in the caller, not here.
+function expandRecurrenceBetween(
   rule: DueDateRecurrenceRule,
-  windowDays: number,
-  now: Date,
+  from: Date,
+  to: Date,
+  expansionBudget?: RecurrenceExpansionBudget,
 ): ExpandedOccurrence[] {
   const dtstartFloating = wallClockToNaiveDate(rule.dtstart);
   const parsed = rrulestr(rule.rrule, { dtstart: dtstartFloating, forceset: false });
   if (parsed instanceof RRuleSet) {
-    throw new Error("expandDueDateWindow expects a single RRULE, not a compound rule set");
+    throw new Error("recurrence expansion expects a single RRULE, not a compound rule set");
   }
 
   const rr = new RRule({
@@ -98,32 +106,89 @@ export function expandDueDateWindow(
     );
   }
 
-  const windowEndReal = new Date(now.getTime() + windowDays * MS_PER_DAY);
   // Padded by a day on each side: converting real instants to floating
   // bounds can skew by up to a UTC offset (~24h at most), and this is only
   // a cheap pre-filter -- the real cutoffs below are what actually decide
   // inclusion.
+  let expansionLimitExceeded = false;
   const between = ruleSet.between(
     wallClockToNaiveDate(
-      toWallClockComponents(new Date(now.getTime() - MS_PER_DAY), rule.recurrenceTimezone),
+      toWallClockComponents(new Date(from.getTime() - MS_PER_DAY), rule.recurrenceTimezone),
     ),
     wallClockToNaiveDate(
-      toWallClockComponents(
-        new Date(windowEndReal.getTime() + MS_PER_DAY),
-        rule.recurrenceTimezone,
-      ),
+      toWallClockComponents(new Date(to.getTime() + MS_PER_DAY), rule.recurrenceTimezone),
     ),
     true,
+    expansionBudget === undefined
+      ? undefined
+      : () => {
+          if (expansionBudget.remaining > 0) {
+            expansionBudget.remaining -= 1;
+            return true;
+          }
+          expansionLimitExceeded = true;
+          return false;
+        },
   );
+
+  if (expansionLimitExceeded) {
+    throw new RecurrenceExpansionLimitError(expansionBudget!.limit);
+  }
 
   const occurrences: ExpandedOccurrence[] = [];
   for (const instance of between) {
     const occursLocal = fromFloatingDate(instance);
     const occursAt = resolveWallClockToInstant(occursLocal, rule.recurrenceTimezone);
-    if (occursAt.getTime() < now.getTime()) continue;
-    if (occursAt.getTime() > windowEndReal.getTime()) continue;
+    if (occursAt.getTime() < from.getTime()) continue;
+    if (occursAt.getTime() > to.getTime()) continue;
     if (rule.recurrenceUntil && occursAt.getTime() > rule.recurrenceUntil.getTime()) continue;
     occurrences.push({ occursAt, occursLocal });
   }
   return occurrences;
+}
+
+// General-purpose range expansion: returns every occurrence whose real
+// instant falls within [from, to] (inclusive), regardless of whether that
+// range is in the past, present, or future relative to any "now", and with
+// no window-size limitation of its own. Intended for calendar-style range
+// queries (e.g. "what falls between 2026-09-01 and 2026-09-30"), including
+// ranges the nightly expand-due-date-window cron has not pre-generated
+// occurrence rows for (past ranges, or future ranges beyond its rolling
+// window).
+export function expandRecurrenceInRange(
+  rule: DueDateRecurrenceRule,
+  from: Date,
+  to: Date,
+  expansionBudget?: RecurrenceExpansionBudget,
+): ExpandedOccurrence[] {
+  return expandRecurrenceBetween(rule, from, to, expansionBudget);
+}
+
+export interface RecurrenceExpansionBudget {
+  readonly limit: number;
+  remaining: number;
+}
+
+export class RecurrenceExpansionLimitError extends Error {
+  constructor(public readonly limit: number) {
+    super(`recurrence expansion exceeds the maximum of ${limit} occurrences`);
+    this.name = "RecurrenceExpansionLimitError";
+  }
+}
+
+// Nightly-cron-specific: pre-generates the next windowDays of occurrences
+// from now forward, never returning anything before now. This now-floor is
+// specific to the forward-looking pre-generation job that populates the
+// occurrences table and must not leak into expandRecurrenceInRange above --
+// so it's re-applied here, on top of the general-purpose range result,
+// rather than being baked into the shared helper.
+export function expandDueDateWindow(
+  rule: DueDateRecurrenceRule,
+  windowDays: number,
+  now: Date,
+): ExpandedOccurrence[] {
+  const windowEndReal = new Date(now.getTime() + windowDays * MS_PER_DAY);
+  return expandRecurrenceBetween(rule, now, windowEndReal).filter(
+    (occurrence) => occurrence.occursAt.getTime() >= now.getTime(),
+  );
 }

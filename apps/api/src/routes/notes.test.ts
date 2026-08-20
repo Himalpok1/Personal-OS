@@ -50,6 +50,16 @@ describe("notes routes", () => {
     expect(response.statusCode).toBe(400);
   });
 
+  it("rejects an invalid boolean query parameter with 400", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/notes?include_archived=no",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: "validation_failed" });
+  });
+
   it("archive hides from default list without deleting the row", async () => {
     const created = await app.inject({
       method: "POST",

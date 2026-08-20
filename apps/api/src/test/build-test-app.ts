@@ -1,6 +1,7 @@
 import {
   devicePairingCodes,
   devices,
+  events,
   inboxItems,
   notes,
   notificationDispatchLog,
@@ -28,6 +29,7 @@ export async function truncateTestTables(app: FastifyInstance): Promise<void> {
   await app.db.delete(occurrences);
   await app.db.delete(tasks);
   await app.db.delete(notes);
+  await app.db.delete(events);
   await app.db.delete(projects);
   await app.db.delete(inboxItems);
   await app.db.delete(devices);

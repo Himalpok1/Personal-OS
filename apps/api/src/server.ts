@@ -11,6 +11,7 @@ import { registerDb } from "./plugins/db.js";
 import aiConfigRoutes from "./routes/ai-config.js";
 import captureRoutes from "./routes/capture.js";
 import devicesRoutes from "./routes/devices.js";
+import eventsRoutes from "./routes/events.js";
 import inboxRoutes from "./routes/inbox.js";
 import notesRoutes from "./routes/notes.js";
 import occurrencesRoutes from "./routes/occurrences.js";
@@ -35,8 +36,16 @@ export async function buildServer() {
   // Scoped to exactly the known web origins (WEB_APP_ORIGIN) -- no
   // wildcard. apps/mobile's web build is the only browser client; curl and
   // the worker never send an Origin header, so they're unaffected either
-  // way.
-  await app.register(cors, { origin: env.WEB_APP_ORIGIN });
+  // way. `@fastify/cors`'s own default `methods` is `GET,HEAD,POST` (not
+  // the wider `cors` package default most people assume) -- left implicit,
+  // this silently blocked every PATCH/DELETE preflight from the web client
+  // API-wide (archive/update actions), invisible to curl-based verification
+  // since curl never sends preflights. Found via the web browser in
+  // Checkpoint 4.2 (see docs/STATUS.md).
+  await app.register(cors, {
+    origin: env.WEB_APP_ORIGIN,
+    methods: ["GET", "HEAD", "POST", "PATCH", "DELETE"],
+  });
   await app.register(multipart);
 
   app.setErrorHandler((err, request, reply) => {
@@ -96,6 +105,7 @@ export async function buildServer() {
   await app.register(tasksRoutes);
   await app.register(notesRoutes);
   await app.register(projectsRoutes);
+  await app.register(eventsRoutes);
   await app.register(aiConfigRoutes);
   await app.register(devicesRoutes);
   await app.register(transcribeRoutes);

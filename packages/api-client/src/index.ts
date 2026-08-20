@@ -11,6 +11,14 @@ import {
   updateDevice,
   updateDevicePushToken,
 } from "./devices.js";
+import {
+  archiveEvent,
+  createEvent,
+  getEvent,
+  listEvents,
+  listEventsInRange,
+  updateEvent,
+} from "./events.js";
 import { confirmInboxItem, getInboxItem, listInbox } from "./inbox.js";
 import { archiveNote, createNote, getNote, listNotes, updateNote } from "./notes.js";
 import { completeOccurrence, listOccurrences, skipOccurrence } from "./occurrences.js";
@@ -36,6 +44,7 @@ import { transcribe } from "./transcribe.js";
 export { ApiClientError, type ZodLikeSchema } from "./client.js";
 export type { TranscribeAudioFile } from "./transcribe.js";
 export type { DeviceListParams } from "./devices.js";
+export type { EventListParams } from "./events.js";
 export type { InboxListParams } from "./inbox.js";
 export type { NoteListParams } from "./notes.js";
 export type { ProjectListParams } from "./projects.js";
@@ -77,6 +86,13 @@ export function createApiClient(baseUrl: string) {
     createProject: createProject.bind(null, baseUrl),
     updateProject: updateProject.bind(null, baseUrl),
     archiveProject: archiveProject.bind(null, baseUrl),
+
+    listEvents: listEvents.bind(null, baseUrl),
+    getEvent: getEvent.bind(null, baseUrl),
+    createEvent: createEvent.bind(null, baseUrl),
+    updateEvent: updateEvent.bind(null, baseUrl),
+    archiveEvent: archiveEvent.bind(null, baseUrl),
+    listEventsInRange: listEventsInRange.bind(null, baseUrl),
 
     listOccurrences: listOccurrences.bind(null, baseUrl),
     completeOccurrence: completeOccurrence.bind(null, baseUrl),

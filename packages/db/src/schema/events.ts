@@ -46,6 +46,10 @@ export const events = pgTable(
     externalEtag: text("external_etag"),
     externalSyncedAt: timestamp("external_synced_at", { withTimezone: true }),
     projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
+    // Soft-delete: set by POST /events/:id/archive (Checkpoint 4.1). See
+    // tasks.ts's archivedAt comment for the full rationale (independent of
+    // any lifecycle state; occurrences/item_tags lineage are never touched).
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -58,5 +62,14 @@ export const events = pgTable(
     // migration to close the same indexing gap tasks/notes had.
     index("events_project_id_idx").on(table.projectId),
     index("events_starts_at_idx").on(table.startsAt),
+    // Partial variant added alongside archivedAt (Checkpoint 4.1) -- serves
+    // GET /events' default list query, which (like tasks_status_due_at_idx)
+    // always carries the archived_at is null predicate and orders by
+    // starts_at. Left events_starts_at_idx itself untouched rather than
+    // rewriting it in place, so this migration stays additive-only (no
+    // DROP INDEX).
+    index("events_starts_at_active_idx")
+      .on(table.startsAt)
+      .where(sql`${table.archivedAt} is null`),
   ],
 );

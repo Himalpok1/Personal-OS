@@ -1,0 +1,2 @@
+ALTER TABLE "events" ADD COLUMN "archived_at" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "events_starts_at_active_idx" ON "events" USING btree ("starts_at") WHERE "events"."archived_at" is null;
