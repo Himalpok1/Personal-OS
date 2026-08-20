@@ -1,12 +1,16 @@
 import {
+  EventCancelOccurrenceSchema,
   EventCreateSchema,
+  EventDetachSchema,
   EventRangeQuerySchema,
   EventRangeResponseSchema,
   EventSchema,
   EventUpdateSchema,
   paginatedResponseSchema,
   type Event,
+  type EventCancelOccurrence,
   type EventCreate,
+  type EventDetach,
   type EventRangeItem,
   type EventRangeQuery,
   type EventRangeResponse,
@@ -16,7 +20,9 @@ import { buildQuery, fetchJson } from "./client.js";
 
 export type {
   Event,
+  EventCancelOccurrence,
   EventCreate,
+  EventDetach,
   EventRangeItem,
   EventRangeQuery,
   EventRangeResponse,
@@ -71,4 +77,24 @@ export async function archiveEvent(baseUrl: string, id: string): Promise<Event> 
 export async function listEventsInRange(baseUrl: string, query: EventRangeQuery) {
   const parsed = EventRangeQuerySchema.parse(query);
   return fetchJson(baseUrl, `/events/range${buildQuery(parsed)}`, EventRangeResponseSchema);
+}
+
+export async function detachEvent(baseUrl: string, id: string, body: EventDetach): Promise<Event> {
+  const parsed = EventDetachSchema.parse(body);
+  return fetchJson(baseUrl, `/events/${id}/detach`, EventSchema, {
+    method: "POST",
+    body: JSON.stringify(parsed),
+  });
+}
+
+export async function cancelEventOccurrence(
+  baseUrl: string,
+  id: string,
+  body: EventCancelOccurrence,
+): Promise<Event> {
+  const parsed = EventCancelOccurrenceSchema.parse(body);
+  return fetchJson(baseUrl, `/events/${id}/cancel-occurrence`, EventSchema, {
+    method: "POST",
+    body: JSON.stringify(parsed),
+  });
 }

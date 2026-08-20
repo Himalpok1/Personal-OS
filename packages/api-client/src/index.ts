@@ -13,7 +13,9 @@ import {
 } from "./devices.js";
 import {
   archiveEvent,
+  cancelEventOccurrence,
   createEvent,
+  detachEvent,
   getEvent,
   listEvents,
   listEventsInRange,
@@ -46,7 +48,9 @@ export type { TranscribeAudioFile } from "./transcribe.js";
 export type { DeviceListParams } from "./devices.js";
 export type {
   Event,
+  EventCancelOccurrence,
   EventCreate,
+  EventDetach,
   EventListParams,
   EventRangeItem,
   EventRangeQuery,
@@ -101,6 +105,8 @@ export function createApiClient(baseUrl: string) {
     updateEvent: updateEvent.bind(null, baseUrl),
     archiveEvent: archiveEvent.bind(null, baseUrl),
     listEventsInRange: listEventsInRange.bind(null, baseUrl),
+    detachEvent: detachEvent.bind(null, baseUrl),
+    cancelEventOccurrence: cancelEventOccurrence.bind(null, baseUrl),
 
     listOccurrences: listOccurrences.bind(null, baseUrl),
     completeOccurrence: completeOccurrence.bind(null, baseUrl),

@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClientError } from "./client.js";
 import {
   archiveEvent,
+  cancelEventOccurrence,
   createEvent,
+  detachEvent,
   getEvent,
   listEvents,
   listEventsInRange,
@@ -26,6 +28,8 @@ const eventRow = {
   recurrence_until: null,
   recurrence_count: null,
   recurrence_exdates: null,
+  parent_event_id: null,
+  original_start_at: null,
   project_id: null,
   archived_at: null,
   created_at: "2026-08-16T00:00:00.000Z",
@@ -263,6 +267,64 @@ describe("listEventsInRange", () => {
     const [url] = fetchMock.mock.calls[0] as [URL, RequestInit];
     const parsedUrl = new URL(url.toString());
     expect(parsedUrl.searchParams.get("include_archived")).toBe("false");
+  });
+});
+
+describe("detachEvent", () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("POSTs the parsed body to /events/:id/detach and returns the detached event", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(eventRow), { status: 200 }));
+    global.fetch = fetchMock;
+
+    const result = await detachEvent("http://localhost:3000", eventRow.id, {
+      original_start_at: "2026-08-21T14:00:00.000Z",
+      title: "Detached meeting",
+      starts_at: "2026-08-21T15:00:00-05:00",
+      ends_at: "2026-08-21T15:30:00-05:00",
+      timezone: "America/Chicago",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe(`http://localhost:3000/events/${eventRow.id}/detach`);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      original_start_at: "2026-08-21T14:00:00.000Z",
+      title: "Detached meeting",
+      timezone: "America/Chicago",
+    });
+    expect(result).toEqual(eventRow);
+  });
+});
+
+describe("cancelEventOccurrence", () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("POSTs the parsed body to /events/:id/cancel-occurrence and returns the event", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(eventRow), { status: 200 }));
+    global.fetch = fetchMock;
+
+    const result = await cancelEventOccurrence("http://localhost:3000", eventRow.id, {
+      original_start_at: "2026-08-21T14:00:00.000Z",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe(`http://localhost:3000/events/${eventRow.id}/cancel-occurrence`);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      original_start_at: "2026-08-21T14:00:00.000Z",
+    });
+    expect(result).toEqual(eventRow);
   });
 });
 

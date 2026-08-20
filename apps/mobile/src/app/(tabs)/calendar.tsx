@@ -49,7 +49,13 @@ export default function CalendarScreen() {
     include_archived: false,
   });
 
-  const goToEvent = (entry: EventRangeItem) => router.push(`/events/${entry.id}`);
+  const goToEvent = (entry: EventRangeItem) => {
+    if (entry.is_recurring_instance && entry.occurs_at) {
+      router.push(`/events/${entry.id}?occursAt=${encodeURIComponent(entry.occurs_at)}`);
+    } else {
+      router.push(`/events/${entry.id}`);
+    }
+  };
 
   const goToNewAllDay = (date: Date) => {
     router.push(`/events/new?date=${format(date, "yyyy-MM-dd")}&allDay=true`);

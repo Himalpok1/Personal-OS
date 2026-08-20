@@ -1,5 +1,12 @@
 import type { EventListParams } from "@personal-os/api-client";
-import type { Event, EventCreate, EventRangeQuery, EventUpdate } from "@personal-os/schema";
+import type {
+  Event,
+  EventCancelOccurrence,
+  EventCreate,
+  EventDetach,
+  EventRangeQuery,
+  EventUpdate,
+} from "@personal-os/schema";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { UI_TEST_MODE } from "@/config/ui-test-mode";
 import { api } from "./client";
@@ -20,6 +27,8 @@ const UI_TEST_EVENT: Event = {
   recurrence_until: null,
   recurrence_count: null,
   recurrence_exdates: [],
+  parent_event_id: null,
+  original_start_at: null,
   project_id: null,
   archived_at: null,
   created_at: "2026-08-20T00:00:00.000Z",
@@ -84,6 +93,23 @@ export function useArchiveEvent() {
   const invalidate = useInvalidateEvents();
   return useMutation({
     mutationFn: (id: string) => api.archiveEvent(id),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDetachEvent() {
+  const invalidate = useInvalidateEvents();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: EventDetach }) => api.detachEvent(id, body),
+    onSuccess: invalidate,
+  });
+}
+
+export function useCancelEventOccurrence() {
+  const invalidate = useInvalidateEvents();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: EventCancelOccurrence }) =>
+      api.cancelEventOccurrence(id, body),
     onSuccess: invalidate,
   });
 }

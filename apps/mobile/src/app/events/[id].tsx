@@ -1,6 +1,12 @@
 import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
 import { useProjects } from "@/queries/projects";
-import { useArchiveEvent, useEvent, useUpdateEvent } from "@/queries/events";
+import {
+  useArchiveEvent,
+  useCancelEventOccurrence,
+  useDetachEvent,
+  useEvent,
+  useUpdateEvent,
+} from "@/queries/events";
 import {
   parseRRuleStringToEditorState,
   serializeEditorStateToRRule,
@@ -8,25 +14,328 @@ import {
 } from "@personal-os/core/recurrence/editor";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  ScrollView,
+  Switch,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+
+export type EditMode = "standard" | "occurrence";
+
+export function computeOccurrenceTiming(
+  event: {
+    all_day: boolean;
+    starts_at?: string | null;
+    ends_at?: string | null;
+    start_date?: string | null;
+    end_date?: string | null;
+  },
+  occursAt: string,
+) {
+  if (event.all_day) {
+    const startDate = occursAt.slice(0, 10);
+    let endDate = startDate;
+    if (event.start_date && event.end_date) {
+      const startMs = new Date(event.start_date).getTime();
+      const endMs = new Date(event.end_date).getTime();
+      const diffDays = Math.max(0, Math.round((endMs - startMs) / (24 * 60 * 60 * 1000)));
+      const endObj = new Date(new Date(startDate).getTime() + diffDays * 24 * 60 * 60 * 1000);
+      endDate = endObj.toISOString().slice(0, 10);
+    }
+    return { allDay: true, startDate, endDate, startsAt: "", endsAt: "" };
+  } else {
+    const occursDate = new Date(occursAt);
+    let durationMs = 30 * 60 * 1000;
+    if (event.starts_at && event.ends_at) {
+      const diff = new Date(event.ends_at).getTime() - new Date(event.starts_at).getTime();
+      if (diff > 0) durationMs = diff;
+    }
+    const occursEndDate = new Date(occursDate.getTime() + durationMs);
+    return {
+      allDay: false,
+      startDate: "",
+      endDate: "",
+      startsAt: occursDate.toISOString(),
+      endsAt: occursEndDate.toISOString(),
+    };
+  }
+}
+
+export interface EditEventViewProps {
+  modalVisible: boolean;
+  onDismissModal: () => void;
+  onSelectEditOccurrence: () => void;
+  onSelectEditSeries: () => void;
+  onCancelOccurrence: () => void;
+  isCanceling?: boolean;
+  isDetached: boolean;
+  editMode: EditMode;
+  recurrence: RecurrenceEditorState;
+  onRecurrenceChange: (state: RecurrenceEditorState) => void;
+  title: string;
+  onTitleChange: (val: string) => void;
+  description: string;
+  onDescriptionChange: (val: string) => void;
+  location: string;
+  onLocationChange: (val: string) => void;
+  allDay: boolean;
+  onAllDayChange: (val: boolean) => void;
+  startDate: string;
+  onStartDateChange: (val: string) => void;
+  endDate: string;
+  onEndDateChange: (val: string) => void;
+  startsAt: string;
+  onStartsAtChange: (val: string) => void;
+  endsAt: string;
+  onEndsAtChange: (val: string) => void;
+  timezone: string;
+  projects?: Array<{ id: string; name: string }>;
+  projectId?: string;
+  onProjectIdChange: (id?: string) => void;
+  onSubmit: () => void;
+  isSubmitting?: boolean;
+  onArchive?: () => void;
+  isError?: boolean;
+}
+
+export function EditEventView(props: EditEventViewProps) {
+  const showRecurrenceEditor = !props.isDetached && props.editMode !== "occurrence";
+
+  return (
+    <ScrollView className="flex-1 bg-white p-4 dark:bg-black">
+      <Modal
+        visible={props.modalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={props.onDismissModal}
+        testID="recurring-action-modal"
+      >
+        <View className="flex-1 items-center justify-center bg-black/50 p-4">
+          <View className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-lg dark:bg-neutral-900">
+            <Text className="mb-2 text-lg font-semibold text-black dark:text-white">
+              Recurring Event
+            </Text>
+            <Text className="mb-5 text-sm text-neutral-600 dark:text-neutral-400">
+              Would you like to edit only this occurrence or the entire recurring series?
+            </Text>
+
+            <Pressable
+              testID="edit-occurrence-button"
+              onPress={props.onSelectEditOccurrence}
+              className="mb-2.5 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700"
+            >
+              <Text className="font-semibold text-white">Edit this occurrence</Text>
+            </Pressable>
+
+            <Pressable
+              testID="edit-series-button"
+              onPress={props.onSelectEditSeries}
+              className="mb-2.5 items-center rounded-lg bg-neutral-100 py-3 active:bg-neutral-200 dark:bg-neutral-800 dark:active:bg-neutral-700"
+            >
+              <Text className="font-semibold text-black dark:text-white">Edit entire series</Text>
+            </Pressable>
+
+            <Pressable
+              testID="cancel-occurrence-button"
+              onPress={props.onCancelOccurrence}
+              disabled={props.isCanceling}
+              className="mb-2.5 items-center rounded-lg bg-red-50 py-3 active:bg-red-100 dark:bg-red-950/40 dark:active:bg-red-900/60"
+            >
+              <Text className="font-semibold text-red-600 dark:text-red-400">
+                {props.isCanceling ? "Canceling..." : "Cancel this occurrence"}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              testID="dismiss-modal-button"
+              onPress={props.onDismissModal}
+              className="items-center py-2"
+            >
+              <Text className="text-sm text-neutral-500">Dismiss</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {props.isDetached ? (
+        <View
+          testID="detached-event-banner"
+          className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950/40"
+        >
+          <Text className="text-sm font-medium text-amber-800 dark:text-amber-200">
+            This is a modified occurrence of a recurring event.
+          </Text>
+        </View>
+      ) : null}
+
+      {showRecurrenceEditor ? (
+        <View className="mb-4" testID="recurrence-section">
+          <Text className="mb-1 text-sm text-neutral-500">Recurrence</Text>
+          <RecurrenceEditor
+            value={props.recurrence}
+            onChange={props.onRecurrenceChange}
+            isTask={false}
+          />
+        </View>
+      ) : null}
+
+      <Text className="mb-1 text-sm text-neutral-500">Title</Text>
+      <TextInput
+        value={props.title}
+        onChangeText={props.onTitleChange}
+        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+      />
+
+      <Text className="mb-1 text-sm text-neutral-500">Description</Text>
+      <TextInput
+        value={props.description}
+        onChangeText={props.onDescriptionChange}
+        multiline
+        className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+      />
+
+      <Text className="mb-1 text-sm text-neutral-500">Location</Text>
+      <TextInput
+        value={props.location}
+        onChangeText={props.onLocationChange}
+        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+      />
+
+      <View className="mb-4 flex-row items-center justify-between">
+        <Text className="text-black dark:text-white">All-day</Text>
+        <Switch value={props.allDay} onValueChange={props.onAllDayChange} />
+      </View>
+
+      {props.allDay ? (
+        <>
+          <Text className="mb-1 text-sm text-neutral-500">Start date (YYYY-MM-DD)</Text>
+          <TextInput
+            value={props.startDate}
+            onChangeText={props.onStartDateChange}
+            placeholder="2026-09-15"
+            placeholderTextColor="#888"
+            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+          />
+
+          <Text className="mb-1 text-sm text-neutral-500">End date (YYYY-MM-DD)</Text>
+          <TextInput
+            value={props.endDate}
+            onChangeText={props.onEndDateChange}
+            placeholder="2026-09-15"
+            placeholderTextColor="#888"
+            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+          />
+        </>
+      ) : (
+        <>
+          <Text className="mb-1 text-sm text-neutral-500">Starts at (ISO 8601)</Text>
+          <TextInput
+            value={props.startsAt}
+            onChangeText={props.onStartsAtChange}
+            placeholder="2026-09-15T14:00:00"
+            placeholderTextColor="#888"
+            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+          />
+
+          <Text className="mb-1 text-sm text-neutral-500">Ends at (ISO 8601)</Text>
+          <TextInput
+            value={props.endsAt}
+            onChangeText={props.onEndsAtChange}
+            placeholder="2026-09-15T14:30:00"
+            placeholderTextColor="#888"
+            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+          />
+        </>
+      )}
+
+      <Text className="mb-1 text-sm text-neutral-500">Timezone</Text>
+      <Text className="mb-4 text-black dark:text-white">{props.timezone}</Text>
+
+      <Text className="mb-1 text-sm text-neutral-500">Project</Text>
+      <View className="mb-4 flex-row flex-wrap gap-2">
+        {(props.projects ?? []).map((project) => (
+          <Pressable
+            key={project.id}
+            onPress={() =>
+              props.onProjectIdChange(props.projectId === project.id ? undefined : project.id)
+            }
+            className={
+              props.projectId === project.id
+                ? "rounded-full bg-blue-600 px-3 py-1"
+                : "rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
+            }
+          >
+            <Text
+              className={
+                props.projectId === project.id ? "text-white" : "text-black dark:text-white"
+              }
+            >
+              {project.name}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
+      {props.isError ? (
+        <Text className="mb-2 text-red-600">Couldn&apos;t save those changes.</Text>
+      ) : null}
+
+      <Pressable
+        testID="save-event-button"
+        onPress={props.onSubmit}
+        disabled={props.isSubmitting}
+        className="mb-3 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700"
+      >
+        <Text className="font-semibold text-white">
+          {props.isSubmitting ? "Saving..." : "Save changes"}
+        </Text>
+      </Pressable>
+
+      {props.onArchive ? (
+        <Pressable
+          testID="archive-event-button"
+          onPress={props.onArchive}
+          className="items-center rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"
+        >
+          <Text className="font-semibold text-neutral-600 dark:text-neutral-300">
+            Archive event
+          </Text>
+        </Pressable>
+      ) : null}
+    </ScrollView>
+  );
+}
 
 export default function EditEventScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, occursAt } = useLocalSearchParams<{ id: string; occursAt?: string }>();
   const router = useRouter();
   const { data: event, isLoading } = useEvent(id);
   const { data: projects } = useProjects();
   const updateEvent = useUpdateEvent();
   const archiveEvent = useArchiveEvent();
+  const detachEvent = useDetachEvent();
+  const cancelEventOccurrence = useCancelEventOccurrence();
 
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [location, setLocation] = useState("");
-  const [allDay, setAllDay] = useState(false);
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-  const [startsAt, setStartsAt] = useState("");
-  const [endsAt, setEndsAt] = useState("");
-  const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  const isDetached = event?.parent_event_id != null;
+  const isRecurring = Boolean(event?.rrule);
+
+  const [editMode, setEditMode] = useState<EditMode>("standard");
+  const [modalVisible, setModalVisible] = useState(() => Boolean(occursAt && isRecurring));
+
+  const [title, setTitle] = useState(() => event?.title ?? "");
+  const [description, setDescription] = useState(() => event?.description ?? "");
+  const [location, setLocation] = useState(() => event?.location ?? "");
+  const [allDay, setAllDay] = useState(() => event?.all_day ?? false);
+  const [startDate, setStartDate] = useState(() => event?.start_date ?? "");
+  const [endDate, setEndDate] = useState(() => event?.end_date ?? "");
+  const [startsAt, setStartsAt] = useState(() => event?.starts_at ?? "");
+  const [endsAt, setEndsAt] = useState(() => event?.ends_at ?? "");
+  const [projectId, setProjectId] = useState<string | undefined>(() => event?.project_id ?? undefined);
   const [recurrence, setRecurrence] = useState<RecurrenceEditorState>(() =>
     parseRRuleStringToEditorState(event?.rrule, {
       recurrenceTimezone: event?.recurrence_timezone,
@@ -35,6 +344,12 @@ export default function EditEventScreen() {
       defaultTimezone: event?.timezone,
     }),
   );
+
+  useEffect(() => {
+    if (event && occursAt && isRecurring) {
+      setModalVisible(true);
+    }
+  }, [event, occursAt, isRecurring]);
 
   useEffect(() => {
     if (!event) return;
@@ -65,159 +380,156 @@ export default function EditEventScreen() {
     );
   }
 
-  const submit = () => {
-    const serialized = serializeEditorStateToRRule(recurrence);
-    updateEvent.mutate({
-      id: event.id,
-      body: {
-        title: title.trim() || undefined,
-        description: description.trim(),
-        location: location.trim(),
-        all_day: allDay,
-        ...(allDay
-          ? {
-              start_date: startDate.trim() || null,
-              end_date: endDate.trim() || null,
-              starts_at: null,
-              ends_at: null,
-            }
-          : {
-              starts_at: startsAt.trim() || null,
-              ends_at: endsAt.trim() || null,
-              start_date: null,
-              end_date: null,
-            }),
-        project_id: projectId ?? null,
-        rrule: serialized.rrule,
-        recurrence_timezone: serialized.recurrence_timezone,
-        recurrence_until: serialized.recurrence_until
-          ? serialized.recurrence_until.toISOString()
-          : null,
-        recurrence_count: serialized.recurrence_count,
+  const handleSelectEditOccurrence = () => {
+    setModalVisible(false);
+    setEditMode("occurrence");
+
+    if (!occursAt) return;
+    const timing = computeOccurrenceTiming(event, occursAt);
+    if (timing.allDay) {
+      setStartDate(timing.startDate);
+      setEndDate(timing.endDate);
+    } else {
+      setStartsAt(timing.startsAt);
+      setEndsAt(timing.endsAt);
+    }
+  };
+
+  const handleSelectEditSeries = () => {
+    setModalVisible(false);
+    setEditMode("standard");
+  };
+
+  const handleCancelOccurrence = () => {
+    if (!occursAt) return;
+    cancelEventOccurrence.mutate(
+      {
+        id: event.id,
+        body: { original_start_at: occursAt },
       },
-    });
+      {
+        onSuccess: () => {
+          setModalVisible(false);
+          router.back();
+        },
+      },
+    );
+  };
+
+  const isSubmitting =
+    updateEvent.isPending || detachEvent.isPending || cancelEventOccurrence.isPending;
+
+  const submit = () => {
+    if (editMode === "occurrence" && occursAt) {
+      detachEvent.mutate(
+        {
+          id: event.id,
+          body: {
+            original_start_at: occursAt,
+            title: title.trim() || undefined,
+            description: description.trim() || null,
+            location: location.trim() || null,
+            all_day: allDay,
+            ...(allDay
+              ? {
+                  start_date: startDate.trim() || null,
+                  end_date: endDate.trim() || null,
+                  starts_at: null,
+                  ends_at: null,
+                }
+              : {
+                  starts_at: startsAt.trim() || null,
+                  ends_at: endsAt.trim() || null,
+                  start_date: null,
+                  end_date: null,
+                }),
+            project_id: projectId ?? null,
+          },
+        },
+        {
+          onSuccess: () => router.back(),
+        },
+      );
+      return;
+    }
+
+    const serialized = isDetached ? null : serializeEditorStateToRRule(recurrence);
+    updateEvent.mutate(
+      {
+        id: event.id,
+        body: {
+          title: title.trim() || undefined,
+          description: description.trim() || null,
+          location: location.trim() || null,
+          all_day: allDay,
+          ...(allDay
+            ? {
+                start_date: startDate.trim() || null,
+                end_date: endDate.trim() || null,
+                starts_at: null,
+                ends_at: null,
+              }
+            : {
+                starts_at: startsAt.trim() || null,
+                ends_at: endsAt.trim() || null,
+                start_date: null,
+                end_date: null,
+              }),
+          project_id: projectId ?? null,
+          ...(!isDetached && serialized
+            ? {
+                rrule: serialized.rrule,
+                recurrence_timezone: serialized.recurrence_timezone,
+                recurrence_until: serialized.recurrence_until
+                  ? serialized.recurrence_until.toISOString()
+                  : null,
+                recurrence_count: serialized.recurrence_count,
+              }
+            : {}),
+        },
+      },
+      {
+        onSuccess: () => router.back(),
+      },
+    );
   };
 
   return (
-    <ScrollView className="flex-1 bg-white p-4 dark:bg-black">
-      <View className="mb-4">
-        <Text className="mb-1 text-sm text-neutral-500">Recurrence</Text>
-        <RecurrenceEditor value={recurrence} onChange={setRecurrence} isTask={false} />
-      </View>
-
-      <Text className="mb-1 text-sm text-neutral-500">Title</Text>
-      <TextInput
-        value={title}
-        onChangeText={setTitle}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-
-      <Text className="mb-1 text-sm text-neutral-500">Description</Text>
-      <TextInput
-        value={description}
-        onChangeText={setDescription}
-        multiline
-        className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-
-      <Text className="mb-1 text-sm text-neutral-500">Location</Text>
-      <TextInput
-        value={location}
-        onChangeText={setLocation}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-
-      <View className="mb-4 flex-row items-center justify-between">
-        <Text className="text-black dark:text-white">All-day</Text>
-        <Switch value={allDay} onValueChange={setAllDay} />
-      </View>
-
-      {allDay ? (
-        <>
-          <Text className="mb-1 text-sm text-neutral-500">Start date (YYYY-MM-DD)</Text>
-          <TextInput
-            value={startDate}
-            onChangeText={setStartDate}
-            placeholder="2026-09-15"
-            placeholderTextColor="#888"
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-          />
-
-          <Text className="mb-1 text-sm text-neutral-500">End date (YYYY-MM-DD)</Text>
-          <TextInput
-            value={endDate}
-            onChangeText={setEndDate}
-            placeholder="2026-09-15"
-            placeholderTextColor="#888"
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-          />
-        </>
-      ) : (
-        <>
-          <Text className="mb-1 text-sm text-neutral-500">Starts at (ISO 8601)</Text>
-          <TextInput
-            value={startsAt}
-            onChangeText={setStartsAt}
-            placeholder="2026-09-15T14:00:00"
-            placeholderTextColor="#888"
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-          />
-
-          <Text className="mb-1 text-sm text-neutral-500">Ends at (ISO 8601)</Text>
-          <TextInput
-            value={endsAt}
-            onChangeText={setEndsAt}
-            placeholder="2026-09-15T14:30:00"
-            placeholderTextColor="#888"
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-          />
-        </>
-      )}
-
-      <Text className="mb-1 text-sm text-neutral-500">Timezone</Text>
-      <Text className="mb-4 text-black dark:text-white">{event.timezone}</Text>
-
-      <Text className="mb-1 text-sm text-neutral-500">Project</Text>
-      <View className="mb-4 flex-row flex-wrap gap-2">
-        {(projects ?? []).map((project) => (
-          <Pressable
-            key={project.id}
-            onPress={() => setProjectId(projectId === project.id ? undefined : project.id)}
-            className={
-              projectId === project.id
-                ? "rounded-full bg-blue-600 px-3 py-1"
-                : "rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
-            }
-          >
-            <Text className={projectId === project.id ? "text-white" : "text-black dark:text-white"}>
-              {project.name}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-
-      {updateEvent.isError ? (
-        <Text className="mb-2 text-red-600">Couldn&apos;t save those changes.</Text>
-      ) : null}
-
-      <Pressable
-        onPress={submit}
-        disabled={updateEvent.isPending}
-        className="mb-3 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700"
-      >
-        <Text className="font-semibold text-white">
-          {updateEvent.isPending ? "Saving..." : "Save changes"}
-        </Text>
-      </Pressable>
-
-      <Pressable
-        onPress={() => archiveEvent.mutate(event.id, { onSuccess: () => router.back() })}
-        className="items-center rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"
-      >
-        <Text className="font-semibold text-neutral-600 dark:text-neutral-300">
-          Archive event
-        </Text>
-      </Pressable>
-    </ScrollView>
+    <EditEventView
+      modalVisible={modalVisible}
+      onDismissModal={() => setModalVisible(false)}
+      onSelectEditOccurrence={handleSelectEditOccurrence}
+      onSelectEditSeries={handleSelectEditSeries}
+      onCancelOccurrence={handleCancelOccurrence}
+      isCanceling={cancelEventOccurrence.isPending}
+      isDetached={isDetached}
+      editMode={editMode}
+      recurrence={recurrence}
+      onRecurrenceChange={setRecurrence}
+      title={title}
+      onTitleChange={setTitle}
+      description={description}
+      onDescriptionChange={setDescription}
+      location={location}
+      onLocationChange={setLocation}
+      allDay={allDay}
+      onAllDayChange={setAllDay}
+      startDate={startDate}
+      onStartDateChange={setStartDate}
+      endDate={endDate}
+      onEndDateChange={setEndDate}
+      startsAt={startsAt}
+      onStartsAtChange={setStartsAt}
+      endsAt={endsAt}
+      onEndsAtChange={setEndsAt}
+      timezone={event.timezone}
+      projects={projects}
+      projectId={projectId}
+      onProjectIdChange={setProjectId}
+      onSubmit={submit}
+      isSubmitting={isSubmitting}
+      onArchive={() => archiveEvent.mutate(event.id, { onSuccess: () => router.back() })}
+      isError={updateEvent.isError || detachEvent.isError || cancelEventOccurrence.isError}
+    />
   );
 }
