@@ -1,15 +1,26 @@
-import type { Device } from "@personal-os/schema";
+import type { CalendarConnection, Device } from "@personal-os/schema";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ExactAlarmStatus from "../../modules/exact-alarm-status";
+import GoogleCalendarAuth from "../../modules/google-calendar-auth";
 import * as Notifications from "expo-notifications";
 import { useState } from "react";
 import { Platform, Pressable, SafeAreaView, ScrollView, Switch, Text, View } from "react-native";
+import { mergeAvailableCalendars } from "@/calendar-connections/merge-available-calendars";
 import { useDeviceIdentity } from "@/device-identity/provider";
 import { REMINDERS_CHANNEL_ID, ensureNotificationPermission, ensureReminderChannel } from "@/notifications/channel";
 import { registerForPushNotifications } from "@/notifications/push-token";
 import { describeReminderEligibility } from "@/notifications/reminder-eligibility";
 import { cancelOwnedReminders } from "@/notifications/scheduler";
 import { flushOutbox, getOutboxStats } from "@/outbox/queue";
+import {
+  useAvailableGoogleCalendars,
+  useCalendarConnections,
+  useConnectGoogleCalendar,
+  useDisconnectCalendarConnection,
+  usePersistedCalendarConnectionCalendars,
+  useSyncCalendarConnectionNow,
+  useUpdateCalendarConnectionCalendars,
+} from "@/queries/calendar-connections";
 import { api } from "@/queries/client";
 import {
   useDevices,
@@ -18,6 +29,31 @@ import {
   useUpdateDevice,
   useUpdateDevicePushToken,
 } from "@/queries/devices";
+
+// The exact scope set the backend's token exchange expects -- see
+// Checkpoint 4.5 Stage A / apps/api's calendar-connections route. Kept as a
+// single constant so Settings and any future entry point request identical
+// scopes.
+const GOOGLE_CALENDAR_SCOPES = [
+  "openid",
+  "email",
+  "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+];
+
+// Android-only for this checkpoint -- GoogleCalendarAuthModule.web.ts (and
+// the (unbuilt) iOS side) throw on authorize(). Guarded the same way
+// ReminderEligibilityBanner guards ExactAlarmStatus's Android-only API.
+async function runGoogleCalendarAuthorize(): Promise<{
+  serverAuthCode: string;
+  grantedScopes: string[];
+}> {
+  const webClientId = process.env.EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID;
+  if (!webClientId) {
+    throw new Error("EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID is not configured");
+  }
+  return GoogleCalendarAuth.authorize(webClientId, GOOGLE_CALENDAR_SCOPES);
+}
 
 function OutboxDiagnostics() {
   const queryClient = useQueryClient();
@@ -315,6 +351,239 @@ function ReminderEligibilityBanner({ device }: { device: Device | undefined }) {
   );
 }
 
+function GoogleCalendarRow({
+  calendar,
+  disabled,
+  onToggle,
+}: {
+  calendar: ReturnType<typeof mergeAvailableCalendars>[number];
+  disabled: boolean;
+  onToggle: (next: boolean) => void;
+}) {
+  return (
+    <View className="flex-row items-center justify-between py-2">
+      <View className="mr-2 flex-1">
+        <Text className="text-black dark:text-white">
+          {calendar.summary}
+          {calendar.primary ? " (primary)" : ""}
+        </Text>
+        {calendar.last_successful_sync_at ? (
+          <Text className="text-xs text-neutral-500">
+            Last synced {new Date(calendar.last_successful_sync_at).toLocaleString()}
+          </Text>
+        ) : null}
+      </View>
+      <Switch value={calendar.sync_enabled} onValueChange={onToggle} disabled={disabled} />
+    </View>
+  );
+}
+
+// One card per active Google connection: the live available-calendars list
+// merged against whatever this session has learned about persisted
+// sync_enabled state (see usePersistedCalendarConnectionCalendars's comment
+// -- there's no GET for that data, so it's only known after a toggle or a
+// sync-now response in the current session).
+function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConnection }) {
+  const { data: available, isLoading, isError } = useAvailableGoogleCalendars(connection.id);
+  const { data: persisted } = usePersistedCalendarConnectionCalendars(connection.id);
+  const updateCalendars = useUpdateCalendarConnectionCalendars();
+  const syncNow = useSyncCalendarConnectionNow();
+  const disconnect = useDisconnectCalendarConnection();
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+
+  const merged = mergeAvailableCalendars(available ?? [], persisted ?? []);
+
+  const toggle = (googleCalendarId: string, next: boolean) => {
+    // Always PATCH the full desired set, not just the changed item -- the
+    // response then doubles as a complete snapshot for the cache-only
+    // persisted-calendars query (see queries/calendar-connections.ts).
+    updateCalendars.mutate({
+      connectionId: connection.id,
+      body: merged.map((cal) => ({
+        google_calendar_id: cal.google_calendar_id,
+        sync_enabled: cal.google_calendar_id === googleCalendarId ? next : cal.sync_enabled,
+      })),
+    });
+  };
+
+  return (
+    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
+      <Text className="mb-1 text-base font-bold text-black dark:text-white">
+        {connection.google_account_email}
+      </Text>
+      <Text className="mb-2 text-xs text-neutral-500">Google Calendar · connected</Text>
+
+      {isLoading ? <Text className="text-neutral-500">Loading calendars…</Text> : null}
+      {isError ? (
+        <Text className="text-red-600">Couldn&apos;t load Google calendars.</Text>
+      ) : null}
+
+      {merged.map((cal) => (
+        <GoogleCalendarRow
+          key={cal.google_calendar_id}
+          calendar={cal}
+          disabled={updateCalendars.isPending}
+          onToggle={(next) => toggle(cal.google_calendar_id, next)}
+        />
+      ))}
+
+      <Pressable
+        onPress={async () => {
+          setSyncResult("Syncing…");
+          try {
+            const result = await syncNow.mutateAsync(connection.id);
+            setSyncResult(`Queued ${result.queued} calendar${result.queued === 1 ? "" : "s"}.`);
+          } catch (err) {
+            setSyncResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }}
+        disabled={syncNow.isPending}
+        className="mt-2 rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+      >
+        <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
+          {syncNow.isPending ? "Syncing…" : "Sync now"}
+        </Text>
+      </Pressable>
+      {syncResult ? <Text className="mt-1 text-xs text-neutral-500">{syncResult}</Text> : null}
+
+      <Pressable
+        onPress={() => disconnect.mutate(connection.id)}
+        disabled={disconnect.isPending}
+        className="mt-2 rounded bg-red-100 px-3 py-2 dark:bg-red-950"
+      >
+        <Text className="text-center text-sm text-red-700 dark:text-red-300">
+          {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
+// Android-only (Stage A's native module has no iOS/web implementation --
+// see GoogleCalendarAuthModule.web.ts). Locked Decision 9: this is the only
+// place outbound Google sync configuration exists in the app; nothing here
+// or in events/new.tsx infers a calendar from project_id or any other
+// implicit signal.
+function ConnectedCalendarsCard() {
+  const { data, isLoading, isError } = useCalendarConnections();
+  const connectMutation = useConnectGoogleCalendar();
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [isAuthorizing, setIsAuthorizing] = useState(false);
+
+  if (Platform.OS !== "android") {
+    return (
+      <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
+        <Text className="mb-1 text-base font-bold text-black dark:text-white">
+          Connected Calendars
+        </Text>
+        <Text className="text-xs text-neutral-500">
+          Google Calendar sync is available on the Android app for now.
+        </Text>
+      </View>
+    );
+  }
+
+  const googleConnections = (data?.items ?? []).filter(
+    (connection) => connection.provider === "google",
+  );
+
+  const runConnect = async () => {
+    setConnectError(null);
+    setIsAuthorizing(true);
+    try {
+      const result = await runGoogleCalendarAuthorize();
+      await connectMutation.mutateAsync({ auth_code: result.serverAuthCode });
+    } catch (err) {
+      setConnectError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsAuthorizing(false);
+    }
+  };
+
+  const connecting = isAuthorizing || connectMutation.isPending;
+
+  return (
+    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
+      <Text className="mb-2 text-base font-bold text-black dark:text-white">
+        Connected Calendars
+      </Text>
+
+      {isLoading ? <Text className="text-neutral-500">Loading…</Text> : null}
+      {isError ? (
+        <Text className="text-red-600">Couldn&apos;t load calendar connections.</Text>
+      ) : null}
+
+      {googleConnections.map((connection) => {
+        if (connection.status === "active") {
+          return <GoogleCalendarConnectionCard key={connection.id} connection={connection} />;
+        }
+
+        if (connection.status === "needs_reauth") {
+          return (
+            <View
+              key={connection.id}
+              className="mb-4 rounded border border-amber-500 bg-amber-50 p-3 dark:bg-amber-950"
+            >
+              <Text className="mb-1 text-sm font-bold text-amber-900 dark:text-amber-200">
+                Reconnect Google Calendar
+              </Text>
+              <Text className="mb-2 text-xs text-amber-900 dark:text-amber-200">
+                {connection.google_account_email} needs to be reconnected before syncing can
+                continue.
+                {connection.last_sync_error ? ` (${connection.last_sync_error})` : ""}
+              </Text>
+              <Pressable
+                onPress={runConnect}
+                disabled={connecting}
+                className="rounded bg-amber-200 px-3 py-2 dark:bg-amber-900"
+              >
+                <Text className="text-center text-sm text-amber-900 dark:text-amber-100">
+                  {connecting ? "Reconnecting…" : "Reconnect"}
+                </Text>
+              </Pressable>
+            </View>
+          );
+        }
+
+        // status === "revoked" | "disconnected"
+        return (
+          <View
+            key={connection.id}
+            className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700"
+          >
+            <Text className="mb-2 text-sm text-black dark:text-white">
+              {connection.google_account_email} — not connected
+            </Text>
+            <Pressable
+              onPress={runConnect}
+              disabled={connecting}
+              className="rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+            >
+              <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
+                {connecting ? "Reconnecting…" : "Reconnect"}
+              </Text>
+            </Pressable>
+          </View>
+        );
+      })}
+
+      {googleConnections.length === 0 ? (
+        <Pressable
+          onPress={runConnect}
+          disabled={connecting}
+          className="rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+        >
+          <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
+            {connecting ? "Connecting…" : "Connect Google Calendar"}
+          </Text>
+        </Pressable>
+      ) : null}
+
+      {connectError ? <Text className="mt-2 text-xs text-red-600">{connectError}</Text> : null}
+    </View>
+  );
+}
+
 export default function SettingsScreen() {
   const { identity, clearIdentity } = useDeviceIdentity();
   const { data, isLoading, isError } = useDevices();
@@ -326,6 +595,7 @@ export default function SettingsScreen() {
         <Text className="mb-4 text-xl font-bold text-black dark:text-white">Devices</Text>
 
         <ReminderEligibilityBanner device={thisDevice} />
+        <ConnectedCalendarsCard />
         <NotificationDiagnostics />
         <OutboxDiagnostics />
 

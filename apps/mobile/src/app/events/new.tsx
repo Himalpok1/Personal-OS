@@ -1,4 +1,6 @@
+import { GoogleCalendarLinkPicker } from "@/components/calendar/google-calendar-link-picker";
 import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
+import { useLinkableGoogleCalendars, useLinkEventToGoogleCalendar } from "@/queries/calendar-connections";
 import { useProjects } from "@/queries/projects";
 import { useCreateEvent } from "@/queries/events";
 import {
@@ -41,7 +43,12 @@ export default function NewEventScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<NewEventParams>();
   const createEvent = useCreateEvent();
+  const linkToGoogleCalendar = useLinkEventToGoogleCalendar();
+  const { connectionId: googleConnectionId } = useLinkableGoogleCalendars();
   const { data: projects } = useProjects();
+  const [selectedGoogleCalendarId, setSelectedGoogleCalendarId] = useState<string | undefined>(
+    undefined,
+  );
 
   const [allDay, setAllDay] = useState(
     () => params.allDay === "true" || (Boolean(params.date) && !params.startsAt && !params.endsAt),
@@ -106,7 +113,32 @@ export default function NewEventScreen() {
           }),
       ...recurrenceFields,
     };
-    createEvent.mutate(body, { onSuccess: () => router.back() });
+    createEvent.mutate(body, {
+      onSuccess: (createdEvent) => {
+        // Explicit outbound linking only (Locked Decision 9) -- a new event
+        // is local-only unless a Google calendar was picked here.
+        if (selectedGoogleCalendarId && googleConnectionId) {
+          linkToGoogleCalendar.mutate(
+            {
+              eventId: createdEvent.id,
+              body: {
+                connection_id: googleConnectionId,
+                google_calendar_id: selectedGoogleCalendarId,
+              },
+            },
+            {
+              // A brand-new event can't realistically already be linked, but
+              // treat a defensive 409 (or any other link failure) as a
+              // harmless no-op -- the event itself was already created
+              // successfully, so navigation shouldn't block on the link.
+              onSettled: () => router.back(),
+            },
+          );
+          return;
+        }
+        router.back();
+      },
+    });
   };
 
   return (
@@ -205,6 +237,11 @@ export default function NewEventScreen() {
         <Text className="mb-1 text-sm text-neutral-500">Recurrence</Text>
         <RecurrenceEditor value={recurrence} onChange={setRecurrence} isTask={false} />
       </View>
+
+      <GoogleCalendarLinkPicker
+        selectedGoogleCalendarId={selectedGoogleCalendarId}
+        onChange={setSelectedGoogleCalendarId}
+      />
 
       {createEvent.isError ? (
         <Text className="mb-2 text-red-600">Couldn&apos;t create that event.</Text>

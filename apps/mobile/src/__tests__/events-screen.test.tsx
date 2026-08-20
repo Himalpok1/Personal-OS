@@ -83,6 +83,8 @@ describe("EditEventScreen & Recurring Exceptions UX", () => {
       timezone: "America/Chicago",
       onSubmit: vi.fn(),
       onProjectIdChange: vi.fn(),
+      onGoogleCalendarChange: vi.fn(),
+      onLinkToGoogleCalendar: vi.fn(),
     });
 
     const modal = findByTestId(tree, "recurring-action-modal");
@@ -164,6 +166,8 @@ describe("EditEventScreen & Recurring Exceptions UX", () => {
       timezone: "America/Chicago",
       onSubmit: vi.fn(),
       onProjectIdChange: vi.fn(),
+      onGoogleCalendarChange: vi.fn(),
+      onLinkToGoogleCalendar: vi.fn(),
     });
 
     expect(findByTestId(tree, "recurrence-section")).toBeNull();
@@ -200,6 +204,8 @@ describe("EditEventScreen & Recurring Exceptions UX", () => {
       timezone: "America/Chicago",
       onSubmit,
       onProjectIdChange: vi.fn(),
+      onGoogleCalendarChange: vi.fn(),
+      onLinkToGoogleCalendar: vi.fn(),
     });
 
     const banner = findByTestId(tree, "detached-event-banner");

@@ -1,4 +1,7 @@
+import { ApiClientError } from "@personal-os/api-client";
+import { GoogleCalendarLinkPicker } from "@/components/calendar/google-calendar-link-picker";
 import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
+import { useLinkableGoogleCalendars, useLinkEventToGoogleCalendar } from "@/queries/calendar-connections";
 import { useProjects } from "@/queries/projects";
 import {
   useArchiveEvent,
@@ -101,6 +104,11 @@ export interface EditEventViewProps {
   isSubmitting?: boolean;
   onArchive?: () => void;
   isError?: boolean;
+  selectedGoogleCalendarId?: string;
+  onGoogleCalendarChange: (googleCalendarId: string | undefined) => void;
+  onLinkToGoogleCalendar: () => void;
+  isLinkingToGoogleCalendar?: boolean;
+  googleCalendarLinkNote?: string | null;
 }
 
 export function EditEventView(props: EditEventViewProps) {
@@ -281,6 +289,24 @@ export function EditEventView(props: EditEventViewProps) {
         ))}
       </View>
 
+      <GoogleCalendarLinkPicker
+        selectedGoogleCalendarId={props.selectedGoogleCalendarId}
+        onChange={props.onGoogleCalendarChange}
+        alreadyLinkedNote={props.googleCalendarLinkNote ?? undefined}
+      />
+      {props.selectedGoogleCalendarId ? (
+        <Pressable
+          testID="link-google-calendar-button"
+          onPress={props.onLinkToGoogleCalendar}
+          disabled={props.isLinkingToGoogleCalendar}
+          className="mb-4 rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"
+        >
+          <Text className="text-center font-semibold text-black dark:text-white">
+            {props.isLinkingToGoogleCalendar ? "Linking…" : "Link to Google Calendar"}
+          </Text>
+        </Pressable>
+      ) : null}
+
       {props.isError ? (
         <Text className="mb-2 text-red-600">Couldn&apos;t save those changes.</Text>
       ) : null}
@@ -320,6 +346,12 @@ export default function EditEventScreen() {
   const archiveEvent = useArchiveEvent();
   const detachEvent = useDetachEvent();
   const cancelEventOccurrence = useCancelEventOccurrence();
+  const linkToGoogleCalendar = useLinkEventToGoogleCalendar();
+  const { connectionId: googleConnectionId } = useLinkableGoogleCalendars();
+  const [selectedGoogleCalendarId, setSelectedGoogleCalendarId] = useState<string | undefined>(
+    undefined,
+  );
+  const [googleCalendarLinkNote, setGoogleCalendarLinkNote] = useState<string | null>(null);
 
   const isDetached = event?.parent_event_id != null;
   const isRecurring = Boolean(event?.rrule);
@@ -398,6 +430,36 @@ export default function EditEventScreen() {
   const handleSelectEditSeries = () => {
     setModalVisible(false);
     setEditMode("standard");
+  };
+
+  const handleLinkToGoogleCalendar = () => {
+    if (!selectedGoogleCalendarId || !googleConnectionId) return;
+    setGoogleCalendarLinkNote(null);
+    linkToGoogleCalendar.mutate(
+      {
+        eventId: event.id,
+        body: {
+          connection_id: googleConnectionId,
+          google_calendar_id: selectedGoogleCalendarId,
+        },
+      },
+      {
+        onSuccess: () => setGoogleCalendarLinkNote("Now syncing to Google Calendar."),
+        onError: (err) => {
+          // 409 already_linked -- the route's documented idempotent case
+          // (see LinkEventToGoogleCalendarRequestSchema's comment /
+          // apps/api's link-google-calendar route). Not an error, just an
+          // inline note.
+          if (err instanceof ApiClientError && err.status === 409) {
+            setGoogleCalendarLinkNote("Already syncing to Google.");
+            return;
+          }
+          setGoogleCalendarLinkNote(
+            `Couldn't link to Google Calendar: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        },
+      },
+    );
   };
 
   const handleCancelOccurrence = () => {
@@ -530,6 +592,11 @@ export default function EditEventScreen() {
       isSubmitting={isSubmitting}
       onArchive={() => archiveEvent.mutate(event.id, { onSuccess: () => router.back() })}
       isError={updateEvent.isError || detachEvent.isError || cancelEventOccurrence.isError}
+      selectedGoogleCalendarId={selectedGoogleCalendarId}
+      onGoogleCalendarChange={setSelectedGoogleCalendarId}
+      onLinkToGoogleCalendar={handleLinkToGoogleCalendar}
+      isLinkingToGoogleCalendar={linkToGoogleCalendar.isPending}
+      googleCalendarLinkNote={googleCalendarLinkNote}
     />
   );
 }
