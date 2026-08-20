@@ -1,9 +1,11 @@
 import { createApiClient } from "@personal-os/api-client";
 import { QueryClient } from "@tanstack/react-query";
+import { assertUiTestApiIsolation } from "@/config/ui-test-mode";
 
 // EXPO_PUBLIC_* vars are inlined into the bundle at build/dev time by
 // Expo's Metro config (see apps/mobile/.env for the local-dev default).
 const API_URL = process.env["EXPO_PUBLIC_API_URL"] ?? "http://localhost:3000";
+assertUiTestApiIsolation(API_URL);
 
 export const api = createApiClient(API_URL);
 

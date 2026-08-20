@@ -1,19 +1,24 @@
 import type { ExpoConfig } from "expo/config";
 
+const uiTestMode = process.env.EXPO_PUBLIC_UI_TEST_MODE === "true";
+
 const config: ExpoConfig = {
-  name: "mobile",
+  name: uiTestMode ? "Personal OS UI Test" : "mobile",
   slug: "mobile",
   version: "1.0.0",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
-  scheme: "mobile",
+  scheme: uiTestMode ? "personal-os-ui-test" : "mobile",
   userInterfaceStyle: "automatic",
   ios: {
     icon: "./assets/expo.icon",
   },
   android: {
-    package: "com.himal.personalos",
-    googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json",
+    package: uiTestMode ? "com.himal.personalos.dev" : "com.himal.personalos",
+    ...(uiTestMode && { usesCleartextTraffic: true }),
+    ...(!uiTestMode && {
+      googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json",
+    }),
     adaptiveIcon: {
       backgroundColor: "#E6F4FE",
       foregroundImage: "./assets/images/android-icon-foreground.png",
@@ -38,9 +43,9 @@ const config: ExpoConfig = {
     ],
     "./plugins/withHardwareInputBridge.ts",
     "expo-secure-store",
-    "expo-audio",
+    ...(!uiTestMode ? ["expo-audio"] : []),
     "expo-sqlite",
-    "expo-notifications",
+    ...(!uiTestMode ? ["expo-notifications"] : []),
   ],
   experiments: {
     typedRoutes: true,
@@ -48,9 +53,11 @@ const config: ExpoConfig = {
   },
   extra: {
     router: {},
-    eas: {
-      projectId: "b704be80-5b01-411e-9239-fa0cea642783",
-    },
+    ...(!uiTestMode && {
+      eas: {
+        projectId: "b704be80-5b01-411e-9239-fa0cea642783",
+      },
+    }),
   },
   owner: "himal_pok",
 };

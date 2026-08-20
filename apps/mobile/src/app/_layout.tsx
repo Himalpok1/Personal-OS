@@ -8,6 +8,7 @@ import { useNotificationLifecycle } from "@/notifications/use-notification-lifec
 import { usePushTokenRegistration } from "@/notifications/use-push-token-registration";
 import { useOutboxFlushOnReconnect } from "@/outbox/use-outbox-flush-on-reconnect";
 import { PttButton } from "@/ptt/ptt-button";
+import { UI_TEST_MODE } from "@/config/ui-test-mode";
 import { queryClient } from "@/queries/client";
 import { useQueryLifecycle } from "@/queries/use-query-lifecycle";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -37,6 +38,11 @@ export default function RootLayout() {
 // screen renders in place of everything else, including the tab
 // navigator. See device-identity/provider.tsx.
 function RootContent() {
+  if (UI_TEST_MODE) return <UiTestContent />;
+  return <ProductionContent />;
+}
+
+function ProductionContent() {
   const { identity, isLoading } = useDeviceIdentity();
   // Called unconditionally, above the early returns below, per the rules
   // of hooks -- the hook itself is a no-op until identity/tasks are
@@ -69,6 +75,8 @@ function RootContent() {
         <Stack.Screen name="notes/new" options={{ title: "New Note" }} />
         <Stack.Screen name="projects/[id]" options={{ title: "Project" }} />
         <Stack.Screen name="projects/new" options={{ title: "New Project" }} />
+        <Stack.Screen name="events/[id]" options={{ title: "Event" }} />
+        <Stack.Screen name="events/new" options={{ title: "New Event" }} />
         <Stack.Screen name="settings" options={{ title: "Settings" }} />
         <Stack.Screen name="hardware-debug" options={{ title: "Hardware spike" }} />
       </Stack>
@@ -76,6 +84,23 @@ function RootContent() {
           docs/STATUS.md's Phase 2 entry. */}
       <QuickAddFab />
       <PttButton />
+    </View>
+  );
+}
+
+// A deliberately capability-minimal shell for the temporary side-by-side
+// Rabbit layout build. It bypasses device identity entirely and never mounts
+// pairing, push, reminder, outbox, notification, PTT, or quick-add lifecycles.
+function UiTestContent() {
+  useQueryLifecycle();
+
+  return (
+    <View style={{ flex: 1 }}>
+      <Stack>
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="events/[id]" options={{ title: "Event" }} />
+        <Stack.Screen name="events/new" options={{ title: "New Event" }} />
+      </Stack>
     </View>
   );
 }
