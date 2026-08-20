@@ -44,11 +44,19 @@ import { transcribe } from "./transcribe.js";
 export { ApiClientError, type ZodLikeSchema } from "./client.js";
 export type { TranscribeAudioFile } from "./transcribe.js";
 export type { DeviceListParams } from "./devices.js";
-export type { EventListParams } from "./events.js";
+export type {
+  Event,
+  EventCreate,
+  EventListParams,
+  EventRangeItem,
+  EventRangeQuery,
+  EventRangeResponse,
+  EventUpdate,
+} from "./events.js";
 export type { InboxListParams } from "./inbox.js";
 export type { NoteListParams } from "./notes.js";
 export type { ProjectListParams } from "./projects.js";
-export type { TaskListParams } from "./tasks.js";
+export type { Task, TaskCreate, TaskListParams, TaskStatus, TaskUpdate } from "./tasks.js";
 
 // A flat method bag, not a nested tasks.list()/notes.list() namespace --
 // matches the shape the original single health() method already had.

@@ -1,5 +1,10 @@
+import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
 import { useProjects } from "@/queries/projects";
 import { useCreateEvent } from "@/queries/events";
+import {
+  serializeEditorStateToRRule,
+  type RecurrenceEditorState,
+} from "@personal-os/core/recurrence/editor";
 import type { EventCreate } from "@personal-os/schema";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
@@ -53,10 +58,36 @@ export default function NewEventScreen() {
   const [startsAt, setStartsAt] = useState(() => params.startsAt ?? "");
   const [endsAt, setEndsAt] = useState(() => params.endsAt ?? "");
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  const [recurrence, setRecurrence] = useState<RecurrenceEditorState>({
+    enabled: false,
+    frequency: "DAILY",
+    interval: 1,
+    weekdays: [],
+    monthDay: null,
+    endMode: "never",
+    untilDate: null,
+    count: null,
+    anchor: "due_date",
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    isCustom: false,
+    rawRrule: null,
+  });
 
   const submit = () => {
     if (!title.trim()) return;
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    let recurrenceFields: Partial<EventCreate> = {};
+    if (recurrence.enabled) {
+      const serialized = serializeEditorStateToRRule(recurrence);
+      recurrenceFields = {
+        rrule: serialized.rrule,
+        recurrence_timezone: serialized.recurrence_timezone ?? timezone,
+        recurrence_until: serialized.recurrence_until
+          ? serialized.recurrence_until.toISOString()
+          : undefined,
+        recurrence_count: serialized.recurrence_count ?? undefined,
+      };
+    }
     const body: EventCreate = {
       title: title.trim(),
       description: description.trim() || undefined,
@@ -73,6 +104,7 @@ export default function NewEventScreen() {
             starts_at: startsAt.trim() || undefined,
             ends_at: endsAt.trim() || undefined,
           }),
+      ...recurrenceFields,
     };
     createEvent.mutate(body, { onSuccess: () => router.back() });
   };
@@ -167,6 +199,11 @@ export default function NewEventScreen() {
             </Text>
           </Pressable>
         ))}
+      </View>
+
+      <View className="mb-4">
+        <Text className="mb-1 text-sm text-neutral-500">Recurrence</Text>
+        <RecurrenceEditor value={recurrence} onChange={setRecurrence} isTask={false} />
       </View>
 
       {createEvent.isError ? (

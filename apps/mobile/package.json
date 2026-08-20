@@ -5,6 +5,7 @@
   "dependencies": {
     "@expo/ui": "~57.0.11",
     "@personal-os/api-client": "workspace:*",
+    "@personal-os/core": "workspace:*",
     "@personal-os/schema": "workspace:*",
     "@tanstack/react-query": "^5.90.2",
     "date-fns": "^4.4.0",

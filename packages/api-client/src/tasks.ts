@@ -10,6 +10,8 @@ import {
 } from "@personal-os/schema";
 import { buildQuery, fetchJson } from "./client.js";
 
+export type { Task, TaskCreate, TaskStatus, TaskUpdate };
+
 const TaskListResponseSchema = paginatedResponseSchema(TaskSchema);
 
 // Client-side params, not the server's TaskListQuerySchema -- that schema

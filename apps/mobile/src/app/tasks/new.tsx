@@ -1,5 +1,10 @@
+import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
 import { useProjects } from "@/queries/projects";
 import { useCreateTask } from "@/queries/tasks";
+import {
+  serializeEditorStateToRRule,
+  type RecurrenceEditorState,
+} from "@personal-os/core/recurrence/editor";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
@@ -13,16 +18,46 @@ export default function NewTaskScreen() {
   const [body, setBody] = useState("");
   const [dueAt, setDueAt] = useState("");
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  const [recurrence, setRecurrence] = useState<RecurrenceEditorState>({
+    enabled: false,
+    frequency: "DAILY",
+    interval: 1,
+    weekdays: [],
+    monthDay: null,
+    endMode: "never",
+    untilDate: null,
+    count: null,
+    anchor: "due_date",
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    isCustom: false,
+    rawRrule: null,
+  });
 
   const submit = () => {
     if (!title.trim()) return;
+    const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    let recurrenceFields = {};
+    if (recurrence.enabled) {
+      const serialized = serializeEditorStateToRRule(recurrence);
+      recurrenceFields = {
+        rrule: serialized.rrule,
+        recurrence_timezone: serialized.recurrence_timezone ?? userTimezone,
+        recurrence_anchor: serialized.recurrence_anchor,
+        recurrence_until: serialized.recurrence_until
+          ? serialized.recurrence_until.toISOString()
+          : undefined,
+        recurrence_count: serialized.recurrence_count ?? undefined,
+      };
+    }
+
     createTask.mutate(
       {
         title: title.trim(),
         body: body.trim() || undefined,
         due_at: dueAt.trim() || undefined,
         project_id: projectId,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        timezone: userTimezone,
+        ...recurrenceFields,
       },
       { onSuccess: () => router.back() },
     );
@@ -74,6 +109,11 @@ export default function NewTaskScreen() {
             </Text>
           </Pressable>
         ))}
+      </View>
+
+      <View className="mb-4">
+        <Text className="mb-1 text-sm text-neutral-500">Recurrence</Text>
+        <RecurrenceEditor value={recurrence} onChange={setRecurrence} isTask={true} />
       </View>
 
       {createTask.isError ? (

@@ -1,5 +1,11 @@
+import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
 import { useProjects } from "@/queries/projects";
 import { useArchiveTask, useTask, useUpdateTask } from "@/queries/tasks";
+import {
+  parseRRuleStringToEditorState,
+  serializeEditorStateToRRule,
+  type RecurrenceEditorState,
+} from "@personal-os/core/recurrence/editor";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
@@ -16,6 +22,15 @@ export default function EditTaskScreen() {
   const [body, setBody] = useState("");
   const [dueAt, setDueAt] = useState("");
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  const [recurrence, setRecurrence] = useState<RecurrenceEditorState>(() =>
+    parseRRuleStringToEditorState(task?.rrule, {
+      recurrenceTimezone: task?.recurrence_timezone,
+      recurrenceUntil: task?.recurrence_until,
+      recurrenceCount: task?.recurrence_count,
+      recurrenceAnchor: task?.recurrence_anchor,
+      defaultTimezone: task?.timezone,
+    }),
+  );
 
   useEffect(() => {
     if (!task) return;
@@ -23,6 +38,15 @@ export default function EditTaskScreen() {
     setBody(task.body ?? "");
     setDueAt(task.due_at ?? "");
     setProjectId(task.project_id ?? undefined);
+    setRecurrence(
+      parseRRuleStringToEditorState(task.rrule, {
+        recurrenceTimezone: task.recurrence_timezone,
+        recurrenceUntil: task.recurrence_until,
+        recurrenceCount: task.recurrence_count,
+        recurrenceAnchor: task.recurrence_anchor,
+        defaultTimezone: task.timezone,
+      }),
+    );
   }, [task]);
 
   if (isLoading || !task) {
@@ -34,6 +58,7 @@ export default function EditTaskScreen() {
   }
 
   const submit = () => {
+    const serialized = serializeEditorStateToRRule(recurrence);
     updateTask.mutate({
       id: task.id,
       body: {
@@ -41,22 +66,23 @@ export default function EditTaskScreen() {
         body: body.trim(),
         due_at: dueAt.trim() || null,
         project_id: projectId ?? null,
+        rrule: serialized.rrule,
+        recurrence_timezone: serialized.recurrence_timezone,
+        recurrence_anchor: serialized.recurrence_anchor,
+        recurrence_until: serialized.recurrence_until
+          ? serialized.recurrence_until.toISOString()
+          : null,
+        recurrence_count: serialized.recurrence_count,
       },
     });
   };
 
   return (
     <ScrollView className="flex-1 bg-white p-4 dark:bg-black">
-      {task.rrule ? (
-        <View className="mb-4 rounded-lg bg-neutral-100 p-3 dark:bg-neutral-900">
-          <Text className="text-xs text-neutral-500">
-            Recurring ({task.recurrence_anchor}): {task.rrule}
-          </Text>
-          <Text className="text-xs text-neutral-400">
-            Recurrence can&apos;t be edited here yet -- capture a new instruction to change it.
-          </Text>
-        </View>
-      ) : null}
+      <View className="mb-4">
+        <Text className="mb-1 text-sm text-neutral-500">Recurrence</Text>
+        <RecurrenceEditor value={recurrence} onChange={setRecurrence} isTask={true} />
+      </View>
 
       <Text className="mb-1 text-sm text-neutral-500">Title</Text>
       <TextInput

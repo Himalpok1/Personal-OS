@@ -7,10 +7,21 @@ import {
   paginatedResponseSchema,
   type Event,
   type EventCreate,
+  type EventRangeItem,
   type EventRangeQuery,
+  type EventRangeResponse,
   type EventUpdate,
 } from "@personal-os/schema";
 import { buildQuery, fetchJson } from "./client.js";
+
+export type {
+  Event,
+  EventCreate,
+  EventRangeItem,
+  EventRangeQuery,
+  EventRangeResponse,
+  EventUpdate,
+};
 
 const EventListResponseSchema = paginatedResponseSchema(EventSchema);
 

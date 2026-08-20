@@ -23,6 +23,9 @@ const eventRow = {
   end_date: null,
   rrule: null,
   recurrence_timezone: null,
+  recurrence_until: null,
+  recurrence_count: null,
+  recurrence_exdates: null,
   project_id: null,
   archived_at: null,
   created_at: "2026-08-16T00:00:00.000Z",
@@ -120,6 +123,33 @@ describe("createEvent", () => {
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toMatchObject({ title: "Team standup" });
   });
+
+  it("POSTs recurring event fields properly to /events", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(eventRow), { status: 201 }));
+    global.fetch = fetchMock;
+
+    await createEvent("http://localhost:3000", {
+      title: "Daily Standup",
+      starts_at: "2026-08-21T09:00:00-05:00",
+      ends_at: "2026-08-21T09:30:00-05:00",
+      timezone: "America/Chicago",
+      rrule: "FREQ=DAILY;INTERVAL=1",
+      recurrence_timezone: "America/Chicago",
+      recurrence_until: "2026-12-31T23:59:59.999Z",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe("http://localhost:3000/events");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      title: "Daily Standup",
+      rrule: "FREQ=DAILY;INTERVAL=1",
+      recurrence_timezone: "America/Chicago",
+      recurrence_until: "2026-12-31T23:59:59.999Z",
+    });
+  });
 });
 
 describe("updateEvent", () => {
@@ -140,6 +170,28 @@ describe("updateEvent", () => {
     expect(url.toString()).toBe(`http://localhost:3000/events/${eventRow.id}`);
     expect(init.method).toBe("PATCH");
     expect(JSON.parse(init.body as string)).toEqual({ title: "Renamed standup" });
+  });
+
+  it("PATCHes recurring event fields including rrule and recurrence_count", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(eventRow), { status: 200 }));
+    global.fetch = fetchMock;
+
+    await updateEvent("http://localhost:3000", eventRow.id, {
+      rrule: "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE",
+      recurrence_timezone: "America/Chicago",
+      recurrence_count: 10,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe(`http://localhost:3000/events/${eventRow.id}`);
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({
+      rrule: "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE",
+      recurrence_timezone: "America/Chicago",
+      recurrence_count: 10,
+    });
   });
 });
 

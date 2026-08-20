@@ -1,5 +1,11 @@
+import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
 import { useProjects } from "@/queries/projects";
 import { useArchiveEvent, useEvent, useUpdateEvent } from "@/queries/events";
+import {
+  parseRRuleStringToEditorState,
+  serializeEditorStateToRRule,
+  type RecurrenceEditorState,
+} from "@personal-os/core/recurrence/editor";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
@@ -21,6 +27,14 @@ export default function EditEventScreen() {
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  const [recurrence, setRecurrence] = useState<RecurrenceEditorState>(() =>
+    parseRRuleStringToEditorState(event?.rrule, {
+      recurrenceTimezone: event?.recurrence_timezone,
+      recurrenceUntil: event?.recurrence_until,
+      recurrenceCount: event?.recurrence_count,
+      defaultTimezone: event?.timezone,
+    }),
+  );
 
   useEffect(() => {
     if (!event) return;
@@ -33,6 +47,14 @@ export default function EditEventScreen() {
     setStartsAt(event.starts_at ?? "");
     setEndsAt(event.ends_at ?? "");
     setProjectId(event.project_id ?? undefined);
+    setRecurrence(
+      parseRRuleStringToEditorState(event.rrule, {
+        recurrenceTimezone: event.recurrence_timezone,
+        recurrenceUntil: event.recurrence_until,
+        recurrenceCount: event.recurrence_count,
+        defaultTimezone: event.timezone,
+      }),
+    );
   }, [event]);
 
   if (isLoading || !event) {
@@ -44,6 +66,7 @@ export default function EditEventScreen() {
   }
 
   const submit = () => {
+    const serialized = serializeEditorStateToRRule(recurrence);
     updateEvent.mutate({
       id: event.id,
       body: {
@@ -65,20 +88,22 @@ export default function EditEventScreen() {
               end_date: null,
             }),
         project_id: projectId ?? null,
+        rrule: serialized.rrule,
+        recurrence_timezone: serialized.recurrence_timezone,
+        recurrence_until: serialized.recurrence_until
+          ? serialized.recurrence_until.toISOString()
+          : null,
+        recurrence_count: serialized.recurrence_count,
       },
     });
   };
 
   return (
     <ScrollView className="flex-1 bg-white p-4 dark:bg-black">
-      {event.rrule ? (
-        <View className="mb-4 rounded-lg bg-neutral-100 p-3 dark:bg-neutral-900">
-          <Text className="text-xs text-neutral-500">Recurring: {event.rrule}</Text>
-          <Text className="text-xs text-neutral-400">
-            Recurrence can&apos;t be edited here yet -- capture a new instruction to change it.
-          </Text>
-        </View>
-      ) : null}
+      <View className="mb-4">
+        <Text className="mb-1 text-sm text-neutral-500">Recurrence</Text>
+        <RecurrenceEditor value={recurrence} onChange={setRecurrence} isTask={false} />
+      </View>
 
       <Text className="mb-1 text-sm text-neutral-500">Title</Text>
       <TextInput
