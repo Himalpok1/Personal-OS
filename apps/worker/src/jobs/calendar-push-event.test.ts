@@ -6,6 +6,7 @@ import {
 import {
   calendarConnectionCalendars,
   calendarConnections,
+  calendarEventInstances,
   eventExternalLinks,
   events,
   type Db,
@@ -220,5 +221,79 @@ describe("calendar.google.push-event", () => {
     const handler = createCalendarPushEventHandler(db, client);
     await expect(handler([fakeJob({ eventId: eventRow!.id })])).resolves.not.toThrow();
     expect(await db.select().from(eventExternalLinks)).toHaveLength(0);
+  });
+
+  it("pushes a detached recurring occurrence to Google with recurringEventId and originalStartTime", async () => {
+    const connectionId = await insertConnection(db);
+    await db.insert(calendarConnectionCalendars).values({
+      connectionId,
+      googleCalendarId: GOOGLE_CALENDAR_ID,
+      summary: "Primary",
+      syncEnabled: true,
+    });
+    const [parentRow] = await db
+      .insert(events)
+      .values({
+        title: "Weekly Standup",
+        timezone: "America/Chicago",
+        startsAt: new Date("2026-09-07T09:00:00-05:00"),
+        endsAt: new Date("2026-09-07T09:30:00-05:00"),
+        rrule: "RRULE:FREQ=WEEKLY;INTERVAL=1",
+      })
+      .returning();
+    await db.insert(eventExternalLinks).values({
+      eventId: parentRow!.id,
+      connectionId,
+      googleCalendarId: GOOGLE_CALENDAR_ID,
+      googleEventId: "g-master-1",
+      lastSyncedLocalUpdatedAt: parentRow!.updatedAt,
+    });
+
+    const originalStartAt = new Date("2026-09-14T09:00:00-05:00");
+    const [childRow] = await db
+      .insert(events)
+      .values({
+        title: "Weekly Standup (moved)",
+        timezone: "America/Chicago",
+        startsAt: new Date("2026-09-14T10:00:00-05:00"),
+        endsAt: new Date("2026-09-14T10:30:00-05:00"),
+        parentEventId: parentRow!.id,
+        originalStartAt,
+      })
+      .returning();
+
+    await db.insert(eventExternalLinks).values({
+      eventId: childRow!.id,
+      connectionId,
+      googleCalendarId: GOOGLE_CALENDAR_ID,
+      googleEventId: null,
+      syncStatus: "pending_push",
+    });
+
+    const client = createFakeGoogleCalendarClient();
+    const handler = createCalendarPushEventHandler(db, client);
+    await handler([fakeJob({ eventId: childRow!.id })]);
+
+    expect(client.writeCalls).toHaveLength(1);
+    expect(client.writeCalls[0]).toMatchObject({
+      kind: "insert",
+      calendarId: GOOGLE_CALENDAR_ID,
+      event: {
+        summary: "Weekly Standup (moved)",
+        recurringEventId: "g-master-1",
+        originalStartTime: {
+          dateTime: originalStartAt.toISOString(),
+          timeZone: "America/Chicago",
+        },
+      },
+    });
+
+    const [instanceRow] = await db
+      .select()
+      .from(calendarEventInstances)
+      .where(eq(calendarEventInstances.localDetachedEventId, childRow!.id));
+    expect(instanceRow?.mappingStatus).toBe("detached");
+    expect(instanceRow?.googleMasterEventId).toBe("g-master-1");
+    expect(instanceRow?.localParentEventId).toBe(parentRow!.id);
   });
 });

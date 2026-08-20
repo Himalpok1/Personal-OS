@@ -37,12 +37,15 @@ export interface GoogleCalendarEvent {
 }
 
 export interface GoogleEventWriteBody {
+  status?: GoogleEventStatus;
   summary?: string;
   description?: string;
   location?: string;
   start?: GoogleEventDateTime;
   end?: GoogleEventDateTime;
   recurrence?: string[];
+  recurringEventId?: string;
+  originalStartTime?: GoogleEventDateTime;
 }
 
 export interface ListCalendarsResult {

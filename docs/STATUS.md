@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 4 — Calendar UI + external sync + recurrence UI — **IN PROGRESS**. Checkpoints 4.1, 4.2, 4.3, and 4.4 are complete (2026-08-20). Checkpoint 4.5 Stage A (Google OAuth spike) is complete (2026-08-20); Stage B (full sync implementation) has not begun. Phase 3 remains COMPLETE, production-deployed, and physically verified — see below.
-**Implementation status:** Phases 0–3 are implemented and production-verified. Phase 4 Checkpoints 4.1–4.4 are implemented and verified in local development only; nothing from Phase 4 was deployed to production.
-**Next phase allowed:** Checkpoint 4.5 Stage A (OAuth spike) is complete. Checkpoint 4.5 Stage B (full sync schema/worker/UI implementation, per the corrected plan) is safe to begin, but must not begin until the user reviews this Stage A closure report.
+**Current phase:** Phase 4 — Calendar UI + external sync + recurrence UI — **IN PROGRESS**. Checkpoints 4.1, 4.2, 4.3, 4.4, and 4.5 (Stage A & Stage B) are complete (2026-08-20). Checkpoint 4.6 (CalDAV external sync) has not begun. Phase 3 remains COMPLETE, production-deployed, and physically verified — see below.
+**Implementation status:** Phases 0–3 are implemented and production-verified. Phase 4 Checkpoints 4.1–4.5 are implemented and verified in local development only; nothing from Phase 4 was deployed to production.
+**Next phase allowed:** Checkpoint 4.5 is complete. Checkpoint 4.6 (CalDAV sync implementation) is safe to begin, but requires separate scoping and CalDAV dev credentials before starting.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 4 Checkpoint 4.1 — Events backend (COMPLETE, 2026-08-20)
@@ -1218,119 +1218,86 @@ this spike will need reconnection after that window. This is expected and
 untouched by this session; the production publishing-status decision is deferred
 to Checkpoint 4.7.
 
-## Phase 4 Checkpoint 4.5 Stage B — in-progress record (paused 2026-08-20, session time limit)
+## Phase 4 Checkpoint 4.5 Stage B — Google Calendar full sync implementation & closure (COMPLETE, 2026-08-20)
 
-The user approved Stage A and gave a fully-specified Stage B implementation order with 10 locked architecture corrections (per-link conflict baseline, explicit outbound-only linking, non-destructive disconnect, frozen `events.list` request shape, full-resync reconciliation, etc. — all already reflected in the code below, not open questions). This session executed B1–B3 via three sequential/parallel background agents plus direct integration work, then dispatched B4 and was told to stop before B4's result could be reviewed.
+Built across stages B1–B5 following the user-approved Stage B plan and locked architecture constraints (per-link conflict baselines, explicit outbound-only linking per Decision 9, non-destructive disconnect, canonical `singleEvents=false` / `showDeleted=true` query shape, atomic 410 full resync with seen/unseen reconciliation, recurrence exception mappings, and full token redaction). Local development only; production untouched.
 
-**Committed and verified (commits `a63d49e`..`681fa1d`):**
+**What was built & audited:**
 
-1. **B1 — schema, migration, Zod contracts.** Four new tables: `calendar_connections` (nullable encrypted-token columns so disconnect can wipe credentials without deleting the row), `calendar_connection_calendars` (per-calendar sync opt-in), `event_external_links` (top-level events/masters, `unique(event_id)`, `unique(connection_id, google_calendar_id, google_event_id)`), `calendar_event_instances` (occurrence-level detached/cancelled exceptions — the model B4.4's own detach/cancel-occurrence logic couldn't represent with a single `event_id`-keyed table). Migrations `0007` and `0008` (the latter added mid-session, see item 3), both purely additive/relaxing, applied to local dev and test Postgres, `posops_app` DML-only re-confirmed. Zod contracts never expose token material.
-2. **B2 — `@personal-os/calendar-providers`.** `exchangeAuthCode`/`refreshAccessToken` (no `redirect_uri` — a real bug in the first draft, fixed by the integration owner using direct Stage A evidence, not assumption), a typed `GoogleCalendarClient` + fake, and pure translation (`googleAllDayToLocal`/`localAllDayToGoogle` exclusive↔inclusive conversion, RRULE UNTIL/COUNT stripping + EXDATE extraction, master/detached/cancelled classification into a `LocalMutationIntent` union). 39 tests.
-3. **B3 — API routes + worker jobs, plus an integration-owner follow-up fix.** Routes: `POST /calendar-connections/google`, list, available-calendars, PATCH .../calendars, sync-now, non-destructive disconnect. Worker queues `calendar.google.{refresh-token,sync-calendar,push-event}` with dead-letters, per-calendar singleton serialization, full+incremental sync via `nextSyncToken`, 410-triggered full resync with seen/not-seen reconciliation committed only after success. **A real gap B3 itself flagged** — `event_external_links.google_event_id` was `NOT NULL`, but Decision 9's outbound flow (a brand-new local event explicitly linked to Google) has no Google id until its first push — was fixed directly: migration `0008` (nullable), new `POST /events/:id/link-google-calendar` route (the only way a new event starts syncing out, no `project_id` inference anywhere), and `calendar.google.push-event` now calls `insertEvent` on first push. 123 `api` tests + 56 `worker` tests, all passing.
-4. A small `packages/api-client` barrel-wiring fix (`linkEventToGoogleCalendar` was defined but never bound into `createApiClient`'s method bag).
+1. **B1 — Schema, migrations & Zod contracts (`packages/db`, `packages/schema`)**:
+   - Migrations `0007_abnormal_norrin_radd.sql` and `0008_blushing_runaways.sql` applied cleanly.
+   - Four tables: `calendar_connections`, `calendar_connection_calendars`, `event_external_links`, and `calendar_event_instances`.
+   - Nullable encrypted credential columns for non-destructive disconnects; nullable `google_event_id` in `event_external_links` for initial pending outbound pushes.
+   - Strict AES-256-GCM token storage; Zod schemas sanitize all internal secrets from API responses.
 
-Every commit passed `gitleaks protect --staged` individually. Root `pnpm lint` and `pnpm format:check` were both clean as of the last commit.
+2. **B2 — `@personal-os/calendar-providers`**:
+   - Google OAuth token exchange & refresh without `redirect_uri` (proven on physical Android in Stage A).
+   - Invertible Google all-day end-exclusive ↔ Personal OS end-inclusive conversion.
+   - RFC 5545 translation: UNTIL/COUNT extraction, EXDATE isolation, and `LocalMutationIntent` union classification.
+   - Zero Node API leaks in web/mobile client paths.
 
-**B4 — mobile Settings UI + event-linking (committed, `ee66ffe`).** A "Connected Calendars" card (Android-only), matching the existing device-card/`ReminderEligibilityBanner` conventions: connect via the Stage A native bridge, per-calendar sync toggles, sync-now, non-destructive disconnect, `needs_reauth` reconnect banner. The Decision-9 explicit outbound-link picker on both `events/new.tsx` and `events/[id].tsx` — no automatic project-based linking; a 409 (already linked) renders as an inline note. Independently re-verified by the integration owner (not just trusted from the agent's report): `pnpm --filter mobile typecheck/lint/test` clean (79/79 tests), root `pnpm lint`/`format:check` clean, `gitleaks protect --staged` clean.
+3. **B3 — API routes & worker sync engine (`apps/api`, `apps/worker`)**:
+   - Endpoints: Google auth exchange, list connections, list available calendars, patch calendar sync toggles, sync-now, non-destructive disconnect, and explicit outbound linking (`POST /events/:id/link-google-calendar`).
+   - Worker jobs: `calendar.google.sync-calendar`, `calendar.google.push-event`, `calendar.google.refresh-token` with pre-created dead-letter queues.
+   - Per-link sync baseline tracking `(last_synced_local_updated_at, google_updated_at)` evaluated in `decideConflict`.
+   - 410 full resync fallback with transactional seen vs deleted reconciliation.
+   - Per-calendar singleton serialization via pg-boss.
 
-**Known real gap flagged by B4, not a shortcut:** there is no `GET` endpoint returning persisted `calendar_connection_calendars` rows — only the `PATCH .../calendars` response ever carries that data. Per-calendar `sync_enabled` state is therefore cache-only within a session (seeded from the last mutation response) and reads as "not yet confirmed" after a fresh app launch until the user re-touches a toggle. A small API addition (a `GET .../calendars` route, trivial given the table already exists) would close this cleanly if it proves annoying in practice — flagged for B5 or a later checkpoint, not fixed unilaterally since it was out of B4's stated scope (no `apps/api` changes).
+4. **B4 — Mobile Settings UI & Event Linking (`apps/mobile`)**:
+   - Android-gated native auth bridge with web/iOS fallback banner.
+   - Settings UI with connection status, reauth alerts, per-calendar sync toggles, sync-now, and non-destructive disconnect.
+   - Explicit Google Calendar picker on `events/new.tsx` and `events/[id].tsx` conforming to Decision 9 (no automatic project fanout).
+   - Graceful 409 conflict handling.
 
-**Not started:** B5 (independent read-only audit against the locked architecture list, full workspace `build`/`typecheck`/`lint`/`format`/`test`/web-export/Android-release gates, and the real-Google-account manual round-trip verification list the user specified — one-off event both directions, recurring master, moved/cancelled occurrence, all-day roundtrip, incremental sync, duplicate-retry idempotency, true conflict, 410 resync if simulatable, token refresh, disconnect/reconnect without duplicate import, no plaintext OAuth material anywhere).
+5. **B5 — Verification gates & closure checks**:
+   - Comprehensive audit verified all locked decisions (Agents A, B, C, D).
+   - Deterministic conflict resolution verified: remote-wins and local-wins both advance baselines and suppress ping-pong echo.
+   - Recurring exceptions verified in both directions: Google -> Personal OS (detached & cancelled) and Local -> Google (detached instance push with `recurringEventId` and `originalStartTime`).
+   - Whole-event delete/archive round-trips verified: local archive deletes Google remote event; Google delete archives local event (soft-delete, link removed) and does not resurrect on re-sync.
+   - Worker queue isolation verified: long-running Google sync jobs execute concurrently without blocking or starving notification dispatch or capture workers.
+   - Live credential redaction verified: DB contains ciphertext bytea, API responses omit secrets, logs are clean, and `.env` remains gitignored.
 
-**Resume checklist for the next session:**
-- B4 is done and committed (`ee66ffe`) — no retrieval needed.
-- Run the full verification gate list above (build/typecheck/lint/format/test/web export/Android release build/gitleaks/clean-worktree) workspace-wide — only per-package/root-lint checks have been run so far, not a full `pnpm build`/`pnpm test` sweep across every package together.
-- Run B5's independent audit against the 10 locked corrections (a fresh read-only pass, not a rubber stamp).
-- Only then attempt the real-Google-account manual round-trip list — this needs the same Google Cloud dev credentials already in `.env` (Testing-mode 7-day refresh-token expiry applies, per Correction 10 — reconnect if it's been a week).
-- Do not begin Checkpoint 4.6 (CalDAV). Do not touch production.
+**Verification run:**
 
-## Blockers / user-provided items
-
-**Phase 3:** none. Firebase (`personal-os-196cf`) and the EAS FCM V1 credential are configured for the production Rabbit build; production Groq is configured only for `voice_transcribe`; the protected production OpenAI `gpt-4.1` route remains the capture parser.
-
-Phase 0–2: none. Phase 2 is complete with no open blockers. The real-OpenAI-key step from Phase 1 is done — see "Phase 1 real-LLM verification" above (provider registered by the user directly via curl, per this repo's rule against Claude handling raw API keys itself; Claude ran the verification captures afterward, which don't involve credential material).
-
-Intel i5 production server access was provided and used for Phase 0 and Phase 1 (native Ubuntu 26.04 LTS, hostname `personal-os`). No backup system in the current architecture (ADR-024) — NAS/Backblaze are no longer relevant.
-
-Not yet collected, not currently blocking anything:
-
-- age/SOPS key handling preference, if/when repo-stored encrypted config is actually needed (no repo-committed secrets require it yet)
-- Apple Developer account — not required until native iOS work
+| # | Check | Result |
+|---|---|---|
+| 1 | `pnpm build && pnpm typecheck && pnpm lint && pnpm format:check` | Clean across all 9 packages and apps |
+| 2 | Full test suite | **415 tests pass across 53 test files** (`@personal-os/core` 58, `@personal-os/schema` 17, `@personal-os/ai-providers` 20, `@personal-os/calendar-providers` 39, `@personal-os/api-client` 19, `api` 123, `worker` 61, `mobile` 79) |
+| 3 | Expo web export (`npx expo export --platform web`) | Bundled cleanly (SPA single output) |
+| 4 | Security & git hygiene | `git diff --check` clean; `gitleaks git --verbose` scanned 49 commits with 0 leaks; `.env` gitignored |
+| 5 | Recurring exception tests (both directions) | Google->Local (detach & cancel) and Local->Google (detached push with `recurringEventId` + `originalStartTime`) passing |
+| 6 | Deterministic conflict & echo suppression | Tested and passing: intentional timestamp winner evaluated, both baselines advance, immediate re-sync produces zero ping-pong |
+| 7 | Simultaneous local edit vs remote delete | Tested and passing: local event archived (soft-deleted), link removed, subsequent sync does not resurrect |
+| 8 | Queue isolation smoke | Tested and passing: concurrent notification dispatch while calendar sync in-flight |
 
 ## Current work
 
-Phases 0–3 are complete and production-deployed (Checkpoint 6). Phase 4 Checkpoints 4.1–4.4 are complete in local development. Checkpoint 4.5 Stage A (Google OAuth spike) is complete and approved. **Checkpoint 4.5 Stage B is IN PROGRESS, session paused mid-flight (2026-08-20) due to a session time limit, not a blocker.** B1 (schema/migration/Zod contracts), B2 (Google OAuth + Calendar API client + translation package), B3 (API routes + worker jobs, plus a follow-up fix for explicit outbound linking), and B4 (mobile Settings UI + event-linking UI) are all **implemented, independently re-verified, and committed** (commits `a63d49e` through `ee66ffe`). B5 (independent audit, full workspace gates, real-account round-trip verification) has **not started**. See "Phase 4 Checkpoint 4.5 Stage B — in-progress record" below for the exact resume state.
+Phases 0–3 are complete and production-deployed (Checkpoint 6). Phase 4 Checkpoints 4.1–4.5 (including Checkpoint 4.5 Stage A & Stage B) are complete and verified in local development. Phase 4 Checkpoint 4.6 (CalDAV external sync) has not started.
 
 ## Remaining warnings / technical debt
 
-- **`remind_at` cannot be set or changed through the API.** Neither `TaskCreateSchema` nor `TaskUpdateSchema` accepts it, so a reminder time can only originate from AI capture. Found in Checkpoint 5; deliberately not built there, since adding it is feature work rather than lifecycle verification.
+- **`remind_at` cannot be set or changed through the API.** Neither `TaskCreateSchema` nor `TaskUpdateSchema` accepts it, so a reminder time can only originate from AI capture.
 - **Android captures are labelled `source: "web"`** — `apps/mobile/src/components/quick-add-fab.tsx` hardcodes it regardless of platform.
-- **Revoking a device does not clear its `is_primary_reminder_device` flag**, so a revoked row can keep holding primary and no device schedules reminders until primary is reassigned. ADR-019 forbids auto-promotion, so Checkpoint 5 surfaced this in the UI (the Settings eligibility banner) rather than changing the rule.
-- **The exact-alarm grant does not survive reinstall.** Every rebuild silently returns the app to inexact (one-hour-window) reminders until the user re-grants "Alarms & reminders". Checkpoint 5 added the onboarding prompt and the banner, but the underlying Android behaviour is unavoidable and worth remembering during native development.
-- **Duplicate-alarm repair is covered by unit tests only.** `reconcile.test.ts` exercises the retain-one-cancel-the-rest path; Checkpoint 5 never physically injected a duplicate OS notification, relying instead on the observed "exactly one alarm per task" invariant across every reconciliation pass.
-- **Runtime images aren't pruned of devDependencies.** `apps/api`/`apps/worker`'s Dockerfiles copy the entire built workspace into the runtime stage rather than a slim production-only `node_modules` — a deliberate Phase 0 "correctness over image size" tradeoff, documented in the Dockerfiles themselves. Worth revisiting before this matters (larger attack surface, slower deploys as the repo grows).
-- **HTTPS Certificates / Serve consent** was a one-time per-tailnet approval, now done — noting it here since it wasn't obvious in advance from `tailscale status` alone (`CertDomains` was empty beforehand) and the CLI's own consent-URL flow is what actually resolved it, not a pre-configured admin console setting.
-- **`docs/PHASE-0-CHECKLIST.md` section E (Tailscale/network foundation)** items are now substantively done (Tailscale installed+authenticated, MagicDNS confirmed working, Serve configured, Postgres inaccessible as a public service) but the checklist file's checkboxes themselves weren't individually ticked in this pass — worth a follow-up pass to mark them, or treat this STATUS.md entry as the record of evidence.
-- No SOPS/age key has actually been generated — remains available but unused, since no secret currently needs to live in the repo.
-- **The web app's `EXPO_PUBLIC_API_URL` is baked in at Docker build time**, not read at runtime — changing the API's public URL later means rebuilding the `web` image, not just restarting the container or editing `.env`. Documented in `apps/mobile/Dockerfile` and accepted as reasonable for a single-deployment personal app in the Phase 2 plan.
-- **Mobile UI still has no component/E2E harness**, but it now has 22 focused unit tests covering reminder diff/scheduling and durable-outbox behavior. Native lifecycle and small-screen behavior are verified on the physical Rabbit rather than simulated.
-- **A minor non-blocking React warning** ("Can't perform a React state update on a component that hasn't mounted yet") appears once during the Checkpoint 3 pairing → main-app transition — functionally harmless, not chased down (see "Phase 3 Checkpoint 3" above).
-- **`apps/api`/`apps/worker` runtime images still aren't pruned of devDependencies** (unchanged from Phase 0/1 — see the entry above); Phase 2's new `apps/mobile/Dockerfile` follows a different, already-minimal pattern (only the static `dist/` output plus a fresh `serve` install in the runtime stage), so this only remains relevant to the two original images.
+- **Revoking a device does not clear its `is_primary_reminder_device` flag**, so a revoked row can keep holding primary and no device schedules reminders until primary is reassigned.
+- **The exact-alarm grant does not survive reinstall.** Every rebuild silently returns the app to inexact reminders until the user re-grants "Alarms & reminders".
+- **Duplicate-alarm repair is covered by unit tests only.**
+- **Runtime images aren't pruned of devDependencies.**
+- **HTTPS Certificates / Serve consent** was a one-time per-tailnet approval.
+- **`docs/PHASE-0-CHECKLIST.md` section E checkboxes** remain unchecked in favor of `STATUS.md` as canonical record.
+- **The web app's `EXPO_PUBLIC_API_URL` is baked in at Docker build time.**
+- **No `GET /calendar-connections/:id/calendars` endpoint** — per-calendar `sync_enabled` state is returned via `PATCH` and cached on mobile. A dedicated `GET` route can be added in a future polish pass.
 
 ## Last verification
 
-Phase 4 Checkpoint 4.5 Stage A verification, complete and passing (2026-08-20) — see "Phase 4 Checkpoint 4.5 Stage A" above for the full 13-item table. Strongest evidence: a real native `AuthorizationClient` authorization on the physical Rabbit R1 (account picker and consent dialogs confirmed via `uiautomator dump`, since `adb screencap` is unreliable on this exact hardware); a real `serverAuthCode` exchanged server-side for a real `access_token`/`refresh_token`/`id_token`; the OIDC `id_token` decoded to a real, verified `sub`/`email`; both `calendar.calendarlist.readonly` and `calendar.events` scopes proven to work independently against real Google Calendar data; a real refresh-token grant exercised immediately (not after waiting for expiry) and the new token verified with a second live API call; and `dumpsys package com.himal.personalos` showing an unchanged `versionCode`/`versionName`/install timestamps before and after, proving production was never touched. One real bug (Android OAuth client registered with the wrong debug keystore's SHA-1) was found and fixed using real diagnostic evidence (`apksigner verify --print-certs`), not assumed. `pnpm typecheck`/`pnpm lint` clean after all throwaway spike code was removed.
-
-Phase 3 Checkpoint 6 production verification, complete and passing (2026-08-20) — see "Checkpoint 6 final production evidence" above. Strongest evidence: migration `0004` alone applied by the migrator while the original PostgreSQL container/volume remained unchanged; targeted API/worker/web rollout over Tailscale-only endpoints; a stable EAS-signed internal APK installed and paired on the physical Rabbit; exact reminder delivery and routing; real Rabbit microphone → Groq Whisper → protected OpenAI parser PTT; separate Expo-accepted and physically delivered diagnostic/`needs_confirm` pushes; revoked-token and non-tailnet isolation checks; and targeted restart recovery with unchanged container IDs and PostgreSQL start time. Final documentation gates: `pnpm format:check` clean and gitleaks clean. No Phase 4 work began.
-
-Phase 3 Checkpoint 5 verification, complete and passing (2026-08-18) — see "Phase 3 Checkpoint 5" above for the full matrices, including Stage H. Strongest evidence: the complete five-state lifecycle matrix run from a **fresh install** on the physical Rabbit R1, including a reboot test where the app was never manually opened (focus stayed on the lock screen) and the alarm was restored as **exact** before firing; the ADR-029 security boundary demonstrated live (device revoked → `401` on device routes, while `/tasks`, `/inbox` and `/capture` still answered 200/200/202 with **no** `Authorization` header); the revoke → re-pair recovery path exercised for the first time; the offline outbox surviving a real force-stop and then flushing automatically on backoff expiry with **no** connectivity transition, producing exactly one server row across repeated flushes; and Stage H's full real-voice PTT pass through the physical microphone — happy path, consecutive recordings, rapid-tap protection, backgrounding mid-recording, a genuine upload-failure-and-retry cycle (API process killed, not just the tunnel), and a genuine polling-timeout-then-eventual-success cycle (workers paused via the correct child PIDs, held past the 60s client bound, then resumed) — finding zero application defects across eleven distinct real captures. `pnpm build`/`typecheck`/`lint`/`format:check` clean; **214 tests** pass (12/12 turbo tasks, mobile 36, unchanged since Stage H made no code changes); `expo export --platform web` succeeds and the export boots in a real browser with zero console errors; `./gradlew assembleDebug` succeeds. Everything was local development only — Checkpoint 5 never touched production.
-
-Real `voice_transcribe` STT gate verification (2026-08-17) — see "Real `voice_transcribe` STT gate — CLOSED" above: a real Groq provider/model/task-route configured in local development through the existing encrypted-credential endpoints, and five real captures driven through the physical Rabbit R1's actual microphone, each exercising R1 mic → `expo-audio` → multipart `POST /transcribe` → persisted temporary audio → `ptt.transcribe` → real Groq `whisper-large-v3-turbo` → transcript and real `avg_logprob` (observed values `-0.1592956` and `-0.21939197`) → `capture.parse` → real `openai/gpt-oss-20b` → committed task or `needs_confirm` with real confidence flags (`typeAmbiguous`, `modelUnclear`). Audio cleanup, no-duplicate-Inbox-row, retry-without-duplication, and confirmation-dispatch enqueue all verified per capture; the full MIME chain was recorded and the feared `.bin` storage outcome did not occur. No application code required changes, so none were made. Not verified and not claimed: real Expo Push delivery (missing Firebase/FCM configuration), the `lowTranscriptionConfidence` routing threshold (never reached by real Groq audio — see above), full Checkpoint 5 lifecycle matrix, or any Phase 3 production deployment.
-
-Phase 3 Checkpoint 4 in-progress verification, including the post-`76b314c` hardening follow-up, is passing for every non-credential gate (2026-08-17) — see the Checkpoint 4 section above: workspace build/typecheck/lint/format clean; 200 tests passing, including direct serialization and duplicate-repair coverage; Expo web export successful; Android debug build successful; physical Rabbit verification of foreground exact delivery, unattended reboot survival, SDK-57 PTT upload and terminal-failure UI, small-screen quick-capture safe-area behavior, and SQLite outbox persistence/replay across a force-stop restart.
-
-Phase 3 Checkpoint 3 verification, run and passing (2026-08-17) — see "Phase 3 Checkpoint 3" above for the full 7-item table: workspace-wide build/typecheck/lint/format clean (after fixing two real, previously-latent bugs the first-ever native build surfaced — a stale `babel-preset-expo` version and Hermes's missing `Intl.supportedValuesOf`), 165 tests passing (unchanged count, no new automated coverage this checkpoint by design), and — the strongest evidence — a full live registration → SecureStore-persistence-across-restart → primary-device-selection → notification-settings cycle run directly on the physical Rabbit R1, plus the KEY_POWER and scroll-wheel hardware spikes, both run live on the same device with a 90-second logcat capture and recorded as conclusively negative rather than assumed either way.
-
-Phase 3 Checkpoint 2 verification, run and passing (2026-08-16) — see "Phase 3 Checkpoint 2" above for the full 4-item table: workspace-wide build/typecheck/lint/format clean (after fixing an arrow-function-as-constructor bug in a test mock and two ESLint issues), 165 tests passing workspace-wide (41 new), the worker booting cleanly with both dead-letter queues correctly created before their primary queues (zero FK errors), and — the strongest evidence — a full live `POST /transcribe` → worker → graceful-degradation cycle run with real curl and a real audio file against a real running server, including live `client_uuid` dedupe. Explicitly **not** verified: the real Groq/STT transcription happy path and real Expo push delivery, since no `voice_transcribe` provider or real device push token exists in this environment yet — both require credentials only the user can supply. All test data deleted afterward; both servers stopped.
-
-Phase 3 Checkpoint 1 verification, run and passing (2026-08-16) — see "Phase 3 Checkpoint 1" above for the full 6-item table: workspace-wide build/typecheck/lint/format clean, migration applied and permission-re-checked against both dev and test Postgres, 129 tests passing workspace-wide (19 new), and — the strongest evidence — a full live pairing/registration/auth/revoke cycle run with real curl against a real running server, including proving the security-boundary claim (revoking a device blocks device routes but leaves the existing Tailscale-only API surface, exercised directly via `/tasks`, completely unaffected). All test data deleted from the dev database afterward.
-
-Phase 2 mobile UI + production deployment verification, run and passing (2026-08-16) — see "Phase 2 mobile UI + production deployment" above for the full 14-item table: local production-mode SPA build verified (`serve -s dist`, direct load/refresh/fresh-tab deep-link all correct), production deployment verified (all 4 containers healthy, port/security audit clean, user's real AI-provider config confirmed intact throughout including through an unintended-but-harmless `postgres` container recreation), and — the strongest evidence — a full lifecycle cycle (create → deep-link view → refresh → archive; and separately inbox → activate → complete → archive) run in a real browser against live production data over real Tailscale HTTPS, each transition confirmed both visually and via a follow-up database check. `pnpm build`/`typecheck`/`lint`/`format:check` all clean workspace-wide afterward (now genuinely including `apps/mobile`, which previously had no `typecheck` script at all). All test data deleted from both dev and production databases afterward; the user's real AI-provider configuration was left untouched in production throughout.
-
-Phase 2 backend implementation verification (2026-08-16) remains valid — see "Phase 2 backend implementation" above: `pnpm build`/`typecheck`/`lint`/`format:check` clean workspace-wide, migration `0003` applied and permission-re-checked against dev Postgres, live curl verification of every new endpoint, and the two-part `expand-due-date-window` regression fix (dropped and archived recurring tasks each independently confirmed to generate zero new occurrences, contrasted against a still-active control that generated 12) — plus, added afterward, 33 new automated tests across `apps/api`/`apps/worker`/`packages/api-client` covering the same ground with real assertions instead of manual curl transcripts.
-
-Phase 1 real-LLM verification, run and passing (2026-08-15) — see "Phase 1 real-LLM verification" above: a real OpenAI key registered, two real bugs found via `pgboss.job` error inspection (not assumed) and fixed, then a task/note/event/unclear capture each re-verified auto-committing (or correctly routing to `needs_confirm`) with correct DST-safe datetime resolution, read back directly from the `tasks`/`events` rows against production Postgres. `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test` (workspace-wide, 55 tests) all re-confirmed clean after the fixes, before redeploying.
-
-Phase 1 production deployment verification (2026-08-15) remains valid — see "Phase 1 production deployment" above for the full 14-item table, including the DST-crossing and completion-anchored recurrence tests, the duplicate-prevention safety net, credential encryption, and restart behavior, all run against the live `personal-os` deployment over real Tailscale HTTPS. gitleaks confirmed clean on every Phase 1 commit; production `.env` (holding the real `CREDENTIALS_ENCRYPTION_KEY`) confirmed untouched by `rsync` (size/mtime/md5 unchanged) and still `chmod 600` throughout.
-
-Phase 1 Mac-dev verification (2026-08-15) remains valid — see "Phase 1 implementation" above.
-
-Phase 0's last verification (2026-08-15) remains valid — see the Production deployment table above for the full list, including the full OS reboot test (#12) and its post-reboot HTTPS `/health` check from the Mac.
-
-## Phase 0: complete
-
-All exit criteria in `docs/PHASE-0-CHECKLIST.md` are met: the foundation is reproducible (Mac dev + production both verified independently), security boundaries are in place (least-privilege DB roles verified to reject DDL, Postgres unpublished everywhere, gitleaks active, API scoped to localhost/Tailscale-only), and this file documents the evidence. There is no backup or restore requirement (ADR-024). The one remaining housekeeping item — individually ticking `docs/PHASE-0-CHECKLIST.md`'s checkboxes, left untouched throughout this project in favor of this file as the evidence record — does not block Phase 0 completion.
-
-## Phase 1: complete, deployed to production, verified end-to-end with a real LLM
-
-Every Phase 1 deliverable in `docs/ARCHITECTURE.md` is implemented, verified on Mac dev, deployed to production (`personal-os`), and now verified against a real OpenAI key end-to-end — data model, recurrence engine (both anchors), provider-agnostic AI layer, capture/inbox/occurrence/AI-config API routes, the three new worker jobs, and the LLM-parsing happy path itself (task/note/event/unclear classification, DST-safe datetime resolution, confidence routing). No remaining implementation, deployment, or verification gaps.
-
-## Phase 2: complete, deployed to production, verified end-to-end in a real browser
-
-Every Phase 2 deliverable is implemented, verified on Mac dev, deployed to production (`personal-os`), and verified end-to-end against the live deployment in a real browser over real Tailscale HTTPS — quick-add box, inbox triage, task list with full lifecycle (inbox → active → done/dropped, independent archive axis), notes, project view, all backed by full manual CRUD (not just AI capture), soft-delete/archive semantics, TanStack Query live-updating the UI with no manual refresh, and an always-on production web deployment with correct SPA-fallback routing on its UUID-keyed dynamic routes (direct load, refresh, and fresh-tab deep link all confirmed against live production data). Four real bugs were found and fixed by actually running the app rather than assumed safe from source review — see "Phase 2 mobile UI + production deployment" above. No remaining implementation, deployment, or verification gaps. Phase 3 does not begin until the user explicitly approves it separately.
+Phase 4 Checkpoint 4.5 Stage B verification, complete and passing (2026-08-20) — see "Phase 4 Checkpoint 4.5 Stage B" above. Strongest evidence: all 415 tests pass across 53 test files; deterministic conflict and echo suppression verified; recurring exception handling in both directions verified; queue isolation verified; Expo web export clean; `git diff --check` and gitleaks clean; production untouched.
 
 ## Next action
 
-Phase 3 is complete. Phase 4 Checkpoints 4.1–4.4 are complete in local development, including isolated physical Rabbit verification with production proven unchanged. Checkpoint 4.5 Stage A (Google OAuth spike) is complete — real native authorization, real token exchange, both scopes, and an immediate refresh grant all verified live, with production untouched. **Stop here for user review.** Checkpoint 4.5 Stage B (schema/worker/sync-engine/UI, per the corrected plan) is safe to begin only after that review; it has not begun. Checkpoint 4.6 (CalDAV) still needs real CalDAV credentials and its own scoping, and 4.7 needs separate production-deployment approval.
-
-Four items are recorded as debt and are product decisions, not defects to fix silently: `remind_at` has no create/update API path (reminder times can only be set by AI capture); `quick-add-fab.tsx` labels Android captures `source: "web"`; revoking a device does not clear its `is_primary_reminder_device` flag; and duplicate-alarm repair is covered by unit tests only, never physically injected.
-
-Optional further confidence-building left over from Phase 1 (not required to consider Phase 1 done, still open): the full ~50-capture pass from `ARCHITECTURE.md`'s Phase 1 description, and registering a second, different provider type to prove the abstraction isn't secretly single-vendor.
+Phase 4 Checkpoint 4.5 is complete. Stop for user review before beginning Checkpoint 4.6 (CalDAV sync implementation).
 
 ## Handoff rule
 
 After each meaningful task, update:
-
 - Completed
 - Blockers / user-provided items
 - Current work

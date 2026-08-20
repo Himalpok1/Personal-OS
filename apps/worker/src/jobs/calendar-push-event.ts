@@ -10,6 +10,7 @@ import {
 import {
   calendarConnectionCalendars,
   calendarConnections,
+  calendarEventInstances,
   eventExternalLinks,
   events,
   type Db,
@@ -119,7 +120,10 @@ function buildGoogleRecurrenceLines(row: typeof events.$inferSelect): string[] |
   return [`RRULE:${rrule}`];
 }
 
-function eventRowToGoogleWriteBody(row: typeof events.$inferSelect): GoogleEventWriteBody {
+function eventRowToGoogleWriteBody(
+  row: typeof events.$inferSelect,
+  parentGoogleEventId?: string,
+): GoogleEventWriteBody {
   const body: GoogleEventWriteBody = {
     summary: row.title,
     description: row.description ?? undefined,
@@ -132,9 +136,20 @@ function eventRowToGoogleWriteBody(row: typeof events.$inferSelect): GoogleEvent
     );
     body.start = { date: googleStartDate };
     body.end = { date: googleEndDate };
+    if (parentGoogleEventId && row.originalStartAt) {
+      body.recurringEventId = parentGoogleEventId;
+      body.originalStartTime = { date: row.originalStartAt.toISOString().slice(0, 10) };
+    }
   } else if (row.startsAt) {
     body.start = { dateTime: row.startsAt.toISOString(), timeZone: row.timezone };
     body.end = { dateTime: (row.endsAt ?? row.startsAt).toISOString(), timeZone: row.timezone };
+    if (parentGoogleEventId && row.originalStartAt) {
+      body.recurringEventId = parentGoogleEventId;
+      body.originalStartTime = {
+        dateTime: row.originalStartAt.toISOString(),
+        timeZone: row.timezone,
+      };
+    }
   }
   const recurrence = buildGoogleRecurrenceLines(row);
   if (recurrence) body.recurrence = recurrence;
@@ -211,7 +226,18 @@ export function createCalendarPushEventHandler(
         continue;
       }
 
-      const body = eventRowToGoogleWriteBody(row);
+      let parentGoogleEventId: string | undefined;
+      if (row.parentEventId) {
+        const [parentLink] = await db
+          .select()
+          .from(eventExternalLinks)
+          .where(eq(eventExternalLinks.eventId, row.parentEventId));
+        if (parentLink?.googleEventId) {
+          parentGoogleEventId = parentLink.googleEventId;
+        }
+      }
+
+      const body = eventRowToGoogleWriteBody(row, parentGoogleEventId);
 
       // No googleEventId yet: this is the link's first push -- the local
       // event was explicitly linked (Decision 9's outbound flow) but never
@@ -236,6 +262,42 @@ export function createCalendarPushEventHandler(
           updatedAt: new Date(),
         })
         .where(eq(eventExternalLinks.id, link.id));
+
+      if (row.parentEventId && row.originalStartAt && parentGoogleEventId) {
+        await db
+          .insert(calendarEventInstances)
+          .values({
+            connectionId: link.connectionId,
+            googleCalendarId: link.googleCalendarId,
+            googleMasterEventId: parentGoogleEventId,
+            googleInstanceEventId: written.id,
+            googleOriginalStartTime: row.originalStartAt,
+            localParentEventId: row.parentEventId,
+            localOriginalStartAt: row.originalStartAt,
+            localDetachedEventId: row.id,
+            mappingStatus: "detached",
+            googleEtag: written.etag,
+            googleUpdatedAt: new Date(written.updated),
+            lastSyncedLocalUpdatedAt: row.updatedAt,
+            syncStatus: "synced",
+          })
+          .onConflictDoUpdate({
+            target: [
+              calendarEventInstances.connectionId,
+              calendarEventInstances.googleCalendarId,
+              calendarEventInstances.googleInstanceEventId,
+            ],
+            set: {
+              localDetachedEventId: row.id,
+              mappingStatus: "detached",
+              googleEtag: written.etag,
+              googleUpdatedAt: new Date(written.updated),
+              lastSyncedLocalUpdatedAt: row.updatedAt,
+              syncStatus: "synced",
+              updatedAt: new Date(),
+            },
+          });
+      }
     }
   };
 }

@@ -474,4 +474,261 @@ describe("calendar.google.sync-calendar", () => {
       .where(eq(calendarConnections.id, connectionId));
     expect(row?.lastSyncError).toContain("retries exhausted");
   });
+
+  describe("deterministic conflict resolution and baseline invariants", () => {
+    it("remote wins when remote updated timestamp is later than local edit timestamp, advances baseline, and suppresses echo", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+
+      const baseDate = new Date("2026-08-01T10:00:00.000Z");
+
+      // Seed event at baseline
+      const initialClient = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            {
+              items: [
+                oneOffEvent({
+                  summary: "Initial Summary",
+                  updated: baseDate.toISOString(),
+                }),
+              ],
+              nextSyncToken: "token-base",
+            },
+          ],
+        },
+      });
+      await runSync(db, initialClient, calendarId, connectionId);
+
+      const [initialLocal] = await db.select().from(events);
+      expect(initialLocal?.title).toBe("Initial Summary");
+
+      // Fix baseline to baseDate explicitly
+      await db.update(events).set({ updatedAt: baseDate }).where(eq(events.id, initialLocal!.id));
+      await db
+        .update(eventExternalLinks)
+        .set({ lastSyncedLocalUpdatedAt: baseDate, googleUpdatedAt: baseDate })
+        .where(eq(eventExternalLinks.eventId, initialLocal!.id));
+
+      // Local edit at baseDate + 2 hours
+      const localEditTime = new Date(baseDate.getTime() + 2 * 3600_000);
+      await db
+        .update(events)
+        .set({ title: "Local Edit", updatedAt: localEditTime })
+        .where(eq(events.id, initialLocal!.id));
+
+      // Remote edit at baseDate + 4 hours (LATER than local)
+      const remoteEditTimeStr = new Date(baseDate.getTime() + 4 * 3600_000).toISOString();
+      const conflictClient = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            {
+              items: [
+                oneOffEvent({
+                  summary: "Remote Edit (Later)",
+                  updated: remoteEditTimeStr,
+                }),
+              ],
+              nextSyncToken: "token-after-remote-win",
+            },
+          ],
+        },
+      });
+
+      // Execute sync
+      await runSync(db, conflictClient, calendarId, connectionId);
+
+      // Remote wins
+      const [afterConflict] = await db.select().from(events).where(eq(events.id, initialLocal!.id));
+      expect(afterConflict?.title).toBe("Remote Edit (Later)");
+
+      // Both baselines advance
+      const [link] = await db
+        .select()
+        .from(eventExternalLinks)
+        .where(eq(eventExternalLinks.eventId, initialLocal!.id));
+      expect(link?.googleUpdatedAt?.toISOString()).toBe(remoteEditTimeStr);
+      expect(link?.lastSyncedLocalUpdatedAt?.getTime()).toBe(afterConflict!.updatedAt.getTime());
+
+      // Immediate re-sync with same remote event produces no echo or mutation
+      const reSyncClient = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            {
+              items: [
+                oneOffEvent({
+                  summary: "Remote Edit (Later)",
+                  updated: remoteEditTimeStr,
+                }),
+              ],
+              nextSyncToken: "token-stable",
+            },
+          ],
+        },
+      });
+      await runSync(db, reSyncClient, calendarId, connectionId);
+
+      const [afterReSync] = await db.select().from(events).where(eq(events.id, initialLocal!.id));
+      expect(afterReSync?.title).toBe("Remote Edit (Later)");
+      expect(afterReSync?.updatedAt.getTime()).toBe(afterConflict!.updatedAt.getTime());
+    });
+
+    it("local wins when local updated timestamp is later than remote edit timestamp, advances baseline, and suppresses echo", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+
+      const baseDate = new Date("2026-08-01T10:00:00.000Z");
+
+      // Seed event at baseline
+      const initialClient = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            {
+              items: [
+                oneOffEvent({
+                  summary: "Initial Title",
+                  updated: baseDate.toISOString(),
+                }),
+              ],
+              nextSyncToken: "token-base",
+            },
+          ],
+        },
+      });
+      await runSync(db, initialClient, calendarId, connectionId);
+
+      const [initialLocal] = await db.select().from(events);
+
+      // Fix baseline to baseDate explicitly
+      await db.update(events).set({ updatedAt: baseDate }).where(eq(events.id, initialLocal!.id));
+      await db
+        .update(eventExternalLinks)
+        .set({ lastSyncedLocalUpdatedAt: baseDate, googleUpdatedAt: baseDate })
+        .where(eq(eventExternalLinks.eventId, initialLocal!.id));
+
+      // Remote edit at baseDate + 2 hours
+      const remoteEditTimeStr = new Date(baseDate.getTime() + 2 * 3600_000).toISOString();
+      // Local edit at baseDate + 5 hours (LATER than remote)
+      const localEditTime = new Date(baseDate.getTime() + 5 * 3600_000);
+      await db
+        .update(events)
+        .set({ title: "Local Title (Wins)", updatedAt: localEditTime })
+        .where(eq(events.id, initialLocal!.id));
+
+      const conflictClient = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            {
+              items: [
+                oneOffEvent({
+                  summary: "Remote Title (Earlier)",
+                  updated: remoteEditTimeStr,
+                }),
+              ],
+              nextSyncToken: "token-after-local-win",
+            },
+          ],
+        },
+      });
+
+      await runSync(db, conflictClient, calendarId, connectionId);
+
+      // Local title is preserved
+      const [afterConflict] = await db.select().from(events).where(eq(events.id, initialLocal!.id));
+      expect(afterConflict?.title).toBe("Local Title (Wins)");
+
+      // Immediate re-sync with same remote event leaves local intact with no ping-pong
+      const reSyncClient = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            {
+              items: [
+                oneOffEvent({
+                  summary: "Remote Title (Earlier)",
+                  updated: remoteEditTimeStr,
+                }),
+              ],
+              nextSyncToken: "token-stable-2",
+            },
+          ],
+        },
+      });
+      await runSync(db, reSyncClient, calendarId, connectionId);
+
+      const [afterReSync] = await db.select().from(events).where(eq(events.id, initialLocal!.id));
+      expect(afterReSync?.title).toBe("Local Title (Wins)");
+    });
+
+    it("simultaneous local edit vs remote delete archives local event (remote delete policy)", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+
+      const initialClient = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            {
+              items: [
+                oneOffEvent({
+                  id: "g-del-1",
+                  summary: "To be deleted on Google",
+                  updated: "2026-08-01T10:00:00.000Z",
+                }),
+              ],
+              nextSyncToken: "token-del-base",
+            },
+          ],
+        },
+      });
+      await runSync(db, initialClient, calendarId, connectionId);
+
+      const [initialLocal] = await db.select().from(events);
+      // Local side edits the event
+      await db
+        .update(events)
+        .set({ title: "Local edit before remote delete", updatedAt: new Date() })
+        .where(eq(events.id, initialLocal!.id));
+
+      // Remote side deletes the event
+      const deleteClient = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            {
+              items: [
+                {
+                  id: "g-del-1",
+                  status: "cancelled",
+                  etag: '"etag-del"',
+                  updated: "2026-08-02T12:00:00.000Z",
+                  iCalUID: "ical-del-1@google.com",
+                },
+              ],
+              nextSyncToken: "token-after-delete",
+            },
+          ],
+        },
+      });
+      await runSync(db, deleteClient, calendarId, connectionId);
+
+      // Local event is archived (soft-deleted), not hard deleted, link is removed
+      const [archivedEvent] = await db.select().from(events).where(eq(events.id, initialLocal!.id));
+      expect(archivedEvent?.archivedAt).not.toBeNull();
+      const links = await db.select().from(eventExternalLinks);
+      expect(links).toHaveLength(0);
+
+      // Subsequent sync does not resurrect or duplicate it
+      const emptyClient = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            {
+              items: [],
+              nextSyncToken: "token-empty",
+            },
+          ],
+        },
+      });
+      await runSync(db, emptyClient, calendarId, connectionId);
+      const remainingLinks = await db.select().from(eventExternalLinks);
+      expect(remainingLinks).toHaveLength(0);
+    });
+  });
 });
