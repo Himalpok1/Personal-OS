@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 4 — Calendar UI + external sync + recurrence UI — **IN PROGRESS**. Checkpoints 4.1 and 4.2 are complete (2026-08-20). Phase 3 remains COMPLETE, production-deployed, and physically verified — see below.
-**Implementation status:** Phases 0–3 are implemented and production-verified. Phase 4 Checkpoints 4.1–4.2 are implemented and verified in local development only; nothing from Phase 4 was deployed to production.
-**Next phase allowed:** Checkpoint 4.3 is safe to begin, but must not begin until the user reviews the Checkpoints 4.1–4.2 closure report.
+**Current phase:** Phase 4 — Calendar UI + external sync + recurrence UI — **IN PROGRESS**. Checkpoints 4.1, 4.2, and 4.3 are complete (2026-08-20). Phase 3 remains COMPLETE, production-deployed, and physically verified — see below.
+**Implementation status:** Phases 0–3 are implemented and production-verified. Phase 4 Checkpoints 4.1–4.3 are implemented and verified in local development only; nothing from Phase 4 was deployed to production.
+**Next phase allowed:** Checkpoint 4.4 is safe to begin, but must not begin until the user reviews the Checkpoint 4.3 closure report.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 4 Checkpoint 4.1 — Events backend (COMPLETE, 2026-08-20)
@@ -74,7 +74,49 @@ At 480×640 on the physical Rabbit, the fifth Calendar tab remained usable with 
 
 The backend closure pass also added the approved hard bounds and browser regressions. `GET /events/range` requires offset datetimes, rejects `from >= to` and spans over 366 days with structured validation errors, accepts exactly 366 days, and enforces one shared 10,000-candidate recurrence-expansion budget across the request. Every RRULE candidate is charged before range/recurrence-until filtering; candidate 10,001 stops expansion and returns `400 { error: "recurrence_expansion_limit_exceeded", event_id, limit: 10000 }`, never partial results. An independent review found and then verified the fix for initially under-counted filtered candidates. Strict boolean parsing now accepts only actual booleans or exact `"true"`/`"false"` strings. CORS preflight tests prove the approved origin receives GET/HEAD/POST/PATCH/DELETE (including PATCH and DELETE), PUT is not advertised, an unapproved origin receives no usable authorization, and ordinary non-browser requests remain unaffected.
 
-Final local verification: migration `0005` applied successfully using `MIGRATIONS_DATABASE_URL`; the runtime role's `CREATE TABLE` was denied with SQLSTATE `42501`; build, typecheck, lint, format check, web export, API startup, worker startup, and release APK build all passed; **291 tests in 40 files** passed across the workspace; gitleaks scanned 29 commits/~1.47 MB and found no leaks. Checkpoints 4.1 and 4.2 are complete. Checkpoint 4.3 has not begun.
+Final local verification: migration `0005` applied successfully using `MIGRATIONS_DATABASE_URL`; the runtime role's `CREATE TABLE` was denied with SQLSTATE `42501`; build, typecheck, lint, format check, web export, API startup, worker startup, and release APK build all passed; **291 tests in 40 files** passed across the workspace; gitleaks scanned 29 commits/~1.47 MB and found no leaks. Checkpoints 4.1 and 4.2 are complete.
+
+## Phase 4 Checkpoint 4.3 — Shared RRULE editor + backend recurrence-write enablement (COMPLETE, 2026-08-20)
+
+Built with a 5-agent parallel effort under the approved plan with corrections, main Antigravity session as integration owner and Agent E as independent read-only auditor. Local development only; no production access.
+
+**What was built:**
+
+1. **`@personal-os/core/recurrence/editor`** (`packages/core/src/recurrence/editor.ts`) — client-safe, pure recurrence editor model:
+   - Supported editable grammar: `DAILY`, `WEEKLY` (with `BYDAY=MO..SU`), `MONTHLY` (with `BYMONTHDAY=1..31`), `YEARLY`, `INTERVAL >= 1`, `WKST`.
+   - `parseRRuleStringToEditorState`: parses standard rules; detects pre-existing unsupported/custom rules (`BYSETPOS`, complex `BYMONTH`, ordinal days) as `isCustom: true` and retains `rawRrule` without destructive mutations.
+   - `serializeEditorStateToRRule`: converts UI state to RFC 5545 RRULE and structured columns (`recurrence_until`, `recurrence_count`, `recurrence_timezone`, `recurrence_anchor`).
+   - `resolveLocalUntilToInstant` / `resolveInstantToLocalUntil`: DST-safe inclusive local calendar date (`YYYY-MM-DD` at `23:59:59.999`) resolution to real UTC cutoff.
+   - `formatRecurrenceSummary`: live human-readable summary.
+   - Zero Node APIs or `rrule` npm package imports.
+
+2. **Server Recurrence Validation & Invalidation** (`packages/core/src/recurrence/validation.ts`, `apps/api/src/routes/tasks.ts`, `apps/api/src/routes/events.ts`):
+   - Server-side `validateRecurrenceRule` enforcing RFC 5545 syntax via `rrulestr`, rejecting compound `RRuleSet` or embedded `UNTIL=`/`COUNT=`, and enforcing mutual exclusivity of `recurrence_until` and `recurrence_count`.
+   - Completion-anchored tasks strictly restricted to `FREQ`, `INTERVAL`, `WKST` with no `recurrence_until`/`recurrence_count`/`recurrence_exdates`.
+   - Events strictly forbid `recurrence_anchor`.
+   - Transition-specific transactional occurrence invalidation using a single `effectiveNow` timestamp:
+     - **Due-Date -> Due-Date edit**: preserves overdue scheduled (`occurs_at < effectiveNow`), done, and skipped occurrences; replaces future scheduled occurrences (`occurs_at >= effectiveNow`); re-expands 90-day forward window.
+     - **Event -> Event edit**: preserves historical scheduled and skipped occurrences; replaces future scheduled occurrences; re-expands 90-day window.
+     - **Due-Date -> Completion-Date transition**: deletes all open scheduled non-lazy occurrences (including overdue); preserves done/skipped; seeds 1 open lazy occurrence.
+     - **Completion-Date -> Due-Date transition**: deletes open lazy scheduled occurrence; preserves done/skipped; materializes 90-day forward window (`lazy_generated = false`).
+     - **Clearing Recurrence (`rrule = null`)**: deletes all scheduled occurrences (including overdue); preserves done/skipped; clears all recurrence columns.
+     - **Creation with Recurrence**: materializes 90-day window for due-date tasks/events; seeds 1 lazy occurrence for completion-date tasks.
+
+3. **Shared Mobile `<RecurrenceEditor />` & Screen Integration** (`apps/mobile/src/components/recurrence/recurrence-editor.tsx`, `apps/mobile/src/app/tasks/`, `apps/mobile/src/app/events/`):
+   - Single reusable component for tasks and events.
+   - Frequency chips, interval inputs, weekly day chips, month-day input, end condition selectors (never, until date, count), and task-only anchor selector ("On due date" vs "After completion").
+   - Custom recurrence notice card: displays existing unsupported rule and preserves it until user clicks "Replace with standard recurrence".
+   - Integrated into `tasks/new.tsx`, `tasks/[id].tsx`, `events/new.tsx`, and `events/[id].tsx`.
+
+4. **Schema & API Client Updates** (`packages/schema/src/tasks.ts`, `packages/schema/src/events.ts`, `packages/api-client/src/`):
+   - Updated `TaskSchema`, `TaskCreateSchema`, `TaskUpdateSchema`, `EventSchema`, `EventCreateSchema`, `EventUpdateSchema` with strict validation.
+   - API client methods and types re-exported and verified.
+
+**Verification run:**
+- `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check` all passed cleanly across all 8 packages.
+- Total **379 automated tests across 46 test files** passed with zero failures.
+- Expo web export bundled cleanly with 0 errors (`npx expo export --platform web`).
+- Independent read-only audit (Agent E) verified all 5 invariant categories with zero defects.
 
 ## Current objective
 
