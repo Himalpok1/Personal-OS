@@ -7,6 +7,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
@@ -71,5 +72,10 @@ export const events = pgTable(
     index("events_starts_at_active_idx")
       .on(table.startsAt)
       .where(sql`${table.archivedAt} is null`),
+    // Ensures at most one active detached event row per (parent, original_start_at)
+    // occurrence slot.
+    uniqueIndex("events_detached_unique_idx")
+      .on(table.parentEventId, table.originalStartAt)
+      .where(sql`${table.parentEventId} is not null and ${table.archivedAt} is null`),
   ],
 );

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "events_detached_unique_idx" ON "events" USING btree ("parent_event_id","original_start_at") WHERE "events"."parent_event_id" is not null and "events"."archived_at" is null;

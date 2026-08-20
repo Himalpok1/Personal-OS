@@ -25,6 +25,8 @@ export const EventSchema = z.object({
   recurrence_until: z.string().datetime({ offset: true }).nullable(),
   recurrence_count: z.number().int().nullable(),
   recurrence_exdates: z.array(z.string().date()).nullable(),
+  parent_event_id: z.string().uuid().nullable(),
+  original_start_at: z.string().datetime({ offset: true }).nullable(),
   project_id: z.string().uuid().nullable(),
   archived_at: z.string().datetime({ offset: true }).nullable(),
   created_at: z.string().datetime({ offset: true }),
@@ -214,6 +216,56 @@ export type EventRangeQuery = z.infer<typeof EventRangeQuerySchema>;
 // recurring entry with; both are null for a one-off entry
 // (is_recurring_instance: false), where starts_at/ends_at (or
 // start_date/end_date) already are the instance.
+export const EventDetachSchema = z
+  .object({
+    original_start_at: z.string().datetime({ offset: true }),
+    title: z.string().min(1).optional(),
+    description: z.string().nullable().optional(),
+    location: z.string().nullable().optional(),
+    starts_at: FlexibleDatetimeSchema.nullable().optional(),
+    ends_at: FlexibleDatetimeSchema.nullable().optional(),
+    all_day: z.boolean().optional(),
+    start_date: z.string().date().nullable().optional(),
+    end_date: z.string().date().nullable().optional(),
+    timezone: z.string().refine(isValidTimezone, { message: "unknown IANA timezone" }).optional(),
+    project_id: z.string().uuid().nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.all_day === true) {
+      if (value.starts_at !== undefined && value.starts_at !== null) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["starts_at"],
+          message: "timestamps are not allowed for all-day events",
+        });
+      }
+      if (value.start_date && value.end_date && value.end_date < value.start_date) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["end_date"],
+          message: "must be on or after start_date",
+        });
+      }
+    } else if (value.all_day === false) {
+      if (value.start_date !== undefined && value.start_date !== null) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["start_date"],
+          message: "date-only fields are not allowed for timed events",
+        });
+      }
+    }
+  });
+export type EventDetach = z.infer<typeof EventDetachSchema>;
+
+export const EventCancelOccurrenceSchema = z
+  .object({
+    original_start_at: z.string().datetime({ offset: true }),
+  })
+  .strict();
+export type EventCancelOccurrence = z.infer<typeof EventCancelOccurrenceSchema>;
+
 export const EventRangeItemSchema = z.object({
   id: z.string().uuid(),
   title: z.string(),
@@ -227,6 +279,8 @@ export const EventRangeItemSchema = z.object({
   is_recurring_instance: z.boolean(),
   occurs_at: z.string().datetime({ offset: true }).nullable(),
   occurs_ends_at: z.string().datetime({ offset: true }).nullable(),
+  parent_event_id: z.string().uuid().nullable().optional(),
+  original_start_at: z.string().datetime({ offset: true }).nullable().optional(),
   // Null for a one-off entry (status is a recurring-occurrence concept only).
   // In practice this is only ever "scheduled" or "done": a real occurrences
   // row with status "skipped" is excluded from the response entirely rather

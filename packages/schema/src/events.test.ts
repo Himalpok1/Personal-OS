@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { EventCreateSchema, EventSchema, EventUpdateSchema } from "./events.js";
+import {
+  EventCancelOccurrenceSchema,
+  EventCreateSchema,
+  EventDetachSchema,
+  EventSchema,
+  EventUpdateSchema,
+} from "./events.js";
 
 describe("Event schemas", () => {
   describe("EventCreateSchema", () => {
@@ -58,8 +64,38 @@ describe("Event schemas", () => {
     });
   });
 
+  describe("EventDetachSchema", () => {
+    it("accepts valid detach payload with overrides", () => {
+      const result = EventDetachSchema.safeParse({
+        original_start_at: "2026-08-25T09:00:00Z",
+        title: "Rescheduled sync",
+        starts_at: "2026-08-25T14:00:00Z",
+        ends_at: "2026-08-25T14:30:00Z",
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects invalid timestamps on all-day detach", () => {
+      const result = EventDetachSchema.safeParse({
+        original_start_at: "2026-08-25T09:00:00Z",
+        all_day: true,
+        starts_at: "2026-08-25T14:00:00Z",
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("EventCancelOccurrenceSchema", () => {
+    it("accepts valid cancel occurrence payload", () => {
+      const result = EventCancelOccurrenceSchema.safeParse({
+        original_start_at: "2026-08-25T09:00:00Z",
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
   describe("EventSchema", () => {
-    it("parses full event with recurrence fields", () => {
+    it("parses full event with recurrence and exception fields", () => {
       const result = EventSchema.safeParse({
         id: "123e4567-e89b-12d3-a456-426614174000",
         title: "Test event",
@@ -76,6 +112,8 @@ describe("Event schemas", () => {
         recurrence_until: null,
         recurrence_count: 10,
         recurrence_exdates: ["2026-09-01"],
+        parent_event_id: null,
+        original_start_at: null,
         project_id: null,
         archived_at: null,
         created_at: "2026-08-20T12:00:00Z",
