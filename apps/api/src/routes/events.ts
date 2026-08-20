@@ -3,13 +3,16 @@ import {
   expandRecurrenceInRange,
   parseFlexibleDatetime,
   RecurrenceExpansionLimitError,
+  resolveInstantToLocalUntil,
   toWallClockComponents,
   wallClockToNaiveDate,
   type DueDateRecurrenceRule,
 } from "@personal-os/core";
 import { events, occurrences } from "@personal-os/db";
 import {
+  EventCancelOccurrenceSchema,
   EventCreateSchema,
+  EventDetachSchema,
   EventListQuerySchema,
   EventRangeItemSchema,
   EventRangeQuerySchema,
@@ -52,6 +55,8 @@ function toEventResponse(row: typeof events.$inferSelect) {
     recurrence_until: row.recurrenceUntil ? row.recurrenceUntil.toISOString() : null,
     recurrence_count: row.recurrenceCount,
     recurrence_exdates: row.recurrenceExdates,
+    parent_event_id: row.parentEventId,
+    original_start_at: row.originalStartAt ? row.originalStartAt.toISOString() : null,
     project_id: row.projectId,
     archived_at: row.archivedAt ? row.archivedAt.toISOString() : null,
     created_at: row.createdAt.toISOString(),
@@ -62,6 +67,22 @@ function toEventResponse(row: typeof events.$inferSelect) {
 async function findEvent(app: FastifyInstance, id: string) {
   const [row] = await app.db.select().from(events).where(eq(events.id, id));
   return row ?? null;
+}
+
+function isValidOccurrence(parent: typeof events.$inferSelect, targetInstant: Date): boolean {
+  if (!parent.rrule || !parent.startsAt) return false;
+  const targetTz = parent.recurrenceTimezone ?? parent.timezone;
+  const ruleWithoutExdates: DueDateRecurrenceRule = {
+    rrule: parent.rrule,
+    recurrenceTimezone: targetTz,
+    dtstart: toWallClockComponents(parent.startsAt, targetTz),
+    recurrenceUntil: parent.recurrenceUntil ?? undefined,
+    recurrenceCount: parent.recurrenceCount ?? undefined,
+  };
+  const from = new Date(targetInstant.getTime() - 1000);
+  const to = new Date(targetInstant.getTime() + 1000);
+  const candidateOccurrences = expandRecurrenceInRange(ruleWithoutExdates, from, to);
+  return candidateOccurrences.some((o) => o.occursAt.getTime() === targetInstant.getTime());
 }
 
 // Recomputed fresh from the real anchor instant + zone on every call rather
@@ -261,6 +282,8 @@ export default function eventsRoutes(app: FastifyInstance): void {
         is_recurring_instance: false,
         occurs_at: null,
         occurs_ends_at: null,
+        parent_event_id: row.parentEventId ?? null,
+        original_start_at: row.originalStartAt ? row.originalStartAt.toISOString() : null,
         status: null,
       });
     }
@@ -279,6 +302,8 @@ export default function eventsRoutes(app: FastifyInstance): void {
         is_recurring_instance: false,
         occurs_at: null,
         occurs_ends_at: null,
+        parent_event_id: row.parentEventId ?? null,
+        original_start_at: row.originalStartAt ? row.originalStartAt.toISOString() : null,
         status: null,
       });
     }
@@ -325,6 +350,8 @@ export default function eventsRoutes(app: FastifyInstance): void {
           is_recurring_instance: true,
           occurs_at: occurrence.occursAt.toISOString(),
           occurs_ends_at: row.endsAt ? new Date(occursAtMs + durationMs).toISOString() : null,
+          parent_event_id: null,
+          original_start_at: null,
           status: (real?.status ?? "scheduled") as EventRangeItem["status"],
         });
       }
@@ -426,6 +453,15 @@ export default function eventsRoutes(app: FastifyInstance): void {
     const body = EventUpdateSchema.parse(request.body);
     const existing = await findEvent(app, request.params.id);
     if (!existing) return reply.code(404).send({ error: "not_found" });
+
+    if (existing.parentEventId !== null && body.rrule !== undefined && body.rrule !== null) {
+      return reply.code(400).send({
+        error: "validation_failed",
+        issues: [
+          { path: ["rrule"], message: "detached event exceptions cannot have recurrence rules" },
+        ],
+      });
+    }
 
     const startsAt =
       body.starts_at !== undefined
@@ -577,15 +613,242 @@ export default function eventsRoutes(app: FastifyInstance): void {
     return toEventResponse(row);
   });
 
+  app.post<{ Params: { id: string } }>("/events/:id/detach", async (request, reply) => {
+    const body = EventDetachSchema.parse(request.body);
+    const parent = await findEvent(app, request.params.id);
+    if (!parent || parent.archivedAt) return reply.code(404).send({ error: "not_found" });
+
+    if (!parent.rrule) {
+      return reply.code(409).send({
+        error: "not_recurring",
+        message: "only recurring events can be detached",
+      });
+    }
+
+    const originalStartAt = new Date(body.original_start_at);
+    if (!isValidOccurrence(parent, originalStartAt)) {
+      return reply.code(400).send({
+        error: "validation_failed",
+        issues: [
+          {
+            path: ["original_start_at"],
+            message: "not a valid occurrence instant for this event",
+          },
+        ],
+      });
+    }
+
+    // Idempotent: return existing active detached event if already present
+    const [existingDetached] = await app.db
+      .select()
+      .from(events)
+      .where(
+        and(
+          eq(events.parentEventId, parent.id),
+          eq(events.originalStartAt, originalStartAt),
+          isNull(events.archivedAt),
+        ),
+      );
+
+    if (existingDetached) {
+      return reply.code(200).send(toEventResponse(existingDetached));
+    }
+
+    const targetTz = body.timezone ?? parent.timezone;
+    const allDay = body.all_day ?? parent.allDay;
+    const title = body.title ?? parent.title;
+    const description = body.description !== undefined ? body.description : parent.description;
+    const location = body.location !== undefined ? body.location : parent.location;
+    const projectId = body.project_id !== undefined ? body.project_id : parent.projectId;
+
+    let startDate: string | null = null;
+    let endDate: string | null = null;
+    let startsAt: Date | null = null;
+    let endsAt: Date | null = null;
+
+    if (allDay) {
+      startDate =
+        body.start_date ??
+        parent.startDate ??
+        resolveInstantToLocalUntil(originalStartAt, targetTz);
+      endDate = body.end_date !== undefined ? body.end_date : (parent.endDate ?? startDate);
+      if (startDate && endDate && endDate < startDate) {
+        return reply.code(400).send({
+          error: "validation_failed",
+          issues: [{ path: ["end_date"], message: "must be on or after start_date" }],
+        });
+      }
+    } else {
+      const parentDuration =
+        parent.endsAt && parent.startsAt ? parent.endsAt.getTime() - parent.startsAt.getTime() : 0;
+      startsAt = body.starts_at ? parseFlexibleDatetime(body.starts_at, targetTz) : originalStartAt;
+      endsAt = body.ends_at
+        ? parseFlexibleDatetime(body.ends_at, targetTz)
+        : body.starts_at
+          ? new Date(startsAt.getTime() + parentDuration)
+          : parent.endsAt
+            ? new Date(originalStartAt.getTime() + parentDuration)
+            : null;
+
+      if (startsAt && endsAt && endsAt.getTime() <= startsAt.getTime()) {
+        return reply.code(400).send({
+          error: "validation_failed",
+          issues: [{ path: ["ends_at"], message: "must be later than starts_at" }],
+        });
+      }
+    }
+
+    const row = await app.db.transaction(async (tx) => {
+      const parentTz = parent.recurrenceTimezone ?? parent.timezone;
+      const exdateStr = resolveInstantToLocalUntil(originalStartAt, parentTz);
+      const currentExdates = parent.recurrenceExdates ?? [];
+      if (!currentExdates.includes(exdateStr)) {
+        await tx
+          .update(events)
+          .set({
+            recurrenceExdates: [...currentExdates, exdateStr],
+            updatedAt: new Date(),
+          })
+          .where(eq(events.id, parent.id));
+      }
+
+      await tx
+        .delete(occurrences)
+        .where(
+          and(
+            eq(occurrences.parentType, "event"),
+            eq(occurrences.parentId, parent.id),
+            eq(occurrences.occursAt, originalStartAt),
+          ),
+        );
+
+      const [inserted] = await tx
+        .insert(events)
+        .values({
+          title,
+          description,
+          location,
+          timezone: targetTz,
+          allDay,
+          startDate,
+          endDate,
+          startsAt,
+          endsAt,
+          projectId,
+          parentEventId: parent.id,
+          originalStartAt,
+          rrule: null,
+          recurrenceTimezone: null,
+          recurrenceUntil: null,
+          recurrenceCount: null,
+          recurrenceExdates: null,
+        })
+        .returning();
+
+      if (!inserted) throw new Error("insert into events returned no row");
+      return inserted;
+    });
+
+    return reply.code(201).send(toEventResponse(row));
+  });
+
+  app.post<{ Params: { id: string } }>("/events/:id/cancel-occurrence", async (request, reply) => {
+    const body = EventCancelOccurrenceSchema.parse(request.body);
+    const parent = await findEvent(app, request.params.id);
+    if (!parent || parent.archivedAt) return reply.code(404).send({ error: "not_found" });
+
+    if (!parent.rrule) {
+      return reply.code(409).send({
+        error: "not_recurring",
+        message: "only recurring events can have occurrences canceled",
+      });
+    }
+
+    const originalStartAt = new Date(body.original_start_at);
+    if (!isValidOccurrence(parent, originalStartAt)) {
+      return reply.code(400).send({
+        error: "validation_failed",
+        issues: [
+          {
+            path: ["original_start_at"],
+            message: "not a valid occurrence instant for this event",
+          },
+        ],
+      });
+    }
+
+    const [existingDetached] = await app.db
+      .select()
+      .from(events)
+      .where(
+        and(
+          eq(events.parentEventId, parent.id),
+          eq(events.originalStartAt, originalStartAt),
+          isNull(events.archivedAt),
+        ),
+      );
+
+    if (existingDetached) {
+      return reply.code(409).send({
+        error: "already_detached",
+        message: "occurrence is already detached; archive or update the detached event instead",
+      });
+    }
+
+    const updatedParent = await app.db.transaction(async (tx) => {
+      const parentTz = parent.recurrenceTimezone ?? parent.timezone;
+      const exdateStr = resolveInstantToLocalUntil(originalStartAt, parentTz);
+      const currentExdates = parent.recurrenceExdates ?? [];
+      let updatedRow = parent;
+      if (!currentExdates.includes(exdateStr)) {
+        const [row] = await tx
+          .update(events)
+          .set({
+            recurrenceExdates: [...currentExdates, exdateStr],
+            updatedAt: new Date(),
+          })
+          .where(eq(events.id, parent.id))
+          .returning();
+        if (row) updatedRow = row;
+      }
+
+      await tx
+        .delete(occurrences)
+        .where(
+          and(
+            eq(occurrences.parentType, "event"),
+            eq(occurrences.parentId, parent.id),
+            eq(occurrences.occursAt, originalStartAt),
+          ),
+        );
+
+      return updatedRow;
+    });
+
+    return reply.code(200).send(toEventResponse(updatedParent));
+  });
+
   // Soft-delete: sets archived_at, touches nothing else -- occurrences and
   // item_tags lineage stay exactly as they were. Idempotent -- re-archiving
-  // an already-archived event is a no-op.
+  // an already-archived event is a no-op. Cascades to active detached children.
   app.post<{ Params: { id: string } }>("/events/:id/archive", async (request, reply) => {
-    const [row] = await app.db
-      .update(events)
-      .set({ archivedAt: new Date(), updatedAt: new Date() })
-      .where(eq(events.id, request.params.id))
-      .returning();
+    const now = new Date();
+    const row = await app.db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(events)
+        .set({ archivedAt: now, updatedAt: now })
+        .where(eq(events.id, request.params.id))
+        .returning();
+      if (!updated) return null;
+
+      await tx
+        .update(events)
+        .set({ archivedAt: now, updatedAt: now })
+        .where(and(eq(events.parentEventId, request.params.id), isNull(events.archivedAt)));
+
+      return updated;
+    });
+
     if (!row) return reply.code(404).send({ error: "not_found" });
     return toEventResponse(row);
   });

@@ -1,7 +1,7 @@
 import { wallClockToNaiveDate } from "@personal-os/core";
 import { events, occurrences } from "@personal-os/db";
 import type { Event, EventRangeItem, Project } from "@personal-os/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
@@ -898,6 +898,577 @@ describe("events routes", () => {
 
       const items = await range("2026-09-01T00:00:00Z", "2026-09-03T00:00:00Z");
       expect(items.map((item) => item.title)).toEqual(["First", "Second", "Third"]);
+    });
+  });
+
+  describe("detach and cancel-occurrence", () => {
+    it("detaches a timed event occurrence, creating a detached event and adding exdate to parent", async () => {
+      const parentResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Weekly Standup",
+          timezone: "America/Chicago",
+          starts_at: "2026-09-07T09:00:00-05:00",
+          ends_at: "2026-09-07T09:30:00-05:00",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const parent = parentResp.json<Event>();
+      const occurrenceInstant = "2026-09-14T14:00:00.000Z";
+
+      const detachResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/detach`,
+        payload: {
+          original_start_at: occurrenceInstant,
+          title: "Moved Standup",
+          starts_at: "2026-09-14T10:00:00-05:00",
+          ends_at: "2026-09-14T10:30:00-05:00",
+        },
+      });
+      expect(detachResp.statusCode).toBe(201);
+      const detached = detachResp.json<Event>();
+      expect(detached.parent_event_id).toBe(parent.id);
+      expect(detached.original_start_at).toBe(occurrenceInstant);
+      expect(detached.title).toBe("Moved Standup");
+      expect(detached.starts_at).toBe("2026-09-14T15:00:00.000Z");
+      expect(detached.ends_at).toBe("2026-09-14T15:30:00.000Z");
+      expect(detached.rrule).toBeNull();
+
+      // Verify parent has exdate
+      const parentGet = await app.inject({ method: "GET", url: `/events/${parent.id}` });
+      expect(parentGet.json<Event>().recurrence_exdates).toEqual(["2026-09-14"]);
+
+      // Verify range query shows detached replacement and excludes original slot
+      const rangeResp = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2026-09-14T00:00:00Z&to=2026-09-15T00:00:00Z",
+      });
+      expect(rangeResp.statusCode).toBe(200);
+      const items = rangeResp.json<EventRangeItem[]>();
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        id: detached.id,
+        title: "Moved Standup",
+        is_recurring_instance: false,
+        starts_at: "2026-09-14T15:00:00.000Z",
+        parent_event_id: parent.id,
+        original_start_at: occurrenceInstant,
+      });
+    });
+
+    it("detaches a dynamic occurrence far in future beyond 90-day window", async () => {
+      const parentId = await insertRecurringEvent(app, {
+        title: "Open-ended far future series",
+        startsAt: new Date("2026-01-05T09:00:00-06:00"),
+        endsAt: new Date("2026-01-05T09:30:00-06:00"),
+        rrule: "FREQ=WEEKLY;INTERVAL=1",
+        recurrenceTimezone: "America/Chicago",
+      });
+
+      // 2027-03-08 is Monday (14 months out, CST, UTC-6 -> 15:00:00Z)
+      const occurrenceInstant = "2027-03-08T15:00:00.000Z";
+
+      const detachResp = await app.inject({
+        method: "POST",
+        url: `/events/${parentId}/detach`,
+        payload: {
+          original_start_at: occurrenceInstant,
+          title: "Far Future Exception",
+        },
+      });
+      expect(detachResp.statusCode).toBe(201);
+      const detached = detachResp.json<Event>();
+      expect(detached.parent_event_id).toBe(parentId);
+      expect(detached.title).toBe("Far Future Exception");
+      expect(detached.starts_at).toBe(occurrenceInstant);
+
+      const parentGet = await app.inject({ method: "GET", url: `/events/${parentId}` });
+      expect(parentGet.json<Event>().recurrence_exdates).toEqual(["2027-03-08"]);
+
+      const rangeResp = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2027-03-08T00:00:00Z&to=2027-03-09T00:00:00Z",
+      });
+      const items = rangeResp.json<EventRangeItem[]>();
+      expect(items).toHaveLength(1);
+      expect(items[0]?.title).toBe("Far Future Exception");
+      expect(items[0]?.is_recurring_instance).toBe(false);
+    });
+
+    it("detaches an occurrence into an all-day event", async () => {
+      const parentResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Regular Meeting",
+          timezone: "America/Chicago",
+          starts_at: "2026-09-07T09:00:00-05:00",
+          ends_at: "2026-09-07T09:30:00-05:00",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const parent = parentResp.json<Event>();
+      const occurrenceInstant = "2026-09-14T14:00:00.000Z";
+
+      const detachResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/detach`,
+        payload: {
+          original_start_at: occurrenceInstant,
+          title: "All Day Hackathon",
+          all_day: true,
+          start_date: "2026-09-14",
+          end_date: "2026-09-14",
+        },
+      });
+      expect(detachResp.statusCode).toBe(201);
+      const detached = detachResp.json<Event>();
+      expect(detached.all_day).toBe(true);
+      expect(detached.start_date).toBe("2026-09-14");
+      expect(detached.end_date).toBe("2026-09-14");
+      expect(detached.starts_at).toBeNull();
+      expect(detached.parent_event_id).toBe(parent.id);
+
+      const rangeResp = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2026-09-14T00:00:00Z&to=2026-09-15T00:00:00Z",
+      });
+      const items = rangeResp.json<EventRangeItem[]>();
+      expect(items).toHaveLength(1);
+      expect(items[0]?.all_day).toBe(true);
+      expect(items[0]?.title).toBe("All Day Hackathon");
+    });
+
+    it("cancels a timed occurrence so it disappears from range and cannot be resurrected", async () => {
+      const parentResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Recurring to Cancel",
+          timezone: "America/Chicago",
+          starts_at: "2026-09-07T09:00:00-05:00",
+          ends_at: "2026-09-07T09:30:00-05:00",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const parent = parentResp.json<Event>();
+      const occurrenceInstant = "2026-09-14T14:00:00.000Z";
+
+      // Verify occurrence row exists before cancel
+      const occsBefore = await app.db
+        .select()
+        .from(occurrences)
+        .where(
+          and(
+            eq(occurrences.parentId, parent.id),
+            eq(occurrences.occursAt, new Date(occurrenceInstant)),
+          ),
+        );
+      expect(occsBefore).toHaveLength(1);
+
+      const cancelResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/cancel-occurrence`,
+        payload: { original_start_at: occurrenceInstant },
+      });
+      expect(cancelResp.statusCode).toBe(200);
+      const updatedParent = cancelResp.json<Event>();
+      expect(updatedParent.recurrence_exdates).toEqual(["2026-09-14"]);
+
+      // Materialized occurrence row deleted
+      const occsAfter = await app.db
+        .select()
+        .from(occurrences)
+        .where(
+          and(
+            eq(occurrences.parentId, parent.id),
+            eq(occurrences.occursAt, new Date(occurrenceInstant)),
+          ),
+        );
+      expect(occsAfter).toHaveLength(0);
+
+      // Disappears from range query
+      const rangeResp = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2026-09-14T00:00:00Z&to=2026-09-15T00:00:00Z",
+      });
+      expect(rangeResp.json<EventRangeItem[]>()).toHaveLength(0);
+    });
+
+    it("cancels an occurrence and preserves other occurrences", async () => {
+      const parentResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Daily sync",
+          timezone: "America/Chicago",
+          starts_at: "2026-09-01T09:00:00-05:00",
+          ends_at: "2026-09-01T09:30:00-05:00",
+          rrule: "FREQ=DAILY;INTERVAL=1",
+        },
+      });
+      const parent = parentResp.json<Event>();
+      // Cancel Sept 2 occurrence (2026-09-02T14:00:00.000Z)
+      const cancelResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/cancel-occurrence`,
+        payload: { original_start_at: "2026-09-02T14:00:00.000Z" },
+      });
+      expect(cancelResp.statusCode).toBe(200);
+      expect(cancelResp.json<Event>().recurrence_exdates).toEqual(["2026-09-02"]);
+
+      const rangeResp = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2026-09-01T00:00:00Z&to=2026-09-04T00:00:00Z",
+      });
+      const items = rangeResp.json<EventRangeItem[]>();
+      const dates = items.map((i) => i.occurs_at);
+      expect(dates).toContain("2026-09-01T14:00:00.000Z");
+      expect(dates).not.toContain("2026-09-02T14:00:00.000Z");
+      expect(dates).toContain("2026-09-03T14:00:00.000Z");
+    });
+
+    it("handles idempotency: duplicate detach returns 200 with same event; duplicate cancel returns 200 with parent", async () => {
+      const parentResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Idempotency series",
+          timezone: "America/Chicago",
+          starts_at: "2026-09-07T09:00:00-05:00",
+          ends_at: "2026-09-07T09:30:00-05:00",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const parent = parentResp.json<Event>();
+
+      // Detach Sept 14
+      const detach1 = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/detach`,
+        payload: { original_start_at: "2026-09-14T14:00:00.000Z", title: "Detached Title" },
+      });
+      expect(detach1.statusCode).toBe(201);
+      const detachedId = detach1.json<Event>().id;
+
+      const detach2 = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/detach`,
+        payload: { original_start_at: "2026-09-14T14:00:00.000Z", title: "Another Title" },
+      });
+      expect(detach2.statusCode).toBe(200);
+      expect(detach2.json<Event>().id).toBe(detachedId);
+
+      // Cancel Sept 21
+      const cancel1 = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/cancel-occurrence`,
+        payload: { original_start_at: "2026-09-21T14:00:00.000Z" },
+      });
+      expect(cancel1.statusCode).toBe(200);
+      expect(cancel1.json<Event>().recurrence_exdates).toEqual(["2026-09-14", "2026-09-21"]);
+
+      const cancel2 = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/cancel-occurrence`,
+        payload: { original_start_at: "2026-09-21T14:00:00.000Z" },
+      });
+      expect(cancel2.statusCode).toBe(200);
+      expect(cancel2.json<Event>().recurrence_exdates).toEqual(["2026-09-14", "2026-09-21"]);
+    });
+
+    it("allows detaching a slot that was previously canceled", async () => {
+      const parentResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Cancel then Detach",
+          timezone: "America/Chicago",
+          starts_at: "2026-09-07T09:00:00-05:00",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const parent = parentResp.json<Event>();
+
+      // Cancel first
+      const cancelResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/cancel-occurrence`,
+        payload: { original_start_at: "2026-09-14T14:00:00.000Z" },
+      });
+      expect(cancelResp.statusCode).toBe(200);
+
+      // Detach now
+      const detachResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/detach`,
+        payload: {
+          original_start_at: "2026-09-14T14:00:00.000Z",
+          title: "Resurrected as Detached",
+        },
+      });
+      expect(detachResp.statusCode).toBe(201);
+      expect(detachResp.json<Event>().title).toBe("Resurrected as Detached");
+
+      const rangeResp = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2026-09-14T00:00:00Z&to=2026-09-15T00:00:00Z",
+      });
+      expect(rangeResp.json<EventRangeItem[]>()).toHaveLength(1);
+      expect(rangeResp.json<EventRangeItem[]>()[0]?.title).toBe("Resurrected as Detached");
+    });
+
+    it("rejects cancel on an already detached occurrence with 409", async () => {
+      const parentResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Detach then Cancel",
+          timezone: "America/Chicago",
+          starts_at: "2026-09-07T09:00:00-05:00",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const parent = parentResp.json<Event>();
+
+      const detachResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/detach`,
+        payload: { original_start_at: "2026-09-14T14:00:00.000Z" },
+      });
+      expect(detachResp.statusCode).toBe(201);
+
+      const cancelResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/cancel-occurrence`,
+        payload: { original_start_at: "2026-09-14T14:00:00.000Z" },
+      });
+      expect(cancelResp.statusCode).toBe(409);
+      expect(cancelResp.json<ErrorBody>().error).toBe("already_detached");
+    });
+
+    it("preserves detached event and exdate when editing parent series", async () => {
+      const parentResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Series Original Title",
+          timezone: "America/Chicago",
+          starts_at: "2026-09-07T09:00:00-05:00",
+          ends_at: "2026-09-07T09:30:00-05:00",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const parent = parentResp.json<Event>();
+
+      const detachResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/detach`,
+        payload: {
+          original_start_at: "2026-09-14T14:00:00.000Z",
+          title: "Custom Standup",
+        },
+      });
+      expect(detachResp.statusCode).toBe(201);
+      const detachedId = detachResp.json<Event>().id;
+
+      // Edit parent series title
+      const patchResp = await app.inject({
+        method: "PATCH",
+        url: `/events/${parent.id}`,
+        payload: { title: "Series Updated Title" },
+      });
+      expect(patchResp.statusCode).toBe(200);
+      expect(patchResp.json<Event>().recurrence_exdates).toEqual(["2026-09-14"]);
+
+      // Verify detached event is unchanged
+      const detachedGet = await app.inject({ method: "GET", url: `/events/${detachedId}` });
+      expect(detachedGet.json<Event>().title).toBe("Custom Standup");
+
+      // Verify range query
+      const rangeResp = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2026-09-07T00:00:00Z&to=2026-09-22T00:00:00Z",
+      });
+      const items = rangeResp.json<EventRangeItem[]>();
+      const custom = items.find((i) => i.title === "Custom Standup");
+      expect(custom).toBeDefined();
+      expect(custom?.is_recurring_instance).toBe(false);
+
+      const seriesInstances = items.filter((i) => i.title === "Series Updated Title");
+      expect(seriesInstances.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("cascades archive to detached children when archiving parent, but not vice-versa", async () => {
+      const parentResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Parent with Child",
+          timezone: "America/Chicago",
+          starts_at: "2026-09-07T09:00:00-05:00",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const parent = parentResp.json<Event>();
+
+      const detachResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/detach`,
+        payload: { original_start_at: "2026-09-14T14:00:00.000Z" },
+      });
+      const child = detachResp.json<Event>();
+
+      // Archive parent
+      const archiveParent = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/archive`,
+      });
+      expect(archiveParent.statusCode).toBe(200);
+
+      // Verify child is also archived
+      const childGet = await app.inject({ method: "GET", url: `/events/${child.id}` });
+      expect(childGet.json<Event>().archived_at).not.toBeNull();
+
+      // Test archiving child only
+      const parent2Resp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Parent 2",
+          timezone: "America/Chicago",
+          starts_at: "2026-09-07T09:00:00-05:00",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const parent2 = parent2Resp.json<Event>();
+      const detach2 = await app.inject({
+        method: "POST",
+        url: `/events/${parent2.id}/detach`,
+        payload: { original_start_at: "2026-09-14T14:00:00.000Z" },
+      });
+      const child2 = detach2.json<Event>();
+
+      // Archive child only
+      const archiveChild = await app.inject({
+        method: "POST",
+        url: `/events/${child2.id}/archive`,
+      });
+      expect(archiveChild.statusCode).toBe(200);
+      expect(archiveChild.json<Event>().archived_at).not.toBeNull();
+
+      const parent2Get = await app.inject({ method: "GET", url: `/events/${parent2.id}` });
+      expect(parent2Get.json<Event>().archived_at).toBeNull();
+    });
+
+    it("rejects PATCH setting rrule on detached event with 400", async () => {
+      const parentResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Series",
+          timezone: "America/Chicago",
+          starts_at: "2026-09-07T09:00:00-05:00",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const parent = parentResp.json<Event>();
+
+      const detachResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/detach`,
+        payload: { original_start_at: "2026-09-14T14:00:00.000Z" },
+      });
+      const child = detachResp.json<Event>();
+
+      const patchResp = await app.inject({
+        method: "PATCH",
+        url: `/events/${child.id}`,
+        payload: { rrule: "FREQ=DAILY;INTERVAL=1" },
+      });
+      expect(patchResp.statusCode).toBe(400);
+      expect(patchResp.json<ErrorBody>().error).toBe("validation_failed");
+      expect(
+        patchResp.json<{ error: string; issues: { message: string }[] }>().issues[0]?.message,
+      ).toBe("detached event exceptions cannot have recurrence rules");
+    });
+
+    it("validates errors: invalid original_start_at -> 400, detach/cancel on non-recurring -> 409, unknown event -> 404", async () => {
+      const nonRecurring = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Non-recurring",
+          timezone: "America/Chicago",
+          starts_at: "2026-09-07T09:00:00-05:00",
+        },
+      });
+      const nonRecId = nonRecurring.json<Event>().id;
+
+      // Detach on non-recurring -> 409
+      const detachNonRec = await app.inject({
+        method: "POST",
+        url: `/events/${nonRecId}/detach`,
+        payload: { original_start_at: "2026-09-07T14:00:00.000Z" },
+      });
+      expect(detachNonRec.statusCode).toBe(409);
+      expect(detachNonRec.json<ErrorBody>().error).toBe("not_recurring");
+
+      // Cancel on non-recurring -> 409
+      const cancelNonRec = await app.inject({
+        method: "POST",
+        url: `/events/${nonRecId}/cancel-occurrence`,
+        payload: { original_start_at: "2026-09-07T14:00:00.000Z" },
+      });
+      expect(cancelNonRec.statusCode).toBe(409);
+      expect(cancelNonRec.json<ErrorBody>().error).toBe("not_recurring");
+
+      // Invalid original_start_at on recurring event -> 400
+      const recurring = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Weekly series",
+          timezone: "America/Chicago",
+          starts_at: "2026-09-07T09:00:00-05:00",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const recId = recurring.json<Event>().id;
+
+      const detachInvalidTime = await app.inject({
+        method: "POST",
+        url: `/events/${recId}/detach`,
+        payload: { original_start_at: "2026-09-08T14:00:00.000Z" }, // Tuesday instead of Monday
+      });
+      expect(detachInvalidTime.statusCode).toBe(400);
+      expect(detachInvalidTime.json<ErrorBody>().error).toBe("validation_failed");
+
+      const cancelInvalidTime = await app.inject({
+        method: "POST",
+        url: `/events/${recId}/cancel-occurrence`,
+        payload: { original_start_at: "2026-09-08T14:00:00.000Z" },
+      });
+      expect(cancelInvalidTime.statusCode).toBe(400);
+      expect(cancelInvalidTime.json<ErrorBody>().error).toBe("validation_failed");
+
+      // Unknown ID -> 404
+      const unknownId = "00000000-0000-0000-0000-000000000000";
+      const detachUnknown = await app.inject({
+        method: "POST",
+        url: `/events/${unknownId}/detach`,
+        payload: { original_start_at: "2026-09-07T14:00:00.000Z" },
+      });
+      expect(detachUnknown.statusCode).toBe(404);
+
+      const cancelUnknown = await app.inject({
+        method: "POST",
+        url: `/events/${unknownId}/cancel-occurrence`,
+        payload: { original_start_at: "2026-09-07T14:00:00.000Z" },
+      });
+      expect(cancelUnknown.statusCode).toBe(404);
     });
   });
 });
