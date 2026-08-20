@@ -6,11 +6,11 @@ The canonical design is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Current state
 
-Phases 0, 1, and 2 are complete and production-verified. **Phase 3 is in
-progress**: device auth/pairing, native Android foundations, transcription
-workers, local reminders, the capture outbox, and touch-driven PTT are
-implemented. Production has not been modified for the in-progress Phase 3
-work.
+Phases 0–3 are complete and production-verified. The Phase 3 MVP runs on the
+physical Rabbit R1 with stable EAS-managed Android signing, production device
+pairing, exact local reminders, Groq voice transcription, the protected OpenAI
+capture parser, and real Expo/FCM notification delivery. Production remains
+Tailscale-only.
 
 See [`docs/STATUS.md`](docs/STATUS.md).
 
