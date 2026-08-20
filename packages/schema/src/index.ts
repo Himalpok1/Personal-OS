@@ -10,3 +10,4 @@ export * from "./projects.js";
 export * from "./occurrences.js";
 export * from "./devices.js";
 export * from "./events.js";
+export * from "./calendar-connections.js";

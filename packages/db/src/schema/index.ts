@@ -13,3 +13,7 @@ export * from "./occurrences.js";
 export * from "./devices.js";
 export * from "./device-pairing-codes.js";
 export * from "./notification-dispatch-log.js";
+export * from "./calendar-connections.js";
+export * from "./calendar-connection-calendars.js";
+export * from "./event-external-links.js";
+export * from "./calendar-event-instances.js";
