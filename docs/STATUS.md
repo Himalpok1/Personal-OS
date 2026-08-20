@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 4 — Calendar UI + external sync + recurrence UI — **IN PROGRESS**. Checkpoints 4.1, 4.2, and 4.3 are complete (2026-08-20). Phase 3 remains COMPLETE, production-deployed, and physically verified — see below.
-**Implementation status:** Phases 0–3 are implemented and production-verified. Phase 4 Checkpoints 4.1–4.3 are implemented and verified in local development only; nothing from Phase 4 was deployed to production.
-**Next phase allowed:** Checkpoint 4.4 is safe to begin, but must not begin until the user reviews the Checkpoint 4.3 closure report.
+**Current phase:** Phase 4 — Calendar UI + external sync + recurrence UI — **IN PROGRESS**. Checkpoints 4.1, 4.2, 4.3, and 4.4 are complete (2026-08-20). Phase 3 remains COMPLETE, production-deployed, and physically verified — see below.
+**Implementation status:** Phases 0–3 are implemented and production-verified. Phase 4 Checkpoints 4.1–4.4 are implemented and verified in local development only; nothing from Phase 4 was deployed to production.
+**Next phase allowed:** Checkpoint 4.5 is safe to begin, but must not begin until the user reviews the Checkpoint 4.4 closure report.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 4 Checkpoint 4.1 — Events backend (COMPLETE, 2026-08-20)
@@ -117,6 +117,52 @@ Built with a 5-agent parallel effort under the approved plan with corrections, m
 - Total **379 automated tests across 46 test files** passed with zero failures.
 - Expo web export bundled cleanly with 0 errors (`npx expo export --platform web`).
 - Independent read-only audit (Agent E) verified all 5 invariant categories with zero defects.
+
+## Phase 4 Checkpoint 4.4 — Event occurrence override/detach + single-occurrence cancel (COMPLETE, 2026-08-20)
+
+Built with a 4-agent parallel effort under the approved plan, main Antigravity session as integration owner, Agent A on backend exception domain, Agent B on API client, Agent C on mobile calendar UX, and Agent D as independent read-only auditor. Local development only; no production access.
+
+**What was built:**
+
+1. **Database Schema & Constraints** (migration `0006_great_lizard.sql`, `packages/db/src/schema/events.ts`):
+   - Created partial unique index `events_detached_unique_idx` on `(parent_event_id, original_start_at) WHERE parent_event_id IS NOT NULL AND archived_at IS NULL`, preventing duplicate active detached exception events for the same occurrence slot.
+   - Applied cleanly to local dev and dedicated test database.
+
+2. **Schema & API Client Updates** (`packages/schema/src/events.ts`, `packages/api-client/src/events.ts`):
+   - Added `parent_event_id` (uuid nullable) and `original_start_at` (datetime nullable) to `EventSchema` and `EventRangeItemSchema`.
+   - Added `EventDetachSchema` and `EventCancelOccurrenceSchema` with strict validation.
+   - Added `detachEvent(baseUrl, id, body)` (`POST /events/:id/detach`) and `cancelEventOccurrence(baseUrl, id, body)` (`POST /events/:id/cancel-occurrence`) to `@personal-os/api-client`.
+
+3. **Backend Exception & Cancellation Endpoints** (`apps/api/src/routes/events.ts`):
+   - `POST /events/:id/detach`:
+     - Validates parent is recurring and `original_start_at` matches a valid occurrence instant.
+     - Idempotent: returns existing active detached event if already present.
+     - Atomically updates parent `recurrence_exdates` with local occurrence date (`YYYY-MM-DD`), removes pre-materialized occurrence row, and inserts detached event row with `parent_event_id` and `original_start_at` while setting recurrence columns to null.
+   - `POST /events/:id/cancel-occurrence`:
+     - Validates parent is recurring and `original_start_at` is a valid occurrence instant.
+     - Returns `409 already_detached` if the slot is already occupied by a detached event.
+     - Atomically appends exdate to parent `recurrence_exdates` and cleans up materialized occurrence.
+   - `PATCH /events/:id`:
+     - Strictly rejects setting `rrule` on detached events (`parentEventId !== null`) with `400 validation_failed`.
+   - `POST /events/:id/archive`:
+     - Cascades archive to all active detached children when archiving a recurring parent series; archiving a detached event only archives that event.
+   - `GET /events/range`:
+     - Populates `parent_event_id` and `original_start_at` on returned items. Recurring series expansion skips exdated occurrences; detached items appear once from Source 1/2 with zero duplicates.
+
+4. **Mobile Calendar UX & Action Sheet** (`apps/mobile/src/app/(tabs)/calendar.tsx`, `apps/mobile/src/app/events/[id].tsx`, `apps/mobile/src/queries/events.ts`):
+   - Tapping a recurring instance routes with `?occursAt=<iso>` parameter.
+   - In `events/[id].tsx`, recurring instance with `occursAt` displays cross-platform action modal with three choices:
+     - **Edit this occurrence**: computes occurrence timing, pre-fills form, hides recurrence editor, and saves via `useDetachEvent()`.
+     - **Edit entire series**: opens standard series edit mode.
+     - **Cancel this occurrence**: calls `useCancelEventOccurrence()` and navigates back.
+   - Detached events display a modified occurrence banner and hide `<RecurrenceEditor />`.
+   - Zero Node API or `rrule` imports in mobile bundle.
+
+**Verification run:**
+- `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check` all passed cleanly workspace-wide.
+- All 12 Turbo tasks and all test suites passed cleanly: **385+ tests across 47 test files**.
+- `npx expo export --platform web` completed with 0 errors.
+- Independent read-only audit (Agent D) verified all 6 invariant categories with zero defects.
 
 ## Current objective
 
