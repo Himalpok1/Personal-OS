@@ -46,7 +46,10 @@ describe("googleAllDayToLocal / localAllDayToGoogle", () => {
 
 describe("googleRecurrenceToLocal", () => {
   it("strips UNTIL= out of the RRULE string and returns it as recurrenceUntil", () => {
-    const result = googleRecurrenceToLocal(["RRULE:FREQ=WEEKLY;UNTIL=20261231T235959Z;BYDAY=MO,WE,FR"], "America/Chicago");
+    const result = googleRecurrenceToLocal(
+      ["RRULE:FREQ=WEEKLY;UNTIL=20261231T235959Z;BYDAY=MO,WE,FR"],
+      "America/Chicago",
+    );
     expect(result.rrule).toBe("RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR");
     expect(result.rrule).not.toMatch(/UNTIL/);
     expect(result.recurrenceUntil).toBeInstanceOf(Date);
@@ -56,7 +59,10 @@ describe("googleRecurrenceToLocal", () => {
   });
 
   it("strips COUNT= out of the RRULE string and returns it as recurrenceCount", () => {
-    const result = googleRecurrenceToLocal(["RRULE:FREQ=DAILY;COUNT=10;INTERVAL=2"], "America/Chicago");
+    const result = googleRecurrenceToLocal(
+      ["RRULE:FREQ=DAILY;COUNT=10;INTERVAL=2"],
+      "America/Chicago",
+    );
     expect(result.rrule).toBe("RRULE:FREQ=DAILY;INTERVAL=2");
     expect(result.rrule).not.toMatch(/COUNT/);
     expect(result.recurrenceCount).toBe(10);
@@ -81,7 +87,10 @@ describe("googleRecurrenceToLocal", () => {
   });
 
   it("handles a date-only (VALUE=DATE) EXDATE line for all-day masters", () => {
-    const result = googleRecurrenceToLocal(["RRULE:FREQ=DAILY", "EXDATE;VALUE=DATE:20260825"], "America/Chicago");
+    const result = googleRecurrenceToLocal(
+      ["RRULE:FREQ=DAILY", "EXDATE;VALUE=DATE:20260825"],
+      "America/Chicago",
+    );
     expect(result.exdateInstants).toHaveLength(1);
     // Resolved at local midnight in the master's timezone.
     const local = googleExdateInstantToLocalDate(result.exdateInstants[0]!, "America/Chicago");
@@ -125,7 +134,12 @@ describe("classifyGoogleEvent", () => {
   const base = { etag: '"1"', updated: "2026-08-01T00:00:00Z", iCalUID: "uid@google.com" } as const;
 
   it("classifies a master (recurrence present, no recurringEventId)", () => {
-    const event: GoogleCalendarEvent = { ...base, id: "master-1", status: "confirmed", recurrence: ["RRULE:FREQ=DAILY"] };
+    const event: GoogleCalendarEvent = {
+      ...base,
+      id: "master-1",
+      status: "confirmed",
+      recurrence: ["RRULE:FREQ=DAILY"],
+    };
     expect(classifyGoogleEvent(event)).toBe("master");
   });
 
@@ -211,7 +225,10 @@ describe("mapGoogleEventToLocalUpsert", () => {
       summary: "Weekly sync",
       start: { dateTime: "2026-08-17T09:00:00-05:00", timeZone: "America/Chicago" },
       end: { dateTime: "2026-08-17T09:30:00-05:00", timeZone: "America/Chicago" },
-      recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20270101T000000Z", "EXDATE;TZID=America/Chicago:20260824T090000"],
+      recurrence: [
+        "RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20270101T000000Z",
+        "EXDATE;TZID=America/Chicago:20260824T090000",
+      ],
       etag: '"1"',
       updated: "2026-08-01T00:00:00Z",
       iCalUID: "uid@google.com",

@@ -1,6 +1,21 @@
+import { createGoogleCalendarClient } from "@personal-os/calendar-providers";
 import { createDbClient } from "@personal-os/db";
 import { PgBoss } from "pg-boss";
 import { createCaptureParseHandler } from "./jobs/capture-parse.js";
+import {
+  createCalendarPushEventDeadLetterHandler,
+  createCalendarPushEventHandler,
+} from "./jobs/calendar-push-event.js";
+import {
+  createCalendarRefreshTokenDeadLetterHandler,
+  createCalendarRefreshTokenHandler,
+  enqueueCalendarRefreshForAllActiveConnections,
+} from "./jobs/calendar-refresh-token.js";
+import {
+  createCalendarSyncCalendarDeadLetterHandler,
+  createCalendarSyncCalendarHandler,
+  enqueueCalendarSyncForAllEnabledCalendars,
+} from "./jobs/calendar-sync-calendar.js";
 import { expandDueDateWindowJob } from "./jobs/expand-due-date-window.js";
 import { createGenerateLazyOccurrenceHandler } from "./jobs/generate-lazy-occurrence.js";
 import {
@@ -15,6 +30,12 @@ import { sweepOrphanAudioJob } from "./jobs/sweep-orphan-audio.js";
 import { env } from "./env.js";
 import { recordHeartbeat } from "./heartbeat.js";
 import {
+  CALENDAR_PUSH_EVENT_DEAD_QUEUE,
+  CALENDAR_PUSH_EVENT_QUEUE,
+  CALENDAR_REFRESH_TOKEN_DEAD_QUEUE,
+  CALENDAR_REFRESH_TOKEN_QUEUE,
+  CALENDAR_SYNC_CALENDAR_DEAD_QUEUE,
+  CALENDAR_SYNC_CALENDAR_QUEUE,
   CAPTURE_PARSE_QUEUE,
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
   NOTIFICATIONS_DISPATCH_QUEUE,
@@ -24,6 +45,13 @@ import {
   PTT_TRANSCRIBE_QUEUE,
   QUEUE_RETRY_OPTIONS,
 } from "./queue-names.js";
+
+// Local-only trigger queues (cron targets that fan out into the shared,
+// api-visible queues above) -- same convention as HEARTBEAT_QUEUE and
+// SWEEP_ORPHAN_AUDIO_QUEUE below: worker-internal, never sent to by apps/api,
+// so they don't need to live in the shared queue-names.ts file.
+const CALENDAR_SYNC_CRON_QUEUE = "calendar.google.sync-cron";
+const CALENDAR_REFRESH_CRON_QUEUE = "calendar.google.refresh-cron";
 
 const SWEEP_ORPHAN_AUDIO_QUEUE = "audio.sweep-orphan";
 
@@ -124,8 +152,66 @@ async function main(): Promise<void> {
   // Hourly -- generous relative to the 2h orphan threshold, cheap to run.
   await boss.schedule(SWEEP_ORPHAN_AUDIO_QUEUE, "0 * * * *");
 
+  // Phase 4 Checkpoint 4.5 Stage B (Google Calendar sync). One real
+  // GoogleCalendarClient shared by both jobs that need to call the Google
+  // Calendar API.
+  const googleCalendarClient = createGoogleCalendarClient();
+
+  await boss.createQueue(CALENDAR_REFRESH_TOKEN_DEAD_QUEUE);
+  await boss.work(
+    CALENDAR_REFRESH_TOKEN_DEAD_QUEUE,
+    createCalendarRefreshTokenDeadLetterHandler(db),
+  );
+  await boss.createQueue(CALENDAR_REFRESH_TOKEN_QUEUE, {
+    ...QUEUE_RETRY_OPTIONS[CALENDAR_REFRESH_TOKEN_QUEUE],
+    deadLetter: CALENDAR_REFRESH_TOKEN_DEAD_QUEUE,
+  });
+  await boss.work(CALENDAR_REFRESH_TOKEN_QUEUE, createCalendarRefreshTokenHandler(db, boss));
+
+  await boss.createQueue(CALENDAR_SYNC_CALENDAR_DEAD_QUEUE);
+  await boss.work(
+    CALENDAR_SYNC_CALENDAR_DEAD_QUEUE,
+    createCalendarSyncCalendarDeadLetterHandler(db),
+  );
+  await boss.createQueue(CALENDAR_SYNC_CALENDAR_QUEUE, {
+    ...QUEUE_RETRY_OPTIONS[CALENDAR_SYNC_CALENDAR_QUEUE],
+    deadLetter: CALENDAR_SYNC_CALENDAR_DEAD_QUEUE,
+  });
+  await boss.work(
+    CALENDAR_SYNC_CALENDAR_QUEUE,
+    createCalendarSyncCalendarHandler(db, googleCalendarClient),
+  );
+
+  await boss.createQueue(CALENDAR_PUSH_EVENT_DEAD_QUEUE);
+  await boss.work(CALENDAR_PUSH_EVENT_DEAD_QUEUE, createCalendarPushEventDeadLetterHandler(db));
+  await boss.createQueue(CALENDAR_PUSH_EVENT_QUEUE, {
+    ...QUEUE_RETRY_OPTIONS[CALENDAR_PUSH_EVENT_QUEUE],
+    deadLetter: CALENDAR_PUSH_EVENT_DEAD_QUEUE,
+  });
+  await boss.work(
+    CALENDAR_PUSH_EVENT_QUEUE,
+    createCalendarPushEventHandler(db, googleCalendarClient),
+  );
+
+  // Local trigger queues: fan out into the real per-connection/per-calendar
+  // jobs above. 15-minute sync cadence per the B3 brief; refresh checks run
+  // more often than the ~10-minute safety margin they enforce so a
+  // near-expiry token is caught well before calendar.google.sync-calendar
+  // would otherwise have to refresh it inline.
+  await boss.createQueue(CALENDAR_SYNC_CRON_QUEUE);
+  await boss.work(CALENDAR_SYNC_CRON_QUEUE, async () => {
+    await enqueueCalendarSyncForAllEnabledCalendars(db, boss, CALENDAR_SYNC_CALENDAR_QUEUE);
+  });
+  await boss.schedule(CALENDAR_SYNC_CRON_QUEUE, "*/15 * * * *");
+
+  await boss.createQueue(CALENDAR_REFRESH_CRON_QUEUE);
+  await boss.work(CALENDAR_REFRESH_CRON_QUEUE, async () => {
+    await enqueueCalendarRefreshForAllActiveConnections(db, boss, CALENDAR_REFRESH_TOKEN_QUEUE);
+  });
+  await boss.schedule(CALENDAR_REFRESH_CRON_QUEUE, "*/5 * * * *");
+
   console.log(
-    `worker started: ${HEARTBEAT_QUEUE} scheduled every minute, ${OCCURRENCES_EXPAND_WINDOW_QUEUE} scheduled nightly, ${SWEEP_ORPHAN_AUDIO_QUEUE} scheduled hourly, ${CAPTURE_PARSE_QUEUE}/${OCCURRENCES_GENERATE_LAZY_QUEUE}/${PTT_TRANSCRIBE_QUEUE}/${NOTIFICATIONS_DISPATCH_QUEUE} listening`,
+    `worker started: ${HEARTBEAT_QUEUE} scheduled every minute, ${OCCURRENCES_EXPAND_WINDOW_QUEUE} scheduled nightly, ${SWEEP_ORPHAN_AUDIO_QUEUE} scheduled hourly, ${CALENDAR_SYNC_CRON_QUEUE} scheduled every 15min, ${CALENDAR_REFRESH_CRON_QUEUE} scheduled every 5min, ${CAPTURE_PARSE_QUEUE}/${OCCURRENCES_GENERATE_LAZY_QUEUE}/${PTT_TRANSCRIBE_QUEUE}/${NOTIFICATIONS_DISPATCH_QUEUE}/${CALENDAR_REFRESH_TOKEN_QUEUE}/${CALENDAR_SYNC_CALENDAR_QUEUE}/${CALENDAR_PUSH_EVENT_QUEUE} listening`,
   );
 }
 

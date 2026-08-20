@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { GoogleSyncTokenExpiredError } from "./google-calendar-client.js";
-import { FAKE_SYNC_TOKEN_EXPIRED, createFakeGoogleCalendarClient } from "./google-calendar-client.fake.js";
+import {
+  FAKE_SYNC_TOKEN_EXPIRED,
+  createFakeGoogleCalendarClient,
+} from "./google-calendar-client.fake.js";
 
 describe("createFakeGoogleCalendarClient", () => {
   it("returns the fixed calendar list", async () => {
@@ -15,8 +18,30 @@ describe("createFakeGoogleCalendarClient", () => {
     const client = createFakeGoogleCalendarClient({
       listEventsQueues: {
         primary: [
-          { items: [{ id: "e1", status: "confirmed", etag: '"1"', updated: "2026-01-01T00:00:00Z", iCalUID: "u1" }], nextPageToken: "page-2" },
-          { items: [{ id: "e2", status: "confirmed", etag: '"2"', updated: "2026-01-01T00:00:00Z", iCalUID: "u2" }], nextSyncToken: "sync-final" },
+          {
+            items: [
+              {
+                id: "e1",
+                status: "confirmed",
+                etag: '"1"',
+                updated: "2026-01-01T00:00:00Z",
+                iCalUID: "u1",
+              },
+            ],
+            nextPageToken: "page-2",
+          },
+          {
+            items: [
+              {
+                id: "e2",
+                status: "confirmed",
+                etag: '"2"',
+                updated: "2026-01-01T00:00:00Z",
+                iCalUID: "u2",
+              },
+            ],
+            nextSyncToken: "sync-final",
+          },
         ],
       },
     });
@@ -40,14 +65,16 @@ describe("createFakeGoogleCalendarClient", () => {
       listEventsQueues: { primary: [FAKE_SYNC_TOKEN_EXPIRED] },
     });
 
-    await expect(client.listEvents("token", { calendarId: "primary", syncToken: "stale" })).rejects.toBeInstanceOf(
-      GoogleSyncTokenExpiredError,
-    );
+    await expect(
+      client.listEvents("token", { calendarId: "primary", syncToken: "stale" }),
+    ).rejects.toBeInstanceOf(GoogleSyncTokenExpiredError);
   });
 
   it("rejects with a clear error when the queue is exhausted", async () => {
     const client = createFakeGoogleCalendarClient();
-    await expect(client.listEvents("token", { calendarId: "primary" })).rejects.toThrow(/no scripted listEvents response/);
+    await expect(client.listEvents("token", { calendarId: "primary" })).rejects.toThrow(
+      /no scripted listEvents response/,
+    );
   });
 
   it("records write calls and echoes input back on insert/update", async () => {
@@ -56,7 +83,9 @@ describe("createFakeGoogleCalendarClient", () => {
     expect(inserted.summary).toBe("New event");
     expect(inserted.id).toBeTruthy();
 
-    const updated = await client.updateEvent("token", "primary", "existing-id", { summary: "Renamed" });
+    const updated = await client.updateEvent("token", "primary", "existing-id", {
+      summary: "Renamed",
+    });
     expect(updated.id).toBe("existing-id");
     expect(updated.summary).toBe("Renamed");
 
@@ -64,7 +93,12 @@ describe("createFakeGoogleCalendarClient", () => {
 
     expect(client.writeCalls).toEqual([
       { kind: "insert", calendarId: "primary", event: { summary: "New event" } },
-      { kind: "update", calendarId: "primary", eventId: "existing-id", event: { summary: "Renamed" } },
+      {
+        kind: "update",
+        calendarId: "primary",
+        eventId: "existing-id",
+        event: { summary: "Renamed" },
+      },
       { kind: "delete", calendarId: "primary", eventId: "existing-id" },
     ]);
   });
@@ -72,7 +106,15 @@ describe("createFakeGoogleCalendarClient", () => {
   it("allows enqueueing a response mid-test", async () => {
     const client = createFakeGoogleCalendarClient();
     client.enqueueListEventsResponse("secondary", {
-      items: [{ id: "e1", status: "confirmed", etag: '"1"', updated: "2026-01-01T00:00:00Z", iCalUID: "u1" }],
+      items: [
+        {
+          id: "e1",
+          status: "confirmed",
+          etag: '"1"',
+          updated: "2026-01-01T00:00:00Z",
+          iCalUID: "u1",
+        },
+      ],
     });
     const result = await client.listEvents("token", { calendarId: "secondary" });
     expect(result.items).toHaveLength(1);

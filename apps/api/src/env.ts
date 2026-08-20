@@ -26,6 +26,14 @@ const EnvSchema = z.object({
   // production it's the audio_data named volume mounted into both
   // containers at this same path -- see docker-compose.yml.
   AUDIO_STORAGE_PATH: z.string().min(1).default("/tmp/personal-os-audio"),
+
+  // Google Calendar OAuth (Phase 4 Checkpoint 4.5 Stage B). The client id is
+  // non-secret and also lives in apps/mobile's EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID
+  // (Stage A's native AuthorizationClient flow needs it client-side too) --
+  // the two must refer to the same OAuth client. The secret is server-only
+  // and must never be exposed to apps/mobile.
+  GOOGLE_OAUTH_CLIENT_ID: z.string().min(1),
+  GOOGLE_OAUTH_CLIENT_SECRET: z.string().min(1),
 });
 
 // Fail fast on missing config. This is distinct from DB *reachability*,

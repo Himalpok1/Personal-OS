@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GoogleOAuthError, exchangeAuthCode, refreshAccessToken } from "./google-oauth.js";
 
 function base64url(json: unknown): string {
-  return Buffer.from(JSON.stringify(json)).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return Buffer.from(JSON.stringify(json))
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 function fakeIdToken(payload: { sub: string; email: string }): string {
@@ -60,7 +64,9 @@ describe("exchangeAuthCode", () => {
 
   it("throws GoogleOAuthError with the raw Google error code on invalid_grant", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ error: "invalid_grant", error_description: "Bad Request" }), { status: 400 }),
+      new Response(JSON.stringify({ error: "invalid_grant", error_description: "Bad Request" }), {
+        status: 400,
+      }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -77,7 +83,7 @@ describe("exchangeAuthCode", () => {
     });
   });
 
-  it("marks invalid_grant/invalid_client as permanent and other errors as not permanent", async () => {
+  it("marks invalid_grant/invalid_client as permanent and other errors as not permanent", () => {
     const permanent = new GoogleOAuthError("bad grant", 400, "invalid_grant");
     expect(permanent.isPermanent).toBe(true);
 
@@ -152,14 +158,21 @@ describe("refreshAccessToken", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ error: "invalid_grant", error_description: "Token has been revoked" }), {
-          status: 400,
-        }),
+        new Response(
+          JSON.stringify({ error: "invalid_grant", error_description: "Token has been revoked" }),
+          {
+            status: 400,
+          },
+        ),
       ),
     );
 
     await expect(
-      refreshAccessToken({ refreshToken: "revoked", clientId: "client-id", clientSecret: "client-secret" }),
+      refreshAccessToken({
+        refreshToken: "revoked",
+        clientId: "client-id",
+        clientSecret: "client-secret",
+      }),
     ).rejects.toMatchObject({ name: "GoogleOAuthError", googleErrorCode: "invalid_grant" });
   });
 });

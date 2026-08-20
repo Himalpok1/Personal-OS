@@ -1,5 +1,6 @@
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
+import type { GoogleCalendarClient } from "@personal-os/calendar-providers";
 import { workerHeartbeat } from "@personal-os/db";
 import { HealthCheckResponseSchema, type HealthCheckResponse } from "@personal-os/schema";
 import { sql } from "drizzle-orm";
@@ -8,7 +9,9 @@ import { ZodError } from "zod";
 import { env } from "./env.js";
 import { registerBoss } from "./plugins/boss.js";
 import { registerDb } from "./plugins/db.js";
+import { registerGoogleCalendarClient } from "./plugins/google-calendar-client.js";
 import aiConfigRoutes from "./routes/ai-config.js";
+import calendarConnectionsRoutes from "./routes/calendar-connections.js";
 import captureRoutes from "./routes/capture.js";
 import devicesRoutes from "./routes/devices.js";
 import eventsRoutes from "./routes/events.js";
@@ -21,18 +24,29 @@ import transcribeRoutes from "./routes/transcribe.js";
 
 const STALE_AFTER_MS = 5 * 60_000;
 
-export async function buildServer() {
+export interface BuildServerOptions {
+  // Tests only -- see plugins/google-calendar-client.ts's doc comment.
+  // Production (index.ts) never passes this, so the real client is always
+  // used outside a test suite.
+  googleCalendarClient?: GoogleCalendarClient;
+}
+
+export async function buildServer(options: BuildServerOptions = {}) {
   const app = Fastify({
     logger: {
       // AI provider routes accept API keys in the request body, and
       // devices routes accept a bearer token in the Authorization header --
       // never let Fastify's default request logging echo either back out.
-      redact: { paths: ["req.body.api_key", "req.headers.authorization"], censor: "[redacted]" },
+      redact: {
+        paths: ["req.body.api_key", "req.body.auth_code", "req.headers.authorization"],
+        censor: "[redacted]",
+      },
     },
   });
 
   registerDb(app);
   await registerBoss(app);
+  registerGoogleCalendarClient(app, options.googleCalendarClient);
   // Scoped to exactly the known web origins (WEB_APP_ORIGIN) -- no
   // wildcard. apps/mobile's web build is the only browser client; curl and
   // the worker never send an Origin header, so they're unaffected either
@@ -106,6 +120,7 @@ export async function buildServer() {
   await app.register(notesRoutes);
   await app.register(projectsRoutes);
   await app.register(eventsRoutes);
+  await app.register(calendarConnectionsRoutes);
   await app.register(aiConfigRoutes);
   await app.register(devicesRoutes);
   await app.register(transcribeRoutes);

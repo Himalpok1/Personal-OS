@@ -1,4 +1,9 @@
-import type { GoogleCalendarClient, GoogleCalendarEvent, ListCalendarsResult, ListEventsResult } from "./google-calendar-client.js";
+import type {
+  GoogleCalendarClient,
+  GoogleCalendarEvent,
+  ListCalendarsResult,
+  ListEventsResult,
+} from "./google-calendar-client.js";
 import { GoogleSyncTokenExpiredError } from "./google-calendar-client.js";
 
 /**
@@ -44,7 +49,9 @@ export interface FakeGoogleCalendarClient extends GoogleCalendarClient {
 
 let fakeEventCounter = 0;
 
-function makeFakeEvent(overrides: Partial<GoogleCalendarEvent> & { id?: string }): GoogleCalendarEvent {
+function makeFakeEvent(
+  overrides: Partial<GoogleCalendarEvent> & { id?: string },
+): GoogleCalendarEvent {
   fakeEventCounter += 1;
   return {
     id: overrides.id ?? `fake-event-${fakeEventCounter}`,
@@ -64,7 +71,9 @@ function makeFakeEvent(overrides: Partial<GoogleCalendarEvent> & { id?: string }
  * return a synthesized event echoing the input (insert/update) or resolve
  * with no value (delete) -- there is no real server state to mutate.
  */
-export function createFakeGoogleCalendarClient(fixtures: GoogleCalendarClientFixtures = {}): FakeGoogleCalendarClient {
+export function createFakeGoogleCalendarClient(
+  fixtures: GoogleCalendarClientFixtures = {},
+): FakeGoogleCalendarClient {
   const queues: Record<string, Array<FakeListEventsResponse | typeof FAKE_SYNC_TOKEN_EXPIRED>> = {};
   for (const [calendarId, queue] of Object.entries(fixtures.listEventsQueues ?? {})) {
     queues[calendarId] = [...queue];

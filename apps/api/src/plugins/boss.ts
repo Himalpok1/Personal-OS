@@ -2,6 +2,12 @@ import type { FastifyInstance } from "fastify";
 import { PgBoss } from "pg-boss";
 import { env } from "../env.js";
 import {
+  CALENDAR_PUSH_EVENT_DEAD_QUEUE,
+  CALENDAR_PUSH_EVENT_QUEUE,
+  CALENDAR_REFRESH_TOKEN_DEAD_QUEUE,
+  CALENDAR_REFRESH_TOKEN_QUEUE,
+  CALENDAR_SYNC_CALENDAR_DEAD_QUEUE,
+  CALENDAR_SYNC_CALENDAR_QUEUE,
   CAPTURE_PARSE_QUEUE,
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
   NOTIFICATIONS_DISPATCH_QUEUE,
@@ -79,6 +85,26 @@ export async function registerBoss(app: FastifyInstance): Promise<void> {
     await boss.createQueue(NOTIFICATIONS_DISPATCH_QUEUE, {
       ...QUEUE_RETRY_OPTIONS[NOTIFICATIONS_DISPATCH_QUEUE],
       deadLetter: NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
+    });
+    // Phase 4 Checkpoint 4.5 Stage B -- apps/api only ever sends to these
+    // (POST /calendar-connections/:id/sync-now sends CALENDAR_SYNC_CALENDAR_QUEUE
+    // jobs directly; the others are worker-internal but must still be
+    // created identically here since whichever process starts first wins
+    // the queue's options).
+    await boss.createQueue(CALENDAR_REFRESH_TOKEN_DEAD_QUEUE);
+    await boss.createQueue(CALENDAR_REFRESH_TOKEN_QUEUE, {
+      ...QUEUE_RETRY_OPTIONS[CALENDAR_REFRESH_TOKEN_QUEUE],
+      deadLetter: CALENDAR_REFRESH_TOKEN_DEAD_QUEUE,
+    });
+    await boss.createQueue(CALENDAR_SYNC_CALENDAR_DEAD_QUEUE);
+    await boss.createQueue(CALENDAR_SYNC_CALENDAR_QUEUE, {
+      ...QUEUE_RETRY_OPTIONS[CALENDAR_SYNC_CALENDAR_QUEUE],
+      deadLetter: CALENDAR_SYNC_CALENDAR_DEAD_QUEUE,
+    });
+    await boss.createQueue(CALENDAR_PUSH_EVENT_DEAD_QUEUE);
+    await boss.createQueue(CALENDAR_PUSH_EVENT_QUEUE, {
+      ...QUEUE_RETRY_OPTIONS[CALENDAR_PUSH_EVENT_QUEUE],
+      deadLetter: CALENDAR_PUSH_EVENT_DEAD_QUEUE,
     });
   } else {
     app.log.error(

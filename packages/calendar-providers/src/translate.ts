@@ -43,7 +43,10 @@ function addCalendarDays(dateOnly: string, deltaDays: number): string {
  * event's real last day). This app's `end_date` is INCLUSIVE. Converts a
  * Google all-day start/end pair into this app's inclusive representation.
  */
-export function googleAllDayToLocal(googleStartDate: string, googleEndDate: string): { startDate: string; endDate: string } {
+export function googleAllDayToLocal(
+  googleStartDate: string,
+  googleEndDate: string,
+): { startDate: string; endDate: string } {
   return {
     startDate: googleStartDate,
     endDate: addCalendarDays(googleEndDate, -1),
@@ -51,7 +54,10 @@ export function googleAllDayToLocal(googleStartDate: string, googleEndDate: stri
 }
 
 /** The inverse of {@link googleAllDayToLocal}: local inclusive -> Google exclusive. */
-export function localAllDayToGoogle(localStartDate: string, localEndDate: string): { googleStartDate: string; googleEndDate: string } {
+export function localAllDayToGoogle(
+  localStartDate: string,
+  localEndDate: string,
+): { googleStartDate: string; googleEndDate: string } {
   return {
     googleStartDate: localStartDate,
     googleEndDate: addCalendarDays(localEndDate, 1),
@@ -117,7 +123,14 @@ function parseIcalDateTimeValue(raw: string): ParsedIcalDateTimeValue {
 function icalValueToInstant(value: ParsedIcalDateTimeValue, fallbackTimezone: string): Date {
   if (value.isUtc) {
     return new Date(
-      Date.UTC(value.year, value.month - 1, value.day, value.hour ?? 0, value.minute ?? 0, value.second ?? 0),
+      Date.UTC(
+        value.year,
+        value.month - 1,
+        value.day,
+        value.hour ?? 0,
+        value.minute ?? 0,
+        value.second ?? 0,
+      ),
     );
   }
   // Date-only (VALUE=DATE) or a floating/TZID-qualified date-time: resolve
@@ -152,7 +165,11 @@ function parseIcalParams(paramsSegment: string): Map<string, string> {
  * Splits one RFC5545 content line ("NAME;PARAMS:VALUES") into its name,
  * params, and raw (still comma-joined) value segment.
  */
-function splitIcalLine(line: string): { name: string; params: Map<string, string>; rawValues: string } {
+function splitIcalLine(line: string): {
+  name: string;
+  params: Map<string, string>;
+  rawValues: string;
+} {
   const colonIndex = line.indexOf(":");
   if (colonIndex === -1) {
     throw new Error(`malformed RFC5545 line, missing ":": "${line}"`);
@@ -161,7 +178,8 @@ function splitIcalLine(line: string): { name: string; params: Map<string, string
   const rawValues = line.slice(colonIndex + 1);
   const semiIndex = head.indexOf(";");
   const name = semiIndex === -1 ? head : head.slice(0, semiIndex);
-  const params = semiIndex === -1 ? new Map<string, string>() : parseIcalParams(head.slice(semiIndex + 1));
+  const params =
+    semiIndex === -1 ? new Map<string, string>() : parseIcalParams(head.slice(semiIndex + 1));
   return { name, params, rawValues };
 }
 
@@ -175,7 +193,10 @@ function splitIcalLine(line: string): { name: string; params: Map<string, string
  * doesn't support is fine to store and expand via a full RFC5545 library.
  * Any `EXDATE:` lines mixed into the same array are extracted separately.
  */
-export function googleRecurrenceToLocal(recurrenceLines: string[], dtstartTimezone: string): GoogleRecurrenceTranslation {
+export function googleRecurrenceToLocal(
+  recurrenceLines: string[],
+  dtstartTimezone: string,
+): GoogleRecurrenceTranslation {
   let rruleParts: string[] | undefined;
   let recurrenceUntil: Date | undefined;
   let recurrenceCount: number | undefined;
@@ -258,7 +279,10 @@ export function googleExdateInstantToLocalDate(instant: Date, timezone: string):
  * on top (this package has no way to expand an RRULE against the DB's
  * existing occurrences, which is out of scope here).
  */
-export function wouldCollideOnSameLocalDate(existingLocalDates: string[], candidateDate: string): boolean {
+export function wouldCollideOnSameLocalDate(
+  existingLocalDates: string[],
+  candidateDate: string,
+): boolean {
   return existingLocalDates.includes(candidateDate);
 }
 
@@ -266,7 +290,8 @@ export function wouldCollideOnSameLocalDate(existingLocalDates: string[], candid
 // Event classification
 // ---------------------------------------------------------------------------
 
-export type GoogleEventClassification = "master" | "detached_instance" | "cancelled_instance" | "one_off";
+export type GoogleEventClassification =
+  "master" | "detached_instance" | "cancelled_instance" | "one_off";
 
 /**
  * Classifies a Google event per the locked grammar:
@@ -356,7 +381,10 @@ function googleEventDateTimeToInstant(dt: GoogleEventDateTime): Date {
   throw new Error("GoogleEventDateTime has neither dateTime nor date");
 }
 
-function translateFields(event: GoogleCalendarEvent, ctx: CalendarSyncConnectionContext): LocalEventFields {
+function translateFields(
+  event: GoogleCalendarEvent,
+  ctx: CalendarSyncConnectionContext,
+): LocalEventFields {
   const base: Omit<LocalEventFields, "allDay"> = {
     title: event.summary ?? "",
     description: event.description ?? null,
@@ -401,7 +429,9 @@ export function mapGoogleEventToLocalUpsert(
 ): LocalMutationIntent {
   if (classification === "cancelled_instance") {
     if (!event.recurringEventId || !event.originalStartTime) {
-      throw new Error(`cancelled_instance event "${event.id}" is missing recurringEventId/originalStartTime`);
+      throw new Error(
+        `cancelled_instance event "${event.id}" is missing recurringEventId/originalStartTime`,
+      );
     }
     return {
       kind: "cancel_instance",
@@ -414,7 +444,9 @@ export function mapGoogleEventToLocalUpsert(
 
   if (classification === "detached_instance") {
     if (!event.recurringEventId || !event.originalStartTime) {
-      throw new Error(`detached_instance event "${event.id}" is missing recurringEventId/originalStartTime`);
+      throw new Error(
+        `detached_instance event "${event.id}" is missing recurringEventId/originalStartTime`,
+      );
     }
     return {
       kind: "detach_instance",

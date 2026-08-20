@@ -50,6 +50,9 @@ importers:
       '@personal-os/ai-providers':
         specifier: workspace:*
         version: link:../../packages/ai-providers
+      '@personal-os/calendar-providers':
+        specifier: workspace:*
+        version: link:../../packages/calendar-providers
       '@personal-os/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -235,6 +238,9 @@ importers:
       '@personal-os/ai-providers':
         specifier: workspace:*
         version: link:../../packages/ai-providers
+      '@personal-os/calendar-providers':
+        specifier: workspace:*
+        version: link:../../packages/calendar-providers
       '@personal-os/core':
         specifier: workspace:*
         version: link:../../packages/core

@@ -68,7 +68,11 @@ export interface ListEventsResult {
 export interface GoogleCalendarClient {
   listCalendars(accessToken: string): Promise<ListCalendarsResult>;
   listEvents(accessToken: string, params: ListEventsParams): Promise<ListEventsResult>;
-  insertEvent(accessToken: string, calendarId: string, event: GoogleEventWriteBody): Promise<GoogleCalendarEvent>;
+  insertEvent(
+    accessToken: string,
+    calendarId: string,
+    event: GoogleEventWriteBody,
+  ): Promise<GoogleCalendarEvent>;
   updateEvent(
     accessToken: string,
     calendarId: string,
@@ -81,7 +85,9 @@ export interface GoogleCalendarClient {
 /** Thrown by listEvents on a 410 -- the syncToken is invalid/expired and the caller must fall back to a full resync. */
 export class GoogleSyncTokenExpiredError extends Error {
   constructor() {
-    super("Google Calendar sync token is invalid or expired (HTTP 410) -- a full resync is required");
+    super(
+      "Google Calendar sync token is invalid or expired (HTTP 410) -- a full resync is required",
+    );
     this.name = "GoogleSyncTokenExpiredError";
   }
 }
@@ -107,7 +113,11 @@ interface GoogleApiErrorBody {
   };
 }
 
-async function googleFetch(accessToken: string, path: string, init?: RequestInit): Promise<Response> {
+async function googleFetch(
+  accessToken: string,
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
   return fetch(`${CALENDAR_API_BASE}${path}`, {
     ...init,
     headers: {
@@ -182,10 +192,14 @@ export function createGoogleCalendarClient(): GoogleCalendarClient {
     },
 
     async insertEvent(accessToken, calendarId, event) {
-      const response = await googleFetch(accessToken, `/calendars/${encodeURIComponent(calendarId)}/events`, {
-        method: "POST",
-        body: JSON.stringify(event),
-      });
+      const response = await googleFetch(
+        accessToken,
+        `/calendars/${encodeURIComponent(calendarId)}/events`,
+        {
+          method: "POST",
+          body: JSON.stringify(event),
+        },
+      );
       if (!response.ok) return throwForNonOk(response, false);
       return (await response.json()) as GoogleCalendarEvent;
     },

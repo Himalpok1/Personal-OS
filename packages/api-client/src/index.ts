@@ -1,4 +1,12 @@
 import { HealthCheckResponseSchema, type HealthCheckResponse } from "@personal-os/schema";
+import {
+  connectGoogleCalendar,
+  disconnectCalendarConnection,
+  listAvailableGoogleCalendars,
+  listCalendarConnections,
+  syncCalendarConnectionNow,
+  updateCalendarConnectionCalendars,
+} from "./calendar-connections.js";
 import { capture } from "./capture.js";
 import { fetchJson } from "./client.js";
 import {
@@ -45,6 +53,13 @@ import { transcribe } from "./transcribe.js";
 
 export { ApiClientError, type ZodLikeSchema } from "./client.js";
 export type { TranscribeAudioFile } from "./transcribe.js";
+export type {
+  AvailableGoogleCalendarsResponse,
+  CalendarConnection,
+  CalendarConnectionCalendar,
+  CalendarConnectionCalendarUpdate,
+  ConnectGoogleCalendarRequest,
+} from "./calendar-connections.js";
 export type { DeviceListParams } from "./devices.js";
 export type {
   Event,
@@ -111,6 +126,13 @@ export function createApiClient(baseUrl: string) {
     listOccurrences: listOccurrences.bind(null, baseUrl),
     completeOccurrence: completeOccurrence.bind(null, baseUrl),
     skipOccurrence: skipOccurrence.bind(null, baseUrl),
+
+    connectGoogleCalendar: connectGoogleCalendar.bind(null, baseUrl),
+    listCalendarConnections: listCalendarConnections.bind(null, baseUrl),
+    listAvailableGoogleCalendars: listAvailableGoogleCalendars.bind(null, baseUrl),
+    updateCalendarConnectionCalendars: updateCalendarConnectionCalendars.bind(null, baseUrl),
+    syncCalendarConnectionNow: syncCalendarConnectionNow.bind(null, baseUrl),
+    disconnectCalendarConnection: disconnectCalendarConnection.bind(null, baseUrl),
 
     // Unlike every other method above, these take a device bearer token as
     // their second argument (after baseUrl) -- registerDevice is the one

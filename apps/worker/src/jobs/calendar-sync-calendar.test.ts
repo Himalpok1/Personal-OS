@@ -1,0 +1,477 @@
+import { encryptSecret } from "@personal-os/ai-providers";
+import {
+  createFakeGoogleCalendarClient,
+  FAKE_SYNC_TOKEN_EXPIRED,
+  type FakeGoogleCalendarClient,
+  type GoogleCalendarEvent,
+} from "@personal-os/calendar-providers";
+import {
+  calendarConnectionCalendars,
+  calendarConnections,
+  calendarEventInstances,
+  eventExternalLinks,
+  events,
+  occurrences,
+  type Db,
+} from "@personal-os/db";
+import { and, eq } from "drizzle-orm";
+import { beforeEach, describe, expect, it } from "vitest";
+import { buildTestDb, truncateTestTables } from "../test/build-test-db.js";
+import {
+  createCalendarSyncCalendarDeadLetterHandler,
+  runCalendarSync,
+  type CalendarSyncCalendarJobData,
+} from "./calendar-sync-calendar.js";
+import { env } from "../env.js";
+
+const GOOGLE_CALENDAR_ID = "primary";
+
+async function insertConnection(
+  db: Db,
+  overrides: Partial<typeof calendarConnections.$inferInsert> = {},
+): Promise<string> {
+  const accessSecret = encryptSecret("fake-access-token", env.CREDENTIALS_ENCRYPTION_KEY);
+  const refreshSecret = encryptSecret("fake-refresh-token", env.CREDENTIALS_ENCRYPTION_KEY);
+  const [row] = await db
+    .insert(calendarConnections)
+    .values({
+      provider: "google",
+      googleAccountEmail: "user@example.com",
+      googleAccountId: `account-${Math.random()}`,
+      accessTokenCiphertext: accessSecret.ciphertext,
+      accessTokenIv: accessSecret.iv,
+      accessTokenAuthTag: accessSecret.authTag,
+      accessTokenExpiresAt: new Date(Date.now() + 3600_000),
+      refreshTokenCiphertext: refreshSecret.ciphertext,
+      refreshTokenIv: refreshSecret.iv,
+      refreshTokenAuthTag: refreshSecret.authTag,
+      grantedScope: "https://www.googleapis.com/auth/calendar",
+      status: "active",
+      ...overrides,
+    })
+    .returning({ id: calendarConnections.id });
+  return row!.id;
+}
+
+async function insertCalendar(
+  db: Db,
+  connectionId: string,
+  overrides: Partial<typeof calendarConnectionCalendars.$inferInsert> = {},
+): Promise<string> {
+  const [row] = await db
+    .insert(calendarConnectionCalendars)
+    .values({
+      connectionId,
+      googleCalendarId: GOOGLE_CALENDAR_ID,
+      summary: "Primary",
+      syncEnabled: true,
+      ...overrides,
+    })
+    .returning({ id: calendarConnectionCalendars.id });
+  return row!.id;
+}
+
+function oneOffEvent(overrides: Partial<GoogleCalendarEvent> = {}): GoogleCalendarEvent {
+  return {
+    id: "g-event-1",
+    status: "confirmed",
+    summary: "Dentist",
+    start: { dateTime: "2026-09-01T15:00:00-05:00", timeZone: "America/Chicago" },
+    end: { dateTime: "2026-09-01T15:30:00-05:00", timeZone: "America/Chicago" },
+    etag: '"etag-1"',
+    updated: "2026-08-01T00:00:00.000Z",
+    iCalUID: "ical-1@google.com",
+    ...overrides,
+  };
+}
+
+function masterEvent(overrides: Partial<GoogleCalendarEvent> = {}): GoogleCalendarEvent {
+  return {
+    id: "g-master-1",
+    status: "confirmed",
+    summary: "Standup",
+    start: { dateTime: "2026-09-07T09:00:00-05:00", timeZone: "America/Chicago" },
+    end: { dateTime: "2026-09-07T09:30:00-05:00", timeZone: "America/Chicago" },
+    recurrence: ["RRULE:FREQ=WEEKLY;INTERVAL=1"],
+    etag: '"etag-master"',
+    updated: "2026-08-01T00:00:00.000Z",
+    iCalUID: "ical-master@google.com",
+    ...overrides,
+  };
+}
+
+async function runSync(
+  db: Db,
+  client: FakeGoogleCalendarClient,
+  calendarConnectionCalendarId: string,
+  connectionId: string,
+) {
+  const data: CalendarSyncCalendarJobData = { connectionId, calendarConnectionCalendarId };
+  await runCalendarSync({ db, client }, data);
+}
+
+describe("calendar.google.sync-calendar", () => {
+  let db: Db;
+
+  beforeEach(async () => {
+    db = buildTestDb();
+    await truncateTestTables(db);
+  });
+
+  it("full sync creates a local event + event_external_links row from a one-off event", async () => {
+    const connectionId = await insertConnection(db);
+    const calendarId = await insertCalendar(db, connectionId);
+    const client = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [{ items: [oneOffEvent()], nextSyncToken: "sync-token-1" }],
+      },
+    });
+
+    await runSync(db, client, calendarId, connectionId);
+
+    const eventRows = await db.select().from(events);
+    expect(eventRows).toHaveLength(1);
+    expect(eventRows[0]?.title).toBe("Dentist");
+
+    const [link] = await db.select().from(eventExternalLinks);
+    expect(link?.googleEventId).toBe("g-event-1");
+    expect(link?.connectionId).toBe(connectionId);
+    expect(link?.lastSyncedLocalUpdatedAt?.getTime()).toBe(eventRows[0]?.updatedAt.getTime());
+
+    const [calRow] = await db
+      .select()
+      .from(calendarConnectionCalendars)
+      .where(eq(calendarConnectionCalendars.id, calendarId));
+    expect(calRow?.nextSyncToken).toBe("sync-token-1");
+    expect(calRow?.lastFullSyncAt).not.toBeNull();
+  });
+
+  it("full sync creates a recurring local event from a master with UNTIL/COUNT stripped", async () => {
+    const connectionId = await insertConnection(db);
+    const calendarId = await insertCalendar(db, connectionId);
+    const client = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [{ items: [masterEvent()], nextSyncToken: "sync-token-2" }],
+      },
+    });
+
+    await runSync(db, client, calendarId, connectionId);
+
+    const [eventRow] = await db.select().from(events);
+    expect(eventRow?.rrule).toBe("RRULE:FREQ=WEEKLY;INTERVAL=1");
+    expect(eventRow?.recurrenceTimezone).toBe("America/Chicago");
+  });
+
+  it("incremental sync applies a remote-only change (remote wins when local untouched)", async () => {
+    const connectionId = await insertConnection(db);
+    const calendarId = await insertCalendar(db, connectionId);
+    const client1 = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [{ items: [oneOffEvent()], nextSyncToken: "existing-token" }],
+      },
+    });
+    // Seed via a full sync first (no stored token yet in this fresh calendar row).
+    await runSync(db, client1, calendarId, connectionId);
+
+    const client2 = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [
+          {
+            items: [
+              oneOffEvent({
+                summary: "Dentist (rescheduled)",
+                updated: "2026-08-05T00:00:00.000Z",
+              }),
+            ],
+            nextSyncToken: "next-token",
+          },
+        ],
+      },
+    });
+    await runSync(db, client2, calendarId, connectionId);
+
+    const [eventRow] = await db.select().from(events);
+    expect(eventRow?.title).toBe("Dentist (rescheduled)");
+
+    const [calRow] = await db
+      .select()
+      .from(calendarConnectionCalendars)
+      .where(eq(calendarConnectionCalendars.id, calendarId));
+    expect(calRow?.nextSyncToken).toBe("next-token");
+  });
+
+  it("a local-only change is left alone (not overwritten) on the next sync", async () => {
+    const connectionId = await insertConnection(db);
+    const calendarId = await insertCalendar(db, connectionId);
+    const client1 = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [{ items: [oneOffEvent()], nextSyncToken: "token-a" }],
+      },
+    });
+    await runSync(db, client1, calendarId, connectionId);
+
+    const [eventRow] = await db.select().from(events);
+    await db
+      .update(events)
+      .set({ title: "Dentist (locally renamed)", updatedAt: new Date() })
+      .where(eq(events.id, eventRow!.id));
+
+    const client2 = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [{ items: [oneOffEvent()], nextSyncToken: "token-b" }],
+      },
+    });
+    await runSync(db, client2, calendarId, connectionId);
+
+    const [updatedRow] = await db.select().from(events).where(eq(events.id, eventRow!.id));
+    expect(updatedRow?.title).toBe("Dentist (locally renamed)");
+  });
+
+  it("410 GoogleSyncTokenExpiredError falls back to a full resync and reconciles a remote-deleted event", async () => {
+    const connectionId = await insertConnection(db);
+    const calendarId = await insertCalendar(db, connectionId);
+
+    // Seed two events via a first full sync.
+    const seedClient = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [
+          {
+            items: [
+              oneOffEvent({ id: "g-event-1" }),
+              oneOffEvent({ id: "g-event-2", summary: "Lunch" }),
+            ],
+            nextSyncToken: "stale-token",
+          },
+        ],
+      },
+    });
+    await runSync(db, seedClient, calendarId, connectionId);
+    expect(await db.select().from(events)).toHaveLength(2);
+
+    // Incremental sync with the now-stale token: 410, then a full resync
+    // that only mentions g-event-1 -- g-event-2 must be archived (soft
+    // deleted) and its link removed by reconciliation.
+    const resyncClient = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [
+          FAKE_SYNC_TOKEN_EXPIRED,
+          { items: [oneOffEvent({ id: "g-event-1" })], nextSyncToken: "fresh-token" },
+        ],
+      },
+    });
+    await runSync(db, resyncClient, calendarId, connectionId);
+
+    const allEvents = await db.select().from(events);
+    const lunch = allEvents.find((e) => e.title === "Lunch");
+    expect(lunch?.archivedAt).not.toBeNull();
+
+    const links = await db.select().from(eventExternalLinks);
+    expect(links.map((l) => l.googleEventId)).toEqual(["g-event-1"]);
+
+    const [calRow] = await db
+      .select()
+      .from(calendarConnectionCalendars)
+      .where(eq(calendarConnectionCalendars.id, calendarId));
+    expect(calRow?.nextSyncToken).toBe("fresh-token");
+  });
+
+  it("never advances the stored syncToken when the apply pass throws mid-batch", async () => {
+    const connectionId = await insertConnection(db);
+    const calendarId = await insertCalendar(db, connectionId, { nextSyncToken: "token-before" });
+
+    // A malformed all-day event (missing start.date/end.date on an
+    // all-day-shaped item) makes translateFields throw inside the DB
+    // transaction -- the whole transaction (including the syncToken
+    // commit) must roll back.
+    const badEvent: GoogleCalendarEvent = {
+      id: "g-bad",
+      status: "confirmed",
+      summary: "Broken",
+      start: { date: "2026-09-01" },
+      // end.date deliberately omitted
+      etag: '"etag-bad"',
+      updated: "2026-08-01T00:00:00.000Z",
+      iCalUID: "ical-bad@google.com",
+    };
+    const client = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [{ items: [badEvent], nextSyncToken: "token-after" }],
+      },
+    });
+
+    await expect(runSync(db, client, calendarId, connectionId)).rejects.toThrow();
+
+    const [calRow] = await db
+      .select()
+      .from(calendarConnectionCalendars)
+      .where(eq(calendarConnectionCalendars.id, calendarId));
+    expect(calRow?.nextSyncToken).toBe("token-before");
+    expect(await db.select().from(events)).toHaveLength(0);
+  });
+
+  it("detaches a single occurrence of a recurring master into its own local event", async () => {
+    const connectionId = await insertConnection(db);
+    const calendarId = await insertCalendar(db, connectionId);
+
+    const masterClient = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [{ items: [masterEvent()], nextSyncToken: "token-master" }],
+      },
+    });
+    await runSync(db, masterClient, calendarId, connectionId);
+    const [masterRow] = await db.select().from(events);
+    expect(masterRow?.recurrenceExdates ?? []).toHaveLength(0);
+
+    const instanceEvent: GoogleCalendarEvent = {
+      id: "g-instance-1",
+      status: "confirmed",
+      summary: "Standup (moved)",
+      start: { dateTime: "2026-09-14T10:00:00-05:00", timeZone: "America/Chicago" },
+      end: { dateTime: "2026-09-14T10:30:00-05:00", timeZone: "America/Chicago" },
+      recurringEventId: "g-master-1",
+      originalStartTime: { dateTime: "2026-09-14T09:00:00-05:00", timeZone: "America/Chicago" },
+      etag: '"etag-instance"',
+      updated: "2026-08-02T00:00:00.000Z",
+      iCalUID: "ical-instance@google.com",
+    };
+    const instanceClient = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [{ items: [instanceEvent], nextSyncToken: "token-instance" }],
+      },
+    });
+    await runSync(db, instanceClient, calendarId, connectionId);
+
+    const allEvents = await db.select().from(events);
+    const child = allEvents.find((e) => e.title === "Standup (moved)");
+    expect(child?.parentEventId).toBe(masterRow!.id);
+    expect(child?.originalStartAt?.toISOString()).toBe(
+      new Date("2026-09-14T09:00:00-05:00").toISOString(),
+    );
+
+    const [parentAfter] = await db.select().from(events).where(eq(events.id, masterRow!.id));
+    expect(parentAfter?.recurrenceExdates).toContain("2026-09-14");
+
+    const [instanceRow] = await db.select().from(calendarEventInstances);
+    expect(instanceRow?.mappingStatus).toBe("detached");
+    expect(instanceRow?.localDetachedEventId).toBe(child!.id);
+  });
+
+  it("cancels a single occurrence of a recurring master without creating a local child", async () => {
+    const connectionId = await insertConnection(db);
+    const calendarId = await insertCalendar(db, connectionId);
+
+    const masterClient = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [{ items: [masterEvent()], nextSyncToken: "token-master" }],
+      },
+    });
+    await runSync(db, masterClient, calendarId, connectionId);
+    const [masterRow] = await db.select().from(events);
+
+    // Pre-seed a matching pre-generated occurrence, mirroring what the
+    // nightly expand-due-date-window job would have produced.
+    await db.insert(occurrences).values({
+      parentType: "event",
+      parentId: masterRow!.id,
+      occursAt: new Date("2026-09-21T09:00:00-05:00"),
+      occursLocal: new Date("2026-09-21T09:00:00"),
+      status: "scheduled",
+      lazyGenerated: false,
+    });
+
+    const cancelledInstance: GoogleCalendarEvent = {
+      id: "g-instance-cancelled",
+      status: "cancelled",
+      recurringEventId: "g-master-1",
+      originalStartTime: { dateTime: "2026-09-21T09:00:00-05:00", timeZone: "America/Chicago" },
+      etag: '"etag-cancel"',
+      updated: "2026-08-02T00:00:00.000Z",
+      iCalUID: "ical-cancel@google.com",
+    };
+    const instanceClient = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [{ items: [cancelledInstance], nextSyncToken: "token-cancel" }],
+      },
+    });
+    await runSync(db, instanceClient, calendarId, connectionId);
+
+    const [instanceRow] = await db.select().from(calendarEventInstances);
+    expect(instanceRow?.mappingStatus).toBe("cancelled");
+    expect(instanceRow?.localDetachedEventId).toBeNull();
+
+    const [parentAfter] = await db.select().from(events).where(eq(events.id, masterRow!.id));
+    expect(parentAfter?.recurrenceExdates).toContain("2026-09-21");
+
+    const remainingOccurrences = await db
+      .select()
+      .from(occurrences)
+      .where(and(eq(occurrences.parentType, "event"), eq(occurrences.parentId, masterRow!.id)));
+    expect(remainingOccurrences).toHaveLength(0);
+  });
+
+  it("archives a standalone event that Google reports as cancelled", async () => {
+    const connectionId = await insertConnection(db);
+    const calendarId = await insertCalendar(db, connectionId);
+    const client1 = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [{ items: [oneOffEvent()], nextSyncToken: "token-1" }],
+      },
+    });
+    await runSync(db, client1, calendarId, connectionId);
+
+    const client2 = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [
+          {
+            items: [
+              {
+                id: "g-event-1",
+                status: "cancelled",
+                etag: '"etag-2"',
+                updated: "2026-08-03T00:00:00.000Z",
+                iCalUID: "ical-1@google.com",
+              },
+            ],
+            nextSyncToken: "token-2",
+          },
+        ],
+      },
+    });
+    await runSync(db, client2, calendarId, connectionId);
+
+    const [eventRow] = await db.select().from(events);
+    expect(eventRow?.archivedAt).not.toBeNull();
+    expect(await db.select().from(eventExternalLinks)).toHaveLength(0);
+  });
+
+  it("no-ops when the connection is not active (status stopping mechanism)", async () => {
+    const connectionId = await insertConnection(db, { status: "needs_reauth" });
+    const calendarId = await insertCalendar(db, connectionId);
+    const client = createFakeGoogleCalendarClient({
+      listEventsQueues: {
+        [GOOGLE_CALENDAR_ID]: [{ items: [oneOffEvent()], nextSyncToken: "token" }],
+      },
+    });
+    await runSync(db, client, calendarId, connectionId);
+    expect(await db.select().from(events)).toHaveLength(0);
+    expect(client.listEventsCalls).toHaveLength(0);
+  });
+
+  it("dead-letter handler records the failure on the connection", async () => {
+    const connectionId = await insertConnection(db);
+    const calendarId = await insertCalendar(db, connectionId);
+    const handler = createCalendarSyncCalendarDeadLetterHandler(db);
+    await handler([
+      {
+        id: "job-1",
+        name: "calendar.google.sync-calendar",
+        data: { connectionId, calendarConnectionCalendarId: calendarId },
+      } as never,
+    ]);
+    const [row] = await db
+      .select()
+      .from(calendarConnections)
+      .where(eq(calendarConnections.id, connectionId));
+    expect(row?.lastSyncError).toContain("retries exhausted");
+  });
+});

@@ -137,7 +137,9 @@ function decodeIdTokenPayload(idToken: string): DecodedIdToken {
  * pair, and extracts the account's stable identity from the accompanying
  * OIDC id_token. Throws {@link GoogleOAuthError} on any non-2xx response.
  */
-export async function exchangeAuthCode(params: ExchangeAuthCodeParams): Promise<ExchangedGoogleTokens> {
+export async function exchangeAuthCode(
+  params: ExchangeAuthCodeParams,
+): Promise<ExchangedGoogleTokens> {
   // No redirect_uri: this app's native AuthorizationClient flow (Checkpoint
   // 4.5 Stage A) never involves a redirect at all -- the code comes back
   // through an on-device Activity result, not a browser redirect. Sending a
@@ -187,7 +189,9 @@ export async function exchangeAuthCode(params: ExchangeAuthCodeParams): Promise<
  * always return a new refresh_token on this call -- callers must keep using
  * the existing stored refresh token when this response omits one.
  */
-export async function refreshAccessToken(params: RefreshAccessTokenParams): Promise<RefreshedGoogleTokens> {
+export async function refreshAccessToken(
+  params: RefreshAccessTokenParams,
+): Promise<RefreshedGoogleTokens> {
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: params.refreshToken,
