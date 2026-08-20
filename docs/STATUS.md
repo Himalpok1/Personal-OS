@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 4 — Calendar UI + external sync + recurrence UI — **IN PROGRESS**. Checkpoints 4.1, 4.2, 4.3, and 4.4 are complete (2026-08-20). Phase 3 remains COMPLETE, production-deployed, and physically verified — see below.
+**Current phase:** Phase 4 — Calendar UI + external sync + recurrence UI — **IN PROGRESS**. Checkpoints 4.1, 4.2, 4.3, and 4.4 are complete (2026-08-20). Checkpoint 4.5 Stage A (Google OAuth spike) is complete (2026-08-20); Stage B (full sync implementation) has not begun. Phase 3 remains COMPLETE, production-deployed, and physically verified — see below.
 **Implementation status:** Phases 0–3 are implemented and production-verified. Phase 4 Checkpoints 4.1–4.4 are implemented and verified in local development only; nothing from Phase 4 was deployed to production.
-**Next phase allowed:** Checkpoint 4.5 is safe to begin, but must not begin until the user reviews the Checkpoint 4.4 closure report.
+**Next phase allowed:** Checkpoint 4.5 Stage A (OAuth spike) is complete. Checkpoint 4.5 Stage B (full sync schema/worker/UI implementation, per the corrected plan) is safe to begin, but must not begin until the user reviews this Stage A closure report.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 4 Checkpoint 4.1 — Events backend (COMPLETE, 2026-08-20)
@@ -1129,6 +1129,95 @@ overall task status, not just the passing count.
 All Checkpoint 5 test tasks and inbox items were deleted from the dev database
 afterward. Device rows were deliberately left in place.
 
+## Phase 4 Checkpoint 4.5 Stage A — Google Calendar OAuth spike (COMPLETE, 2026-08-20)
+
+Planned via plan mode; the user approved with 10 required corrections (native
+AuthorizationClient bridge instead of the legacy GoogleSignin SDK, least-privilege
+scopes, a per-link conflict baseline, a corrected recurring-exception mapping
+model, exclusive/inclusive all-day date math, a frozen `events.list` request
+shape, full-resync reconciliation semantics, non-destructive disconnect,
+explicit-only outbound push, and a documented Testing-mode token-expiry caveat)
+before Stage A began. The full corrected plan is recorded at
+`/Users/himalpokhrel/.claude/plans/linear-gathering-hopper.md`. This entry covers
+Stage A only — the narrow real-device OAuth spike gate — not Stage B (schema,
+worker, sync engine, UI), which has not started.
+
+**Google Cloud setup** (user, in the existing `personal-os-196cf` project): Calendar
+API enabled; OAuth consent screen in Testing status with the user's real Google
+account added as a test user (account identifier deliberately not recorded here)
+and exactly four scopes (`openid`, `email`,
+`.../auth/calendar.events`, `.../auth/calendar.calendarlist.readonly`); an Android
+OAuth client (`Personal OS Dev (Rabbit)`, package `com.himal.personalos.dev`); a
+Web application OAuth client (`Personal OS API (dev)`) whose id/secret were placed
+directly into the root `.env` as `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`
+by the user, never typed into chat. `apps/mobile/.env`/`.env.example` gained the
+non-secret `EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID` (the Web client id, needed on-device
+as `requestOfflineAccess()`'s `webClientId` — the matching secret stays server-side
+only).
+
+**A real, non-obvious bug was found and fixed during setup, not assumed away:**
+the Android OAuth client was first registered with the SHA-1 fingerprint from the
+*global* `~/.android/debug.keystore`. Expo's local prebuild actually signs debug
+builds with its own **project-local** `apps/mobile/android/app/debug.keystore`
+(generated the first time `expo run:android` creates the native project) — a
+completely different key. This produced a real `UNREGISTERED_ON_API_CONSOLE`
+error from the live device, not a theoretical concern. Diagnosed by extracting the
+actual APK's signing certificate via `apksigner verify --print-certs` (plain
+`keytool -printcert -jarfile` doesn't read APK Signature Scheme v2/v3 signatures,
+so it silently failed first) and comparing SHA-1 fingerprints directly. The user
+corrected the Android client's SHA-1 in the console to the real value
+(`5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25`), after which
+authorization succeeded immediately.
+
+**Native bridge built** (per the user's correction, not the legacy GoogleSignin
+SDK): a new Expo Module, `apps/mobile/modules/google-calendar-auth/`, modeled
+directly on the existing `modules/exact-alarm-status/` precedent. Its Kotlin side
+(`GoogleCalendarAuthModule.kt`) wraps `Identity.getAuthorizationClient(activity)` +
+`AuthorizationRequest.Builder().setRequestedScopes(...).requestOfflineAccess(webClientId)`
+directly, using the Expo Modules Kotlin DSL's `AsyncFunction(name) { args, promise
+-> }` overload plus the `OnActivityResult { activity, payload -> }` DSL entry to
+receive the `IntentSender` result — both confirmed to exist in the exact installed
+`expo-modules-core@57.0.11` by reading its bundled Kotlin sources directly before
+writing code, not assumed from general Expo Modules API knowledge. Depends on
+`com.google.android.gms:play-services-auth:21.6.0`, added via the module's own
+`android/build.gradle`, autolinked with no `app.config.ts` plugin entry needed
+(matching the existing `exact-alarm-status` precedent, which also has none). This
+module is a real, permanent Stage B deliverable — not thrown away.
+
+**Verification actually run, all on the physical Rabbit R1 using the established
+side-by-side `com.himal.personalos.dev` identity** (per Locked Decision 6 —
+production's `com.himal.personalos` install was never targeted by any command this
+session):
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Dev-client build with the new native module | `expo run:android` (EXPO_PUBLIC_UI_TEST_MODE=true) succeeded after fixing one real Kotlin compile error (`Scope.scopeUri` doesn't exist in this `play-services-auth` version; `Scope.toString()` returns the scope URI instead — found directly from the Gradle error, not guessed) |
+| 2 | Real native authorization call, live on-device | A throwaway button on the existing `hardware-debug` screen invoked the bridge; Android's real account-picker and consent dialogs appeared — confirmed via `uiautomator dump` since `adb screencap` is black-screen-unreliable on this exact hardware, a quirk already documented in Checkpoint 3 (LogBox rendering black-on-black) and re-confirmed here by a real photo the user took of the physical device showing the app genuinely rendering correctly |
+| 3 | Wrong-account rejection is real, not assumed | Selecting a different, non-test-user Google account first was correctly rejected (before the SHA-1 fix, this surfaced as `UNREGISTERED_ON_API_CONSOLE`; the flow itself — account picker → consent → result — was already working) |
+| 4 | Real `serverAuthCode` received | Confirmed length 73, all four requested scopes reported granted (`grantedScopes` included both calendar scopes plus `openid`/`email`/`userinfo.email`) |
+| 5 | Real server-side code exchange | A one-off local script read the real `GOOGLE_OAUTH_CLIENT_ID`/`SECRET` from `.env` and posted to `https://oauth2.googleapis.com/token` — HTTP 200, real `access_token` (253 chars), real `refresh_token` (103 chars), real `id_token` (922 chars) |
+| 6 | OIDC identity decoded and correct (Locked Decision 2) | The `id_token` JWT payload was decoded (no signature verification needed for this spike): a real `sub` and the real, `email_verified: true` account email were both present and correctly matched the account selected on-device (values deliberately not recorded here) — proving the OIDC identity is what supplies the stable account id/email, not any calendar-scoped call |
+| 7 | `calendar.calendarlist.readonly` works independently | Real `GET .../users/me/calendarList` with the access token → HTTP 200, 4 real calendars returned (including the real primary calendar and a real "Family" calendar) |
+| 8 | `calendar.events` works independently, frozen request shape accepted | Real `GET .../calendars/primary/events?singleEvents=false&showDeleted=true&maxResults=10` → HTTP 200, 10 real events returned with no rejection of the frozen parameter shape from the corrected plan §3.6 |
+| 9 | Refresh-token grant exercised immediately (Correction 7 — no waiting for real expiry) | A real `grant_type=refresh_token` call succeeded immediately after the code exchange — HTTP 200, a genuinely different new `access_token` returned, and that new token verified against a real second `calendarList.list` call (HTTP 200) |
+| 10 | No public callback/listener at any point | Confirmed by construction (native `AuthorizationClient` + direct server↔Google token exchange, no redirect URI configured on either OAuth client) and by observation (no browser tab ever opened on-device) |
+| 11 | Production untouched | `dumpsys package com.himal.personalos` before/after: `versionCode=3`, `versionName=1.0.0`, `firstInstallTime`/`lastUpdateTime` both unchanged at `2026-08-19 16:26:10`, matching Checkpoint 6's recorded baseline exactly |
+| 12 | Cleanup | Throwaway UI/console.log removed from `hardware-debug.tsx` (reverted to its pre-spike content exactly); the temporary local scratch file holding live tokens was deleted; the `com.himal.personalos.dev` build was uninstalled from the Rabbit afterward, matching the Checkpoint 4.2 precedent of not leaving temporary builds installed |
+| 13 | `pnpm typecheck`/`pnpm lint` (apps/mobile) after cleanup | Both clean — typecheck zero errors; lint's one warning is pre-existing and in an unrelated file (`events/[id].tsx`), not touched this session |
+
+**What Stage A leaves behind for Stage B:** the real, working
+`modules/google-calendar-auth/` native module; `GOOGLE_OAUTH_CLIENT_ID`/`SECRET` in
+the root `.env`; `EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID` in `apps/mobile/.env`; the
+corrected Android client SHA-1 on record; and the exact confirmed scope list. No
+schema, worker, or UI code from the corrected plan's Stage B has been written.
+
+**Expected dev-environment caveat, not a defect:** per the corrected plan §11,
+while the OAuth consent screen stays in Testing status, Google expires refresh
+tokens issued to test users after 7 days — the real refresh token obtained during
+this spike will need reconnection after that window. This is expected and
+untouched by this session; the production publishing-status decision is deferred
+to Checkpoint 4.7.
+
 ## Blockers / user-provided items
 
 **Phase 3:** none. Firebase (`personal-os-196cf`) and the EAS FCM V1 credential are configured for the production Rabbit build; production Groq is configured only for `voice_transcribe`; the protected production OpenAI `gpt-4.1` route remains the capture parser.
@@ -1144,7 +1233,7 @@ Not yet collected, not currently blocking anything:
 
 ## Current work
 
-Phases 0–3 are complete. Checkpoint 6 deployed Phase 3 to production and passed the stable-build, migration, targeted-rollout, Rabbit pairing, reminder, PTT, push, security, and restart/recovery gates. Phase 4 has not begun and requires separate explicit approval.
+Phases 0–3 are complete and production-deployed (Checkpoint 6). Phase 4 Checkpoints 4.1–4.4 are complete in local development, isolated-device-verified, with production proven unchanged. Checkpoint 4.5 Stage A (Google Calendar OAuth spike) is complete — the real native `AuthorizationClient` flow, server-side token exchange, both calendar scopes, and an immediate refresh-token grant were all verified live against the physical Rabbit R1's side-by-side dev identity, with production untouched throughout. Checkpoint 4.5 Stage B (the full sync schema/worker/UI implementation) has not begun and awaits the user's review of this Stage A closure.
 
 ## Remaining warnings / technical debt
 
@@ -1163,6 +1252,8 @@ Phases 0–3 are complete. Checkpoint 6 deployed Phase 3 to production and passe
 - **`apps/api`/`apps/worker` runtime images still aren't pruned of devDependencies** (unchanged from Phase 0/1 — see the entry above); Phase 2's new `apps/mobile/Dockerfile` follows a different, already-minimal pattern (only the static `dist/` output plus a fresh `serve` install in the runtime stage), so this only remains relevant to the two original images.
 
 ## Last verification
+
+Phase 4 Checkpoint 4.5 Stage A verification, complete and passing (2026-08-20) — see "Phase 4 Checkpoint 4.5 Stage A" above for the full 13-item table. Strongest evidence: a real native `AuthorizationClient` authorization on the physical Rabbit R1 (account picker and consent dialogs confirmed via `uiautomator dump`, since `adb screencap` is unreliable on this exact hardware); a real `serverAuthCode` exchanged server-side for a real `access_token`/`refresh_token`/`id_token`; the OIDC `id_token` decoded to a real, verified `sub`/`email`; both `calendar.calendarlist.readonly` and `calendar.events` scopes proven to work independently against real Google Calendar data; a real refresh-token grant exercised immediately (not after waiting for expiry) and the new token verified with a second live API call; and `dumpsys package com.himal.personalos` showing an unchanged `versionCode`/`versionName`/install timestamps before and after, proving production was never touched. One real bug (Android OAuth client registered with the wrong debug keystore's SHA-1) was found and fixed using real diagnostic evidence (`apksigner verify --print-certs`), not assumed. `pnpm typecheck`/`pnpm lint` clean after all throwaway spike code was removed.
 
 Phase 3 Checkpoint 6 production verification, complete and passing (2026-08-20) — see "Checkpoint 6 final production evidence" above. Strongest evidence: migration `0004` alone applied by the migrator while the original PostgreSQL container/volume remained unchanged; targeted API/worker/web rollout over Tailscale-only endpoints; a stable EAS-signed internal APK installed and paired on the physical Rabbit; exact reminder delivery and routing; real Rabbit microphone → Groq Whisper → protected OpenAI parser PTT; separate Expo-accepted and physically delivered diagnostic/`needs_confirm` pushes; revoked-token and non-tailnet isolation checks; and targeted restart recovery with unchanged container IDs and PostgreSQL start time. Final documentation gates: `pnpm format:check` clean and gitleaks clean. No Phase 4 work began.
 
@@ -1204,7 +1295,7 @@ Every Phase 2 deliverable is implemented, verified on Mac dev, deployed to produ
 
 ## Next action
 
-Phase 3 is complete. Phase 4 Checkpoints 4.1 (events backend) and 4.2 (calendar UI + normal event CRUD) are complete in local development, including isolated physical Rabbit verification with production proven unchanged. Stop here for user review. Checkpoint 4.3 is safe to begin only after that review; it has not begun. Checkpoint 4.5 (Google Calendar sync) still opens with a mandatory native OAuth spike and user-supplied Google OAuth client credentials, 4.6 needs real CalDAV credentials, and 4.7 needs separate production-deployment approval.
+Phase 3 is complete. Phase 4 Checkpoints 4.1–4.4 are complete in local development, including isolated physical Rabbit verification with production proven unchanged. Checkpoint 4.5 Stage A (Google OAuth spike) is complete — real native authorization, real token exchange, both scopes, and an immediate refresh grant all verified live, with production untouched. **Stop here for user review.** Checkpoint 4.5 Stage B (schema/worker/sync-engine/UI, per the corrected plan) is safe to begin only after that review; it has not begun. Checkpoint 4.6 (CalDAV) still needs real CalDAV credentials and its own scoping, and 4.7 needs separate production-deployment approval.
 
 Four items are recorded as debt and are product decisions, not defects to fix silently: `remind_at` has no create/update API path (reminder times can only be set by AI capture); `quick-add-fab.tsx` labels Android captures `source: "web"`; revoking a device does not clear its `is_primary_reminder_device` flag; and duplicate-alarm repair is covered by unit tests only, never physically injected.
 
