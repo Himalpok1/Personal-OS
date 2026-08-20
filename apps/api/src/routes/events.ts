@@ -1,8 +1,10 @@
 import {
+  expandDueDateWindow,
   expandRecurrenceInRange,
   parseFlexibleDatetime,
   RecurrenceExpansionLimitError,
   toWallClockComponents,
+  wallClockToNaiveDate,
   type DueDateRecurrenceRule,
 } from "@personal-os/core";
 import { events, occurrences } from "@personal-os/db";
@@ -47,6 +49,9 @@ function toEventResponse(row: typeof events.$inferSelect) {
     end_date: row.endDate,
     rrule: row.rrule,
     recurrence_timezone: row.recurrenceTimezone,
+    recurrence_until: row.recurrenceUntil ? row.recurrenceUntil.toISOString() : null,
+    recurrence_count: row.recurrenceCount,
+    recurrence_exdates: row.recurrenceExdates,
     project_id: row.projectId,
     archived_at: row.archivedAt ? row.archivedAt.toISOString() : null,
     created_at: row.createdAt.toISOString(),
@@ -338,11 +343,10 @@ export default function eventsRoutes(app: FastifyInstance): void {
     return toEventResponse(row);
   });
 
-  // rrule/recurrence_*/archived_at are rejected by EventCreateSchema's
-  // .strict() before this ever runs -- recurrence stays capture(AI)-only,
-  // same precedent as tasks.
   app.post("/events", async (request, reply) => {
     const body = EventCreateSchema.parse(request.body);
+    const effectiveNow = new Date();
+
     const startsAt = body.starts_at
       ? parseFlexibleDatetime(body.starts_at, body.timezone)
       : undefined;
@@ -353,22 +357,68 @@ export default function eventsRoutes(app: FastifyInstance): void {
         issues: [{ path: ["ends_at"], message: "must be later than starts_at" }],
       });
     }
-    const [row] = await app.db
-      .insert(events)
-      .values({
-        title: body.title,
-        description: body.description,
-        location: body.location,
-        startsAt,
-        endsAt,
-        timezone: body.timezone,
-        allDay: body.all_day,
-        startDate: body.start_date,
-        endDate: body.end_date,
-        projectId: body.project_id,
-      })
-      .returning();
-    if (!row) throw new Error("insert into events returned no row");
+
+    const recurrenceTimezone = body.rrule ? (body.recurrence_timezone ?? body.timezone) : null;
+    const recurrenceUntil =
+      body.rrule && body.recurrence_until
+        ? parseFlexibleDatetime(body.recurrence_until, recurrenceTimezone ?? body.timezone)
+        : null;
+    const recurrenceCount = body.rrule ? (body.recurrence_count ?? null) : null;
+    const recurrenceExdates = body.rrule ? (body.recurrence_exdates ?? null) : null;
+
+    const row = await app.db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(events)
+        .values({
+          title: body.title,
+          description: body.description,
+          location: body.location,
+          startsAt,
+          endsAt,
+          timezone: body.timezone,
+          allDay: body.all_day,
+          startDate: body.start_date,
+          endDate: body.end_date,
+          projectId: body.project_id,
+          rrule: body.rrule ?? null,
+          recurrenceTimezone,
+          recurrenceUntil,
+          recurrenceCount,
+          recurrenceExdates,
+        })
+        .returning();
+      if (!inserted) throw new Error("insert into events returned no row");
+
+      if (body.rrule && startsAt) {
+        const rule: DueDateRecurrenceRule = {
+          rrule: body.rrule,
+          recurrenceTimezone: recurrenceTimezone!,
+          dtstart: toWallClockComponents(startsAt, recurrenceTimezone!),
+          recurrenceUntil: recurrenceUntil ?? undefined,
+          recurrenceCount: recurrenceCount ?? undefined,
+          recurrenceExdates: recurrenceExdates ?? undefined,
+        };
+        const generated = expandDueDateWindow(rule, 90, effectiveNow);
+        for (const occurrence of generated) {
+          await tx
+            .insert(occurrences)
+            .values({
+              parentType: "event",
+              parentId: inserted.id,
+              occursAt: occurrence.occursAt,
+              occursLocal: wallClockToNaiveDate(occurrence.occursLocal),
+              status: "scheduled",
+              lazyGenerated: false,
+            })
+            .onConflictDoNothing({
+              target: [occurrences.parentType, occurrences.parentId, occurrences.occursAt],
+            });
+        }
+      }
+
+      return inserted;
+    });
+
     return reply.code(201).send(toEventResponse(row));
   });
 
@@ -409,29 +459,121 @@ export default function eventsRoutes(app: FastifyInstance): void {
       });
     }
 
-    const [row] = await app.db
-      .update(events)
-      .set({
-        ...(body.title !== undefined && { title: body.title }),
-        ...(body.description !== undefined && { description: body.description }),
-        ...(body.location !== undefined && { location: body.location }),
-        // Resolved against the event's own stored timezone, not a
-        // client-supplied one -- same reasoning as tasks.ts's due_at PATCH.
-        ...(body.starts_at !== undefined && {
+    const effectiveNow = new Date();
+
+    const row = await app.db.transaction(async (tx) => {
+      const rruleExplicitlyNull = body.rrule === null;
+      const newRrule = body.rrule !== undefined ? body.rrule : existing.rrule;
+      const hasRecurrence = Boolean(newRrule) && !rruleExplicitlyNull;
+
+      let newRecurrenceTimezone: string | null = null;
+      let newRecurrenceUntil: Date | null = null;
+      let newRecurrenceCount: number | null = null;
+      let newRecurrenceExdates: string[] | null = null;
+
+      if (hasRecurrence) {
+        newRecurrenceTimezone =
+          body.recurrence_timezone !== undefined
+            ? body.recurrence_timezone
+            : (existing.recurrenceTimezone ?? existing.timezone);
+        const targetTz = newRecurrenceTimezone ?? existing.timezone;
+        newRecurrenceUntil =
+          body.recurrence_until !== undefined
+            ? body.recurrence_until
+              ? parseFlexibleDatetime(body.recurrence_until, targetTz)
+              : null
+            : existing.recurrenceUntil;
+        newRecurrenceCount =
+          body.recurrence_count !== undefined ? body.recurrence_count : existing.recurrenceCount;
+        newRecurrenceExdates =
+          body.recurrence_exdates !== undefined
+            ? body.recurrence_exdates
+            : existing.recurrenceExdates;
+      }
+
+      const hadRecurrence = Boolean(existing.rrule);
+
+      if (hadRecurrence && !hasRecurrence) {
+        // Rule E: Clearing recurrence (rrule = null): delete ALL scheduled occurrences
+        // Preserve done and skipped.
+        await tx
+          .delete(occurrences)
+          .where(
+            and(
+              eq(occurrences.parentType, "event"),
+              eq(occurrences.parentId, existing.id),
+              eq(occurrences.status, "scheduled"),
+            ),
+          );
+      } else if (hasRecurrence) {
+        // Rule B: Event -> Event Edit:
+        // Preserve historical scheduled (occurs_at < effectiveNow) and skipped / status rows.
+        // Delete future scheduled occurrences (status = 'scheduled' AND occurs_at >= effectiveNow).
+        await tx
+          .delete(occurrences)
+          .where(
+            and(
+              eq(occurrences.parentType, "event"),
+              eq(occurrences.parentId, existing.id),
+              eq(occurrences.status, "scheduled"),
+              gte(occurrences.occursAt, effectiveNow),
+            ),
+          );
+
+        if (startsAt) {
+          const rule: DueDateRecurrenceRule = {
+            rrule: newRrule!,
+            recurrenceTimezone: newRecurrenceTimezone!,
+            dtstart: toWallClockComponents(startsAt, newRecurrenceTimezone!),
+            recurrenceUntil: newRecurrenceUntil ?? undefined,
+            recurrenceCount: newRecurrenceCount ?? undefined,
+            recurrenceExdates: newRecurrenceExdates ?? undefined,
+          };
+          const generated = expandDueDateWindow(rule, 90, effectiveNow);
+          for (const occurrence of generated) {
+            await tx
+              .insert(occurrences)
+              .values({
+                parentType: "event",
+                parentId: existing.id,
+                occursAt: occurrence.occursAt,
+                occursLocal: wallClockToNaiveDate(occurrence.occursLocal),
+                status: "scheduled",
+                lazyGenerated: false,
+              })
+              .onConflictDoNothing({
+                target: [occurrences.parentType, occurrences.parentId, occurrences.occursAt],
+              });
+          }
+        }
+      }
+
+      const [updated] = await tx
+        .update(events)
+        .set({
+          title: body.title !== undefined ? body.title : existing.title,
+          description: body.description !== undefined ? body.description : existing.description,
+          location: body.location !== undefined ? body.location : existing.location,
           startsAt,
-        }),
-        ...(body.ends_at !== undefined && {
           endsAt,
-        }),
-        ...(body.all_day !== undefined && { allDay: body.all_day }),
-        ...(body.start_date !== undefined && { startDate: body.start_date }),
-        ...(body.end_date !== undefined && { endDate: body.end_date }),
-        ...(body.project_id !== undefined && { projectId: body.project_id }),
-        updatedAt: new Date(),
-      })
-      .where(eq(events.id, request.params.id))
-      .returning();
-    if (!row) throw new Error("update on events returned no row for an id that was just found");
+          allDay,
+          startDate,
+          endDate,
+          projectId: body.project_id !== undefined ? body.project_id : existing.projectId,
+          rrule: hasRecurrence ? newRrule : null,
+          recurrenceTimezone: hasRecurrence ? newRecurrenceTimezone : null,
+          recurrenceUntil: hasRecurrence ? newRecurrenceUntil : null,
+          recurrenceCount: hasRecurrence ? newRecurrenceCount : null,
+          recurrenceExdates: hasRecurrence ? newRecurrenceExdates : null,
+          updatedAt: effectiveNow,
+        })
+        .where(eq(events.id, request.params.id))
+        .returning();
+
+      return updated;
+    });
+
+    if (!row) return reply.code(404).send({ error: "not_found" });
     return toEventResponse(row);
   });
 

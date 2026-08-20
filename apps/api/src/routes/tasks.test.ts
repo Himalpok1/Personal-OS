@@ -33,14 +33,404 @@ describe("tasks routes", () => {
     expect(body.archived_at).toBeNull();
   });
 
-  it("rejects rrule/status/archived_at on create with 400, not a silent strip", async () => {
+  it("rejects status/archived_at on create with 400, not a silent strip", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/tasks",
-      payload: { title: "bad", timezone: "America/Chicago", rrule: "FREQ=DAILY" },
+      payload: { title: "bad", timezone: "America/Chicago", status: "done" },
     });
     expect(response.statusCode).toBe(400);
     expect(response.json<ErrorBody>().error).toBe("validation_failed");
+  });
+
+  describe("recurrence on tasks", () => {
+    it("creates a due-date task with recurrence and materializes 90-day occurrence window", async () => {
+      const now = new Date();
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: {
+          title: "Daily due-date task",
+          timezone: "America/Chicago",
+          due_at: now.toISOString(),
+          rrule: "FREQ=DAILY;INTERVAL=1",
+          recurrence_anchor: "due_date",
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      const body = response.json<Task>();
+      expect(body.rrule).toBe("FREQ=DAILY;INTERVAL=1");
+      expect(body.recurrence_anchor).toBe("due_date");
+      expect(body.recurrence_timezone).toBe("America/Chicago");
+
+      const occs = await app.db.select().from(occurrences).where(eq(occurrences.parentId, body.id));
+      expect(occs.length).toBeGreaterThanOrEqual(89);
+      expect(occs.every((o) => o.status === "scheduled" && !o.lazyGenerated)).toBe(true);
+    });
+
+    it("creates a completion-date task with recurrence and seeds a single lazy occurrence", async () => {
+      const now = new Date();
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: {
+          title: "Completion-anchored task",
+          timezone: "America/Chicago",
+          due_at: now.toISOString(),
+          rrule: "FREQ=DAILY;INTERVAL=3",
+          recurrence_anchor: "completion_date",
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      const body = response.json<Task>();
+      expect(body.rrule).toBe("FREQ=DAILY;INTERVAL=3");
+      expect(body.recurrence_anchor).toBe("completion_date");
+
+      const occs = await app.db.select().from(occurrences).where(eq(occurrences.parentId, body.id));
+      expect(occs).toHaveLength(1);
+      expect(occs[0]?.status).toBe("scheduled");
+      expect(occs[0]?.lazyGenerated).toBe(true);
+    });
+
+    it("rejects mutual exclusivity of recurrence_until and recurrence_count with 400", async () => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: {
+          title: "Invalid recurrence",
+          timezone: "America/Chicago",
+          due_at: new Date().toISOString(),
+          rrule: "FREQ=DAILY",
+          recurrence_until: "2026-12-31T23:59:59.000Z",
+          recurrence_count: 5,
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json<ErrorBody>().error).toBe("validation_failed");
+    });
+
+    it("rejects completion_date task with recurrence_until, recurrence_count, or invalid rrule with 400", async () => {
+      const untilResp = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: {
+          title: "Invalid until",
+          timezone: "America/Chicago",
+          due_at: new Date().toISOString(),
+          rrule: "FREQ=DAILY",
+          recurrence_anchor: "completion_date",
+          recurrence_until: "2026-12-31T23:59:59.000Z",
+        },
+      });
+      expect(untilResp.statusCode).toBe(400);
+
+      const countResp = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: {
+          title: "Invalid count",
+          timezone: "America/Chicago",
+          due_at: new Date().toISOString(),
+          rrule: "FREQ=DAILY",
+          recurrence_anchor: "completion_date",
+          recurrence_count: 5,
+        },
+      });
+      expect(countResp.statusCode).toBe(400);
+
+      const complexRuleResp = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: {
+          title: "Invalid complex rrule",
+          timezone: "America/Chicago",
+          due_at: new Date().toISOString(),
+          rrule: "FREQ=WEEKLY;BYDAY=MO,WE",
+          recurrence_anchor: "completion_date",
+        },
+      });
+      expect(complexRuleResp.statusCode).toBe(400);
+    });
+
+    it("transitions due-date -> completion-date with overdue scheduled occurrence (verifying overdue row is deleted and single lazy row is created)", async () => {
+      const pastDue = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000); // 5 days ago
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: {
+          title: "Due date to convert",
+          timezone: "America/Chicago",
+          due_at: pastDue.toISOString(),
+          rrule: "FREQ=DAILY;INTERVAL=1",
+          recurrence_anchor: "due_date",
+        },
+      });
+      const taskId = created.json<Task>().id;
+
+      // Add a done occurrence and a skipped occurrence in the past
+      await app.db.insert(occurrences).values([
+        {
+          parentType: "task",
+          parentId: taskId,
+          occursAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+          occursLocal: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+          status: "done",
+          completedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+          lazyGenerated: false,
+        },
+        {
+          parentType: "task",
+          parentId: taskId,
+          occursAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+          occursLocal: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+          status: "skipped",
+          lazyGenerated: false,
+        },
+        // Overdue scheduled occurrence
+        {
+          parentType: "task",
+          parentId: taskId,
+          occursAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+          occursLocal: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+          status: "scheduled",
+          lazyGenerated: false,
+        },
+      ]);
+
+      const patchResp = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${taskId}`,
+        payload: {
+          rrule: "FREQ=DAILY;INTERVAL=3",
+          recurrence_anchor: "completion_date",
+        },
+      });
+      expect(patchResp.statusCode).toBe(200);
+      expect(patchResp.json<Task>().recurrence_anchor).toBe("completion_date");
+
+      const allOccs = await app.db
+        .select()
+        .from(occurrences)
+        .where(eq(occurrences.parentId, taskId));
+
+      // Overdue scheduled non-lazy row and all future scheduled non-lazy rows deleted
+      const nonLazyScheduled = allOccs.filter((o) => !o.lazyGenerated && o.status === "scheduled");
+      expect(nonLazyScheduled).toHaveLength(0);
+
+      // Single lazy scheduled occurrence created
+      const lazyScheduled = allOccs.filter((o) => o.lazyGenerated && o.status === "scheduled");
+      expect(lazyScheduled).toHaveLength(1);
+
+      // Done and skipped preserved
+      const doneOccs = allOccs.filter((o) => o.status === "done");
+      expect(doneOccs).toHaveLength(1);
+      const skippedOccs = allOccs.filter((o) => o.status === "skipped");
+      expect(skippedOccs).toHaveLength(1);
+    });
+
+    it("transitions completion-date -> due-date with overdue open lazy occurrence (verifying open lazy row is deleted and window is materialized)", async () => {
+      const pastDue = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: {
+          title: "Completion date to convert",
+          timezone: "America/Chicago",
+          due_at: pastDue.toISOString(),
+          rrule: "FREQ=DAILY;INTERVAL=3",
+          recurrence_anchor: "completion_date",
+        },
+      });
+      const taskId = created.json<Task>().id;
+
+      // Add done & skipped rows
+      await app.db.insert(occurrences).values([
+        {
+          parentType: "task",
+          parentId: taskId,
+          occursAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+          occursLocal: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+          status: "done",
+          completedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+          lazyGenerated: true,
+        },
+        {
+          parentType: "task",
+          parentId: taskId,
+          occursAt: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000),
+          occursLocal: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000),
+          status: "skipped",
+          lazyGenerated: true,
+        },
+      ]);
+
+      const patchResp = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${taskId}`,
+        payload: {
+          rrule: "FREQ=DAILY;INTERVAL=1",
+          recurrence_anchor: "due_date",
+          due_at: new Date().toISOString(),
+        },
+      });
+      expect(patchResp.statusCode).toBe(200);
+      expect(patchResp.json<Task>().recurrence_anchor).toBe("due_date");
+
+      const allOccs = await app.db
+        .select()
+        .from(occurrences)
+        .where(eq(occurrences.parentId, taskId));
+
+      // Open lazy scheduled row deleted
+      const lazyScheduled = allOccs.filter((o) => o.lazyGenerated && o.status === "scheduled");
+      expect(lazyScheduled).toHaveLength(0);
+
+      // 90-day window materialized
+      const nonLazyScheduled = allOccs.filter((o) => !o.lazyGenerated && o.status === "scheduled");
+      expect(nonLazyScheduled.length).toBeGreaterThanOrEqual(89);
+
+      // Done and skipped preserved
+      expect(allOccs.filter((o) => o.status === "done")).toHaveLength(1);
+      expect(allOccs.filter((o) => o.status === "skipped")).toHaveLength(1);
+    });
+
+    it("clears recurrence with overdue scheduled occurrence (verifying overdue row is deleted and parent becomes non-recurring)", async () => {
+      const now = new Date();
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: {
+          title: "Clear recurrence test",
+          timezone: "America/Chicago",
+          due_at: now.toISOString(),
+          rrule: "FREQ=DAILY;INTERVAL=1",
+          recurrence_anchor: "due_date",
+        },
+      });
+      const taskId = created.json<Task>().id;
+
+      // Add overdue scheduled, done, and skipped rows
+      await app.db.insert(occurrences).values([
+        {
+          parentType: "task",
+          parentId: taskId,
+          occursAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+          occursLocal: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+          status: "scheduled",
+          lazyGenerated: false,
+        },
+        {
+          parentType: "task",
+          parentId: taskId,
+          occursAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+          occursLocal: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+          status: "done",
+          completedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+          lazyGenerated: false,
+        },
+        {
+          parentType: "task",
+          parentId: taskId,
+          occursAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+          occursLocal: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+          status: "skipped",
+          lazyGenerated: false,
+        },
+      ]);
+
+      const patchResp = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${taskId}`,
+        payload: { rrule: null },
+      });
+      expect(patchResp.statusCode).toBe(200);
+      const body = patchResp.json<Task>();
+      expect(body.rrule).toBeNull();
+      expect(body.recurrence_anchor).toBeNull();
+      expect(body.recurrence_timezone).toBeNull();
+
+      const allOccs = await app.db
+        .select()
+        .from(occurrences)
+        .where(eq(occurrences.parentId, taskId));
+
+      // ALL scheduled rows deleted (including overdue)
+      expect(allOccs.filter((o) => o.status === "scheduled")).toHaveLength(0);
+
+      // Done and skipped preserved
+      expect(allOccs.filter((o) => o.status === "done")).toHaveLength(1);
+      expect(allOccs.filter((o) => o.status === "skipped")).toHaveLength(1);
+    });
+
+    it("edits due-date task preserving overdue scheduled occurrence and completed/skipped occurrences", async () => {
+      const now = new Date();
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: {
+          title: "Due date edit preservation test",
+          timezone: "America/Chicago",
+          due_at: now.toISOString(),
+          rrule: "FREQ=DAILY;INTERVAL=1",
+          recurrence_anchor: "due_date",
+        },
+      });
+      const taskId = created.json<Task>().id;
+
+      const overdueInstant = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+      await app.db.insert(occurrences).values([
+        {
+          parentType: "task",
+          parentId: taskId,
+          occursAt: overdueInstant,
+          occursLocal: overdueInstant,
+          status: "scheduled",
+          lazyGenerated: false,
+        },
+        {
+          parentType: "task",
+          parentId: taskId,
+          occursAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+          occursLocal: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+          status: "done",
+          completedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+          lazyGenerated: false,
+        },
+        {
+          parentType: "task",
+          parentId: taskId,
+          occursAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+          occursLocal: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+          status: "skipped",
+          lazyGenerated: false,
+        },
+      ]);
+
+      const patchResp = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${taskId}`,
+        payload: {
+          title: "Updated due date title",
+          rrule: "FREQ=WEEKLY;BYDAY=MO,WE,FR",
+        },
+      });
+      expect(patchResp.statusCode).toBe(200);
+
+      const allOccs = await app.db
+        .select()
+        .from(occurrences)
+        .where(eq(occurrences.parentId, taskId));
+
+      // Overdue scheduled occurrence preserved
+      const overdueOcc = allOccs.find(
+        (o) => o.occursAt.getTime() === overdueInstant.getTime() && o.status === "scheduled",
+      );
+      expect(overdueOcc).toBeDefined();
+
+      // Done and skipped preserved
+      expect(allOccs.filter((o) => o.status === "done")).toHaveLength(1);
+      expect(allOccs.filter((o) => o.status === "skipped")).toHaveLength(1);
+    });
   });
 
   it("resolves an offset-less due_at against the supplied timezone", async () => {

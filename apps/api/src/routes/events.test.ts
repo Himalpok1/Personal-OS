@@ -65,14 +65,195 @@ describe("events routes", () => {
     expect(body.ends_at).toBe("2026-08-21T14:30:00.000Z");
   });
 
-  it("rejects rrule/recurrence_timezone/archived_at on create with 400, not a silent strip", async () => {
-    const response = await app.inject({
+  it("rejects recurrence_anchor on event create/update with 400", async () => {
+    const createResp = await app.inject({
       method: "POST",
       url: "/events",
-      payload: { title: "bad", timezone: "America/Chicago", rrule: "FREQ=WEEKLY" },
+      payload: {
+        title: "Bad event",
+        timezone: "America/Chicago",
+        starts_at: "2026-08-21T09:00:00-05:00",
+        rrule: "FREQ=WEEKLY",
+        recurrence_anchor: "due_date",
+      },
     });
-    expect(response.statusCode).toBe(400);
-    expect(response.json<ErrorBody>().error).toBe("validation_failed");
+    expect(createResp.statusCode).toBe(400);
+    expect(createResp.json<ErrorBody>().error).toBe("validation_failed");
+
+    const validCreated = await app.inject({
+      method: "POST",
+      url: "/events",
+      payload: {
+        title: "Good event",
+        timezone: "America/Chicago",
+        starts_at: "2026-08-21T09:00:00-05:00",
+      },
+    });
+    const id = validCreated.json<Event>().id;
+
+    const patchResp = await app.inject({
+      method: "PATCH",
+      url: `/events/${id}`,
+      payload: {
+        recurrence_anchor: "due_date",
+      },
+    });
+    expect(patchResp.statusCode).toBe(400);
+    expect(patchResp.json<ErrorBody>().error).toBe("validation_failed");
+  });
+
+  describe("recurrence on events", () => {
+    it("rejects mutual exclusivity of recurrence_until and recurrence_count on events with 400", async () => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Invalid recurrence event",
+          timezone: "America/Chicago",
+          starts_at: "2026-08-21T09:00:00-05:00",
+          rrule: "FREQ=WEEKLY",
+          recurrence_until: "2026-12-31T23:59:59.000Z",
+          recurrence_count: 10,
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json<ErrorBody>().error).toBe("validation_failed");
+    });
+
+    it("creates a recurring event and materializes 90-day occurrence window", async () => {
+      const now = new Date();
+      const response = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Recurring standup",
+          timezone: "America/Chicago",
+          starts_at: now.toISOString(),
+          ends_at: new Date(now.getTime() + 1800000).toISOString(),
+          rrule: "FREQ=DAILY;INTERVAL=1",
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      const body = response.json<Event>();
+      expect(body.rrule).toBe("FREQ=DAILY;INTERVAL=1");
+      expect(body.recurrence_timezone).toBe("America/Chicago");
+
+      const occs = await app.db.select().from(occurrences).where(eq(occurrences.parentId, body.id));
+      expect(occs.length).toBeGreaterThanOrEqual(89);
+      expect(occs.every((o) => o.parentType === "event" && o.status === "scheduled")).toBe(true);
+    });
+
+    it("updates a recurring event, replacing future scheduled occurrences while preserving historical scheduled and skipped", async () => {
+      const now = new Date();
+      const created = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Recurring event to update",
+          timezone: "America/Chicago",
+          starts_at: now.toISOString(),
+          ends_at: new Date(now.getTime() + 1800000).toISOString(),
+          rrule: "FREQ=DAILY;INTERVAL=1",
+        },
+      });
+      const eventId = created.json<Event>().id;
+
+      const pastScheduledInstant = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+      const pastSkippedInstant = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+      await app.db.insert(occurrences).values([
+        {
+          parentType: "event",
+          parentId: eventId,
+          occursAt: pastScheduledInstant,
+          occursLocal: pastScheduledInstant,
+          status: "scheduled",
+          lazyGenerated: false,
+        },
+        {
+          parentType: "event",
+          parentId: eventId,
+          occursAt: pastSkippedInstant,
+          occursLocal: pastSkippedInstant,
+          status: "skipped",
+          lazyGenerated: false,
+        },
+      ]);
+
+      const patchResp = await app.inject({
+        method: "PATCH",
+        url: `/events/${eventId}`,
+        payload: {
+          rrule: "FREQ=WEEKLY;BYDAY=MO,WE,FR",
+        },
+      });
+      expect(patchResp.statusCode).toBe(200);
+
+      const allOccs = await app.db
+        .select()
+        .from(occurrences)
+        .where(eq(occurrences.parentId, eventId));
+
+      // Past scheduled occurrence preserved
+      const pastOcc = allOccs.find(
+        (o) => o.occursAt.getTime() === pastScheduledInstant.getTime() && o.status === "scheduled",
+      );
+      expect(pastOcc).toBeDefined();
+
+      // Past skipped occurrence preserved
+      const skippedOcc = allOccs.find(
+        (o) => o.occursAt.getTime() === pastSkippedInstant.getTime() && o.status === "skipped",
+      );
+      expect(skippedOcc).toBeDefined();
+    });
+
+    it("clears recurrence (rrule: null) on event, deleting all scheduled occurrences while preserving skipped", async () => {
+      const now = new Date();
+      const created = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Recurring event to clear",
+          timezone: "America/Chicago",
+          starts_at: now.toISOString(),
+          ends_at: new Date(now.getTime() + 1800000).toISOString(),
+          rrule: "FREQ=DAILY;INTERVAL=1",
+        },
+      });
+      const eventId = created.json<Event>().id;
+
+      const pastSkippedInstant = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+      await app.db.insert(occurrences).values([
+        {
+          parentType: "event",
+          parentId: eventId,
+          occursAt: pastSkippedInstant,
+          occursLocal: pastSkippedInstant,
+          status: "skipped",
+          lazyGenerated: false,
+        },
+      ]);
+
+      const patchResp = await app.inject({
+        method: "PATCH",
+        url: `/events/${eventId}`,
+        payload: { rrule: null },
+      });
+      expect(patchResp.statusCode).toBe(200);
+      const body = patchResp.json<Event>();
+      expect(body.rrule).toBeNull();
+      expect(body.recurrence_timezone).toBeNull();
+
+      const allOccs = await app.db
+        .select()
+        .from(occurrences)
+        .where(eq(occurrences.parentId, eventId));
+
+      // All scheduled rows deleted
+      expect(allOccs.filter((o) => o.status === "scheduled")).toHaveLength(0);
+
+      // Skipped row preserved
+      expect(allOccs.filter((o) => o.status === "skipped")).toHaveLength(1);
+    });
   });
 
   it("rejects an unknown field on update with 400", async () => {

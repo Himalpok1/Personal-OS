@@ -1,4 +1,12 @@
-import { canActivateTask, canCompleteTaskDirectly, parseFlexibleDatetime } from "@personal-os/core";
+import {
+  canActivateTask,
+  canCompleteTaskDirectly,
+  expandDueDateWindow,
+  parseFlexibleDatetime,
+  toWallClockComponents,
+  wallClockToNaiveDate,
+  type DueDateRecurrenceRule,
+} from "@personal-os/core";
 import { occurrences, tasks } from "@personal-os/db";
 import {
   TaskCreateSchema,
@@ -6,7 +14,7 @@ import {
   TaskSchema,
   TaskUpdateSchema,
 } from "@personal-os/schema";
-import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 
 function toTaskResponse(row: typeof tasks.$inferSelect) {
@@ -24,6 +32,9 @@ function toTaskResponse(row: typeof tasks.$inferSelect) {
     rrule: row.rrule,
     recurrence_anchor: row.recurrenceAnchor,
     recurrence_timezone: row.recurrenceTimezone,
+    recurrence_until: row.recurrenceUntil ? row.recurrenceUntil.toISOString() : null,
+    recurrence_count: row.recurrenceCount,
+    recurrence_exdates: row.recurrenceExdates,
     archived_at: row.archivedAt ? row.archivedAt.toISOString() : null,
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
@@ -97,51 +108,276 @@ export default function tasksRoutes(app: FastifyInstance): void {
     return toTaskResponse(row);
   });
 
-  // rrule/recurrence_*/status/archived_at are rejected by TaskCreateSchema's
-  // .strict() before this ever runs -- recurrence stays capture(AI)-only in
-  // Phase 2. Manually created tasks start "active", not "inbox": there's no
-  // backing inbox_item to triage, unlike an AI-captured task.
   app.post("/tasks", async (request, reply) => {
     const body = TaskCreateSchema.parse(request.body);
-    const [row] = await app.db
-      .insert(tasks)
-      .values({
-        title: body.title,
-        body: body.body,
-        status: "active",
-        dueAt: body.due_at ? parseFlexibleDatetime(body.due_at, body.timezone) : undefined,
-        timezone: body.timezone,
-        priority: body.priority,
-        projectId: body.project_id,
-      })
-      .returning();
-    if (!row) throw new Error("insert into tasks returned no row");
+    const effectiveNow = new Date();
+
+    const dueAt = body.due_at ? parseFlexibleDatetime(body.due_at, body.timezone) : null;
+    const recurrenceTimezone = body.rrule ? (body.recurrence_timezone ?? body.timezone) : null;
+    const recurrenceAnchor = body.rrule ? (body.recurrence_anchor ?? "due_date") : null;
+    const recurrenceUntil =
+      body.rrule && body.recurrence_until
+        ? parseFlexibleDatetime(body.recurrence_until, recurrenceTimezone ?? body.timezone)
+        : null;
+    const recurrenceCount = body.rrule ? (body.recurrence_count ?? null) : null;
+    const recurrenceExdates = body.rrule ? (body.recurrence_exdates ?? null) : null;
+
+    const row = await app.db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(tasks)
+        .values({
+          title: body.title,
+          body: body.body,
+          status: "active",
+          dueAt,
+          timezone: body.timezone,
+          priority: body.priority,
+          projectId: body.project_id,
+          rrule: body.rrule ?? null,
+          recurrenceTimezone,
+          recurrenceAnchor,
+          recurrenceUntil,
+          recurrenceCount,
+          recurrenceExdates,
+        })
+        .returning();
+      if (!inserted) throw new Error("insert into tasks returned no row");
+
+      if (body.rrule) {
+        if (recurrenceAnchor === "completion_date") {
+          const firstOccursAt = dueAt ?? effectiveNow;
+          const occursLocal = toWallClockComponents(firstOccursAt, recurrenceTimezone!);
+          await tx.insert(occurrences).values({
+            parentType: "task",
+            parentId: inserted.id,
+            occursAt: firstOccursAt,
+            occursLocal: wallClockToNaiveDate(occursLocal),
+            status: "scheduled",
+            lazyGenerated: true,
+          });
+        } else {
+          // due_date anchor
+          const ruleAnchor = dueAt ?? effectiveNow;
+          const rule: DueDateRecurrenceRule = {
+            rrule: body.rrule,
+            recurrenceTimezone: recurrenceTimezone!,
+            dtstart: toWallClockComponents(ruleAnchor, recurrenceTimezone!),
+            recurrenceUntil: recurrenceUntil ?? undefined,
+            recurrenceCount: recurrenceCount ?? undefined,
+            recurrenceExdates: recurrenceExdates ?? undefined,
+          };
+          const generated = expandDueDateWindow(rule, 90, effectiveNow);
+          for (const occurrence of generated) {
+            await tx
+              .insert(occurrences)
+              .values({
+                parentType: "task",
+                parentId: inserted.id,
+                occursAt: occurrence.occursAt,
+                occursLocal: wallClockToNaiveDate(occurrence.occursLocal),
+                status: "scheduled",
+                lazyGenerated: false,
+              })
+              .onConflictDoNothing({
+                target: [occurrences.parentType, occurrences.parentId, occurrences.occursAt],
+              });
+          }
+        }
+      }
+
+      return inserted;
+    });
+
     return reply.code(201).send(toTaskResponse(row));
   });
 
   app.patch<{ Params: { id: string } }>("/tasks/:id", async (request, reply) => {
     const body = TaskUpdateSchema.parse(request.body);
-    const existing = await findTask(app, request.params.id);
-    if (!existing) return reply.code(404).send({ error: "not_found" });
+    const effectiveNow = new Date();
 
-    const [row] = await app.db
-      .update(tasks)
-      .set({
-        ...(body.title !== undefined && { title: body.title }),
-        ...(body.body !== undefined && { body: body.body }),
-        // Resolved against the task's own stored timezone, not a
-        // client-supplied one -- editing a task shouldn't require
-        // re-sending timezone on every PATCH.
-        ...(body.due_at !== undefined && {
-          dueAt: body.due_at ? parseFlexibleDatetime(body.due_at, existing.timezone) : null,
-        }),
-        ...(body.priority !== undefined && { priority: body.priority }),
-        ...(body.project_id !== undefined && { projectId: body.project_id }),
-        updatedAt: new Date(),
-      })
-      .where(eq(tasks.id, request.params.id))
-      .returning();
-    if (!row) throw new Error("update on tasks returned no row for an id that was just found");
+    const row = await app.db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(tasks).where(eq(tasks.id, request.params.id));
+      if (!existing) return null;
+
+      const newTitle = body.title !== undefined ? body.title : existing.title;
+      const newBody = body.body !== undefined ? body.body : existing.body;
+      const newDueAt =
+        body.due_at !== undefined
+          ? body.due_at
+            ? parseFlexibleDatetime(body.due_at, existing.timezone)
+            : null
+          : existing.dueAt;
+      const newPriority = body.priority !== undefined ? body.priority : existing.priority;
+      const newProjectId = body.project_id !== undefined ? body.project_id : existing.projectId;
+
+      const rruleExplicitlyNull = body.rrule === null;
+      const newRrule = body.rrule !== undefined ? body.rrule : existing.rrule;
+      const hasRecurrence = Boolean(newRrule) && !rruleExplicitlyNull;
+
+      let newRecurrenceTimezone: string | null = null;
+      let newRecurrenceAnchor: "due_date" | "completion_date" | null = null;
+      let newRecurrenceUntil: Date | null = null;
+      let newRecurrenceCount: number | null = null;
+      let newRecurrenceExdates: string[] | null = null;
+
+      if (hasRecurrence) {
+        newRecurrenceTimezone =
+          body.recurrence_timezone !== undefined
+            ? body.recurrence_timezone
+            : (existing.recurrenceTimezone ?? existing.timezone);
+        newRecurrenceAnchor =
+          body.recurrence_anchor !== undefined
+            ? (body.recurrence_anchor ?? "due_date")
+            : ((existing.recurrenceAnchor as "due_date" | "completion_date" | null) ?? "due_date");
+        const targetTz = newRecurrenceTimezone ?? existing.timezone;
+        newRecurrenceUntil =
+          body.recurrence_until !== undefined
+            ? body.recurrence_until
+              ? parseFlexibleDatetime(body.recurrence_until, targetTz)
+              : null
+            : existing.recurrenceUntil;
+        newRecurrenceCount =
+          body.recurrence_count !== undefined ? body.recurrence_count : existing.recurrenceCount;
+        newRecurrenceExdates =
+          body.recurrence_exdates !== undefined
+            ? body.recurrence_exdates
+            : existing.recurrenceExdates;
+      }
+
+      const hadRecurrence = Boolean(existing.rrule);
+      const oldAnchor = existing.recurrenceAnchor ?? "due_date";
+
+      if (hadRecurrence && !hasRecurrence) {
+        // E. Clearing Recurrence (rrule = null):
+        // Delete ALL scheduled occurrences for parent, regardless of occurs_at.
+        // Preserve done and skipped.
+        await tx
+          .delete(occurrences)
+          .where(
+            and(
+              eq(occurrences.parentType, "task"),
+              eq(occurrences.parentId, existing.id),
+              eq(occurrences.status, "scheduled"),
+            ),
+          );
+      } else if (hasRecurrence) {
+        if (newRecurrenceAnchor === "completion_date") {
+          if (!hadRecurrence || oldAnchor === "due_date") {
+            // C. Due-Date Task -> Completion-Date Task:
+            // Delete ALL open scheduled non-lazy materialized occurrences (status = 'scheduled' AND lazy_generated = false), including overdue ones.
+            // Preserve done and skipped.
+            // Seed exactly one open lazy occurrence (status = 'scheduled', lazy_generated = true) at due_at ?? effectiveNow.
+            await tx
+              .delete(occurrences)
+              .where(
+                and(
+                  eq(occurrences.parentType, "task"),
+                  eq(occurrences.parentId, existing.id),
+                  eq(occurrences.status, "scheduled"),
+                  eq(occurrences.lazyGenerated, false),
+                ),
+              );
+            const firstOccursAt = newDueAt ?? effectiveNow;
+            const occursLocal = toWallClockComponents(firstOccursAt, newRecurrenceTimezone!);
+            await tx
+              .insert(occurrences)
+              .values({
+                parentType: "task",
+                parentId: existing.id,
+                occursAt: firstOccursAt,
+                occursLocal: wallClockToNaiveDate(occursLocal),
+                status: "scheduled",
+                lazyGenerated: true,
+              })
+              .onConflictDoNothing({
+                target: [occurrences.parentType, occurrences.parentId, occurrences.occursAt],
+              });
+          }
+        } else {
+          // newRecurrenceAnchor === "due_date"
+          if (hadRecurrence && oldAnchor === "completion_date") {
+            // D. Completion-Date Task -> Due-Date Task:
+            // Delete current open lazy scheduled occurrence (status = 'scheduled' AND lazy_generated = true) regardless of occurs_at.
+            // Preserve done and skipped.
+            await tx
+              .delete(occurrences)
+              .where(
+                and(
+                  eq(occurrences.parentType, "task"),
+                  eq(occurrences.parentId, existing.id),
+                  eq(occurrences.status, "scheduled"),
+                  eq(occurrences.lazyGenerated, true),
+                ),
+              );
+          } else {
+            // A. Due-Date -> Due-Date Edit:
+            // Preserve done, skipped, and historical scheduled (occurs_at < effectiveNow).
+            // Delete future scheduled non-lazy occurrences (status = 'scheduled' AND occurs_at >= effectiveNow).
+            await tx
+              .delete(occurrences)
+              .where(
+                and(
+                  eq(occurrences.parentType, "task"),
+                  eq(occurrences.parentId, existing.id),
+                  eq(occurrences.status, "scheduled"),
+                  eq(occurrences.lazyGenerated, false),
+                  gte(occurrences.occursAt, effectiveNow),
+                ),
+              );
+          }
+
+          // Materialize 90-day window from effectiveNow into occurrences with lazy_generated = false
+          const ruleAnchor = newDueAt ?? effectiveNow;
+          const rule: DueDateRecurrenceRule = {
+            rrule: newRrule!,
+            recurrenceTimezone: newRecurrenceTimezone!,
+            dtstart: toWallClockComponents(ruleAnchor, newRecurrenceTimezone!),
+            recurrenceUntil: newRecurrenceUntil ?? undefined,
+            recurrenceCount: newRecurrenceCount ?? undefined,
+            recurrenceExdates: newRecurrenceExdates ?? undefined,
+          };
+          const generated = expandDueDateWindow(rule, 90, effectiveNow);
+          for (const occurrence of generated) {
+            await tx
+              .insert(occurrences)
+              .values({
+                parentType: "task",
+                parentId: existing.id,
+                occursAt: occurrence.occursAt,
+                occursLocal: wallClockToNaiveDate(occurrence.occursLocal),
+                status: "scheduled",
+                lazyGenerated: false,
+              })
+              .onConflictDoNothing({
+                target: [occurrences.parentType, occurrences.parentId, occurrences.occursAt],
+              });
+          }
+        }
+      }
+
+      const [updated] = await tx
+        .update(tasks)
+        .set({
+          title: newTitle,
+          body: newBody,
+          dueAt: newDueAt,
+          priority: newPriority,
+          projectId: newProjectId,
+          rrule: hasRecurrence ? newRrule : null,
+          recurrenceTimezone: hasRecurrence ? newRecurrenceTimezone : null,
+          recurrenceAnchor: hasRecurrence ? newRecurrenceAnchor : null,
+          recurrenceUntil: hasRecurrence ? newRecurrenceUntil : null,
+          recurrenceCount: hasRecurrence ? newRecurrenceCount : null,
+          recurrenceExdates: hasRecurrence ? newRecurrenceExdates : null,
+          updatedAt: effectiveNow,
+        })
+        .where(eq(tasks.id, request.params.id))
+        .returning();
+
+      return updated;
+    });
+
+    if (!row) return reply.code(404).send({ error: "not_found" });
     return toTaskResponse(row);
   });
 
