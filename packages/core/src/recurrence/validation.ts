@@ -1,0 +1,112 @@
+import { createRequire } from "node:module";
+import type * as RRuleModule from "rrule";
+import { isValidTimezone } from "../timezone.js";
+import { validateCompletionAnchoredRule } from "./lazy-next-occurrence.js";
+
+// See due-date-window.ts for why this isn't a plain named import.
+const require = createRequire(import.meta.url);
+const rrulePkg = require("rrule") as typeof RRuleModule;
+const { rrulestr, RRuleSet } = rrulePkg;
+
+export interface ValidateRecurrenceRuleParams {
+  rrule: string | null | undefined;
+  recurrenceTimezone?: string | null;
+  recurrenceUntil?: Date | null;
+  recurrenceCount?: number | null;
+  recurrenceExdates?: string[] | null;
+  recurrenceAnchor?: "due_date" | "completion_date" | null;
+  isTask?: boolean;
+}
+
+/**
+ * Validates a recurrence rule against RFC 5545 syntax, Personal OS data model
+ * constraints, and task/event semantics.
+ */
+export function validateRecurrenceRule(params: ValidateRecurrenceRuleParams): void {
+  const {
+    rrule,
+    recurrenceTimezone,
+    recurrenceUntil,
+    recurrenceCount,
+    recurrenceExdates,
+    recurrenceAnchor,
+    isTask = false,
+  } = params;
+
+  if (rrule === null || rrule === undefined || rrule.trim() === "") {
+    if (recurrenceUntil != null) {
+      throw new Error("recurrenceUntil cannot be set without an rrule");
+    }
+    if (recurrenceCount != null) {
+      throw new Error("recurrenceCount cannot be set without an rrule");
+    }
+    if (recurrenceExdates != null && recurrenceExdates.length > 0) {
+      throw new Error("recurrenceExdates cannot be set without an rrule");
+    }
+    if (recurrenceAnchor != null) {
+      throw new Error("recurrenceAnchor cannot be set without an rrule");
+    }
+    return;
+  }
+
+  if (!isTask && recurrenceAnchor != null) {
+    throw new Error("recurrenceAnchor is only supported for tasks");
+  }
+
+  if (!recurrenceTimezone || !isValidTimezone(recurrenceTimezone)) {
+    throw new Error(`invalid recurrence timezone "${recurrenceTimezone}"`);
+  }
+
+  if (/(?:^|[;:])(?:UNTIL|COUNT)=/i.test(rrule)) {
+    throw new Error(
+      "RRULE string must not embed UNTIL or COUNT; use recurrenceUntil or recurrenceCount instead",
+    );
+  }
+
+  if (recurrenceUntil != null && recurrenceCount != null) {
+    throw new Error("recurrenceUntil and recurrenceCount are mutually exclusive");
+  }
+
+  if (recurrenceUntil != null && Number.isNaN(recurrenceUntil.getTime())) {
+    throw new Error("recurrenceUntil must be a valid Date");
+  }
+
+  if (recurrenceCount != null) {
+    if (!Number.isInteger(recurrenceCount) || recurrenceCount < 1) {
+      throw new Error("recurrenceCount must be a positive integer");
+    }
+  }
+
+  if (recurrenceExdates != null) {
+    for (const exdate of recurrenceExdates) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(exdate)) {
+        throw new Error(`invalid exdate "${exdate}", expected YYYY-MM-DD`);
+      }
+    }
+  }
+
+  let parsed;
+  try {
+    parsed = rrulestr(rrule, { forceset: false });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`invalid RRULE syntax: "${rrule}" (${msg})`, { cause: err });
+  }
+
+  if (parsed instanceof RRuleSet) {
+    throw new Error("compound RRULE sets are not supported");
+  }
+
+  if (recurrenceAnchor === "completion_date") {
+    if (recurrenceUntil != null) {
+      throw new Error("completion-anchored recurrence rules do not support recurrenceUntil");
+    }
+    if (recurrenceCount != null) {
+      throw new Error("completion-anchored recurrence rules do not support recurrenceCount");
+    }
+    if (recurrenceExdates != null && recurrenceExdates.length > 0) {
+      throw new Error("completion-anchored recurrence rules do not support recurrenceExdates");
+    }
+    validateCompletionAnchoredRule(rrule);
+  }
+}

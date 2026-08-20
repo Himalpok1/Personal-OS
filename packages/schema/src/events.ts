@@ -20,11 +20,11 @@ export const EventSchema = z.object({
   // packages/db/src/schema/events.ts.
   start_date: z.string().date().nullable(),
   end_date: z.string().date().nullable(),
-  // Read-only in Checkpoint 4.1, same precedent as TaskSchema's rrule
-  // fields -- recurrence stays capture(AI)-only until Phase 4's RRULE
-  // editor (see docs/ARCHITECTURE.md's Phase plan).
   rrule: z.string().nullable(),
   recurrence_timezone: z.string().nullable(),
+  recurrence_until: z.string().datetime({ offset: true }).nullable(),
+  recurrence_count: z.number().int().nullable(),
+  recurrence_exdates: z.array(z.string().date()).nullable(),
   project_id: z.string().uuid().nullable(),
   archived_at: z.string().datetime({ offset: true }).nullable(),
   created_at: z.string().datetime({ offset: true }),
@@ -32,9 +32,6 @@ export const EventSchema = z.object({
 });
 export type Event = z.infer<typeof EventSchema>;
 
-// .strict() so an attempt to sneak rrule/recurrence_*/archived_at into a
-// create body is a loud 400, not a silent strip -- same discipline as
-// TaskCreateSchema.
 export const EventCreateSchema = z
   .object({
     title: z.string().min(1),
@@ -47,6 +44,11 @@ export const EventCreateSchema = z
     start_date: z.string().date().optional(),
     end_date: z.string().date().optional(),
     project_id: z.string().uuid().optional(),
+    rrule: z.string().nullable().optional(),
+    recurrence_timezone: z.string().nullable().optional(),
+    recurrence_until: FlexibleDatetimeSchema.nullable().optional(),
+    recurrence_count: z.number().int().positive().nullable().optional(),
+    recurrence_exdates: z.array(z.string().date()).nullable().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -85,6 +87,33 @@ export const EventCreateSchema = z
         });
       }
     }
+
+    if (value.recurrence_until != null && value.recurrence_count != null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["recurrence_until"],
+        message: "recurrence_until and recurrence_count are mutually exclusive",
+      });
+      ctx.addIssue({
+        code: "custom",
+        path: ["recurrence_count"],
+        message: "recurrence_until and recurrence_count are mutually exclusive",
+      });
+    }
+
+    if (value.rrule) {
+      if (
+        value.recurrence_timezone !== undefined &&
+        value.recurrence_timezone !== null &&
+        !isValidTimezone(value.recurrence_timezone)
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recurrence_timezone"],
+          message: "unknown IANA timezone",
+        });
+      }
+    }
   });
 export type EventCreate = z.infer<typeof EventCreateSchema>;
 
@@ -101,10 +130,43 @@ export const EventUpdateSchema = z
     start_date: z.string().date().nullable().optional(),
     end_date: z.string().date().nullable().optional(),
     project_id: z.string().uuid().nullable().optional(),
+    rrule: z.string().nullable().optional(),
+    recurrence_timezone: z.string().nullable().optional(),
+    recurrence_until: FlexibleDatetimeSchema.nullable().optional(),
+    recurrence_count: z.number().int().positive().nullable().optional(),
+    recurrence_exdates: z.array(z.string().date()).nullable().optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, {
     message: "at least one field must be provided",
+  })
+  .superRefine((value, ctx) => {
+    if (value.recurrence_until != null && value.recurrence_count != null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["recurrence_until"],
+        message: "recurrence_until and recurrence_count are mutually exclusive",
+      });
+      ctx.addIssue({
+        code: "custom",
+        path: ["recurrence_count"],
+        message: "recurrence_until and recurrence_count are mutually exclusive",
+      });
+    }
+
+    if (value.rrule) {
+      if (
+        value.recurrence_timezone !== undefined &&
+        value.recurrence_timezone !== null &&
+        !isValidTimezone(value.recurrence_timezone)
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recurrence_timezone"],
+          message: "unknown IANA timezone",
+        });
+      }
+    }
   });
 export type EventUpdate = z.infer<typeof EventUpdateSchema>;
 

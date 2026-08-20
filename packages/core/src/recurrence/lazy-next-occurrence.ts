@@ -12,25 +12,8 @@ const require = createRequire(import.meta.url);
 const rrulePkg = require("rrule") as typeof RRuleModule;
 const { RRule, RRuleSet, rrulestr } = rrulePkg;
 
-// completion_date-anchored rules generate one occurrence at a time from the
-// completion/skip instant, not from an expanded window -- a rule like
-// BYDAY=MO,WE,FR is incoherent relative to an arbitrary completion instant.
-// Only FREQ/INTERVAL (and the no-op WKST) are meaningful (see
-// docs/ARCHITECTURE.md's recurrence design section).
-const ALLOWED_COMPLETION_ANCHORED_PARTS = new Set(["FREQ", "INTERVAL", "WKST"]);
-
-export function validateCompletionAnchoredRule(rrule: string): void {
-  const parts = rrule.replace(/^RRULE:/i, "").split(";");
-  for (const part of parts) {
-    const key = part.split("=")[0]?.trim().toUpperCase();
-    if (!key) continue;
-    if (!ALLOWED_COMPLETION_ANCHORED_PARTS.has(key)) {
-      throw new Error(
-        `completion-anchored recurrence rules may only use FREQ/INTERVAL, got "${key}" in "${rrule}"`,
-      );
-    }
-  }
-}
+import { validateCompletionAnchoredRule } from "./editor.js";
+export { validateCompletionAnchoredRule };
 
 export interface CompletionAnchoredRule {
   rrule: string;

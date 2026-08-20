@@ -2,6 +2,7 @@
 // import for why (keeps rrule and a Node-only workaround out of the web
 // bundle apps/mobile ships via this package).
 import { isValidTimezone } from "@personal-os/core/timezone";
+import { validateCompletionAnchoredRule } from "@personal-os/core/recurrence/editor";
 import { z } from "zod";
 import { FlexibleDatetimeSchema } from "./parser-tools.js";
 import { booleanQueryParam } from "./pagination.js";
@@ -25,19 +26,18 @@ export const TaskSchema = z.object({
   priority: z.number().int().nullable(),
   project_id: z.string().uuid().nullable(),
   completed_at: z.string().datetime({ offset: true }).nullable(),
-  // Read-only in Phase 2 -- rrule creation/editing stays capture(AI)-only
-  // until Phase 4's RRULE editor (see docs/ARCHITECTURE.md's Phase plan).
   rrule: z.string().nullable(),
   recurrence_anchor: z.enum(["due_date", "completion_date"]).nullable(),
   recurrence_timezone: z.string().nullable(),
+  recurrence_until: z.string().datetime({ offset: true }).nullable(),
+  recurrence_count: z.number().int().nullable(),
+  recurrence_exdates: z.array(z.string().date()).nullable(),
   archived_at: z.string().datetime({ offset: true }).nullable(),
   created_at: z.string().datetime({ offset: true }),
   updated_at: z.string().datetime({ offset: true }),
 });
 export type Task = z.infer<typeof TaskSchema>;
 
-// .strict() so an attempt to sneak rrule/recurrence_*/status/archived_at
-// into a create body is a loud 400, not a silent strip.
 export const TaskCreateSchema = z
   .object({
     title: z.string().min(1),
@@ -46,8 +46,76 @@ export const TaskCreateSchema = z
     priority: z.number().int().optional(),
     project_id: z.string().uuid().optional(),
     timezone: z.string().refine(isValidTimezone, { message: "unknown IANA timezone" }),
+    rrule: z.string().nullable().optional(),
+    recurrence_timezone: z.string().nullable().optional(),
+    recurrence_anchor: z.enum(["due_date", "completion_date"]).nullable().optional(),
+    recurrence_until: FlexibleDatetimeSchema.nullable().optional(),
+    recurrence_count: z.number().int().positive().nullable().optional(),
+    recurrence_exdates: z.array(z.string().date()).nullable().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((val, ctx) => {
+    if (val.recurrence_until != null && val.recurrence_count != null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["recurrence_until"],
+        message: "recurrence_until and recurrence_count are mutually exclusive",
+      });
+      ctx.addIssue({
+        code: "custom",
+        path: ["recurrence_count"],
+        message: "recurrence_until and recurrence_count are mutually exclusive",
+      });
+    }
+    if (val.rrule) {
+      if (
+        val.recurrence_timezone !== undefined &&
+        val.recurrence_timezone !== null &&
+        !isValidTimezone(val.recurrence_timezone)
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recurrence_timezone"],
+          message: "unknown IANA timezone",
+        });
+      }
+    }
+    if (val.recurrence_anchor === "completion_date") {
+      if (val.recurrence_until != null) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recurrence_until"],
+          message: "completion-anchored recurrence rules do not support recurrence_until",
+        });
+      }
+      if (val.recurrence_count != null) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recurrence_count"],
+          message: "completion-anchored recurrence rules do not support recurrence_count",
+        });
+      }
+      if (val.recurrence_exdates != null && val.recurrence_exdates.length > 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recurrence_exdates"],
+          message: "completion-anchored recurrence rules do not support recurrence_exdates",
+        });
+      }
+      if (val.rrule) {
+        try {
+          validateCompletionAnchoredRule(val.rrule);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.addIssue({
+            code: "custom",
+            path: ["rrule"],
+            message: msg,
+          });
+        }
+      }
+    }
+  });
 export type TaskCreate = z.infer<typeof TaskCreateSchema>;
 
 // No status/archived_at here -- those change only via the dedicated
@@ -59,10 +127,78 @@ export const TaskUpdateSchema = z
     due_at: FlexibleDatetimeSchema.nullable().optional(),
     priority: z.number().int().nullable().optional(),
     project_id: z.string().uuid().nullable().optional(),
+    rrule: z.string().nullable().optional(),
+    recurrence_timezone: z.string().nullable().optional(),
+    recurrence_anchor: z.enum(["due_date", "completion_date"]).nullable().optional(),
+    recurrence_until: FlexibleDatetimeSchema.nullable().optional(),
+    recurrence_count: z.number().int().positive().nullable().optional(),
+    recurrence_exdates: z.array(z.string().date()).nullable().optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, {
     message: "at least one field must be provided",
+  })
+  .superRefine((val, ctx) => {
+    if (val.recurrence_until != null && val.recurrence_count != null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["recurrence_until"],
+        message: "recurrence_until and recurrence_count are mutually exclusive",
+      });
+      ctx.addIssue({
+        code: "custom",
+        path: ["recurrence_count"],
+        message: "recurrence_until and recurrence_count are mutually exclusive",
+      });
+    }
+    if (val.rrule) {
+      if (
+        val.recurrence_timezone !== undefined &&
+        val.recurrence_timezone !== null &&
+        !isValidTimezone(val.recurrence_timezone)
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recurrence_timezone"],
+          message: "unknown IANA timezone",
+        });
+      }
+    }
+    if (val.recurrence_anchor === "completion_date") {
+      if (val.recurrence_until != null) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recurrence_until"],
+          message: "completion-anchored recurrence rules do not support recurrence_until",
+        });
+      }
+      if (val.recurrence_count != null) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recurrence_count"],
+          message: "completion-anchored recurrence rules do not support recurrence_count",
+        });
+      }
+      if (val.recurrence_exdates != null && val.recurrence_exdates.length > 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recurrence_exdates"],
+          message: "completion-anchored recurrence rules do not support recurrence_exdates",
+        });
+      }
+      if (val.rrule) {
+        try {
+          validateCompletionAnchoredRule(val.rrule);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.addIssue({
+            code: "custom",
+            path: ["rrule"],
+            message: msg,
+          });
+        }
+      }
+    }
   });
 export type TaskUpdate = z.infer<typeof TaskUpdateSchema>;
 
