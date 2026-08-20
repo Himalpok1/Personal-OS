@@ -545,6 +545,11 @@ async function reconcileFullSync(ctx: ApplyContext): Promise<void> {
       ),
     );
   for (const link of existingLinks) {
+    // A null googleEventId means this link was never pushed to Google in
+    // the first place (Decision 9's outbound-link flow creates the row
+    // before the event exists there) -- it can't be "remote-missing", it's
+    // just still pending its first push.
+    if (link.googleEventId === null) continue;
     if (!ctx.seenLinkKeys.has(link.googleEventId)) {
       await applyStandaloneOrMasterDeletion(ctx, link.googleEventId);
     }

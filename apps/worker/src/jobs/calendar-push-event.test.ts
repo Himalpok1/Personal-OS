@@ -109,6 +109,50 @@ describe("calendar.google.push-event", () => {
     expect(link?.googleUpdatedAt).not.toBeNull();
   });
 
+  it("inserts (not updates) on the first push of a locally-linked event with no googleEventId yet, and fills it in", async () => {
+    const connectionId = await insertConnection(db);
+    await db.insert(calendarConnectionCalendars).values({
+      connectionId,
+      googleCalendarId: GOOGLE_CALENDAR_ID,
+      summary: "Primary",
+      syncEnabled: true,
+    });
+    const [eventRow] = await db
+      .insert(events)
+      .values({
+        title: "New local-only event, explicitly linked",
+        timezone: "America/Chicago",
+        startsAt: new Date("2026-09-01T15:00:00-05:00"),
+        endsAt: new Date("2026-09-01T15:30:00-05:00"),
+      })
+      .returning();
+    // Mirrors what POST /events/:id/link-google-calendar creates: a
+    // pending_push row with no googleEventId, since the event doesn't exist
+    // on Google's side yet.
+    await db.insert(eventExternalLinks).values({
+      eventId: eventRow!.id,
+      connectionId,
+      googleCalendarId: GOOGLE_CALENDAR_ID,
+      googleEventId: null,
+      syncStatus: "pending_push",
+    });
+
+    const client = createFakeGoogleCalendarClient();
+    const handler = createCalendarPushEventHandler(db, client);
+    await handler([fakeJob({ eventId: eventRow!.id })]);
+
+    expect(client.writeCalls).toHaveLength(1);
+    expect(client.writeCalls[0]).toMatchObject({ kind: "insert" });
+
+    const [link] = await db
+      .select()
+      .from(eventExternalLinks)
+      .where(eq(eventExternalLinks.eventId, eventRow!.id));
+    expect(link?.googleEventId).not.toBeNull();
+    expect(link?.syncStatus).toBe("synced");
+    expect(link?.lastSyncedLocalUpdatedAt?.getTime()).toBe(eventRow!.updatedAt.getTime());
+  });
+
   it("deletes on Google and removes the link when the local event is archived", async () => {
     const connectionId = await insertConnection(db);
     await db.insert(calendarConnectionCalendars).values({

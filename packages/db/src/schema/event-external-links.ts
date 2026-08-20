@@ -22,10 +22,19 @@ export const eventExternalLinks = pgTable(
       .notNull()
       .references(() => calendarConnections.id, { onDelete: "cascade" }),
     googleCalendarId: text("google_calendar_id").notNull(),
-    googleEventId: text("google_event_id").notNull(),
+    // Nullable: a brand-new local event the user explicitly links to a
+    // Google calendar (Decision 9's outbound flow) has no Google event id
+    // yet -- it doesn't exist on Google's side until the first
+    // calendar.google.push-event run creates it there. Null here means
+    // "pending initial push" (paired with sync_status='pending_push');
+    // the push job fills this in from Google's insertEvent response.
+    googleEventId: text("google_event_id"),
     // Correlation/debug metadata only -- never used for dedupe lookup. The
     // (connection_id, google_calendar_id, google_event_id) unique index
-    // below is the authoritative dedupe identity.
+    // below is the authoritative dedupe identity (Postgres treats each NULL
+    // as distinct for uniqueness purposes, so multiple pending-push links
+    // can coexist safely -- event_id's own unique constraint already
+    // prevents a duplicate link for the same local event).
     googleIcalUid: text("google_ical_uid"),
     googleEtag: text("google_etag"),
     // Remote half of the per-link conflict baseline.

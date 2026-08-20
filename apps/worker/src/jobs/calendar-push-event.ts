@@ -151,11 +151,12 @@ export function createCalendarPushEventHandler(
         .select()
         .from(eventExternalLinks)
         .where(eq(eventExternalLinks.eventId, job.data.eventId));
-      // Only pushes events that already have an event_external_links row
-      // (per the B3 brief: never an automatic new-event-to-Google trigger).
-      // A NEW local event becoming linked in the first place -- and thus
-      // gaining this row -- is out of scope here; see calendar-connections.ts's
-      // route doc comment / STATUS.md for the exact boundary.
+      // Only pushes events that already have an event_external_links row --
+      // never an automatic new-event-to-Google trigger. A local event gains
+      // this row only via the explicit POST /events/:id/link-google-calendar
+      // route (Decision 9's outbound flow); this job never creates the link
+      // itself, only acts once one exists (with googleEventId possibly still
+      // null, meaning "linked but never pushed yet" -- see below).
       if (!link) continue;
 
       const [connection] = await db
@@ -192,36 +193,44 @@ export function createCalendarPushEventHandler(
       const [row] = await db.select().from(events).where(eq(events.id, job.data.eventId));
 
       if (!row || row.archivedAt) {
-        try {
-          await client.deleteEvent(accessToken, link.googleCalendarId, link.googleEventId);
-        } catch (err) {
-          // 404/410 -- already gone on Google's side. Any other status is
-          // a real failure; rethrow to retry.
-          const alreadyGone =
-            err instanceof GoogleCalendarApiError &&
-            (err.httpStatus === 404 || err.httpStatus === 410);
-          if (!alreadyGone) throw err;
+        // A link with no googleEventId was never pushed -- there is
+        // nothing on Google's side to delete, only the local link row.
+        if (link.googleEventId) {
+          try {
+            await client.deleteEvent(accessToken, link.googleCalendarId, link.googleEventId);
+          } catch (err) {
+            // 404/410 -- already gone on Google's side. Any other status is
+            // a real failure; rethrow to retry.
+            const alreadyGone =
+              err instanceof GoogleCalendarApiError &&
+              (err.httpStatus === 404 || err.httpStatus === 410);
+            if (!alreadyGone) throw err;
+          }
         }
         await db.delete(eventExternalLinks).where(eq(eventExternalLinks.id, link.id));
         continue;
       }
 
       const body = eventRowToGoogleWriteBody(row);
-      const updated = await client.updateEvent(
-        accessToken,
-        link.googleCalendarId,
-        link.googleEventId,
-        body,
-      );
+
+      // No googleEventId yet: this is the link's first push -- the local
+      // event was explicitly linked (Decision 9's outbound flow) but never
+      // pushed to Google before. Create it there instead of updating.
+      const written = link.googleEventId
+        ? await client.updateEvent(accessToken, link.googleCalendarId, link.googleEventId, body)
+        : await client.insertEvent(accessToken, link.googleCalendarId, body);
 
       // Advance BOTH halves of the conflict baseline -- this is what
       // prevents the pulled-back echo of this exact push from being
-      // misread as a fresh remote change on the next pull-sync pass.
+      // misread as a fresh remote change on the next pull-sync pass. Also
+      // fills in googleEventId/googleIcalUid on a first-ever push.
       await db
         .update(eventExternalLinks)
         .set({
-          googleEtag: updated.etag,
-          googleUpdatedAt: new Date(updated.updated),
+          googleEventId: written.id,
+          googleIcalUid: written.iCalUID,
+          googleEtag: written.etag,
+          googleUpdatedAt: new Date(written.updated),
           lastSyncedLocalUpdatedAt: row.updatedAt,
           syncStatus: "synced",
           updatedAt: new Date(),

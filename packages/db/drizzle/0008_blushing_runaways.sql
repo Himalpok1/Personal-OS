@@ -1,0 +1,1 @@
+ALTER TABLE "event_external_links" ALTER COLUMN "google_event_id" DROP NOT NULL;

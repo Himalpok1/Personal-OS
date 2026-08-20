@@ -1,5 +1,11 @@
 import { wallClockToNaiveDate } from "@personal-os/core";
-import { events, occurrences } from "@personal-os/db";
+import {
+  calendarConnectionCalendars,
+  calendarConnections,
+  eventExternalLinks,
+  events,
+  occurrences,
+} from "@personal-os/db";
 import type { Event, EventRangeItem, Project } from "@personal-os/schema";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -1469,6 +1475,132 @@ describe("events routes", () => {
         payload: { original_start_at: "2026-09-07T14:00:00.000Z" },
       });
       expect(cancelUnknown.statusCode).toBe(404);
+    });
+  });
+
+  describe("POST /events/:id/link-google-calendar", () => {
+    async function insertActiveConnectionWithSyncEnabledCalendar(): Promise<{
+      connectionId: string;
+      googleCalendarId: string;
+    }> {
+      const [connection] = await app.db
+        .insert(calendarConnections)
+        .values({
+          provider: "google",
+          googleAccountEmail: "user@example.com",
+          googleAccountId: `sub-${Math.random()}`,
+          status: "active",
+          grantedScope: "https://www.googleapis.com/auth/calendar.events",
+        })
+        .returning({ id: calendarConnections.id });
+      const googleCalendarId = "primary";
+      await app.db.insert(calendarConnectionCalendars).values({
+        connectionId: connection!.id,
+        googleCalendarId,
+        summary: "user@example.com",
+        syncEnabled: true,
+      });
+      return { connectionId: connection!.id, googleCalendarId };
+    }
+
+    it("creates a pending_push link and enqueues the first push, with no googleEventId yet", async () => {
+      const { connectionId, googleCalendarId } =
+        await insertActiveConnectionWithSyncEnabledCalendar();
+      const createResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Local-only event",
+          timezone: "America/Chicago",
+          starts_at: "2026-08-21T09:00:00-05:00",
+        },
+      });
+      expect(createResp.statusCode).toBe(201);
+      const event = createResp.json<Event>();
+
+      const linkResp = await app.inject({
+        method: "POST",
+        url: `/events/${event.id}/link-google-calendar`,
+        payload: { connection_id: connectionId, google_calendar_id: googleCalendarId },
+      });
+
+      expect(linkResp.statusCode).toBe(201);
+      expect(linkResp.json()).toMatchObject({
+        event_id: event.id,
+        connection_id: connectionId,
+        google_calendar_id: googleCalendarId,
+        sync_status: "pending_push",
+      });
+
+      const [row] = await app.db
+        .select()
+        .from(eventExternalLinks)
+        .where(eq(eventExternalLinks.eventId, event.id));
+      expect(row?.googleEventId).toBeNull();
+      expect(row?.syncStatus).toBe("pending_push");
+    });
+
+    it("rejects linking an already-linked event with 409", async () => {
+      const { connectionId, googleCalendarId } =
+        await insertActiveConnectionWithSyncEnabledCalendar();
+      const createResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Twice-linked",
+          timezone: "America/Chicago",
+          starts_at: "2026-08-21T09:00:00-05:00",
+        },
+      });
+      expect(createResp.statusCode).toBe(201);
+      const event = createResp.json<Event>();
+
+      const first = await app.inject({
+        method: "POST",
+        url: `/events/${event.id}/link-google-calendar`,
+        payload: { connection_id: connectionId, google_calendar_id: googleCalendarId },
+      });
+      expect(first.statusCode).toBe(201);
+
+      const second = await app.inject({
+        method: "POST",
+        url: `/events/${event.id}/link-google-calendar`,
+        payload: { connection_id: connectionId, google_calendar_id: googleCalendarId },
+      });
+      expect(second.statusCode).toBe(409);
+      expect(second.json<ErrorBody>().error).toBe("already_linked");
+    });
+
+    it("rejects linking to a non-sync-enabled calendar or an inactive connection with 400", async () => {
+      const { connectionId } = await insertActiveConnectionWithSyncEnabledCalendar();
+      const createResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Bad target",
+          timezone: "America/Chicago",
+          starts_at: "2026-08-21T09:00:00-05:00",
+        },
+      });
+      expect(createResp.statusCode).toBe(201);
+      const event = createResp.json<Event>();
+
+      const wrongCalendar = await app.inject({
+        method: "POST",
+        url: `/events/${event.id}/link-google-calendar`,
+        payload: { connection_id: connectionId, google_calendar_id: "not-sync-enabled" },
+      });
+      expect(wrongCalendar.statusCode).toBe(400);
+
+      const unknownConnection = await app.inject({
+        method: "POST",
+        url: `/events/${event.id}/link-google-calendar`,
+        payload: {
+          connection_id: "00000000-0000-0000-0000-000000000000",
+          google_calendar_id: "primary",
+        },
+      });
+      expect(unknownConnection.statusCode).toBe(400);
     });
   });
 });

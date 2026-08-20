@@ -57,6 +57,13 @@
       "when": 1787263139874,
       "tag": "0007_abnormal_norrin_radd",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787264825650,
+      "tag": "0008_blushing_runaways",
+      "breakpoints": true
     }
   ]
 }

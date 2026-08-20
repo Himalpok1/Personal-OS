@@ -89,3 +89,25 @@ export const AvailableGoogleCalendarsResponseSchema = z.array(AvailableGoogleCal
 export type AvailableGoogleCalendarsResponse = z.infer<
   typeof AvailableGoogleCalendarsResponseSchema
 >;
+
+// Explicit outbound linking (Decision 9): a new Personal OS event is
+// local-only by default; this is the only way it starts syncing to Google.
+// No project_id-based inference exists anywhere -- the calendar is always
+// named explicitly, here.
+export const LinkEventToGoogleCalendarRequestSchema = z
+  .object({
+    connection_id: z.string().uuid(),
+    google_calendar_id: z.string().min(1),
+  })
+  .strict();
+export type LinkEventToGoogleCalendarRequest = z.infer<
+  typeof LinkEventToGoogleCalendarRequestSchema
+>;
+
+export const EventGoogleCalendarLinkSchema = z.object({
+  event_id: z.string().uuid(),
+  connection_id: z.string().uuid(),
+  google_calendar_id: z.string(),
+  sync_status: CalendarSyncStatusSchema,
+});
+export type EventGoogleCalendarLink = z.infer<typeof EventGoogleCalendarLinkSchema>;

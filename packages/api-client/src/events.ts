@@ -2,19 +2,23 @@ import {
   EventCancelOccurrenceSchema,
   EventCreateSchema,
   EventDetachSchema,
+  EventGoogleCalendarLinkSchema,
   EventRangeQuerySchema,
   EventRangeResponseSchema,
   EventSchema,
   EventUpdateSchema,
+  LinkEventToGoogleCalendarRequestSchema,
   paginatedResponseSchema,
   type Event,
   type EventCancelOccurrence,
   type EventCreate,
   type EventDetach,
+  type EventGoogleCalendarLink,
   type EventRangeItem,
   type EventRangeQuery,
   type EventRangeResponse,
   type EventUpdate,
+  type LinkEventToGoogleCalendarRequest,
 } from "@personal-os/schema";
 import { buildQuery, fetchJson } from "./client.js";
 
@@ -23,10 +27,12 @@ export type {
   EventCancelOccurrence,
   EventCreate,
   EventDetach,
+  EventGoogleCalendarLink,
   EventRangeItem,
   EventRangeQuery,
   EventRangeResponse,
   EventUpdate,
+  LinkEventToGoogleCalendarRequest,
 };
 
 const EventListResponseSchema = paginatedResponseSchema(EventSchema);
@@ -77,6 +83,18 @@ export async function archiveEvent(baseUrl: string, id: string): Promise<Event> 
 export async function listEventsInRange(baseUrl: string, query: EventRangeQuery) {
   const parsed = EventRangeQuerySchema.parse(query);
   return fetchJson(baseUrl, `/events/range${buildQuery(parsed)}`, EventRangeResponseSchema);
+}
+
+export async function linkEventToGoogleCalendar(
+  baseUrl: string,
+  id: string,
+  body: LinkEventToGoogleCalendarRequest,
+): Promise<EventGoogleCalendarLink> {
+  const parsed = LinkEventToGoogleCalendarRequestSchema.parse(body);
+  return fetchJson(baseUrl, `/events/${id}/link-google-calendar`, EventGoogleCalendarLinkSchema, {
+    method: "POST",
+    body: JSON.stringify(parsed),
+  });
 }
 
 export async function detachEvent(baseUrl: string, id: string, body: EventDetach): Promise<Event> {
