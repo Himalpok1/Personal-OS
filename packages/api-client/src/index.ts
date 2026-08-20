@@ -25,6 +25,7 @@ import {
   createEvent,
   detachEvent,
   getEvent,
+  linkEventToGoogleCalendar,
   listEvents,
   listEventsInRange,
   updateEvent,
@@ -66,11 +67,13 @@ export type {
   EventCancelOccurrence,
   EventCreate,
   EventDetach,
+  EventGoogleCalendarLink,
   EventListParams,
   EventRangeItem,
   EventRangeQuery,
   EventRangeResponse,
   EventUpdate,
+  LinkEventToGoogleCalendarRequest,
 } from "./events.js";
 export type { InboxListParams } from "./inbox.js";
 export type { NoteListParams } from "./notes.js";
@@ -122,6 +125,7 @@ export function createApiClient(baseUrl: string) {
     listEventsInRange: listEventsInRange.bind(null, baseUrl),
     detachEvent: detachEvent.bind(null, baseUrl),
     cancelEventOccurrence: cancelEventOccurrence.bind(null, baseUrl),
+    linkEventToGoogleCalendar: linkEventToGoogleCalendar.bind(null, baseUrl),
 
     listOccurrences: listOccurrences.bind(null, baseUrl),
     completeOccurrence: completeOccurrence.bind(null, baseUrl),
