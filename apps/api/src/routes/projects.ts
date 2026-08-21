@@ -16,6 +16,12 @@ function toProjectResponse(row: typeof projects.$inferSelect) {
     color: row.color,
     archived_at: row.archivedAt ? row.archivedAt.toISOString() : null,
     created_at: row.createdAt.toISOString(),
+    // Interim Phase 5 Step 1 shim: these columns arrive with migration 0010
+    // (Checkpoint 5.1); every project in existence today predates them.
+    goal: null,
+    target_date: null,
+    completed_at: null,
+    updated_at: row.createdAt.toISOString(),
   });
 }
 
