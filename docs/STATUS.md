@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 4 — Calendar UI + external sync + recurrence UI — **IN PROGRESS**. Checkpoints 4.1, 4.2, 4.3, 4.4, 4.5 (Stage A & Stage B), and 4.6 (CalDAV calendar sync) are complete (2026-08-20). Checkpoint 4.7 (Phase 4 production deployment) has not begun. Phase 3 remains COMPLETE, production-deployed, and physically verified — see below.
-**Implementation status:** Phases 0–3 are implemented and production-verified. Phase 4 Checkpoints 4.1–4.6 are implemented and verified in local development only; nothing from Phase 4 was deployed to production.
-**Next phase allowed:** Checkpoint 4.6 is complete. Checkpoint 4.7 (Phase 4 production deployment & physical verification) is the next allowed checkpoint.
+**Current phase:** Phase 4 — Calendar UI + external sync + recurrence UI — **COMPLETE** (all checkpoints, including 4.7 production deployment & physical verification, closed 2026-08-21). Phases 0–3 remain COMPLETE, production-deployed, and physically verified — see below.
+**Implementation status:** Phases 0–4 are implemented and production-deployed. Checkpoint 4.7 deployed Phase 4 to production and passed both reboot-survival tests physically (Rabbit device and Ubuntu host) on 2026-08-21.
+**Next phase allowed:** Phase 4 is complete. Phase 5 (Finance) is next per `ARCHITECTURE.md`'s phase plan, but it is gated on the open finance-source-of-truth decision (`DECISIONS.md`) — do not begin without explicit user direction.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 4 Checkpoint 4.1 — Events backend (COMPLETE, 2026-08-20)
@@ -199,6 +199,7 @@ Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, 
 - [x] **Phase 3 Checkpoint 4 — PTT + notifications + reboot survival: implemented, hardened, and verified end to end on the physical Rabbit R1, including both credential-dependent gates (real Groq `voice_transcribe` STT and real Expo Push via Firebase/FCM V1) — local development only, nothing deployed.** Full details below under "Phase 3 Checkpoint 4".
 - [x] **Phase 3 Checkpoint 5 — real-device lifecycle verification: the full five-state lifecycle matrix, primary-device/revocation/re-pair, task eligibility, offline-capture durability, real foreground and background push, network transitions, small-screen UX, a web regression pass, and the full PTT lifecycle driven by the user's real voice — all run on the physical Rabbit R1, surfacing five defects, all five fixed and re-verified; Stage H found zero application defects.** Full details below under "Phase 3 Checkpoint 5".
 - [x] **Phase 3 Checkpoint 6 — production deployment: migration `0004`, targeted API/worker/web rollout, Groq-only voice transcription, stable EAS-signed Rabbit transition and pairing, physical reminder/PTT/push acceptance, security verification, and targeted restart recovery — complete.** Full evidence is recorded below.
+- [x] **Phase 4 Checkpoints 4.1–4.7 — calendar UI, RRULE editor, occurrence detach/cancel, Google Calendar + CalDAV sync (local dev), then production deployment with reboot-survival verification on both the Rabbit and the host — complete (2026-08-21).** Full evidence in "Phase 4 Checkpoint 4.7" above.
 
 ## Phase 3 Checkpoint 6 — Stage 2A artifact gate (2026-08-19)
 
@@ -1339,9 +1340,63 @@ Tested against a real RFC 4791 reference CalDAV server (Radicale 3.7.8):
 | 7 | Real CalDAV Interoperability | 8/8 suites passed against Radicale 3.7.8 |
 | 8 | Google Regression Suite | 100% pass across API, worker, and provider packages |
 
+## Phase 4 Checkpoint 4.7 — Production deployment, reboot survival, closure (COMPLETE, 2026-08-21)
+
+Executed across gates A–H followed by final closure gates I1–I8. Server deployment is live; production DB migrations 0000–0009 are applied; the Rabbit was upgraded in place (`com.himal.personalos`, versionCode 4, pairing preserved, PRIMARY preserved, signing identity unchanged); Google production OAuth and a bounded sync smoke test passed; **no CalDAV connection was created in production**; the Tailscale-only network posture is unchanged.
+
+### Gate C incident — postgres recreation on first migration attempt (recorded honestly)
+
+The first migration attempt failed because `MIGRATIONS_DATABASE_URL` was missing — and in the same invocation, `postgres` was unexpectedly recreated. The persistent volume survived: `personal-os_postgres_data` kept its identity, no data was lost, and the migration itself did not run. The successful retry used the reviewed Compose invocation with `--no-deps`: migrations 0005–0009 were applied exactly once each, the journal contains exactly 0000–0009 (10 rows, monotonic timestamps), and runtime DDL denial for `posops_app` was preserved. This repeats the class of process mistake already recorded at Phase 2 ("a few seconds of avoidable restart"); all subsequent Compose commands passed both compose files plus `--no-deps`.
+
+### Gate H discovery and hotfix — linked-event edits did not push
+
+**Defect:** normal local mutations of *already-linked* events did not enqueue the outbound calendar push pipeline. Outbound pushes only fired via explicit link/sync paths, so an ordinary edit left Google/CalDAV stale until the next manual sync — a real pre-existing correctness defect dating to Checkpoints 4.5/4.6.
+
+**Root cause & hotfix** (`121cf3752300e309b523d6584ace219288e4a26b`): new `enqueuePushIfLinked(app, eventId)` helper in `apps/api/src/routes/events.ts` checks `event_external_links` and sends to the existing `calendar.push-event` queue (singletonKey = event id), wired into PATCH `/events/:id`, `/archive`, `/detach` (parent id), and `/cancel-occurrence` (parent id). `apps/worker/src/jobs/calendar-push-event.ts` additionally advances the CalDAV `updated_at` baseline on push success so the next inbound sync does not spuriously re-apply. Regression tests added in `events.test.ts` (+195 lines) and `calendar-push-event.test.ts` (+44 lines).
+
+**Backend-only production redeployment:** `git diff --name-only 0b68a052..121cf375` contains only `apps/api` and `apps/worker` files — zero `apps/mobile` changes — so the versionCode-4 APK built from `0b68a052` remains valid at hotfix HEAD. **Real production proof passed:** a normal local PATCH → automatic outbound push → change visible in Google → sync baseline advanced → follow-up Sync Now produced no echo/ping-pong.
+
+### Component release lineage
+
+Components intentionally do **not** all come from one commit; provenance is stated per component:
+
+| Component | Source commit | Artifact / image | Runtime identity |
+|---|---|---|---|
+| api | `121cf375` (hotfix) | image sha256:`51f14ae98178…` | container `8601af395405`, restart `unless-stopped` |
+| worker | `121cf375` (hotfix) | image sha256:`14f58997fd29…` | container `3f1a2bf824b2`, restart `unless-stopped` |
+| web | `0b68a052` (initial 4.7 rollout; backend-only hotfix changed nothing web-relevant) | image sha256:`18b74c818966…` | container `00f010617277`, restart `unless-stopped` |
+| mobile (Android) | `0b68a052` | EAS build `11df9c1a-44e0-4286-97c9-291bbb725a9b`, profile `production-internal`; APK SHA-256 `d02fe3c54ad3a213344f55907214b89807b0a2b7f5bec2af5d9f17183034ec60` (preserved outside the repo under `checkpoint-4.7/`) | `com.himal.personalos` versionCode **4**, versionName 1.0.0; signing cert SHA-256 unchanged from Checkpoint 6 (`4601e3a2c4ecfe791b0bf6d960871c017fe1f3bc56087389f7ccc3a3f6cc23ea`) per ADR-037 remote-credential reuse |
+| database | migration level **0000–0009** (10 journal rows), each applied once as `posops_migrator` | volumes `personal-os_postgres_data` (2026-08-15) / `personal-os_audio_data` (2026-08-19), identities unchanged throughout | `posops_app` remains DML-only |
+
+Rollback tags retained on the server: `pre-hotfix-0b68a05` (api/worker images) and `cp6-rollback-398ad51` (all three services). The pre-upgrade versionCode-3 APK backup is also preserved outside the repo.
+
+### Tailscale-after-reboot finding (I1–I3)
+
+**Previous failure:** after a Rabbit reboot, Tailscale did not automatically re-establish its VPN; Personal OS correctly showed network failure and self-healed once Tailscale was started manually.
+
+**Root cause:** Always-on VPN had never been configured — `settings get secure always_on_vpn_app` returned null (both `secure` and `global` namespaces). Android therefore had no mandate to start Tailscale's VpnService at boot; `BOOT_COMPLETED` fired but nothing spawned until the app was manually opened. A device configuration absence, not a Tailscale or ROM defect.
+
+**Fix applied:** Always-on VPN enabled through Android Settings (Settings → Network & internet → VPN → Tailscale ⚙ → Always-on VPN ON); "Block connections without VPN" deliberately left OFF; verified read-only afterward (`always_on_vpn_app=com.tailscale.ipn`, `always_on_vpn_lockdown=0`). No Tailscale patching, reinstall, or key changes.
+
+**Final Rabbit reboot test — PASS:** boot completed in ~60 s; `tun0` UP and `com.tailscale.ipn/IPNService` running with **no manual launch**; MagicDNS resolved the tailnet name automatically; the API became reachable without intervention; Tasks and Calendar loaded with real data; no pairing screen; zero entries in the crash buffer; versionCode 4 intact.
+
+### Host reboot survival test (I4) — PASS
+
+Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` policies, volume identities, journal = 10 rows, Serve config, health, bindings). One normal host reboot. Recovery: SSH back in ~30 s; all four containers auto-started with **identical container IDs and image digests**; volume identities and creation timestamps unchanged; single compose network unchanged; journal still exactly 10 rows; queues fully drained; heartbeat fresh within seconds of start; Serve restored tailnet-only; bindings identical (API `127.0.0.1:3000`, web `127.0.0.1:8081`, Postgres unpublished, no `0.0.0.0` application listeners); tailnet HTTPS API health and web HTTP 200 verified from a second machine; the Rabbit reconnected with no manual repair (tailnet ping ~28 ms avg).
+
+### Final audits (I5)
+
+- `posops_app` DDL denial re-proven post-reboot (`permission denied for schema public`); journal 10 rows; heartbeat fresh.
+- Gate H smoke cleanup verified then completed: exactly three rows purged in a count-verified transaction — archived smoke events `cd3e12fb…` ("inbound smoke") and `7be0fb34…` ("outbound smoke"), plus inbox item `7e468843…` ("4.7 smoke test note"); `event_external_links`/`calendar_event_instances`/`occurrences` held zero referencing rows before deletion; post-purge scans clean. The smoke capture's committed note row (`132020f6…`) deliberately remains as ARCHIVED lineage (outside the approved purge scope; invisible in UI, referenced by nothing).
+- Production Google state: exactly one active connection, access/refresh tokens AES-256-GCM encrypted, only the dedicated test calendar sync-enabled, zero orphan/duplicate links, zero instance mappings.
+- Secrets: gitleaks clean across 53 commits; server `.env` mode 600; zero secret matches in api/worker container logs.
+- Repo gates at `121cf375`: build, typecheck, lint, format check, tests, Expo web export, `git diff --check`, gitleaks — all pass. **543 tests pass across 60 test files** (fresh non-cached run): core 105, schema 57, calendar-providers 57, ai-providers 20, api-client 27, api 130, worker 70, mobile 77.
+
+
+
 ## Current work
 
-Phases 0–3 are complete and production-deployed (Checkpoint 6). Phase 4 Checkpoints 4.1–4.6 are complete and verified in local development. Phase 4 Checkpoint 4.7 (Phase 4 production deployment & physical verification) is the next phase.
+Phases 0–4 are complete and production-deployed. Checkpoint 4.7 closed 2026-08-21 with both reboot-survival tests passed physically, all closure audits green, and the full component lineage recorded above.
 
 ## Remaining warnings / technical debt
 
@@ -1355,14 +1410,17 @@ Phases 0–3 are complete and production-deployed (Checkpoint 6). Phase 4 Checkp
 - **`docs/PHASE-0-CHECKLIST.md` section E checkboxes** remain unchecked in favor of `STATUS.md` as canonical record.
 - **The web app's `EXPO_PUBLIC_API_URL` is baked in at Docker build time.**
 - **No `GET /calendar-connections/:id/calendars` endpoint** — per-calendar `sync_enabled` state is returned via `PATCH` and cached on mobile. A dedicated `GET` route can be added in a future polish pass.
+- **`tailscaled` runs as a snap** on the production host — the monitoring unit is `snap.tailscale.tailscaled.service`, not `tailscaled.service`.
+- **Rabbit Tailscale auto-start depends on Android's Always-on VPN setting** (enabled 2026-08-21; lockdown off). It is a device-side OS setting, not app-managed — a factory reset or Tailscale reinstall would require re-enabling it.
+- **One archived Gate H smoke note row (`132020f6…`) remains as lineage** — invisible in UI, referenced by nothing, deliberately outside the approved purge scope.
 
 ## Last verification
 
-Phase 4 Checkpoint 4.6 (CalDAV calendar sync) verification, complete and passing (2026-08-20) — see "Phase 4 Checkpoint 4.6" above. Strongest evidence: all 462 tests pass across 62 test files; CalDAV discovery, sync-collection, fallback inventory, conditional PUT/DELETE, and recurrence set handling verified; SSRF and cross-origin auth stripping verified; Expo web export clean; `git diff --check` and gitleaks clean; production untouched.
+Phase 4 Checkpoint 4.7 closure verification (2026-08-21) — see "Phase 4 Checkpoint 4.7" above. Strongest evidence: Rabbit reboot test passed with Tailscale auto-establishing after enabling Always-on VPN; host reboot test passed with identical container IDs/images, unchanged volumes/journal/Serve/bindings; migrations exactly 0000–0009 with runtime DDL denied; **543 tests pass across 60 test files** at hotfix HEAD `121cf375`; Expo web export clean; `git diff --check` and gitleaks clean; Gate C and Gate H incidents documented above without sanitization.
 
 ## Next action
 
-Phase 4 Checkpoint 4.6 is complete. Stop for user review before proceeding to Checkpoint 4.7 (Phase 4 production deployment).
+Phase 4 is complete. Stop. Phase 5 (Finance) is the next phase per `ARCHITECTURE.md` but is gated on the open finance-source-of-truth decision — await explicit user direction before any Phase 5 work.
 
 ## Handoff rule
 
