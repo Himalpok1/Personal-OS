@@ -7,10 +7,11 @@ import {
   occurrences,
 } from "@personal-os/db";
 import type { Event, EventRangeItem, Project } from "@personal-os/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
+import { CALENDAR_PUSH_EVENT_QUEUE } from "../queue-names.js";
 import type { ErrorBody, Paginated } from "../test/types.js";
 
 // Direct DB inserts for recurring/detached-instance fixtures -- POST /events
@@ -1601,6 +1602,198 @@ describe("events routes", () => {
         },
       });
       expect(unknownConnection.statusCode).toBe(400);
+    });
+  });
+
+  // Checkpoint 4.7 regression coverage: before this fix, only the initial
+  // link-calendar call ever enqueued CALENDAR_PUSH_EVENT_QUEUE -- a
+  // subsequent edit/detach/cancel/archive of an already-linked event never
+  // pushed outbound at all. These tests assert the enqueue itself (via a
+  // direct pgboss.job count), not just that the local row looks right --
+  // that distinction is exactly what let the original gap slip through.
+  describe("outbound push enqueue on mutating an already-linked event", () => {
+    async function insertActiveConnectionWithSyncEnabledCalendar(): Promise<{
+      connectionId: string;
+      googleCalendarId: string;
+    }> {
+      const [connection] = await app.db
+        .insert(calendarConnections)
+        .values({
+          provider: "google",
+          googleAccountEmail: "user@example.com",
+          googleAccountId: `sub-${Math.random()}`,
+          status: "active",
+          grantedScope: "https://www.googleapis.com/auth/calendar.events",
+        })
+        .returning({ id: calendarConnections.id });
+      const googleCalendarId = "primary";
+      await app.db.insert(calendarConnectionCalendars).values({
+        connectionId: connection!.id,
+        googleCalendarId,
+        summary: "user@example.com",
+        syncEnabled: true,
+      });
+      return { connectionId: connection!.id, googleCalendarId };
+    }
+
+    async function pushJobCount(eventId: string): Promise<number> {
+      const result = await app.db.execute<{ count: string }>(
+        sql`select count(*)::text as count from pgboss.job where name = ${CALENDAR_PUSH_EVENT_QUEUE} and data->>'eventId' = ${eventId}`,
+      );
+      return Number(result.rows[0]?.count ?? 0);
+    }
+
+    it("enqueues a new push job when PATCHing an already-linked event", async () => {
+      const { connectionId, googleCalendarId } =
+        await insertActiveConnectionWithSyncEnabledCalendar();
+      const createResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Linked event",
+          timezone: "America/Chicago",
+          starts_at: "2026-08-21T09:00:00-05:00",
+        },
+      });
+      const event = createResp.json<Event>();
+
+      await app.inject({
+        method: "POST",
+        url: `/events/${event.id}/link-google-calendar`,
+        payload: { connection_id: connectionId, google_calendar_id: googleCalendarId },
+      });
+      const countAfterLink = await pushJobCount(event.id);
+      expect(countAfterLink).toBe(1);
+
+      const patchResp = await app.inject({
+        method: "PATCH",
+        url: `/events/${event.id}`,
+        payload: { title: "Linked event (edited)" },
+      });
+      expect(patchResp.statusCode).toBe(200);
+
+      const countAfterPatch = await pushJobCount(event.id);
+      expect(countAfterPatch).toBeGreaterThan(countAfterLink);
+    });
+
+    it("does not enqueue a push job when PATCHing an unlinked event", async () => {
+      const createResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Never linked",
+          timezone: "America/Chicago",
+          starts_at: "2026-08-21T09:00:00-05:00",
+        },
+      });
+      const event = createResp.json<Event>();
+
+      const patchResp = await app.inject({
+        method: "PATCH",
+        url: `/events/${event.id}`,
+        payload: { title: "Still never linked" },
+      });
+      expect(patchResp.statusCode).toBe(200);
+      expect(await pushJobCount(event.id)).toBe(0);
+    });
+
+    it("does not enqueue a push job when a PATCH fails validation", async () => {
+      const { connectionId, googleCalendarId } =
+        await insertActiveConnectionWithSyncEnabledCalendar();
+      const createResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Linked, bad patch",
+          timezone: "America/Chicago",
+          starts_at: "2026-08-21T09:00:00-05:00",
+          ends_at: "2026-08-21T09:30:00-05:00",
+        },
+      });
+      const event = createResp.json<Event>();
+      await app.inject({
+        method: "POST",
+        url: `/events/${event.id}/link-google-calendar`,
+        payload: { connection_id: connectionId, google_calendar_id: googleCalendarId },
+      });
+      const countAfterLink = await pushJobCount(event.id);
+
+      const badPatch = await app.inject({
+        method: "PATCH",
+        url: `/events/${event.id}`,
+        // ends_at before starts_at -- rejected by the handler's own validation
+        payload: { ends_at: "2026-08-21T08:00:00-05:00" },
+      });
+      expect(badPatch.statusCode).toBe(400);
+      expect(await pushJobCount(event.id)).toBe(countAfterLink);
+    });
+
+    it("enqueues a push for the parent series when cancelling a linked recurring event's occurrence", async () => {
+      const { connectionId, googleCalendarId } =
+        await insertActiveConnectionWithSyncEnabledCalendar();
+      const parentId = await insertRecurringEvent(app, {});
+      await app.inject({
+        method: "POST",
+        url: `/events/${parentId}/link-google-calendar`,
+        payload: { connection_id: connectionId, google_calendar_id: googleCalendarId },
+      });
+      const countAfterLink = await pushJobCount(parentId);
+
+      const cancelResp = await app.inject({
+        method: "POST",
+        url: `/events/${parentId}/cancel-occurrence`,
+        payload: { original_start_at: "2026-09-07T09:00:00-05:00" },
+      });
+      expect(cancelResp.statusCode).toBe(200);
+      expect(await pushJobCount(parentId)).toBeGreaterThan(countAfterLink);
+    });
+
+    it("enqueues a push for the parent series when a linked recurring event's occurrence is detached", async () => {
+      const { connectionId, googleCalendarId } =
+        await insertActiveConnectionWithSyncEnabledCalendar();
+      const parentId = await insertRecurringEvent(app, {});
+      await app.inject({
+        method: "POST",
+        url: `/events/${parentId}/link-google-calendar`,
+        payload: { connection_id: connectionId, google_calendar_id: googleCalendarId },
+      });
+      const countAfterLink = await pushJobCount(parentId);
+
+      const detachResp = await app.inject({
+        method: "POST",
+        url: `/events/${parentId}/detach`,
+        payload: { original_start_at: "2026-09-07T09:00:00-05:00", title: "Moved instance" },
+      });
+      expect(detachResp.statusCode).toBe(201);
+      expect(await pushJobCount(parentId)).toBeGreaterThan(countAfterLink);
+    });
+
+    it("enqueues a push job when archiving an already-linked event", async () => {
+      const { connectionId, googleCalendarId } =
+        await insertActiveConnectionWithSyncEnabledCalendar();
+      const createResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Linked, to archive",
+          timezone: "America/Chicago",
+          starts_at: "2026-08-21T09:00:00-05:00",
+        },
+      });
+      const event = createResp.json<Event>();
+      await app.inject({
+        method: "POST",
+        url: `/events/${event.id}/link-google-calendar`,
+        payload: { connection_id: connectionId, google_calendar_id: googleCalendarId },
+      });
+      const countAfterLink = await pushJobCount(event.id);
+
+      const archiveResp = await app.inject({
+        method: "POST",
+        url: `/events/${event.id}/archive`,
+      });
+      expect(archiveResp.statusCode).toBe(200);
+      expect(await pushJobCount(event.id)).toBeGreaterThan(countAfterLink);
     });
   });
 });

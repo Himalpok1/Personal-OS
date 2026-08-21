@@ -425,5 +425,49 @@ describe("calendar.google.push-event", () => {
       const remoteEvent = await fakeCalDav.getEvent(resourceHref, auth);
       expect(remoteEvent.icsData).toContain("SUMMARY:Updated Title");
     });
+
+    // Checkpoint 4.7 fix: caldavEtag alone was previously advanced on push,
+    // but caldavUpdatedAt (the baseline calendar-sync-calendar.ts's
+    // decideConflict() compares against on the next inbound pass) was not --
+    // leaving the sync engine to see a stale remote baseline and needlessly
+    // re-apply the event it had just pushed. Both must advance together.
+    it("advances caldavUpdatedAt alongside caldavEtag on a successful push", async () => {
+      const connectionId = await insertCaldavConnection(db);
+      const [eventRow] = await db
+        .insert(events)
+        .values({
+          title: "Baseline check",
+          timezone: "America/Chicago",
+          startsAt: new Date("2026-08-25T14:00:00.000Z"),
+          endsAt: new Date("2026-08-25T15:00:00.000Z"),
+        })
+        .returning();
+
+      const [link] = await db
+        .insert(eventExternalLinks)
+        .values({
+          eventId: eventRow!.id,
+          connectionId,
+          caldavCalendarUrl: "/calendars/users/testuser/personal/",
+          syncStatus: "pending_push",
+        })
+        .returning();
+
+      const fakeCalDav = (await import("@personal-os/calendar-providers")).createFakeCalDavClient();
+      const fakeGoogle = createFakeGoogleCalendarClient();
+      const handler = createCalendarPushEventHandler(db, fakeGoogle, fakeCalDav);
+
+      expect(link?.caldavUpdatedAt).toBeNull();
+      await handler([fakeJob({ eventId: eventRow!.id })]);
+
+      const [updatedLink] = await db
+        .select()
+        .from(eventExternalLinks)
+        .where(eq(eventExternalLinks.id, link!.id));
+
+      expect(updatedLink?.caldavEtag).toBeDefined();
+      expect(updatedLink?.caldavUpdatedAt).not.toBeNull();
+      expect(updatedLink?.lastSyncedLocalUpdatedAt?.getTime()).toBe(eventRow!.updatedAt.getTime());
+    });
   });
 });

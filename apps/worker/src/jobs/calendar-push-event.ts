@@ -257,6 +257,7 @@ export function createCalendarPushEventHandler(
               .update(eventExternalLinks)
               .set({
                 caldavEtag: putRes.etag,
+                caldavUpdatedAt: new Date(),
                 lastSyncedLocalUpdatedAt: row.updatedAt,
                 syncStatus: "synced",
                 updatedAt: new Date(),
@@ -275,6 +276,7 @@ export function createCalendarPushEventHandler(
                 localDetachedEventId: row.id,
                 mappingStatus: "detached",
                 caldavEtag: putRes.etag,
+                caldavUpdatedAt: new Date(),
                 lastSyncedLocalUpdatedAt: row.updatedAt,
                 syncStatus: "synced",
               })
@@ -287,6 +289,7 @@ export function createCalendarPushEventHandler(
                   localDetachedEventId: row.id,
                   mappingStatus: "detached",
                   caldavEtag: putRes.etag,
+                  caldavUpdatedAt: new Date(),
                   lastSyncedLocalUpdatedAt: row.updatedAt,
                   syncStatus: "synced",
                   updatedAt: new Date(),
@@ -338,6 +341,7 @@ export function createCalendarPushEventHandler(
               caldavResourceUrl: resourceHref,
               caldavIcalUid: uid,
               caldavEtag: putRes.etag,
+              caldavUpdatedAt: new Date(),
               lastSyncedLocalUpdatedAt: row.updatedAt,
               syncStatus: "synced",
               updatedAt: new Date(),

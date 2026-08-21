@@ -77,6 +77,30 @@ async function findEvent(app: FastifyInstance, id: string) {
   return row ?? null;
 }
 
+// Checkpoint 4.7 fix: a local mutation of an already-linked event must reach
+// its external calendar. Previously only the initial link-calendar call ever
+// enqueued CALENDAR_PUSH_EVENT_QUEUE, so any subsequent edit/detach/cancel/
+// archive of an already-synced event silently never propagated outbound.
+// Call this after the owning DB transaction has committed (never from inside
+// it -- pg-boss sends aren't transactional, so enqueueing mid-transaction
+// could push a mutation that then rolls back). singletonKey collapses rapid
+// repeat enqueues for the same event into one in-flight job, which matters
+// most for CalDAV's conditional-PUT (If-Match) path -- two concurrent pushes
+// for the same event would race on a stale etag and spuriously flip
+// sync_status to "conflict".
+async function enqueuePushIfLinked(app: FastifyInstance, eventId: string): Promise<void> {
+  const [link] = await app.db
+    .select({ id: eventExternalLinks.id })
+    .from(eventExternalLinks)
+    .where(eq(eventExternalLinks.eventId, eventId));
+  if (!link) return;
+  await app.boss.send(
+    CALENDAR_PUSH_EVENT_QUEUE,
+    { eventId },
+    { singletonKey: eventId, singletonSeconds: 10 },
+  );
+}
+
 function isValidOccurrence(parent: typeof events.$inferSelect, targetInstant: Date): boolean {
   if (!parent.rrule || !parent.startsAt) return false;
   const targetTz = parent.recurrenceTimezone ?? parent.timezone;
@@ -618,6 +642,7 @@ export default function eventsRoutes(app: FastifyInstance): void {
     });
 
     if (!row) return reply.code(404).send({ error: "not_found" });
+    await enqueuePushIfLinked(app, row.id);
     return toEventResponse(row);
   });
 
@@ -757,6 +782,9 @@ export default function eventsRoutes(app: FastifyInstance): void {
       return inserted;
     });
 
+    // The parent's recurrenceExdates changed, not the new detached child (which
+    // has no external link of its own yet) -- push the parent's series.
+    await enqueuePushIfLinked(app, parent.id);
     return reply.code(201).send(toEventResponse(row));
   });
 
@@ -833,6 +861,7 @@ export default function eventsRoutes(app: FastifyInstance): void {
       return updatedRow;
     });
 
+    await enqueuePushIfLinked(app, parent.id);
     return reply.code(200).send(toEventResponse(updatedParent));
   });
 
@@ -858,6 +887,7 @@ export default function eventsRoutes(app: FastifyInstance): void {
     });
 
     if (!row) return reply.code(404).send({ error: "not_found" });
+    await enqueuePushIfLinked(app, row.id);
     return toEventResponse(row);
   });
 
