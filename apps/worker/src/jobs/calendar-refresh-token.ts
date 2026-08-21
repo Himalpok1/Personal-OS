@@ -150,8 +150,13 @@ export function createCalendarRefreshTokenDeadLetterHandler(
   };
 }
 
-// Enqueues a refresh check for every active connection -- cheap no-op for
-// any connection whose token is still fresh (checked inside the handler).
+// Enqueues a refresh check for every active *Google* connection -- cheap
+// no-op for any connection whose token is still fresh (checked inside the
+// handler). CalDAV connections use static username/password credentials,
+// not OAuth tokens, and must never enter this job: the handler treats a
+// missing refresh token as a permanent auth failure and would otherwise
+// mark a healthy CalDAV connection needs_reauth on its very first cron
+// pass (Checkpoint 4.7 production-deployment finding).
 export async function enqueueCalendarRefreshForAllActiveConnections(
   db: Db,
   boss: PgBoss,
@@ -160,7 +165,9 @@ export async function enqueueCalendarRefreshForAllActiveConnections(
   const rows = await db
     .select({ id: calendarConnections.id })
     .from(calendarConnections)
-    .where(eq(calendarConnections.status, "active"));
+    .where(
+      and(eq(calendarConnections.status, "active"), eq(calendarConnections.provider, "google")),
+    );
   for (const row of rows) {
     await boss.send(queueName, { connectionId: row.id });
   }

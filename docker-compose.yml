@@ -41,6 +41,8 @@ services:
       # this to the deployed web service's real Tailscale Serve origin.
       WEB_APP_ORIGIN: ${WEB_APP_ORIGIN:-http://localhost:8081,http://localhost:8082,http://localhost:19006}
       AUDIO_STORAGE_PATH: /data/audio
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:?GOOGLE_OAUTH_CLIENT_ID must be set in .env}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:?GOOGLE_OAUTH_CLIENT_SECRET must be set in .env}
     volumes:
       - audio_data:/data/audio
     depends_on:
@@ -58,6 +60,8 @@ services:
       DATABASE_URL: postgresql://posops_app:${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set in .env}@postgres:5432/personalos
       CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?CREDENTIALS_ENCRYPTION_KEY must be set in .env}
       AUDIO_STORAGE_PATH: /data/audio
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:?GOOGLE_OAUTH_CLIENT_ID must be set in .env}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:?GOOGLE_OAUTH_CLIENT_SECRET must be set in .env}
     volumes:
       - audio_data:/data/audio
     depends_on:

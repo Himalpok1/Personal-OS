@@ -8,6 +8,7 @@ import { env } from "../env.js";
 import {
   createCalendarRefreshTokenDeadLetterHandler,
   createCalendarRefreshTokenHandler,
+  enqueueCalendarRefreshForAllActiveConnections,
   type CalendarRefreshTokenJobData,
 } from "./calendar-refresh-token.js";
 
@@ -165,5 +166,62 @@ describe("calendar.google.refresh-token", () => {
       .where(eq(calendarConnections.id, connectionId));
     expect(row?.status).toBe("active");
     expect(row?.lastSyncError).toContain("retries exhausted");
+  });
+
+  describe("enqueueCalendarRefreshForAllActiveConnections (provider scoping)", () => {
+    async function insertCaldavConnection(
+      db: Db,
+      overrides: Partial<typeof calendarConnections.$inferInsert> = {},
+    ): Promise<string> {
+      const [row] = await db
+        .insert(calendarConnections)
+        .values({
+          provider: "caldav",
+          serverUrl: "https://caldav.example.com",
+          username: "caldav-user",
+          authType: "basic",
+          status: "active",
+          ...overrides,
+        })
+        .returning({ id: calendarConnections.id });
+      return row!.id;
+    }
+
+    it("enqueues an active google connection", async () => {
+      const connectionId = await insertConnection(db);
+      await enqueueCalendarRefreshForAllActiveConnections(
+        db,
+        boss as unknown as PgBoss,
+        "calendar.google.refresh-token",
+      );
+      expect(boss.send).toHaveBeenCalledWith("calendar.google.refresh-token", { connectionId });
+    });
+
+    it("does not enqueue an active caldav connection", async () => {
+      await insertCaldavConnection(db);
+      await enqueueCalendarRefreshForAllActiveConnections(
+        db,
+        boss as unknown as PgBoss,
+        "calendar.google.refresh-token",
+      );
+      expect(boss.send).not.toHaveBeenCalled();
+    });
+
+    it("never changes a caldav connection's status via the google refresh cron", async () => {
+      const connectionId = await insertCaldavConnection(db);
+      await enqueueCalendarRefreshForAllActiveConnections(
+        db,
+        boss as unknown as PgBoss,
+        "calendar.google.refresh-token",
+      );
+      // Enqueue is a no-op for CalDAV (previous assertion), so the handler
+      // never runs against this row -- confirm it stays exactly as inserted.
+      const [row] = await db
+        .select()
+        .from(calendarConnections)
+        .where(eq(calendarConnections.id, connectionId));
+      expect(row?.status).toBe("active");
+      expect(row?.lastSyncError).toBeNull();
+    });
   });
 });
