@@ -1,10 +1,6 @@
 import { z } from "zod";
 
-// Single provider today. Kept as an enum of one value (rather than a bare
-// z.literal) so a second provider is a schema extension, not a rewrite --
-// mirrors packages/db/src/schema/calendar-connections.ts's
-// text + check('google') pattern.
-export const CalendarConnectionProviderSchema = z.enum(["google"]);
+export const CalendarConnectionProviderSchema = z.enum(["google", "caldav"]);
 export type CalendarConnectionProvider = z.infer<typeof CalendarConnectionProviderSchema>;
 
 export const CalendarConnectionStatusSchema = z.enum([
@@ -19,16 +15,19 @@ export const CalendarSyncStatusSchema = z.enum(["synced", "pending_push", "confl
 export type CalendarSyncStatus = z.infer<typeof CalendarSyncStatusSchema>;
 
 // Response shape only. Deliberately excludes every token/credential field
-// (access_token_*, refresh_token_*) -- matches ai-provider.ts's
-// AiProviderConnectionSchema, which excludes api_key material for the same
-// reason: a future Settings UI can't leak a secret just by reusing an
-// existing response shape.
+// (access_token_*, refresh_token_*, password_*).
 export const CalendarConnectionSchema = z.object({
   id: z.string().uuid(),
   provider: CalendarConnectionProviderSchema,
-  google_account_email: z.string(),
+  // Google-specific fields
+  google_account_email: z.string().nullable().optional(),
+  granted_scope: z.string().nullable().optional(),
+  // CalDAV-specific fields
+  server_url: z.string().nullable().optional(),
+  username: z.string().nullable().optional(),
+  auth_type: z.string().nullable().optional(),
+  // Common fields
   status: CalendarConnectionStatusSchema,
-  granted_scope: z.string(),
   last_sync_error: z.string().nullable(),
   created_at: z.string().datetime({ offset: true }),
   updated_at: z.string().datetime({ offset: true }),
@@ -38,7 +37,8 @@ export type CalendarConnection = z.infer<typeof CalendarConnectionSchema>;
 export const CalendarConnectionCalendarSchema = z.object({
   id: z.string().uuid(),
   connection_id: z.string().uuid(),
-  google_calendar_id: z.string(),
+  google_calendar_id: z.string().nullable().optional(),
+  caldav_calendar_url: z.string().nullable().optional(),
   summary: z.string(),
   sync_enabled: z.boolean(),
   project_id: z.string().uuid().nullable(),
@@ -49,13 +49,11 @@ export const CalendarConnectionCalendarSchema = z.object({
 });
 export type CalendarConnectionCalendar = z.infer<typeof CalendarConnectionCalendarSchema>;
 
-// Per-item body for PATCH /calendar-connections/:id/calendars. sync_enabled
-// is required (this endpoint's whole purpose is toggling it); project_id is
-// optional/nullable since not every synced calendar needs an inbound
-// landing project.
+// Per-item body for PATCH /calendar-connections/:id/calendars.
 export const CalendarConnectionCalendarUpdateSchema = z
   .object({
-    google_calendar_id: z.string().min(1),
+    google_calendar_id: z.string().min(1).optional(),
+    caldav_calendar_url: z.string().min(1).optional(),
     sync_enabled: z.boolean(),
     project_id: z.string().uuid().nullable().optional(),
   })
@@ -64,10 +62,7 @@ export type CalendarConnectionCalendarUpdate = z.infer<
   typeof CalendarConnectionCalendarUpdateSchema
 >;
 
-// The OAuth authorization-code exchange request. auth_code is the only
-// field accepted here -- everything else (tokens, account identity, scope)
-// is derived server-side from Google's token/userinfo response, never
-// supplied by the client.
+// Google OAuth request
 export const ConnectGoogleCalendarRequestSchema = z
   .object({
     auth_code: z.string().min(1),
@@ -75,9 +70,28 @@ export const ConnectGoogleCalendarRequestSchema = z
   .strict();
 export type ConnectGoogleCalendarRequest = z.infer<typeof ConnectGoogleCalendarRequestSchema>;
 
-// A live passthrough listing of the calendars on a connected Google
-// account -- not stored, so no id/timestamps. Distinct from
-// CalendarConnectionCalendarSchema, which is the persisted opt-in row.
+// CalDAV connection request
+export const ConnectCaldavCalendarRequestSchema = z
+  .object({
+    server_url: z.string().url(),
+    username: z.string().min(1),
+    password: z.string().min(1),
+    auth_type: z.enum(["basic", "bearer"]).default("basic").optional(),
+  })
+  .strict();
+export type ConnectCaldavCalendarRequest = z.infer<typeof ConnectCaldavCalendarRequestSchema>;
+
+// Available calendar items
+export const AvailableCalendarSchema = z.object({
+  id: z.string(),
+  summary: z.string(),
+  color: z.string().nullable().optional(),
+  primary: z.boolean().optional(),
+  google_calendar_id: z.string().optional(),
+  caldav_calendar_url: z.string().optional(),
+});
+export type AvailableCalendar = z.infer<typeof AvailableCalendarSchema>;
+
 export const AvailableGoogleCalendarSchema = z.object({
   google_calendar_id: z.string(),
   summary: z.string(),
@@ -90,10 +104,20 @@ export type AvailableGoogleCalendarsResponse = z.infer<
   typeof AvailableGoogleCalendarsResponseSchema
 >;
 
-// Explicit outbound linking (Decision 9): a new Personal OS event is
-// local-only by default; this is the only way it starts syncing to Google.
-// No project_id-based inference exists anywhere -- the calendar is always
-// named explicitly, here.
+export const AvailableCalendarsResponseSchema = z.array(AvailableCalendarSchema);
+export type AvailableCalendarsResponse = z.infer<typeof AvailableCalendarsResponseSchema>;
+
+// Outbound linking
+export const LinkEventToCalendarRequestSchema = z
+  .object({
+    connection_id: z.string().uuid(),
+    google_calendar_id: z.string().min(1).optional(),
+    caldav_calendar_url: z.string().min(1).optional(),
+  })
+  .strict();
+export type LinkEventToCalendarRequest = z.infer<typeof LinkEventToCalendarRequestSchema>;
+
+// Retain backward alias for Google-specific linking
 export const LinkEventToGoogleCalendarRequestSchema = z
   .object({
     connection_id: z.string().uuid(),
@@ -107,7 +131,8 @@ export type LinkEventToGoogleCalendarRequest = z.infer<
 export const EventGoogleCalendarLinkSchema = z.object({
   event_id: z.string().uuid(),
   connection_id: z.string().uuid(),
-  google_calendar_id: z.string(),
+  google_calendar_id: z.string().nullable().optional(),
+  caldav_calendar_url: z.string().nullable().optional(),
   sync_status: CalendarSyncStatusSchema,
 });
 export type EventGoogleCalendarLink = z.infer<typeof EventGoogleCalendarLinkSchema>;

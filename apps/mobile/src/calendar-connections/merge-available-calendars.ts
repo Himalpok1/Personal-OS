@@ -1,33 +1,55 @@
-import type { AvailableGoogleCalendar, CalendarConnectionCalendar } from "@personal-os/schema";
+import type {
+  AvailableCalendar,
+  AvailableGoogleCalendar,
+  CalendarConnectionCalendar,
+} from "@personal-os/schema";
 
-// Pure, no expo/react imports -- same reasoning as reconcile.ts and
-// resolve-notification-route.ts. Google's live calendarList.list passthrough
-// (AvailableGoogleCalendarSchema) has no notion of sync_enabled -- that only
-// exists on the persisted opt-in row (CalendarConnectionCalendarSchema).
-// This merges the two so the Settings picker can render one row per
-// available calendar with its current opt-in state, defaulting to
-// "not yet synced" for a calendar that exists on Google but has never been
-// toggled on in Personal OS.
-export interface MergedGoogleCalendar {
-  google_calendar_id: string;
+export interface MergedCalendarItem {
+  key: string;
+  google_calendar_id?: string;
+  caldav_calendar_url?: string;
   summary: string;
+  color?: string | null;
   primary: boolean;
   sync_enabled: boolean;
   last_successful_sync_at: string | null;
 }
 
+export type MergedGoogleCalendar = MergedCalendarItem & { google_calendar_id: string };
+
 export function mergeAvailableCalendars(
-  available: AvailableGoogleCalendar[],
+  available: Array<AvailableGoogleCalendar | AvailableCalendar>,
   persisted: CalendarConnectionCalendar[],
-): MergedGoogleCalendar[] {
-  const persistedById = new Map(persisted.map((cal) => [cal.google_calendar_id, cal]));
+): MergedCalendarItem[] {
+  const persistedByGoogleId = new Map(
+    persisted
+      .filter((cal) => Boolean(cal.google_calendar_id))
+      .map((cal) => [cal.google_calendar_id!, cal]),
+  );
+  const persistedByCaldavUrl = new Map(
+    persisted
+      .filter((cal) => Boolean(cal.caldav_calendar_url))
+      .map((cal) => [cal.caldav_calendar_url!, cal]),
+  );
 
   return available.map((cal) => {
-    const existing = persistedById.get(cal.google_calendar_id);
+    const googleId = "google_calendar_id" in cal ? cal.google_calendar_id : undefined;
+    const caldavUrl = "caldav_calendar_url" in cal ? cal.caldav_calendar_url : undefined;
+    const key = googleId || caldavUrl || ("id" in cal ? cal.id : "unknown");
+
+    const existing = googleId
+      ? persistedByGoogleId.get(googleId)
+      : caldavUrl
+        ? persistedByCaldavUrl.get(caldavUrl)
+        : undefined;
+
     return {
-      google_calendar_id: cal.google_calendar_id,
+      key,
+      google_calendar_id: googleId,
+      caldav_calendar_url: caldavUrl,
       summary: cal.summary,
-      primary: cal.primary,
+      color: "color" in cal ? cal.color : null,
+      primary: Boolean(cal.primary),
       sync_enabled: existing?.sync_enabled ?? false,
       last_successful_sync_at: existing?.last_successful_sync_at ?? null,
     };

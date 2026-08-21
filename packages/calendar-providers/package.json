@@ -14,7 +14,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@personal-os/core": "workspace:*"
+    "@personal-os/core": "workspace:*",
+    "fast-xml-parser": "^5.11.0",
+    "ical.js": "^2.2.1"
   },
   "devDependencies": {
     "vitest": "^4.1.10"

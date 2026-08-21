@@ -1,21 +1,24 @@
 import { decryptSecret, encryptSecret } from "@personal-os/ai-providers";
 import {
+  applyExceptionToVCalendar,
+  CalDavError,
   GoogleCalendarApiError,
   GoogleOAuthError,
   localAllDayToGoogle,
+  localEventToVCalendar,
   refreshAccessToken,
+  type CalDavClient,
   type GoogleCalendarClient,
   type GoogleEventWriteBody,
 } from "@personal-os/calendar-providers";
 import {
-  calendarConnectionCalendars,
   calendarConnections,
   calendarEventInstances,
   eventExternalLinks,
   events,
   type Db,
 } from "@personal-os/db";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Job } from "pg-boss";
 import { env } from "../env.js";
 
@@ -25,14 +28,6 @@ export interface CalendarPushEventJobData {
 
 const TOKEN_EXPIRY_SAFETY_MARGIN_MS = 60_000;
 
-// Same inline-refresh approach as calendar-sync-calendar.ts's
-// resolveFreshAccessToken -- duplicated in miniature here rather than
-// imported, since the two jobs' surrounding error handling differs enough
-// (this one has no "no-op the whole calendar" fallback, only a single
-// event to push) that sharing would need its own abstraction; not worth it
-// for a ~20-line function. If this drifts out of sync with the
-// sync-calendar copy, prefer that file's version as canonical -- it's
-// exercised far more (every sync pass, not just pushes).
 async function resolveFreshAccessToken(
   db: Db,
   connection: typeof calendarConnections.$inferSelect,
@@ -99,66 +94,63 @@ async function resolveFreshAccessToken(
   return refreshed.accessToken;
 }
 
-// Reconstitutes a single-line Google `recurrence` array from this app's
-// separated rrule/recurrence_until/recurrence_count columns -- the inverse
-// of googleRecurrenceToLocal's UNTIL=/COUNT= extraction
-// (@personal-os/calendar-providers/translate.ts). UNTIL is always emitted
-// in UTC "Z" form (RFC5545 permits this regardless of the rule's own
-// recurrence_timezone -- Google's own API does the same).
-function buildGoogleRecurrenceLines(row: typeof events.$inferSelect): string[] | undefined {
-  if (!row.rrule) return undefined;
-  let rrule = row.rrule.startsWith("RRULE:") ? row.rrule.slice("RRULE:".length) : row.rrule;
-  if (row.recurrenceUntil) {
-    const until = row.recurrenceUntil
-      .toISOString()
-      .replace(/[-:]/g, "")
-      .replace(/\.\d{3}Z$/, "Z");
-    rrule = `${rrule};UNTIL=${until}`;
-  } else if (row.recurrenceCount) {
-    rrule = `${rrule};COUNT=${row.recurrenceCount}`;
-  }
-  return [`RRULE:${rrule}`];
-}
-
 function eventRowToGoogleWriteBody(
   row: typeof events.$inferSelect,
   parentGoogleEventId?: string,
 ): GoogleEventWriteBody {
-  const body: GoogleEventWriteBody = {
-    summary: row.title,
-    description: row.description ?? undefined,
-    location: row.location ?? undefined,
-  };
-  if (row.allDay && row.startDate) {
+  const isInstance = row.parentEventId !== null && row.originalStartAt !== null;
+
+  if (row.allDay) {
+    if (!row.startDate) {
+      throw new Error(`event ${row.id} has all_day=true but no start_date`);
+    }
     const { googleStartDate, googleEndDate } = localAllDayToGoogle(
       row.startDate,
       row.endDate ?? row.startDate,
     );
-    body.start = { date: googleStartDate };
-    body.end = { date: googleEndDate };
-    if (parentGoogleEventId && row.originalStartAt) {
-      body.recurringEventId = parentGoogleEventId;
-      body.originalStartTime = { date: row.originalStartAt.toISOString().slice(0, 10) };
-    }
-  } else if (row.startsAt) {
-    body.start = { dateTime: row.startsAt.toISOString(), timeZone: row.timezone };
-    body.end = { dateTime: (row.endsAt ?? row.startsAt).toISOString(), timeZone: row.timezone };
-    if (parentGoogleEventId && row.originalStartAt) {
+    const body: GoogleEventWriteBody = {
+      summary: row.title,
+      description: row.description ?? undefined,
+      location: row.location ?? undefined,
+      start: { date: googleStartDate },
+      end: { date: googleEndDate },
+    };
+    if (isInstance && parentGoogleEventId && row.originalStartAt) {
       body.recurringEventId = parentGoogleEventId;
       body.originalStartTime = {
-        dateTime: row.originalStartAt.toISOString(),
-        timeZone: row.timezone,
+        date: row.originalStartAt.toISOString().slice(0, 10),
       };
     }
+    return body;
   }
-  const recurrence = buildGoogleRecurrenceLines(row);
-  if (recurrence) body.recurrence = recurrence;
+
+  if (!row.startsAt) {
+    throw new Error(`event ${row.id} has all_day=false but no starts_at`);
+  }
+  const timeZone = row.timezone ?? "UTC";
+  const startDateTime = row.startsAt.toISOString();
+  const endDateTime = (row.endsAt ?? row.startsAt).toISOString();
+  const body: GoogleEventWriteBody = {
+    summary: row.title,
+    description: row.description ?? undefined,
+    location: row.location ?? undefined,
+    start: { dateTime: startDateTime, timeZone },
+    end: { dateTime: endDateTime, timeZone },
+  };
+  if (isInstance && parentGoogleEventId && row.originalStartAt) {
+    body.recurringEventId = parentGoogleEventId;
+    body.originalStartTime = {
+      dateTime: row.originalStartAt.toISOString(),
+      timeZone,
+    };
+  }
   return body;
 }
 
 export function createCalendarPushEventHandler(
   db: Db,
-  client: GoogleCalendarClient,
+  googleClient: GoogleCalendarClient,
+  caldavClient?: CalDavClient,
 ): (jobs: Job<CalendarPushEventJobData>[]) => Promise<void> {
   return async function handleCalendarPushEvent(jobs) {
     for (const job of jobs) {
@@ -166,31 +158,210 @@ export function createCalendarPushEventHandler(
         .select()
         .from(eventExternalLinks)
         .where(eq(eventExternalLinks.eventId, job.data.eventId));
-      // Only pushes events that already have an event_external_links row --
-      // never an automatic new-event-to-Google trigger. A local event gains
-      // this row only via the explicit POST /events/:id/link-google-calendar
-      // route (Decision 9's outbound flow); this job never creates the link
-      // itself, only acts once one exists (with googleEventId possibly still
-      // null, meaning "linked but never pushed yet" -- see below).
       if (!link) continue;
 
       const [connection] = await db
         .select()
         .from(calendarConnections)
         .where(eq(calendarConnections.id, link.connectionId));
-      if (!connection || connection.status !== "active") continue;
+      if (!connection) continue;
 
-      const [calendarRow] = await db
-        .select()
-        .from(calendarConnectionCalendars)
-        .where(
-          and(
-            eq(calendarConnectionCalendars.connectionId, link.connectionId),
-            eq(calendarConnectionCalendars.googleCalendarId, link.googleCalendarId),
-          ),
+      if (connection.status !== "active") {
+        await db
+          .update(eventExternalLinks)
+          .set({
+            syncStatus: "error",
+            lastSyncError: `calendar connection is ${connection.status}`,
+          })
+          .where(eq(eventExternalLinks.id, link.id));
+        continue;
+      }
+
+      // -----------------------------------------------------------------------
+      // CALDAV PROVIDER PUSH
+      // -----------------------------------------------------------------------
+      if (connection.provider === "caldav" && caldavClient) {
+        if (
+          !connection.passwordCiphertext ||
+          !connection.passwordIv ||
+          !connection.passwordAuthTag
+        ) {
+          continue;
+        }
+        const password = decryptSecret(
+          {
+            ciphertext: connection.passwordCiphertext,
+            iv: connection.passwordIv,
+            authTag: connection.passwordAuthTag,
+          },
+          env.CREDENTIALS_ENCRYPTION_KEY,
         );
-      if (!calendarRow || !calendarRow.syncEnabled) continue;
+        const auth = {
+          username: connection.username!,
+          password,
+        };
 
+        const [row] = await db.select().from(events).where(eq(events.id, job.data.eventId));
+
+        if (!row || row.archivedAt) {
+          if (link.caldavResourceUrl) {
+            try {
+              await caldavClient.deleteEvent(
+                link.caldavResourceUrl,
+                link.caldavEtag || undefined,
+                auth,
+              );
+            } catch (err: unknown) {
+              if (!(err instanceof CalDavError && err.status === 404)) {
+                throw err;
+              }
+            }
+          }
+          await db.delete(eventExternalLinks).where(eq(eventExternalLinks.id, link.id));
+          continue;
+        }
+
+        // Outbound push for detached occurrence
+        if (row.parentEventId && row.originalStartAt) {
+          const [parentLink] = await db
+            .select()
+            .from(eventExternalLinks)
+            .where(eq(eventExternalLinks.eventId, row.parentEventId));
+
+          if (parentLink?.caldavResourceUrl) {
+            const parentEvent = await caldavClient.getEvent(parentLink.caldavResourceUrl, auth);
+            const modifiedIcs = applyExceptionToVCalendar(parentEvent.icsData, {
+              kind: "detach",
+              originalStartInstant: row.originalStartAt,
+              fields: {
+                title: row.title,
+                description: row.description,
+                location: row.location,
+                allDay: row.allDay,
+                startsAt: row.startsAt ?? undefined,
+                endsAt: row.endsAt ?? undefined,
+                startDate: row.startDate ?? undefined,
+                endDate: row.endDate ?? undefined,
+                timezone: row.timezone ?? undefined,
+              },
+            });
+
+            const putRes = await caldavClient.putEvent(
+              parentLink.caldavResourceUrl,
+              modifiedIcs,
+              parentLink.caldavEtag || undefined,
+              auth,
+            );
+
+            await db
+              .update(eventExternalLinks)
+              .set({
+                caldavEtag: putRes.etag,
+                lastSyncedLocalUpdatedAt: row.updatedAt,
+                syncStatus: "synced",
+                updatedAt: new Date(),
+              })
+              .where(eq(eventExternalLinks.id, parentLink.id));
+
+            await db
+              .insert(calendarEventInstances)
+              .values({
+                connectionId: link.connectionId,
+                caldavCalendarUrl: link.caldavCalendarUrl,
+                caldavResourceUrl: parentLink.caldavResourceUrl,
+                caldavRecurrenceId: row.originalStartAt.toISOString(),
+                localParentEventId: row.parentEventId,
+                localOriginalStartAt: row.originalStartAt,
+                localDetachedEventId: row.id,
+                mappingStatus: "detached",
+                caldavEtag: putRes.etag,
+                lastSyncedLocalUpdatedAt: row.updatedAt,
+                syncStatus: "synced",
+              })
+              .onConflictDoUpdate({
+                target: [
+                  calendarEventInstances.localParentEventId,
+                  calendarEventInstances.localOriginalStartAt,
+                ],
+                set: {
+                  localDetachedEventId: row.id,
+                  mappingStatus: "detached",
+                  caldavEtag: putRes.etag,
+                  lastSyncedLocalUpdatedAt: row.updatedAt,
+                  syncStatus: "synced",
+                  updatedAt: new Date(),
+                },
+              });
+          }
+          continue;
+        }
+
+        // Outbound push for master / standalone event
+        const isNew = !link.caldavResourceUrl;
+        const uid = link.caldavIcalUid || `${crypto.randomUUID()}@personal-os.local`;
+        const calendarUrl = link.caldavCalendarUrl || "/";
+        const resourceHref =
+          link.caldavResourceUrl ||
+          `${calendarUrl.endsWith("/") ? calendarUrl : calendarUrl + "/"}${uid.split("@")[0]}.ics`;
+
+        const icsData = localEventToVCalendar({
+          title: row.title,
+          description: row.description,
+          location: row.location,
+          allDay: row.allDay,
+          startsAt: row.startsAt ?? undefined,
+          endsAt: row.endsAt ?? undefined,
+          startDate: row.startDate ?? undefined,
+          endDate: row.endDate ?? undefined,
+          timezone: row.timezone ?? undefined,
+          rrule: row.rrule ?? undefined,
+          recurrenceUntil: row.recurrenceUntil ?? undefined,
+          recurrenceCount: row.recurrenceCount ?? undefined,
+          recurrenceExdates: row.recurrenceExdates ?? undefined,
+          uid,
+          caldavResourceUrl: resourceHref,
+          caldavEtag: link.caldavEtag || "",
+        });
+
+        try {
+          const putRes = await caldavClient.putEvent(
+            resourceHref,
+            icsData,
+            isNew ? undefined : link.caldavEtag || undefined,
+            auth,
+            isNew ? { ifNoneMatch: true } : undefined,
+          );
+
+          await db
+            .update(eventExternalLinks)
+            .set({
+              caldavResourceUrl: resourceHref,
+              caldavIcalUid: uid,
+              caldavEtag: putRes.etag,
+              lastSyncedLocalUpdatedAt: row.updatedAt,
+              syncStatus: "synced",
+              updatedAt: new Date(),
+            })
+            .where(eq(eventExternalLinks.id, link.id));
+        } catch (err: unknown) {
+          if (err instanceof CalDavError && err.isConflict) {
+            await db
+              .update(eventExternalLinks)
+              .set({
+                syncStatus: "conflict",
+                lastSyncError: "CalDAV PUT 412 Precondition Failed (ETag conflict)",
+              })
+              .where(eq(eventExternalLinks.id, link.id));
+            continue;
+          }
+          throw err;
+        }
+        continue;
+      }
+
+      // -----------------------------------------------------------------------
+      // GOOGLE PROVIDER PUSH
+      // -----------------------------------------------------------------------
       let accessToken: string;
       try {
         accessToken = await resolveFreshAccessToken(db, connection);
@@ -208,14 +379,10 @@ export function createCalendarPushEventHandler(
       const [row] = await db.select().from(events).where(eq(events.id, job.data.eventId));
 
       if (!row || row.archivedAt) {
-        // A link with no googleEventId was never pushed -- there is
-        // nothing on Google's side to delete, only the local link row.
-        if (link.googleEventId) {
+        if (link.googleEventId && link.googleCalendarId) {
           try {
-            await client.deleteEvent(accessToken, link.googleCalendarId, link.googleEventId);
+            await googleClient.deleteEvent(accessToken, link.googleCalendarId, link.googleEventId);
           } catch (err) {
-            // 404/410 -- already gone on Google's side. Any other status is
-            // a real failure; rethrow to retry.
             const alreadyGone =
               err instanceof GoogleCalendarApiError &&
               (err.httpStatus === 404 || err.httpStatus === 410);
@@ -239,17 +406,15 @@ export function createCalendarPushEventHandler(
 
       const body = eventRowToGoogleWriteBody(row, parentGoogleEventId);
 
-      // No googleEventId yet: this is the link's first push -- the local
-      // event was explicitly linked (Decision 9's outbound flow) but never
-      // pushed to Google before. Create it there instead of updating.
       const written = link.googleEventId
-        ? await client.updateEvent(accessToken, link.googleCalendarId, link.googleEventId, body)
-        : await client.insertEvent(accessToken, link.googleCalendarId, body);
+        ? await googleClient.updateEvent(
+            accessToken,
+            link.googleCalendarId!,
+            link.googleEventId,
+            body,
+          )
+        : await googleClient.insertEvent(accessToken, link.googleCalendarId!, body);
 
-      // Advance BOTH halves of the conflict baseline -- this is what
-      // prevents the pulled-back echo of this exact push from being
-      // misread as a fresh remote change on the next pull-sync pass. Also
-      // fills in googleEventId/googleIcalUid on a first-ever push.
       await db
         .update(eventExternalLinks)
         .set({
@@ -302,12 +467,6 @@ export function createCalendarPushEventHandler(
   };
 }
 
-// Dead-letter: leaves event_external_links.sync_status as whatever it was
-// (still "synced" from its last successful round-trip, or "pending_push" if
-// a caller set that when enqueuing -- this job never sets pending_push
-// itself, since that's an enqueue-time concern for whichever code path
-// eventually triggers a push on ordinary local edits, out of this
-// checkpoint's scope). Records the failure so it's at least visible.
 export function createCalendarPushEventDeadLetterHandler(
   db: Db,
 ): (jobs: Job<CalendarPushEventJobData>[]) => Promise<void> {
@@ -317,7 +476,7 @@ export function createCalendarPushEventDeadLetterHandler(
         .update(eventExternalLinks)
         .set({
           syncStatus: "error",
-          lastSyncError: "calendar.google.push-event: retries exhausted",
+          lastSyncError: "calendar.push-event: retries exhausted",
         })
         .where(eq(eventExternalLinks.eventId, job.data.eventId));
     }

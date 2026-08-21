@@ -1,6 +1,9 @@
 import { encryptSecret } from "@personal-os/ai-providers";
 import {
+  createFakeCalDavClient,
   createFakeGoogleCalendarClient,
+  localEventToVCalendar,
+  applyExceptionToVCalendar,
   FAKE_SYNC_TOKEN_EXPIRED,
   type FakeGoogleCalendarClient,
   type GoogleCalendarEvent,
@@ -25,6 +28,49 @@ import {
 import { env } from "../env.js";
 
 const GOOGLE_CALENDAR_ID = "primary";
+const CALDAV_CALENDAR_URL = "/calendars/users/testuser/personal/";
+
+async function insertCaldavConnection(
+  db: Db,
+  overrides: Partial<typeof calendarConnections.$inferInsert> = {},
+): Promise<string> {
+  const pwSecret = encryptSecret("fake-password", env.CREDENTIALS_ENCRYPTION_KEY);
+  const [row] = await db
+    .insert(calendarConnections)
+    .values({
+      provider: "caldav",
+      serverUrl: "https://caldav.example.com",
+      username: "testuser",
+      authType: "basic",
+      principalUrl: "/principals/users/testuser/",
+      calendarHomeSetUrl: "/calendars/users/testuser/",
+      passwordCiphertext: pwSecret.ciphertext,
+      passwordIv: pwSecret.iv,
+      passwordAuthTag: pwSecret.authTag,
+      status: "active",
+      ...overrides,
+    })
+    .returning({ id: calendarConnections.id });
+  return row!.id;
+}
+
+async function insertCaldavCalendar(
+  db: Db,
+  connectionId: string,
+  overrides: Partial<typeof calendarConnectionCalendars.$inferInsert> = {},
+): Promise<string> {
+  const [row] = await db
+    .insert(calendarConnectionCalendars)
+    .values({
+      connectionId,
+      caldavCalendarUrl: CALDAV_CALENDAR_URL,
+      summary: "Personal",
+      syncEnabled: true,
+      ...overrides,
+    })
+    .returning({ id: calendarConnectionCalendars.id });
+  return row!.id;
+}
 
 async function insertConnection(
   db: Db,
@@ -729,6 +775,188 @@ describe("calendar.google.sync-calendar", () => {
       await runSync(db, emptyClient, calendarId, connectionId);
       const remainingLinks = await db.select().from(eventExternalLinks);
       expect(remainingLinks).toHaveLength(0);
+    });
+  });
+
+  describe("CalDAV calendar sync", () => {
+    it("imports one-off timed, all-day, and recurring master events on initial sync", async () => {
+      const connectionId = await insertCaldavConnection(db);
+      const calendarId = await insertCaldavCalendar(db, connectionId);
+
+      const fakeClient = createFakeCalDavClient();
+      const auth = { username: "testuser", password: "fake-password" };
+
+      // 1. One-off timed event
+      const timedIcs = localEventToVCalendar({
+        title: "Doctor Appointment",
+        allDay: false,
+        startsAt: new Date("2026-08-21T14:00:00.000Z"),
+        endsAt: new Date("2026-08-21T15:00:00.000Z"),
+        timezone: "America/Chicago",
+      });
+      await fakeClient.putEvent(`${CALDAV_CALENDAR_URL}event1.ics`, timedIcs, undefined, auth, {
+        ifNoneMatch: true,
+      });
+
+      // 2. All-day event
+      const allDayIcs = localEventToVCalendar({
+        title: "Vacation",
+        allDay: true,
+        startDate: "2026-08-22",
+        endDate: "2026-08-24",
+        timezone: "UTC",
+      });
+      await fakeClient.putEvent(`${CALDAV_CALENDAR_URL}event2.ics`, allDayIcs, undefined, auth, {
+        ifNoneMatch: true,
+      });
+
+      // 3. Recurring master
+      const recurringIcs = localEventToVCalendar({
+        title: "Weekly Planning",
+        allDay: false,
+        startsAt: new Date("2026-08-21T16:00:00.000Z"),
+        endsAt: new Date("2026-08-21T17:00:00.000Z"),
+        timezone: "America/Chicago",
+        rrule: "FREQ=WEEKLY;BYDAY=FR",
+      });
+      await fakeClient.putEvent(`${CALDAV_CALENDAR_URL}event3.ics`, recurringIcs, undefined, auth, {
+        ifNoneMatch: true,
+      });
+
+      const googleStub = createFakeGoogleCalendarClient();
+      await runCalendarSync(
+        { db, client: googleStub, caldavClient: fakeClient },
+        { connectionId, calendarConnectionCalendarId: calendarId },
+      );
+
+      const importedEvents = await db.select().from(events);
+      expect(importedEvents).toHaveLength(3);
+
+      const timed = importedEvents.find((e) => e.title === "Doctor Appointment");
+      expect(timed).toBeDefined();
+      expect(timed?.allDay).toBe(false);
+
+      const allDay = importedEvents.find((e) => e.title === "Vacation");
+      expect(allDay).toBeDefined();
+      expect(allDay?.allDay).toBe(true);
+      expect(allDay?.startDate).toBe("2026-08-22");
+      expect(allDay?.endDate).toBe("2026-08-24");
+
+      const recurring = importedEvents.find((e) => e.title === "Weekly Planning");
+      expect(recurring).toBeDefined();
+      expect(recurring?.rrule).toBe("FREQ=WEEKLY;BYDAY=FR");
+
+      const links = await db.select().from(eventExternalLinks);
+      expect(links).toHaveLength(3);
+      for (const link of links) {
+        expect(link.caldavCalendarUrl).toBe(CALDAV_CALENDAR_URL);
+        expect(link.caldavResourceUrl).toBeDefined();
+        expect(link.caldavEtag).toBeDefined();
+        expect(link.syncStatus).toBe("synced");
+      }
+
+      // Check sync token updated
+      const [cal] = await db
+        .select()
+        .from(calendarConnectionCalendars)
+        .where(eq(calendarConnectionCalendars.id, calendarId));
+      expect(cal?.nextSyncToken).toBeDefined();
+    });
+
+    it("syncs detached and cancelled recurrence exceptions via single resource model (RFC 4791)", async () => {
+      const connectionId = await insertCaldavConnection(db);
+      const calendarId = await insertCaldavCalendar(db, connectionId);
+
+      const fakeClient = createFakeCalDavClient();
+      const auth = { username: "testuser", password: "fake-password" };
+
+      // Recurring series with detached exception on 2026-08-28
+      const masterIcs = localEventToVCalendar({
+        title: "Team Standup",
+        allDay: false,
+        startsAt: new Date("2026-08-21T14:00:00.000Z"),
+        endsAt: new Date("2026-08-21T14:30:00.000Z"),
+        timezone: "America/Chicago",
+        rrule: "FREQ=WEEKLY;BYDAY=FR",
+      });
+
+      const seriesWithException = applyExceptionToVCalendar(masterIcs, {
+        kind: "detach",
+        originalStartInstant: new Date("2026-08-28T14:00:00.000Z"),
+        fields: {
+          title: "Team Standup (Moved)",
+          allDay: false,
+          startsAt: new Date("2026-08-28T15:00:00.000Z"),
+          endsAt: new Date("2026-08-28T15:30:00.000Z"),
+          timezone: "America/Chicago",
+        },
+      });
+
+      await fakeClient.putEvent(
+        `${CALDAV_CALENDAR_URL}standup.ics`,
+        seriesWithException,
+        undefined,
+        auth,
+        { ifNoneMatch: true },
+      );
+
+      const googleStub = createFakeGoogleCalendarClient();
+      await runCalendarSync(
+        { db, client: googleStub, caldavClient: fakeClient },
+        { connectionId, calendarConnectionCalendarId: calendarId },
+      );
+
+      const allEvents = await db.select().from(events);
+      expect(allEvents).toHaveLength(2); // Master + detached exception
+
+      const master = allEvents.find((e) => e.parentEventId === null);
+      const detached = allEvents.find((e) => e.parentEventId !== null);
+
+      expect(master?.title).toBe("Team Standup");
+      expect(detached?.title).toBe("Team Standup (Moved)");
+      expect(detached?.parentEventId).toBe(master?.id);
+
+      const instances = await db.select().from(calendarEventInstances);
+      expect(instances).toHaveLength(1);
+      expect(instances[0]!.mappingStatus).toBe("detached");
+      expect(instances[0]!.localDetachedEventId).toBe(detached?.id);
+    });
+
+    it("handles invalid sync-token by resetting cursor and reconciling fully", async () => {
+      const connectionId = await insertCaldavConnection(db);
+      const calendarId = await insertCaldavCalendar(db, connectionId, {
+        nextSyncToken: "stale-sync-token",
+      });
+
+      const fakeClient = createFakeCalDavClient();
+      const auth = { username: "testuser", password: "fake-password" };
+
+      await fakeClient.putEvent(
+        `${CALDAV_CALENDAR_URL}meeting.ics`,
+        localEventToVCalendar({
+          title: "Strategy Meeting",
+          allDay: false,
+          startsAt: new Date("2026-08-25T10:00:00.000Z"),
+          endsAt: new Date("2026-08-25T11:00:00.000Z"),
+          timezone: "America/Chicago",
+        }),
+        undefined,
+        auth,
+        { ifNoneMatch: true },
+      );
+
+      fakeClient.forceInvalidSyncToken = true;
+
+      const googleStub = createFakeGoogleCalendarClient();
+      await runCalendarSync(
+        { db, client: googleStub, caldavClient: fakeClient },
+        { connectionId, calendarConnectionCalendarId: calendarId },
+      );
+
+      // Event should still be imported successfully through fallback full reconciliation!
+      const allEvents = await db.select().from(events);
+      expect(allEvents).toHaveLength(1);
+      expect(allEvents[0]!.title).toBe("Strategy Meeting");
     });
   });
 });

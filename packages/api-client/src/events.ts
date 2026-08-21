@@ -97,6 +97,19 @@ export async function linkEventToGoogleCalendar(
   });
 }
 
+export async function linkEventToCalendar(
+  baseUrl: string,
+  id: string,
+  body:
+    | LinkEventToGoogleCalendarRequest
+    | { connection_id: string; google_calendar_id?: string; caldav_calendar_url?: string },
+): Promise<EventGoogleCalendarLink> {
+  return fetchJson(baseUrl, `/events/${id}/link-calendar`, EventGoogleCalendarLinkSchema, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export async function detachEvent(baseUrl: string, id: string, body: EventDetach): Promise<Event> {
   const parsed = EventDetachSchema.parse(body);
   return fetchJson(baseUrl, `/events/${id}/detach`, EventSchema, {

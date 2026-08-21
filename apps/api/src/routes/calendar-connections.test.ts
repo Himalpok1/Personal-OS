@@ -1,9 +1,15 @@
 import {
+  createFakeCalDavClient,
   createFakeGoogleCalendarClient,
+  type FakeCalDavClient,
   type FakeGoogleCalendarClient,
 } from "@personal-os/calendar-providers";
 import { calendarConnectionCalendars, calendarConnections } from "@personal-os/db";
-import type { CalendarConnection } from "@personal-os/schema";
+import type {
+  AvailableCalendarsResponse,
+  CalendarConnection,
+  CalendarConnectionCalendar,
+} from "@personal-os/schema";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -60,6 +66,7 @@ async function connectViaApi(
 describe("calendar-connections routes", () => {
   let app: FastifyInstance;
   let fakeClient: FakeGoogleCalendarClient;
+  let fakeCalDav: FakeCalDavClient;
 
   beforeAll(async () => {
     fakeClient = createFakeGoogleCalendarClient({
@@ -68,7 +75,8 @@ describe("calendar-connections routes", () => {
         { id: "work@group.calendar.google.com", summary: "Work" },
       ],
     });
-    app = await buildTestApp({ googleCalendarClient: fakeClient });
+    fakeCalDav = createFakeCalDavClient();
+    app = await buildTestApp({ googleCalendarClient: fakeClient, caldavClient: fakeCalDav });
   });
 
   afterAll(async () => {
@@ -324,6 +332,88 @@ describe("calendar-connections routes", () => {
 
       const rows = await app.db.select().from(calendarConnections);
       expect(rows).toHaveLength(1);
+    });
+  });
+
+  describe("CalDAV connection routes", () => {
+    it("connects a CalDAV server and discovers calendars", async () => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/calendar-connections/caldav",
+        payload: {
+          server_url: "https://caldav.example.com",
+          username: "testuser",
+          password: "my-app-password",
+        },
+      });
+
+      expect(response.statusCode).toBe(201);
+      const conn = response.json<CalendarConnection>();
+      expect(conn.provider).toBe("caldav");
+      expect(conn.server_url).toBe("https://caldav.example.com");
+      expect(conn.username).toBe("testuser");
+      expect(conn.status).toBe("active");
+
+      // Password should be encrypted in DB
+      const [dbRow] = await app.db
+        .select()
+        .from(calendarConnections)
+        .where(eq(calendarConnections.id, conn.id));
+      expect(dbRow?.passwordCiphertext).toBeDefined();
+
+      // List available calendars
+      const availRes = await app.inject({
+        method: "GET",
+        url: `/calendar-connections/${conn.id}/available-calendars`,
+      });
+      expect(availRes.statusCode).toBe(200);
+      const avail = availRes.json<AvailableCalendarsResponse>();
+      expect(avail.length).toBeGreaterThan(0);
+      expect(avail[0]!.caldav_calendar_url).toBe("/calendars/users/testuser/personal/");
+
+      // Opt calendar into sync
+      const patchRes = await app.inject({
+        method: "PATCH",
+        url: `/calendar-connections/${conn.id}/calendars`,
+        payload: [
+          {
+            caldav_calendar_url: avail[0]!.caldav_calendar_url,
+            sync_enabled: true,
+          },
+        ],
+      });
+      expect(patchRes.statusCode).toBe(200);
+      const patched = patchRes.json<CalendarConnectionCalendar[]>();
+      expect(patched[0]!.caldav_calendar_url).toBe(avail[0]!.caldav_calendar_url);
+      expect(patched[0]!.sync_enabled).toBe(true);
+
+      // Disconnect
+      const discRes = await app.inject({
+        method: "POST",
+        url: `/calendar-connections/${conn.id}/disconnect`,
+      });
+      expect(discRes.statusCode).toBe(200);
+      expect(discRes.json<CalendarConnection>().status).toBe("disconnected");
+
+      const [afterDisc] = await app.db
+        .select()
+        .from(calendarConnections)
+        .where(eq(calendarConnections.id, conn.id));
+      expect(afterDisc?.passwordCiphertext).toBeNull();
+
+      // Reconnect
+      const reRes = await app.inject({
+        method: "POST",
+        url: "/calendar-connections/caldav",
+        payload: {
+          server_url: "https://caldav.example.com",
+          username: "testuser",
+          password: "my-app-password",
+        },
+      });
+      expect(reRes.statusCode).toBe(200);
+      expect(reRes.json<CalendarConnection>().id).toBe(conn.id);
+      expect(reRes.json<CalendarConnection>().status).toBe("active");
     });
   });
 });

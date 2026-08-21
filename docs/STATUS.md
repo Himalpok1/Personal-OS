@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 4 — Calendar UI + external sync + recurrence UI — **IN PROGRESS**. Checkpoints 4.1, 4.2, 4.3, 4.4, and 4.5 (Stage A & Stage B) are complete (2026-08-20). Checkpoint 4.6 (CalDAV external sync) has not begun. Phase 3 remains COMPLETE, production-deployed, and physically verified — see below.
-**Implementation status:** Phases 0–3 are implemented and production-verified. Phase 4 Checkpoints 4.1–4.5 are implemented and verified in local development only; nothing from Phase 4 was deployed to production.
-**Next phase allowed:** Checkpoint 4.5 is complete. Checkpoint 4.6 (CalDAV sync implementation) is safe to begin, but requires separate scoping and CalDAV dev credentials before starting.
+**Current phase:** Phase 4 — Calendar UI + external sync + recurrence UI — **IN PROGRESS**. Checkpoints 4.1, 4.2, 4.3, 4.4, 4.5 (Stage A & Stage B), and 4.6 (CalDAV calendar sync) are complete (2026-08-20). Checkpoint 4.7 (Phase 4 production deployment) has not begun. Phase 3 remains COMPLETE, production-deployed, and physically verified — see below.
+**Implementation status:** Phases 0–3 are implemented and production-verified. Phase 4 Checkpoints 4.1–4.6 are implemented and verified in local development only; nothing from Phase 4 was deployed to production.
+**Next phase allowed:** Checkpoint 4.6 is complete. Checkpoint 4.7 (Phase 4 production deployment & physical verification) is the next allowed checkpoint.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 4 Checkpoint 4.1 — Events backend (COMPLETE, 2026-08-20)
@@ -1270,9 +1270,78 @@ Built across stages B1–B5 following the user-approved Stage B plan and locked 
 | 7 | Simultaneous local edit vs remote delete | Tested and passing: local event archived (soft-deleted), link removed, subsequent sync does not resurrect |
 | 8 | Queue isolation smoke | Tested and passing: concurrent notification dispatch while calendar sync in-flight |
 
+## Phase 4 Checkpoint 4.6 — CalDAV calendar sync (COMPLETE, 2026-08-21)
+
+Built as the second calendar sync provider behind the architecture proven by Google Calendar. Fully adheres to RFC 4791, RFC 6578, and RFC 5545 specifications, including single `.ics` resource recurrence sets, conditional HTTP operations with ETags, SSRF/redirect defense, and universal client support across iOS, Android, and Web. Local development only; production untouched.
+
+**What was built:**
+
+1. **Database schema & migration `0009` (`packages/db`, `packages/schema`)**:
+   - `0009_caldav_provider_support.sql`: Purely additive migration supporting CalDAV columns on `calendar_connections`, `calendar_connection_calendars`, `event_external_links`, and `calendar_event_instances`.
+   - CHECK constraints guaranteeing provider invariants (Google connections require `google_account_email` and `auth_type='oauth2'`; CalDAV connections require `server_url`, `username`, encrypted password, and `auth_type IN ('basic', 'bearer')`).
+   - Partial unique indexes ensuring provider isolation and no malformed mixed-provider rows.
+   - `packages/schema`: Added `ConnectCaldavCalendarRequestSchema`, `AvailableCalendarSchema`, `LinkEventToCalendarRequestSchema`, and updated `CalendarConnectionSchema`.
+
+2. **CalDAV Client, Security, & Translation Engine (`packages/calendar-providers`)**:
+   - **SSRF & Credential Protection (`caldav/ssrf.ts`)**: Mandatory HTTPS requirement (HTTP permitted only for local dev/test loopback), link-local (`169.254.0.0/16`, `fe80::/10`) and cloud metadata (`169.254.169.254`) blocked. Cross-origin redirects strip `Authorization` headers.
+   - **`HttpCalDavClient` (`caldav/caldav-client.ts`)**: RFC 4791 bootstrap discovery (`/.well-known/caldav` -> `current-user-principal` -> `calendar-home-set`), collection discovery (`supported-report-set`, `resourcetype`), RFC 6578 `sync-collection` REPORT with pagination (`number-of-matches-within-limits`), full-inventory fallback (PROPFIND Depth:1 -> diff), batch multiget REPORT (`calendar-multiget`), conditional `PUT` (`If-Match` / `If-None-Match: *`) and conditional `DELETE`.
+   - **`FakeCalDavClient` (`caldav/caldav-client.fake.ts`)**: In-memory mock implementing the full CalDAV protocol, including sync-token invalidation, truncation, ETag conflicts, and recurrence exceptions.
+   - **RFC 5545 Translation Engine (`caldav/translate.ts`)**: Multi-component single-resource recurrence set parsing (RFC 4791 §4.1: master VEVENT + RECURRENCE-ID exceptions sharing one UID and ETag), local VCALENDAR serialization, and in-place exception injection (`applyExceptionToVCalendar`).
+
+3. **API Endpoints & Client (`packages/api-client`, `apps/api`)**:
+   - Added `POST /calendar-connections/caldav` (server_url, username, password with AES-256-GCM encryption).
+   - Added `GET /calendar-connections/:id/available-calendars` (provider-agnostic calendar collection discovery).
+   - Added `PATCH /calendar-connections/:id/calendars` (supports `caldav_calendar_url` opt-in/opt-out).
+   - Added `POST /calendar-connections/:id/sync-now` and `POST /calendar-connections/:id/disconnect` (clears credentials, preserves mapping rows).
+   - Added `POST /events/:id/link-calendar` (supports both Google and CalDAV collections).
+   - `packages/api-client`: Exported `connectCaldavCalendar`, `listAvailableCalendars`, and `linkEventToCalendar`.
+
+4. **Worker Sync Engine & Inbound/Outbound Jobs (`apps/worker`)**:
+   - `syncCaldavCalendar` in `calendar.sync-calendar` job: Incremental sync via `sync-collection`, fallback to inventory PROPFIND upon invalid sync token, multiget batching, deterministic conflict resolution via ETag baseline (`decideConflict`), soft-deletion handling, and recurrence exception mapping.
+   - `pushCaldavEvent` in `calendar.push-event` job: Insert new events (`If-None-Match: *`), update existing events (`If-Match: ETag`), detached occurrence push (reads parent `.ics`, injects RECURRENCE-ID VEVENT, performs conditional PUT on parent resource ETag), and remote event deletion upon local archive.
+
+5. **Universal Mobile UI (`apps/mobile`)**:
+   - Added "Connect CalDAV" form and `CaldavCalendarConnectionCard` in Settings screen, available universally on iOS, Android, and Web.
+   - Updated `mergeAvailableCalendars` to handle both Google and CalDAV collections.
+   - Updated event linking picker and query hooks to support CalDAV calendars.
+
+**Live CalDAV Interoperability Verification (Radicale 3.7.8):**
+
+Tested against a real RFC 4791 reference CalDAV server (Radicale 3.7.8):
+- **Discovery**: `discoverHomeSet` resolved principal (`http://127.0.0.1:5232/testuser/`) and calendar-home-set (`http://127.0.0.1:5232/testuser/`). `findCalendars` discovered collections and reported capabilities.
+- **One-off Events**: Created remote event with `If-None-Match: *`, imported to Personal OS, modified locally, and pushed back with `If-Match: <etag>`. ETag advanced from `6da924...` to `0157b4...`.
+- **All-day Events**: Roundtripped 2-day all-day event (`2026-08-28` to `2026-08-29`). Verified exclusive remote DTEND (`20260830`) correctly translates to inclusive local end date (`2026-08-29`).
+- **Recurrence Sets**: Master recurring series created. Detached occurrence injected into the same `.ics` resource via `applyExceptionToVCalendar` with `RECURRENCE-ID` and pushed via conditional PUT. Re-sync returned both master and detached exception without series duplication. Occurrence cancellation applied `EXDATE` to master VEVENT without deleting parent series.
+- **Inventory & Fallback**: Radicale does not support RFC 6578 sync-collection; fallback path (`PROPFIND Depth:1` inventory diff $\rightarrow$ `calendar-multiget` batching) executed cleanly.
+- **ETag Conflict Protection**: Attempted write with stale ETag returned `412 Precondition Failed` without overwriting remote data.
+- **Delete/Archive**: Conditional DELETE verified on remote server (returned 404 on subsequent GET).
+- **Disconnect/Reconnect**: Connection disconnected (credentials cleared, event links preserved), then reconnected without duplicate data creation.
+
+**Google Regression Audit:**
+- All Google Calendar sync, push, refresh-token, recurrence-exception, and 410 gone reconciliation tests passed with 100% success.
+- Provider queues dispatch cleanly to respective provider engines (`google` / `caldav`) with per-calendar serialization intact.
+
+**Android Release Build:**
+- Command: `cd apps/mobile/android && JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=$HOME/Library/Android/sdk ./gradlew assembleRelease --console=plain`
+- Result: **BUILD SUCCESSFUL in 20s** (653 actionable tasks: 69 executed, 584 up-to-date).
+- Output APK: `apps/mobile/android/app/build/outputs/apk/release/app-release.apk` (111MB, SHA-256 `8800dc595daf3c5ba7f5540a09be752cdba0f1003fedbb1c0cbc7396cb9c2508`).
+
+**Verification Summary:**
+
+| # | Check | Result |
+|---|---|---|
+| 1 | `pnpm build && pnpm typecheck && pnpm lint && pnpm format:check` | Clean across all 9 packages and apps (0 errors, 0 warnings) |
+| 2 | Full test suite | **462 tests pass across 62 test files** (`@personal-os/core` 58, `@personal-os/schema` 18, `@personal-os/ai-providers` 20, `@personal-os/calendar-providers` 57, `@personal-os/api-client` 20, `api` 124, `worker` 66, `mobile` 77) |
+| 3 | Expo web export (`npx expo export --platform web`) | Bundled cleanly (SPA single output) |
+| 4 | Android Release Build (`assembleRelease`) | BUILD SUCCESSFUL (653 tasks) |
+| 5 | Security & git hygiene | `git diff --check` clean; `gitleaks` scanned 50 commits with 0 leaks; `.env` gitignored; password redacted in API logs |
+| 6 | Migration `0009` & DB role verification | Clean application on dev and test DBs; DDL restricted for runtime app role |
+| 7 | Real CalDAV Interoperability | 8/8 suites passed against Radicale 3.7.8 |
+| 8 | Google Regression Suite | 100% pass across API, worker, and provider packages |
+
 ## Current work
 
-Phases 0–3 are complete and production-deployed (Checkpoint 6). Phase 4 Checkpoints 4.1–4.5 (including Checkpoint 4.5 Stage A & Stage B) are complete and verified in local development. Phase 4 Checkpoint 4.6 (CalDAV external sync) has not started.
+Phases 0–3 are complete and production-deployed (Checkpoint 6). Phase 4 Checkpoints 4.1–4.6 are complete and verified in local development. Phase 4 Checkpoint 4.7 (Phase 4 production deployment & physical verification) is the next phase.
 
 ## Remaining warnings / technical debt
 
@@ -1289,11 +1358,11 @@ Phases 0–3 are complete and production-deployed (Checkpoint 6). Phase 4 Checkp
 
 ## Last verification
 
-Phase 4 Checkpoint 4.5 Stage B verification, complete and passing (2026-08-20) — see "Phase 4 Checkpoint 4.5 Stage B" above. Strongest evidence: all 415 tests pass across 53 test files; deterministic conflict and echo suppression verified; recurring exception handling in both directions verified; queue isolation verified; Expo web export clean; `git diff --check` and gitleaks clean; production untouched.
+Phase 4 Checkpoint 4.6 (CalDAV calendar sync) verification, complete and passing (2026-08-20) — see "Phase 4 Checkpoint 4.6" above. Strongest evidence: all 462 tests pass across 62 test files; CalDAV discovery, sync-collection, fallback inventory, conditional PUT/DELETE, and recurrence set handling verified; SSRF and cross-origin auth stripping verified; Expo web export clean; `git diff --check` and gitleaks clean; production untouched.
 
 ## Next action
 
-Phase 4 Checkpoint 4.5 is complete. Stop for user review before beginning Checkpoint 4.6 (CalDAV sync implementation).
+Phase 4 Checkpoint 4.6 is complete. Stop for user review before proceeding to Checkpoint 4.7 (Phase 4 production deployment).
 
 ## Handoff rule
 

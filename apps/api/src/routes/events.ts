@@ -24,7 +24,7 @@ import {
   EventRangeQuerySchema,
   EventSchema,
   EventUpdateSchema,
-  LinkEventToGoogleCalendarRequestSchema,
+  LinkEventToCalendarRequestSchema,
   type EventRangeItem,
 } from "@personal-os/schema";
 import {
@@ -41,7 +41,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { CALENDAR_PUSH_EVENT_QUEUE } from "../queue-names.js";
 
 const MAX_EXPANDED_OCCURRENCES_PER_REQUEST = 10_000;
@@ -867,76 +867,92 @@ export default function eventsRoutes(app: FastifyInstance): void {
   // yet (the row exists locally before the event exists on Google's side)
   // and enqueues the first push; calendar.google.push-event fills in
   // googleEventId once Google's insertEvent response comes back.
-  app.post<{ Params: { id: string } }>(
-    "/events/:id/link-google-calendar",
-    async (request, reply) => {
-      const parseResult = LinkEventToGoogleCalendarRequestSchema.safeParse(request.body);
-      if (!parseResult.success) {
-        return reply.code(400).send({
-          error: "validation_failed",
-          issues: parseResult.error.issues,
-        });
-      }
-      const body = parseResult.data;
-
-      const [row] = await app.db.select().from(events).where(eq(events.id, request.params.id));
-      if (!row || row.archivedAt) return reply.code(404).send({ error: "not_found" });
-
-      const [existingLink] = await app.db
-        .select()
-        .from(eventExternalLinks)
-        .where(eq(eventExternalLinks.eventId, row.id));
-      if (existingLink) {
-        return reply.code(409).send({ error: "already_linked" });
-      }
-
-      const [connection] = await app.db
-        .select()
-        .from(calendarConnections)
-        .where(eq(calendarConnections.id, body.connection_id));
-      if (!connection || connection.status !== "active") {
-        return reply.code(400).send({
-          error: "validation_failed",
-          issues: [{ path: ["connection_id"], message: "connection is not active" }],
-        });
-      }
-
-      const [calendarRow] = await app.db
-        .select()
-        .from(calendarConnectionCalendars)
-        .where(
-          and(
-            eq(calendarConnectionCalendars.connectionId, body.connection_id),
-            eq(calendarConnectionCalendars.googleCalendarId, body.google_calendar_id),
-          ),
-        );
-      if (!calendarRow || !calendarRow.syncEnabled) {
-        return reply.code(400).send({
-          error: "validation_failed",
-          issues: [{ path: ["google_calendar_id"], message: "calendar is not sync-enabled" }],
-        });
-      }
-
-      const [link] = await app.db
-        .insert(eventExternalLinks)
-        .values({
-          eventId: row.id,
-          connectionId: body.connection_id,
-          googleCalendarId: body.google_calendar_id,
-          googleEventId: null,
-          syncStatus: "pending_push",
-        })
-        .returning();
-      if (!link) return reply.code(500).send({ error: "internal_error" });
-
-      await app.boss.send(CALENDAR_PUSH_EVENT_QUEUE, { eventId: row.id });
-
-      return reply.code(201).send({
-        event_id: row.id,
-        connection_id: link.connectionId,
-        google_calendar_id: link.googleCalendarId,
-        sync_status: link.syncStatus,
+  const handleLinkCalendar = async (
+    request: FastifyRequest<{ Params: { id: string }; Body: unknown }>,
+    reply: FastifyReply,
+  ) => {
+    const parseResult = LinkEventToCalendarRequestSchema.safeParse(request.body);
+    if (!parseResult.success) {
+      return reply.code(400).send({
+        error: "validation_failed",
+        issues: parseResult.error.issues,
       });
-    },
-  );
+    }
+    const body = parseResult.data;
+    const isCaldav = Boolean(body.caldav_calendar_url);
+
+    const [row] = await app.db.select().from(events).where(eq(events.id, request.params.id));
+    if (!row || row.archivedAt) return reply.code(404).send({ error: "not_found" });
+
+    const [existingLink] = await app.db
+      .select()
+      .from(eventExternalLinks)
+      .where(eq(eventExternalLinks.eventId, row.id));
+    if (existingLink) {
+      return reply.code(409).send({ error: "already_linked" });
+    }
+
+    const [connection] = await app.db
+      .select()
+      .from(calendarConnections)
+      .where(eq(calendarConnections.id, body.connection_id));
+    if (!connection || connection.status !== "active") {
+      return reply.code(400).send({
+        error: "validation_failed",
+        issues: [{ path: ["connection_id"], message: "connection is not active" }],
+      });
+    }
+
+    const calendarWhere = isCaldav
+      ? and(
+          eq(calendarConnectionCalendars.connectionId, body.connection_id),
+          eq(calendarConnectionCalendars.caldavCalendarUrl, body.caldav_calendar_url!),
+        )
+      : and(
+          eq(calendarConnectionCalendars.connectionId, body.connection_id),
+          eq(calendarConnectionCalendars.googleCalendarId, body.google_calendar_id!),
+        );
+
+    const [calendarRow] = await app.db
+      .select()
+      .from(calendarConnectionCalendars)
+      .where(calendarWhere);
+    if (!calendarRow || !calendarRow.syncEnabled) {
+      return reply.code(400).send({
+        error: "validation_failed",
+        issues: [
+          {
+            path: [isCaldav ? "caldav_calendar_url" : "google_calendar_id"],
+            message: "calendar is not sync-enabled",
+          },
+        ],
+      });
+    }
+
+    const [link] = await app.db
+      .insert(eventExternalLinks)
+      .values({
+        eventId: row.id,
+        connectionId: body.connection_id,
+        googleCalendarId: isCaldav ? null : body.google_calendar_id,
+        caldavCalendarUrl: isCaldav ? body.caldav_calendar_url : null,
+        syncStatus: "pending_push",
+      })
+      .returning();
+    if (!link) return reply.code(500).send({ error: "internal_error" });
+
+    await app.boss.send(CALENDAR_PUSH_EVENT_QUEUE, { eventId: row.id });
+
+    return reply.code(201).send({
+      event_id: row.id,
+      connection_id: link.connectionId,
+      google_calendar_id: link.googleCalendarId,
+      caldav_calendar_url: link.caldavCalendarUrl,
+      sync_status: link.syncStatus,
+    });
+  };
+
+  app.post<{ Params: { id: string } }>("/events/:id/link-google-calendar", handleLinkCalendar);
+
+  app.post<{ Params: { id: string } }>("/events/:id/link-calendar", handleLinkCalendar);
 }

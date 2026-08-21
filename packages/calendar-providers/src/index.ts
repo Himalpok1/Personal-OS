@@ -39,9 +39,34 @@ export {
   wouldCollideOnSameLocalDate,
   classifyGoogleEvent,
   mapGoogleEventToLocalUpsert,
-  type GoogleRecurrenceTranslation,
-  type GoogleEventClassification,
   type LocalEventFields,
   type LocalMutationIntent,
-  type CalendarSyncConnectionContext,
+  type GoogleRecurrenceTranslation,
 } from "./translate.js";
+
+export {
+  CalDavError,
+  createCalDavClient,
+  type CalDavAuth,
+  type CalDavCalendarInfo,
+  type CalDavClient,
+  type CalDavSyncResult,
+} from "./caldav/caldav-client.js";
+
+export {
+  createFakeCalDavClient,
+  type FakeCalDavCalendar,
+  type FakeCalDavClient,
+  type FakeCalDavResource,
+} from "./caldav/caldav-client.fake.js";
+
+export {
+  parseVCalendarToMutationIntents,
+  localEventToVCalendar,
+  applyExceptionToVCalendar,
+  type CalDavEventFields,
+  type CalDavMutationIntent,
+  type CalDavTranslateOptions,
+} from "./caldav/translate.js";
+
+export { validateCalDavUrl, isSameOrigin } from "./caldav/ssrf.js";

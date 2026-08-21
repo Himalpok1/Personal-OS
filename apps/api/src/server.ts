@@ -1,6 +1,6 @@
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
-import type { GoogleCalendarClient } from "@personal-os/calendar-providers";
+import type { CalDavClient, GoogleCalendarClient } from "@personal-os/calendar-providers";
 import { workerHeartbeat } from "@personal-os/db";
 import { HealthCheckResponseSchema, type HealthCheckResponse } from "@personal-os/schema";
 import { sql } from "drizzle-orm";
@@ -8,6 +8,7 @@ import Fastify from "fastify";
 import { ZodError } from "zod";
 import { env } from "./env.js";
 import { registerBoss } from "./plugins/boss.js";
+import { registerCalDavClient } from "./plugins/caldav-client.js";
 import { registerDb } from "./plugins/db.js";
 import { registerGoogleCalendarClient } from "./plugins/google-calendar-client.js";
 import aiConfigRoutes from "./routes/ai-config.js";
@@ -29,16 +30,22 @@ export interface BuildServerOptions {
   // Production (index.ts) never passes this, so the real client is always
   // used outside a test suite.
   googleCalendarClient?: GoogleCalendarClient;
+  caldavClient?: CalDavClient;
 }
 
 export async function buildServer(options: BuildServerOptions = {}) {
   const app = Fastify({
     logger: {
-      // AI provider routes accept API keys in the request body, and
-      // devices routes accept a bearer token in the Authorization header --
-      // never let Fastify's default request logging echo either back out.
+      // AI provider routes accept API keys in the request body, devices routes
+      // accept bearer tokens, and CalDAV routes accept passwords --
+      // never let Fastify's default request logging echo any of them back out.
       redact: {
-        paths: ["req.body.api_key", "req.body.auth_code", "req.headers.authorization"],
+        paths: [
+          "req.body.api_key",
+          "req.body.auth_code",
+          "req.body.password",
+          "req.headers.authorization",
+        ],
         censor: "[redacted]",
       },
     },
@@ -47,6 +54,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   registerDb(app);
   await registerBoss(app);
   registerGoogleCalendarClient(app, options.googleCalendarClient);
+  registerCalDavClient(app, options.caldavClient);
   // Scoped to exactly the known web origins (WEB_APP_ORIGIN) -- no
   // wildcard. apps/mobile's web build is the only browser client; curl and
   // the worker never send an Origin header, so they're unaffected either

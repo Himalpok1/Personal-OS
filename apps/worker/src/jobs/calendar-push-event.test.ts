@@ -296,4 +296,134 @@ describe("calendar.google.push-event", () => {
     expect(instanceRow?.googleMasterEventId).toBe("g-master-1");
     expect(instanceRow?.localParentEventId).toBe(parentRow!.id);
   });
+
+  describe("CalDAV push events", () => {
+    async function insertCaldavConnection(db: Db): Promise<string> {
+      const pwSecret = encryptSecret("fake-password", env.CREDENTIALS_ENCRYPTION_KEY);
+      const [row] = await db
+        .insert(calendarConnections)
+        .values({
+          provider: "caldav",
+          serverUrl: "https://caldav.example.com",
+          username: "testuser",
+          authType: "basic",
+          principalUrl: "/principals/users/testuser/",
+          calendarHomeSetUrl: "/calendars/users/testuser/",
+          passwordCiphertext: pwSecret.ciphertext,
+          passwordIv: pwSecret.iv,
+          passwordAuthTag: pwSecret.authTag,
+          status: "active",
+        })
+        .returning({ id: calendarConnections.id });
+      return row!.id;
+    }
+
+    it("pushes a new standalone event with PUT and If-None-Match: *", async () => {
+      const connectionId = await insertCaldavConnection(db);
+      const [eventRow] = await db
+        .insert(events)
+        .values({
+          title: "New Local Event",
+          timezone: "America/Chicago",
+          startsAt: new Date("2026-08-25T14:00:00.000Z"),
+          endsAt: new Date("2026-08-25T15:00:00.000Z"),
+        })
+        .returning();
+
+      const [link] = await db
+        .insert(eventExternalLinks)
+        .values({
+          eventId: eventRow!.id,
+          connectionId,
+          caldavCalendarUrl: "/calendars/users/testuser/personal/",
+          syncStatus: "pending_push",
+        })
+        .returning();
+
+      const fakeCalDav = (await import("@personal-os/calendar-providers")).createFakeCalDavClient();
+      const fakeGoogle = createFakeGoogleCalendarClient();
+      const handler = createCalendarPushEventHandler(db, fakeGoogle, fakeCalDav);
+
+      await handler([fakeJob({ eventId: eventRow!.id })]);
+
+      const [updatedLink] = await db
+        .select()
+        .from(eventExternalLinks)
+        .where(eq(eventExternalLinks.id, link!.id));
+
+      expect(updatedLink?.syncStatus).toBe("synced");
+      expect(updatedLink?.caldavResourceUrl).toBeDefined();
+      expect(updatedLink?.caldavEtag).toBeDefined();
+
+      const remoteEvent = await fakeCalDav.getEvent(updatedLink!.caldavResourceUrl!, {
+        username: "testuser",
+        password: "fake-password",
+      });
+      expect(remoteEvent.icsData).toContain("SUMMARY:New Local Event");
+    });
+
+    it("pushes an update to an existing event with If-Match: ETag", async () => {
+      const connectionId = await insertCaldavConnection(db);
+      const [eventRow] = await db
+        .insert(events)
+        .values({
+          title: "Initial Title",
+          timezone: "America/Chicago",
+          startsAt: new Date("2026-08-25T14:00:00.000Z"),
+          endsAt: new Date("2026-08-25T15:00:00.000Z"),
+        })
+        .returning();
+
+      const fakeCalDav = (await import("@personal-os/calendar-providers")).createFakeCalDavClient();
+      const auth = { username: "testuser", password: "fake-password" };
+      const resourceHref = "/calendars/users/testuser/personal/existing.ics";
+      const initialPut = await fakeCalDav.putEvent(
+        resourceHref,
+        (await import("@personal-os/calendar-providers")).localEventToVCalendar({
+          title: "Initial Title",
+          allDay: false,
+          startsAt: eventRow!.startsAt!,
+          endsAt: eventRow!.endsAt!,
+          timezone: "America/Chicago",
+        }),
+        undefined,
+        auth,
+        { ifNoneMatch: true },
+      );
+
+      const [link] = await db
+        .insert(eventExternalLinks)
+        .values({
+          eventId: eventRow!.id,
+          connectionId,
+          caldavCalendarUrl: "/calendars/users/testuser/personal/",
+          caldavResourceUrl: resourceHref,
+          caldavEtag: initialPut.etag,
+          syncStatus: "pending_push",
+        })
+        .returning();
+
+      // Edit locally
+      await db
+        .update(events)
+        .set({ title: "Updated Title", updatedAt: new Date() })
+        .where(eq(events.id, eventRow!.id));
+
+      const fakeGoogle = createFakeGoogleCalendarClient();
+      const handler = createCalendarPushEventHandler(db, fakeGoogle, fakeCalDav);
+
+      await handler([fakeJob({ eventId: eventRow!.id })]);
+
+      const [updatedLink] = await db
+        .select()
+        .from(eventExternalLinks)
+        .where(eq(eventExternalLinks.id, link!.id));
+
+      expect(updatedLink?.syncStatus).toBe("synced");
+      expect(updatedLink?.caldavEtag).not.toBe(initialPut.etag);
+
+      const remoteEvent = await fakeCalDav.getEvent(resourceHref, auth);
+      expect(remoteEvent.icsData).toContain("SUMMARY:Updated Title");
+    });
+  });
 });

@@ -1,23 +1,31 @@
 import {
+  AvailableCalendarsResponseSchema,
   AvailableGoogleCalendarsResponseSchema,
   CalendarConnectionCalendarSchema,
   CalendarConnectionCalendarUpdateSchema,
   CalendarConnectionSchema,
+  ConnectCaldavCalendarRequestSchema,
   ConnectGoogleCalendarRequestSchema,
+  type AvailableCalendar,
+  type AvailableCalendarsResponse,
   type AvailableGoogleCalendarsResponse,
   type CalendarConnection,
   type CalendarConnectionCalendar,
   type CalendarConnectionCalendarUpdate,
+  type ConnectCaldavCalendarRequest,
   type ConnectGoogleCalendarRequest,
 } from "@personal-os/schema";
 import { z } from "zod";
 import { fetchJson } from "./client.js";
 
 export type {
+  AvailableCalendar,
+  AvailableCalendarsResponse,
   AvailableGoogleCalendarsResponse,
   CalendarConnection,
   CalendarConnectionCalendar,
   CalendarConnectionCalendarUpdate,
+  ConnectCaldavCalendarRequest,
   ConnectGoogleCalendarRequest,
 };
 
@@ -36,6 +44,17 @@ export async function connectGoogleCalendar(
   });
 }
 
+export async function connectCaldavCalendar(
+  baseUrl: string,
+  body: ConnectCaldavCalendarRequest,
+): Promise<CalendarConnection> {
+  const parsed = ConnectCaldavCalendarRequestSchema.parse(body);
+  return fetchJson(baseUrl, "/calendar-connections/caldav", CalendarConnectionSchema, {
+    method: "POST",
+    body: JSON.stringify(parsed),
+  });
+}
+
 export async function listCalendarConnections(baseUrl: string) {
   return fetchJson(baseUrl, "/calendar-connections", CalendarConnectionListResponseSchema);
 }
@@ -48,6 +67,17 @@ export async function listAvailableGoogleCalendars(
     baseUrl,
     `/calendar-connections/${connectionId}/available-calendars`,
     AvailableGoogleCalendarsResponseSchema,
+  );
+}
+
+export async function listAvailableCalendars(
+  baseUrl: string,
+  connectionId: string,
+): Promise<AvailableCalendarsResponse> {
+  return fetchJson(
+    baseUrl,
+    `/calendar-connections/${connectionId}/available-calendars`,
+    AvailableCalendarsResponseSchema,
   );
 }
 

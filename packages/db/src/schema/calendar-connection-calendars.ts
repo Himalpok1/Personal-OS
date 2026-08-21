@@ -1,10 +1,11 @@
-import { boolean, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, check, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { calendarConnections } from "./calendar-connections.js";
 import { projects } from "./projects.js";
 
-// One row per Google calendar (not just per account) a connection has been
+// One row per external calendar (Google or CalDAV collection) a connection has been
 // told about, letting the user opt individual calendars in/out of sync
-// independently (Phase 4 Checkpoint 4.5 Stage B).
+// independently.
 export const calendarConnectionCalendars = pgTable(
   "calendar_connection_calendars",
   {
@@ -12,17 +13,15 @@ export const calendarConnectionCalendars = pgTable(
     connectionId: uuid("connection_id")
       .notNull()
       .references(() => calendarConnections.id, { onDelete: "cascade" }),
-    googleCalendarId: text("google_calendar_id").notNull(),
+    googleCalendarId: text("google_calendar_id"),
+    caldavCalendarUrl: text("caldav_calendar_url"),
     summary: text("summary").notNull(),
     syncEnabled: boolean("sync_enabled").notNull().default(false),
     // Inbound landing hint only -- which local project a newly-imported
-    // Google event attaches to. Never used to decide outbound push
-    // behavior.
+    // event attaches to. Never used to decide outbound push behavior.
     projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
     nextSyncToken: text("next_sync_token"),
-    // Status/observability metadata only. Sync conflict decisions compare
-    // event_external_links.last_synced_local_updated_at against
-    // event_external_links.google_updated_at -- never this column.
+    // Status/observability metadata only.
     lastSuccessfulSyncAt: timestamp("last_successful_sync_at", { withTimezone: true }),
     lastFullSyncAt: timestamp("last_full_sync_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -32,6 +31,13 @@ export const calendarConnectionCalendars = pgTable(
     uniqueIndex("calendar_connection_calendars_connection_calendar_idx").on(
       table.connectionId,
       table.googleCalendarId,
+    ),
+    uniqueIndex("calendar_connection_calendars_caldav_idx")
+      .on(table.connectionId, table.caldavCalendarUrl)
+      .where(sql`${table.caldavCalendarUrl} IS NOT NULL`),
+    check(
+      "calendar_connection_calendars_invariants",
+      sql`(${table.googleCalendarId} IS NOT NULL AND ${table.caldavCalendarUrl} IS NULL) OR (${table.googleCalendarId} IS NULL AND ${table.caldavCalendarUrl} IS NOT NULL)`,
     ),
   ],
 );

@@ -64,6 +64,13 @@
       "when": 1787264825650,
       "tag": "0008_blushing_runaways",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787268000000,
+      "tag": "0009_caldav_provider_support",
+      "breakpoints": true
     }
   ]
 }

@@ -4,7 +4,7 @@ import ExactAlarmStatus from "../../modules/exact-alarm-status";
 import GoogleCalendarAuth from "../../modules/google-calendar-auth";
 import * as Notifications from "expo-notifications";
 import { useState } from "react";
-import { Platform, Pressable, SafeAreaView, ScrollView, Switch, Text, View } from "react-native";
+import { Platform, Pressable, SafeAreaView, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import { mergeAvailableCalendars } from "@/calendar-connections/merge-available-calendars";
 import { useDeviceIdentity } from "@/device-identity/provider";
 import { REMINDERS_CHANNEL_ID, ensureNotificationPermission, ensureReminderChannel } from "@/notifications/channel";
@@ -13,8 +13,10 @@ import { describeReminderEligibility } from "@/notifications/reminder-eligibilit
 import { cancelOwnedReminders } from "@/notifications/scheduler";
 import { flushOutbox, getOutboxStats } from "@/outbox/queue";
 import {
+  useAvailableCalendars,
   useAvailableGoogleCalendars,
   useCalendarConnections,
+  useConnectCaldavCalendar,
   useConnectGoogleCalendar,
   useDisconnectCalendarConnection,
   usePersistedCalendarConnectionCalendars,
@@ -420,10 +422,14 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
 
       {merged.map((cal) => (
         <GoogleCalendarRow
-          key={cal.google_calendar_id}
+          key={cal.key}
           calendar={cal}
           disabled={updateCalendars.isPending}
-          onToggle={(next) => toggle(cal.google_calendar_id, next)}
+          onToggle={(next) => {
+            if (cal.google_calendar_id) {
+              toggle(cal.google_calendar_id, next);
+            }
+          }}
         />
       ))}
 
@@ -459,48 +465,145 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
   );
 }
 
-// Android-only (Stage A's native module has no iOS/web implementation --
-// see GoogleCalendarAuthModule.web.ts). Locked Decision 9: this is the only
-// place outbound Google sync configuration exists in the app; nothing here
-// or in events/new.tsx infers a calendar from project_id or any other
-// implicit signal.
+function CaldavCalendarConnectionCard({ connection }: { connection: CalendarConnection }) {
+  const { data: available, isLoading, isError } = useAvailableCalendars(connection.id);
+  const { data: persisted } = usePersistedCalendarConnectionCalendars(connection.id);
+  const updateCalendars = useUpdateCalendarConnectionCalendars();
+  const syncNow = useSyncCalendarConnectionNow();
+  const disconnect = useDisconnectCalendarConnection();
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+
+  const merged = mergeAvailableCalendars(available ?? [], persisted ?? []);
+
+  const toggle = (caldavCalendarUrl: string, next: boolean) => {
+    updateCalendars.mutate({
+      connectionId: connection.id,
+      body: merged.map((cal) => ({
+        caldav_calendar_url: cal.caldav_calendar_url,
+        sync_enabled: cal.caldav_calendar_url === caldavCalendarUrl ? next : cal.sync_enabled,
+      })),
+    });
+  };
+
+  return (
+    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
+      <Text className="mb-1 text-base font-bold text-black dark:text-white">
+        {connection.username} ({connection.server_url})
+      </Text>
+      <Text className="mb-2 text-xs text-neutral-500">CalDAV · connected</Text>
+
+      {isLoading ? <Text className="text-neutral-500">Loading calendars…</Text> : null}
+      {isError ? (
+        <Text className="text-red-600">Couldn&apos;t load CalDAV calendars.</Text>
+      ) : null}
+
+      {merged.map((cal) => (
+        <View key={cal.key} className="flex-row items-center justify-between py-2">
+          <View className="mr-2 flex-1">
+            <Text className="text-black dark:text-white">{cal.summary}</Text>
+            {cal.last_successful_sync_at ? (
+              <Text className="text-xs text-neutral-500">
+                Last synced {new Date(cal.last_successful_sync_at).toLocaleString()}
+              </Text>
+            ) : null}
+          </View>
+          <Switch
+            value={cal.sync_enabled}
+            onValueChange={(next) => {
+              if (cal.caldav_calendar_url) {
+                toggle(cal.caldav_calendar_url, next);
+              }
+            }}
+            disabled={updateCalendars.isPending}
+          />
+        </View>
+      ))}
+
+      <Pressable
+        onPress={async () => {
+          setSyncResult("Syncing…");
+          try {
+            const result = await syncNow.mutateAsync(connection.id);
+            setSyncResult(`Queued ${result.queued} calendar${result.queued === 1 ? "" : "s"}.`);
+          } catch (err) {
+            setSyncResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }}
+        disabled={syncNow.isPending}
+        className="mt-2 rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+      >
+        <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
+          {syncNow.isPending ? "Syncing…" : "Sync now"}
+        </Text>
+      </Pressable>
+      {syncResult ? <Text className="mt-1 text-xs text-neutral-500">{syncResult}</Text> : null}
+
+      <Pressable
+        onPress={() => disconnect.mutate(connection.id)}
+        disabled={disconnect.isPending}
+        className="mt-2 rounded bg-red-100 px-3 py-2 dark:bg-red-950"
+      >
+        <Text className="text-center text-sm text-red-700 dark:text-red-300">
+          {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function ConnectedCalendarsCard() {
   const { data, isLoading, isError } = useCalendarConnections();
-  const connectMutation = useConnectGoogleCalendar();
-  const [connectError, setConnectError] = useState<string | null>(null);
+  const connectGoogle = useConnectGoogleCalendar();
+  const connectCaldav = useConnectCaldavCalendar();
+
+  const [googleError, setGoogleError] = useState<string | null>(null);
   const [isAuthorizing, setIsAuthorizing] = useState(false);
 
-  if (Platform.OS !== "android") {
-    return (
-      <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
-        <Text className="mb-1 text-base font-bold text-black dark:text-white">
-          Connected Calendars
-        </Text>
-        <Text className="text-xs text-neutral-500">
-          Google Calendar sync is available on the Android app for now.
-        </Text>
-      </View>
-    );
-  }
+  // CalDAV form state
+  const [showCaldavForm, setShowCaldavForm] = useState(false);
+  const [caldavServerUrl, setCaldavServerUrl] = useState("");
+  const [caldavUsername, setCaldavUsername] = useState("");
+  const [caldavPassword, setCaldavPassword] = useState("");
+  const [caldavError, setCaldavError] = useState<string | null>(null);
 
   const googleConnections = (data?.items ?? []).filter(
     (connection) => connection.provider === "google",
   );
+  const caldavConnections = (data?.items ?? []).filter(
+    (connection) => connection.provider === "caldav",
+  );
 
-  const runConnect = async () => {
-    setConnectError(null);
+  const runGoogleConnect = async () => {
+    setGoogleError(null);
     setIsAuthorizing(true);
     try {
       const result = await runGoogleCalendarAuthorize();
-      await connectMutation.mutateAsync({ auth_code: result.serverAuthCode });
+      await connectGoogle.mutateAsync({ auth_code: result.serverAuthCode });
     } catch (err) {
-      setConnectError(err instanceof Error ? err.message : String(err));
+      setGoogleError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsAuthorizing(false);
     }
   };
 
-  const connecting = isAuthorizing || connectMutation.isPending;
+  const runCaldavConnect = async () => {
+    setCaldavError(null);
+    try {
+      await connectCaldav.mutateAsync({
+        server_url: caldavServerUrl.trim(),
+        username: caldavUsername.trim(),
+        password: caldavPassword,
+      });
+      setShowCaldavForm(false);
+      setCaldavServerUrl("");
+      setCaldavUsername("");
+      setCaldavPassword("");
+    } catch (err) {
+      setCaldavError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const connectingGoogle = isAuthorizing || connectGoogle.isPending;
 
   return (
     <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
@@ -513,73 +616,172 @@ function ConnectedCalendarsCard() {
         <Text className="text-red-600">Couldn&apos;t load calendar connections.</Text>
       ) : null}
 
-      {googleConnections.map((connection) => {
-        if (connection.status === "active") {
-          return <GoogleCalendarConnectionCard key={connection.id} connection={connection} />;
-        }
+      {/* Google Connections (Android only) */}
+      {Platform.OS === "android" ? (
+        <>
+          {googleConnections.map((connection) => {
+            if (connection.status === "active") {
+              return <GoogleCalendarConnectionCard key={connection.id} connection={connection} />;
+            }
 
-        if (connection.status === "needs_reauth") {
-          return (
-            <View
-              key={connection.id}
-              className="mb-4 rounded border border-amber-500 bg-amber-50 p-3 dark:bg-amber-950"
-            >
-              <Text className="mb-1 text-sm font-bold text-amber-900 dark:text-amber-200">
-                Reconnect Google Calendar
-              </Text>
-              <Text className="mb-2 text-xs text-amber-900 dark:text-amber-200">
-                {connection.google_account_email} needs to be reconnected before syncing can
-                continue.
-                {connection.last_sync_error ? ` (${connection.last_sync_error})` : ""}
-              </Text>
-              <Pressable
-                onPress={runConnect}
-                disabled={connecting}
-                className="rounded bg-amber-200 px-3 py-2 dark:bg-amber-900"
+            if (connection.status === "needs_reauth") {
+              return (
+                <View
+                  key={connection.id}
+                  className="mb-4 rounded border border-amber-500 bg-amber-50 p-3 dark:bg-amber-950"
+                >
+                  <Text className="mb-1 text-sm font-bold text-amber-900 dark:text-amber-200">
+                    Reconnect Google Calendar
+                  </Text>
+                  <Text className="mb-2 text-xs text-amber-900 dark:text-amber-200">
+                    {connection.google_account_email} needs to be reconnected before syncing can
+                    continue.
+                    {connection.last_sync_error ? ` (${connection.last_sync_error})` : ""}
+                  </Text>
+                  <Pressable
+                    onPress={runGoogleConnect}
+                    disabled={connectingGoogle}
+                    className="rounded bg-amber-200 px-3 py-2 dark:bg-amber-900"
+                  >
+                    <Text className="text-center text-sm text-amber-900 dark:text-amber-100">
+                      {connectingGoogle ? "Reconnecting…" : "Reconnect"}
+                    </Text>
+                  </Pressable>
+                </View>
+              );
+            }
+
+            return (
+              <View
+                key={connection.id}
+                className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700"
               >
-                <Text className="text-center text-sm text-amber-900 dark:text-amber-100">
-                  {connecting ? "Reconnecting…" : "Reconnect"}
+                <Text className="mb-2 text-sm text-black dark:text-white">
+                  {connection.google_account_email} — not connected
                 </Text>
-              </Pressable>
-            </View>
-          );
-        }
+                <Pressable
+                  onPress={runGoogleConnect}
+                  disabled={connectingGoogle}
+                  className="rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+                >
+                  <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
+                    {connectingGoogle ? "Reconnecting…" : "Reconnect"}
+                  </Text>
+                </Pressable>
+              </View>
+            );
+          })}
 
-        // status === "revoked" | "disconnected"
+          {googleConnections.length === 0 ? (
+            <Pressable
+              onPress={runGoogleConnect}
+              disabled={connectingGoogle}
+              className="mb-3 rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+            >
+              <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
+                {connectingGoogle ? "Connecting…" : "Connect Google Calendar"}
+              </Text>
+            </Pressable>
+          ) : null}
+          {googleError ? <Text className="mb-3 text-xs text-red-600">{googleError}</Text> : null}
+        </>
+      ) : null}
+
+      {/* CalDAV Connections (Universal: iOS, Android, Web) */}
+      {caldavConnections.map((connection) => {
+        if (connection.status === "active") {
+          return <CaldavCalendarConnectionCard key={connection.id} connection={connection} />;
+        }
         return (
           <View
             key={connection.id}
             className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700"
           >
             <Text className="mb-2 text-sm text-black dark:text-white">
-              {connection.google_account_email} — not connected
+              CalDAV ({connection.username}) — disconnected
             </Text>
             <Pressable
-              onPress={runConnect}
-              disabled={connecting}
+              onPress={() => setShowCaldavForm(true)}
               className="rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
             >
               <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
-                {connecting ? "Reconnecting…" : "Reconnect"}
+                Reconnect CalDAV
               </Text>
             </Pressable>
           </View>
         );
       })}
 
-      {googleConnections.length === 0 ? (
-        <Pressable
-          onPress={runConnect}
-          disabled={connecting}
-          className="rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
-        >
-          <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
-            {connecting ? "Connecting…" : "Connect Google Calendar"}
-          </Text>
-        </Pressable>
-      ) : null}
+      {/* CalDAV Connect Button / Form */}
+      {caldavConnections.length === 0 || showCaldavForm ? (
+        showCaldavForm ? (
+          <View className="mt-2 rounded border border-neutral-200 p-3 dark:border-neutral-800">
+            <Text className="mb-2 font-bold text-black dark:text-white">Connect CalDAV Server</Text>
 
-      {connectError ? <Text className="mt-2 text-xs text-red-600">{connectError}</Text> : null}
+            <Text className="mb-1 text-xs text-neutral-500">Server URL</Text>
+            <TextInput
+              value={caldavServerUrl}
+              onChangeText={setCaldavServerUrl}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="https://caldav.example.com"
+              className="mb-2 rounded border border-neutral-300 px-2 py-1 text-sm text-black dark:border-neutral-700 dark:text-white"
+            />
+
+            <Text className="mb-1 text-xs text-neutral-500">Username / Email</Text>
+            <TextInput
+              value={caldavUsername}
+              onChangeText={setCaldavUsername}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="username"
+              className="mb-2 rounded border border-neutral-300 px-2 py-1 text-sm text-black dark:border-neutral-700 dark:text-white"
+            />
+
+            <Text className="mb-1 text-xs text-neutral-500">App Password / Token</Text>
+            <TextInput
+              value={caldavPassword}
+              onChangeText={setCaldavPassword}
+              secureTextEntry
+              autoCapitalize="none"
+              placeholder="password"
+              className="mb-2 rounded border border-neutral-300 px-2 py-1 text-sm text-black dark:border-neutral-700 dark:text-white"
+            />
+
+            {caldavError ? <Text className="mb-2 text-xs text-red-600">{caldavError}</Text> : null}
+
+            <View className="flex-row gap-2">
+              <Pressable
+                onPress={runCaldavConnect}
+                disabled={connectCaldav.isPending}
+                className="flex-1 rounded bg-blue-600 px-3 py-2"
+              >
+                <Text className="text-center text-sm font-bold text-white">
+                  {connectCaldav.isPending ? "Connecting…" : "Connect"}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setShowCaldavForm(false);
+                  setCaldavError(null);
+                }}
+                className="rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+              >
+                <Text className="text-center text-sm text-black dark:text-white">Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : (
+          <Pressable
+            onPress={() => setShowCaldavForm(true)}
+            className="rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+          >
+            <Text className="text-center text-sm text-black dark:text-white">
+              Connect CalDAV Calendar
+            </Text>
+          </Pressable>
+        )
+      ) : null}
     </View>
   );
 }

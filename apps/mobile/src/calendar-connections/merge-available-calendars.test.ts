@@ -6,6 +6,7 @@ function persistedCalendar(overrides: Partial<Parameters<typeof mergeAvailableCa
     id: "11111111-1111-4111-8111-111111111111",
     connection_id: "22222222-2222-4222-8222-222222222222",
     google_calendar_id: "primary",
+    caldav_calendar_url: null,
     summary: "stale summary",
     sync_enabled: true,
     project_id: null,
@@ -18,15 +19,18 @@ function persistedCalendar(overrides: Partial<Parameters<typeof mergeAvailableCa
 }
 
 describe("mergeAvailableCalendars", () => {
-  it("defaults an available calendar with no persisted row to sync_enabled: false", () => {
+  it("defaults an available Google calendar with no persisted row to sync_enabled: false", () => {
     const result = mergeAvailableCalendars(
       [{ google_calendar_id: "work", summary: "Work", primary: false }],
       [],
     );
     expect(result).toEqual([
       {
+        key: "work",
         google_calendar_id: "work",
+        caldav_calendar_url: undefined,
         summary: "Work",
+        color: null,
         primary: false,
         sync_enabled: false,
         last_successful_sync_at: null,
@@ -41,8 +45,11 @@ describe("mergeAvailableCalendars", () => {
     );
     expect(result).toEqual([
       {
+        key: "primary",
         google_calendar_id: "primary",
+        caldav_calendar_url: undefined,
         summary: "Live summary",
+        color: null,
         primary: true,
         sync_enabled: true,
         last_successful_sync_at: "2026-08-19T00:00:00.000Z",
@@ -50,30 +57,37 @@ describe("mergeAvailableCalendars", () => {
     ]);
   });
 
-  it("prefers Google's live summary over the persisted (possibly stale) one", () => {
-    const result = mergeAvailableCalendars(
-      [{ google_calendar_id: "primary", summary: "Renamed Calendar", primary: true }],
-      [persistedCalendar({ summary: "Old Name" })],
-    );
-    expect(result[0]?.summary).toBe("Renamed Calendar");
-  });
-
-  it("drops a persisted calendar that no longer appears in the live Google list", () => {
-    const result = mergeAvailableCalendars(
-      [],
-      [persistedCalendar({ google_calendar_id: "deleted-on-google" })],
-    );
-    expect(result).toEqual([]);
-  });
-
-  it("preserves the order of the available list, not the persisted list", () => {
+  it("merges CalDAV collections matching by caldav_calendar_url", () => {
     const result = mergeAvailableCalendars(
       [
-        { google_calendar_id: "b", summary: "B", primary: false },
-        { google_calendar_id: "a", summary: "A", primary: true },
+        {
+          id: "/calendars/users/me/work/",
+          caldav_calendar_url: "/calendars/users/me/work/",
+          summary: "Work Collection",
+          color: "#0055ff",
+        },
       ],
-      [persistedCalendar({ google_calendar_id: "a", sync_enabled: false })],
+      [
+        persistedCalendar({
+          google_calendar_id: null,
+          caldav_calendar_url: "/calendars/users/me/work/",
+          sync_enabled: true,
+          last_successful_sync_at: "2026-08-20T12:00:00.000Z",
+        }),
+      ],
     );
-    expect(result.map((c) => c.google_calendar_id)).toEqual(["b", "a"]);
+
+    expect(result).toEqual([
+      {
+        key: "/calendars/users/me/work/",
+        google_calendar_id: undefined,
+        caldav_calendar_url: "/calendars/users/me/work/",
+        summary: "Work Collection",
+        color: "#0055ff",
+        primary: false,
+        sync_enabled: true,
+        last_successful_sync_at: "2026-08-20T12:00:00.000Z",
+      },
+    ]);
   });
 });

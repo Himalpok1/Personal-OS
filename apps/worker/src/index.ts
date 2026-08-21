@@ -1,4 +1,4 @@
-import { createGoogleCalendarClient } from "@personal-os/calendar-providers";
+import { createCalDavClient, createGoogleCalendarClient } from "@personal-os/calendar-providers";
 import { createDbClient } from "@personal-os/db";
 import { PgBoss } from "pg-boss";
 import { createCaptureParseHandler } from "./jobs/capture-parse.js";
@@ -152,10 +152,9 @@ async function main(): Promise<void> {
   // Hourly -- generous relative to the 2h orphan threshold, cheap to run.
   await boss.schedule(SWEEP_ORPHAN_AUDIO_QUEUE, "0 * * * *");
 
-  // Phase 4 Checkpoint 4.5 Stage B (Google Calendar sync). One real
-  // GoogleCalendarClient shared by both jobs that need to call the Google
-  // Calendar API.
+  // Phase 4 Checkpoint 4.5 & 4.6 (Google & CalDAV Calendar sync).
   const googleCalendarClient = createGoogleCalendarClient();
+  const caldavClient = createCalDavClient();
 
   await boss.createQueue(CALENDAR_REFRESH_TOKEN_DEAD_QUEUE);
   await boss.work(
@@ -179,7 +178,7 @@ async function main(): Promise<void> {
   });
   await boss.work(
     CALENDAR_SYNC_CALENDAR_QUEUE,
-    createCalendarSyncCalendarHandler(db, googleCalendarClient),
+    createCalendarSyncCalendarHandler(db, googleCalendarClient, caldavClient),
   );
 
   await boss.createQueue(CALENDAR_PUSH_EVENT_DEAD_QUEUE);
@@ -190,7 +189,7 @@ async function main(): Promise<void> {
   });
   await boss.work(
     CALENDAR_PUSH_EVENT_QUEUE,
-    createCalendarPushEventHandler(db, googleCalendarClient),
+    createCalendarPushEventHandler(db, googleCalendarClient, caldavClient),
   );
 
   // Local trigger queues: fan out into the real per-connection/per-calendar

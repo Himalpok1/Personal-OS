@@ -1,7 +1,9 @@
 import { HealthCheckResponseSchema, type HealthCheckResponse } from "@personal-os/schema";
 import {
+  connectCaldavCalendar,
   connectGoogleCalendar,
   disconnectCalendarConnection,
+  listAvailableCalendars,
   listAvailableGoogleCalendars,
   listCalendarConnections,
   syncCalendarConnectionNow,
@@ -25,6 +27,7 @@ import {
   createEvent,
   detachEvent,
   getEvent,
+  linkEventToCalendar,
   linkEventToGoogleCalendar,
   listEvents,
   listEventsInRange,
@@ -126,14 +129,17 @@ export function createApiClient(baseUrl: string) {
     detachEvent: detachEvent.bind(null, baseUrl),
     cancelEventOccurrence: cancelEventOccurrence.bind(null, baseUrl),
     linkEventToGoogleCalendar: linkEventToGoogleCalendar.bind(null, baseUrl),
+    linkEventToCalendar: linkEventToCalendar.bind(null, baseUrl),
 
     listOccurrences: listOccurrences.bind(null, baseUrl),
     completeOccurrence: completeOccurrence.bind(null, baseUrl),
     skipOccurrence: skipOccurrence.bind(null, baseUrl),
 
     connectGoogleCalendar: connectGoogleCalendar.bind(null, baseUrl),
+    connectCaldavCalendar: connectCaldavCalendar.bind(null, baseUrl),
     listCalendarConnections: listCalendarConnections.bind(null, baseUrl),
     listAvailableGoogleCalendars: listAvailableGoogleCalendars.bind(null, baseUrl),
+    listAvailableCalendars: listAvailableCalendars.bind(null, baseUrl),
     updateCalendarConnectionCalendars: updateCalendarConnectionCalendars.bind(null, baseUrl),
     syncCalendarConnectionNow: syncCalendarConnectionNow.bind(null, baseUrl),
     disconnectCalendarConnection: disconnectCalendarConnection.bind(null, baseUrl),

@@ -1,16 +1,20 @@
 import { decryptSecret, encryptSecret } from "@personal-os/ai-providers";
 import {
+  CalDavError,
   exchangeAuthCode,
   GoogleOAuthError,
   refreshAccessToken,
 } from "@personal-os/calendar-providers";
 import { calendarConnectionCalendars, calendarConnections } from "@personal-os/db";
 import {
+  AvailableCalendarsResponseSchema,
   AvailableGoogleCalendarsResponseSchema,
   CalendarConnectionCalendarSchema,
   CalendarConnectionCalendarUpdateSchema,
   CalendarConnectionSchema,
+  ConnectCaldavCalendarRequestSchema,
   ConnectGoogleCalendarRequestSchema,
+  type AvailableCalendarsResponse,
   type AvailableGoogleCalendarsResponse,
   type CalendarConnection,
   type CalendarConnectionCalendar,
@@ -24,9 +28,12 @@ function toConnectionResponse(row: typeof calendarConnections.$inferSelect): Cal
   return CalendarConnectionSchema.parse({
     id: row.id,
     provider: row.provider,
-    google_account_email: row.googleAccountEmail,
+    google_account_email: row.googleAccountEmail ?? null,
+    server_url: row.serverUrl ?? null,
+    username: row.username ?? null,
+    auth_type: row.authType ?? null,
     status: row.status,
-    granted_scope: row.grantedScope,
+    granted_scope: row.grantedScope ?? null,
     last_sync_error: row.lastSyncError,
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
@@ -39,7 +46,8 @@ function toCalendarResponse(
   return CalendarConnectionCalendarSchema.parse({
     id: row.id,
     connection_id: row.connectionId,
-    google_calendar_id: row.googleCalendarId,
+    google_calendar_id: row.googleCalendarId ?? null,
+    caldav_calendar_url: row.caldavCalendarUrl ?? null,
     summary: row.summary,
     sync_enabled: row.syncEnabled,
     project_id: row.projectId,
@@ -61,14 +69,7 @@ async function findConnection(app: FastifyInstance, id: string) {
 }
 
 export default function calendarConnectionsRoutes(app: FastifyInstance): void {
-  // Upserts by google_account_id -- reconnecting the same account after a
-  // disconnect (or simply re-authorizing to refresh scope) updates tokens
-  // in place rather than creating a duplicate connection row. This is also
-  // what makes disconnect -> reconnect safe: POST /calendar-connections/:id/disconnect
-  // never deletes calendar_connection_calendars/event_external_links/
-  // calendar_event_instances rows, so a reconnect of the same account
-  // resumes sync against the same mappings instead of re-importing
-  // duplicates.
+  // Google OAuth connection endpoint
   app.post("/calendar-connections/google", async (request, reply) => {
     const body = ConnectGoogleCalendarRequestSchema.parse(request.body);
 
@@ -126,14 +127,82 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
     return reply.code(existing ? 200 : 201).send(toConnectionResponse(row));
   });
 
+  // CalDAV connection endpoint
+  app.post("/calendar-connections/caldav", async (request, reply) => {
+    const body = ConnectCaldavCalendarRequestSchema.parse(request.body);
+
+    let discovery;
+    try {
+      discovery = await app.caldavClient.discoverHomeSet(body.server_url, {
+        username: body.username,
+        password: body.password,
+      });
+    } catch (err) {
+      if (err instanceof CalDavError) {
+        return reply.code(422).send({
+          error: "caldav_discovery_failed",
+          message: err.message,
+          statusCode: err.status,
+        });
+      }
+      throw err;
+    }
+
+    const passwordSecret = encryptSecret(body.password, env.CREDENTIALS_ENCRYPTION_KEY);
+
+    const [existing] = await app.db
+      .select()
+      .from(calendarConnections)
+      .where(
+        and(
+          eq(calendarConnections.provider, "caldav"),
+          eq(calendarConnections.serverUrl, body.server_url),
+          eq(calendarConnections.username, body.username),
+        ),
+      );
+
+    const values = {
+      provider: "caldav" as const,
+      serverUrl: body.server_url,
+      username: body.username,
+      authType: body.auth_type ?? "basic",
+      principalUrl: discovery.principalUrl,
+      calendarHomeSetUrl: discovery.calendarHomeSetUrl,
+      passwordCiphertext: passwordSecret.ciphertext,
+      passwordIv: passwordSecret.iv,
+      passwordAuthTag: passwordSecret.authTag,
+      status: "active" as const,
+      lastSyncError: null,
+      updatedAt: new Date(),
+    };
+
+    let row: typeof calendarConnections.$inferSelect | undefined;
+    if (existing) {
+      [row] = await app.db
+        .update(calendarConnections)
+        .set(values)
+        .where(eq(calendarConnections.id, existing.id))
+        .returning();
+    } else {
+      [row] = await app.db.insert(calendarConnections).values(values).returning();
+    }
+    if (!row) throw new Error("upsert into calendar_connections returned no row");
+
+    return reply.code(existing ? 200 : 201).send(toConnectionResponse(row));
+  });
+
   app.get("/calendar-connections", async () => {
     const rows = await app.db.select().from(calendarConnections);
     return { items: rows.map(toConnectionResponse) };
   });
 
-  // Live passthrough, never cached/stored -- lets the UI present a
-  // calendar picker before the user has opted any calendar into
-  // calendar_connection_calendars.
+  app.get<{ Params: { id: string } }>("/calendar-connections/:id", async (request, reply) => {
+    const connection = await findConnection(app, request.params.id);
+    if (!connection) return reply.code(404).send({ error: "not_found" });
+    return toConnectionResponse(connection);
+  });
+
+  // Available calendars listing (Google or CalDAV)
   app.get<{ Params: { id: string } }>(
     "/calendar-connections/:id/available-calendars",
     async (request, reply) => {
@@ -143,14 +212,50 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
         return reply.code(409).send({ error: "connection_not_active", status: connection.status });
       }
 
-      const accessToken = await resolveAccessTokenForRequest(app, connection);
-      const result = await app.googleCalendarClient.listCalendars(accessToken);
-      const response: AvailableGoogleCalendarsResponse = result.items.map((item) => ({
-        google_calendar_id: item.id,
-        summary: item.summary,
-        primary: item.primary ?? false,
-      }));
-      return AvailableGoogleCalendarsResponseSchema.parse(response);
+      if (connection.provider === "google") {
+        const accessToken = await resolveAccessTokenForRequest(app, connection);
+        const result = await app.googleCalendarClient.listCalendars(accessToken);
+        const response: AvailableGoogleCalendarsResponse = result.items.map((item) => ({
+          google_calendar_id: item.id,
+          summary: item.summary,
+          primary: item.primary ?? false,
+        }));
+        return AvailableGoogleCalendarsResponseSchema.parse(response);
+      }
+
+      if (connection.provider === "caldav") {
+        if (
+          !connection.passwordCiphertext ||
+          !connection.passwordIv ||
+          !connection.passwordAuthTag
+        ) {
+          return reply.code(401).send({ error: "missing_credentials" });
+        }
+        const password = decryptSecret(
+          {
+            ciphertext: connection.passwordCiphertext,
+            iv: connection.passwordIv,
+            authTag: connection.passwordAuthTag,
+          },
+          env.CREDENTIALS_ENCRYPTION_KEY,
+        );
+        const homeSetUrl = connection.calendarHomeSetUrl || connection.serverUrl!;
+        const cals = await app.caldavClient.findCalendars(homeSetUrl, {
+          username: connection.username!,
+          password,
+        });
+
+        const response: AvailableCalendarsResponse = cals.map((c) => ({
+          id: c.href,
+          summary: c.displayName,
+          caldav_calendar_url: c.href,
+          color: c.color,
+          primary: false,
+        }));
+        return AvailableCalendarsResponseSchema.parse(response);
+      }
+
+      return reply.code(400).send({ error: "unsupported_provider" });
     },
   );
 
@@ -164,15 +269,24 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
       const results: CalendarConnectionCalendar[] = [];
 
       for (const item of body) {
+        const isCaldav = Boolean(item.caldav_calendar_url);
+        const calendarKey = item.google_calendar_id || item.caldav_calendar_url;
+        if (!calendarKey) continue;
+
+        const whereCondition = isCaldav
+          ? and(
+              eq(calendarConnectionCalendars.connectionId, connection.id),
+              eq(calendarConnectionCalendars.caldavCalendarUrl, item.caldav_calendar_url!),
+            )
+          : and(
+              eq(calendarConnectionCalendars.connectionId, connection.id),
+              eq(calendarConnectionCalendars.googleCalendarId, item.google_calendar_id!),
+            );
+
         const [existingRow] = await app.db
           .select()
           .from(calendarConnectionCalendars)
-          .where(
-            and(
-              eq(calendarConnectionCalendars.connectionId, connection.id),
-              eq(calendarConnectionCalendars.googleCalendarId, item.google_calendar_id),
-            ),
-          );
+          .where(whereCondition);
 
         let row: typeof calendarConnectionCalendars.$inferSelect | undefined;
         if (existingRow) {
@@ -186,19 +300,13 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
             .where(eq(calendarConnectionCalendars.id, existingRow.id))
             .returning();
         } else {
-          // A newly-opted-in calendar -- summary is required by the schema
-          // but this endpoint's body doesn't carry it (the client already
-          // has it from GET .../available-calendars); fall back to the
-          // google_calendar_id itself rather than leaving it empty, and
-          // let a future sync-calendar pass populate/correct it. This
-          // matches the read contract's own tolerance for stale metadata
-          // (last_successful_sync_at etc.) elsewhere in this data model.
           [row] = await app.db
             .insert(calendarConnectionCalendars)
             .values({
               connectionId: connection.id,
-              googleCalendarId: item.google_calendar_id,
-              summary: item.google_calendar_id,
+              googleCalendarId: isCaldav ? null : item.google_calendar_id,
+              caldavCalendarUrl: isCaldav ? item.caldav_calendar_url : null,
+              summary: calendarKey,
               syncEnabled: item.sync_enabled,
               projectId: item.project_id ?? null,
             })
@@ -233,13 +341,11 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
         );
 
       for (const cal of enabledCalendars) {
-        // singletonKey (queue policy 'singleton', see queue-names.ts) makes a
-        // sync-now request while a sync is already in flight for this exact
-        // calendar a harmless queued duplicate rather than a concurrent run.
+        const calKey = cal.googleCalendarId || cal.caldavCalendarUrl || cal.id;
         await app.boss.send(
           CALENDAR_SYNC_CALENDAR_QUEUE,
           { connectionId: connection.id, calendarConnectionCalendarId: cal.id },
-          { singletonKey: `${connection.id}:${cal.googleCalendarId}` },
+          { singletonKey: `${connection.id}:${calKey}` },
         );
       }
 
@@ -247,12 +353,6 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
     },
   );
 
-  // Locked, non-destructive: best-effort revoke with Google, null every
-  // credential column, set status='disconnected'. Deliberately does NOT
-  // delete calendar_connection_calendars/event_external_links/
-  // calendar_event_instances -- they must survive so a reconnect of the
-  // same account resumes without re-importing duplicates (see the doc
-  // comment on POST /calendar-connections/google above).
   app.post<{ Params: { id: string } }>(
     "/calendar-connections/:id/disconnect",
     async (request, reply) => {
@@ -260,6 +360,7 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
       if (!connection) return reply.code(404).send({ error: "not_found" });
 
       if (
+        connection.provider === "google" &&
         connection.refreshTokenCiphertext &&
         connection.refreshTokenIv &&
         connection.refreshTokenAuthTag
@@ -279,8 +380,6 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
             body: new URLSearchParams({ token: refreshToken }).toString(),
           });
         } catch (err) {
-          // Best-effort per the locked instruction -- log and continue
-          // regardless of outcome.
           request.log.warn(
             { err },
             "calendar-connections: Google token revocation failed (continuing)",
@@ -299,6 +398,9 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
           refreshTokenCiphertext: null,
           refreshTokenIv: null,
           refreshTokenAuthTag: null,
+          passwordCiphertext: null,
+          passwordIv: null,
+          passwordAuthTag: null,
           updatedAt: new Date(),
         })
         .where(eq(calendarConnections.id, connection.id))
@@ -310,13 +412,6 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
   );
 }
 
-// Shared by GET .../available-calendars (the only route-level caller that
-// needs a live access token synchronously within a request) -- a minimal,
-// non-persisting inline refresh so this live passthrough doesn't force the
-// caller to wait for the worker's own refresh cadence. Does not write a
-// needs_reauth transition on permanent failure; that's handled by the two
-// worker jobs that actually perform sync/push, since a live listing failing
-// once isn't itself sync-affecting the way a background job's failure is.
 async function resolveAccessTokenForRequest(
   app: FastifyInstance,
   connection: typeof calendarConnections.$inferSelect,

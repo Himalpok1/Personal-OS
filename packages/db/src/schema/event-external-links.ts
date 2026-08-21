@@ -4,11 +4,9 @@ import { calendarConnections } from "./calendar-connections.js";
 import { events } from "./events.js";
 
 // Links a top-level local event (one-off, or a recurring MASTER -- never an
-// occurrence exception) to its Google Calendar counterpart. Occurrence-level
-// exceptions under a recurring master are tracked separately in
-// calendar-event-instances.ts, because a cancelled occurrence (per
-// Checkpoint 4.4's cancel-occurrence semantics) has no local `events` row to
-// key this table's unique event_id on.
+// occurrence exception) to its external calendar counterpart (Google or CalDAV).
+// Occurrence-level exceptions under a recurring master are tracked separately in
+// calendar-event-instances.ts.
 export const eventExternalLinks = pgTable(
   "event_external_links",
   {
@@ -21,27 +19,19 @@ export const eventExternalLinks = pgTable(
     connectionId: uuid("connection_id")
       .notNull()
       .references(() => calendarConnections.id, { onDelete: "cascade" }),
-    googleCalendarId: text("google_calendar_id").notNull(),
-    // Nullable: a brand-new local event the user explicitly links to a
-    // Google calendar (Decision 9's outbound flow) has no Google event id
-    // yet -- it doesn't exist on Google's side until the first
-    // calendar.google.push-event run creates it there. Null here means
-    // "pending initial push" (paired with sync_status='pending_push');
-    // the push job fills this in from Google's insertEvent response.
+    // Google-specific fields
+    googleCalendarId: text("google_calendar_id"),
     googleEventId: text("google_event_id"),
-    // Correlation/debug metadata only -- never used for dedupe lookup. The
-    // (connection_id, google_calendar_id, google_event_id) unique index
-    // below is the authoritative dedupe identity (Postgres treats each NULL
-    // as distinct for uniqueness purposes, so multiple pending-push links
-    // can coexist safely -- event_id's own unique constraint already
-    // prevents a duplicate link for the same local event).
     googleIcalUid: text("google_ical_uid"),
     googleEtag: text("google_etag"),
-    // Remote half of the per-link conflict baseline.
     googleUpdatedAt: timestamp("google_updated_at", { withTimezone: true }),
-    // Local half of the per-link conflict baseline -- sync logic compares
-    // events.updated_at against THIS column, never
-    // calendar_connection_calendars.last_successful_sync_at.
+    // CalDAV-specific fields
+    caldavCalendarUrl: text("caldav_calendar_url"),
+    caldavResourceUrl: text("caldav_resource_url"),
+    caldavIcalUid: text("caldav_ical_uid"),
+    caldavEtag: text("caldav_etag"),
+    caldavUpdatedAt: timestamp("caldav_updated_at", { withTimezone: true }),
+    // Common baseline & status
     lastSyncedLocalUpdatedAt: timestamp("last_synced_local_updated_at", { withTimezone: true }),
     syncStatus: text("sync_status").notNull().default("synced"),
     lastSyncError: text("last_sync_error"),
@@ -57,6 +47,13 @@ export const eventExternalLinks = pgTable(
       table.connectionId,
       table.googleCalendarId,
       table.googleEventId,
+    ),
+    uniqueIndex("event_external_links_caldav_resource_idx")
+      .on(table.connectionId, table.caldavCalendarUrl, table.caldavResourceUrl)
+      .where(sql`${table.caldavResourceUrl} IS NOT NULL`),
+    check(
+      "event_external_links_invariants",
+      sql`(${table.googleCalendarId} IS NOT NULL AND ${table.caldavCalendarUrl} IS NULL) OR (${table.googleCalendarId} IS NULL AND ${table.caldavCalendarUrl} IS NOT NULL)`,
     ),
   ],
 );
