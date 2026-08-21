@@ -1,10 +1,28 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 4 — Calendar UI + external sync + recurrence UI — **COMPLETE** (all checkpoints, including 4.7 production deployment & physical verification, closed 2026-08-21). Phases 0–3 remain COMPLETE, production-deployed, and physically verified — see below.
+**Current phase:** Phase 5 — Daily Command Center + Projects — **IN PROGRESS** (plan approved with amendments 2026-08-21; Step 0 documentation reconciliation + Step 1 contract/core freeze; Checkpoint 5.1 is the first implementation checkpoint). Phases 0–4 remain COMPLETE, production-deployed, and physically verified — see below.
 **Implementation status:** Phases 0–4 are implemented and production-deployed. Checkpoint 4.7 deployed Phase 4 to production and passed both reboot-survival tests physically (Rabbit device and Ubuntu host) on 2026-08-21.
-**Next phase allowed:** Phase 4 is complete. Phase 5 (Finance) is next per `ARCHITECTURE.md`'s phase plan, but it is gated on the open finance-source-of-truth decision (`DECISIONS.md`) — do not begin without explicit user direction.
+**Next phase allowed:** Phase 5 checkpoints proceed sequentially under the approved plan (5.1 Today/Home → 5.2 Projects → 5.3 Reviews → 5.4 Agenda → 5.5 Daily Brief → 5.6 polish → 5.7 gated deployment). **No production changes before 5.7.** Finance is deferred to a later phase (ADR-038), still gated on the open finance-source-of-truth decision.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
+
+## Phase 5 — Daily Command Center + Projects (plan approved 2026-08-21)
+
+Phase 5 was redefined by explicit user direction (ADR-038): the original "Phase 5 = Finance" entry is deferred to a later phase, still gated on the open finance-source-of-truth decision. Five read-only planning audits (domain/data, UX/navigation, projects/review, AI/worker, independent risk/test) were reconciled into an approved checkpoint plan; production was untouched throughout planning.
+
+**Approved checkpoints:** 5.1 Today/Home command center · 5.2 operational project management · 5.3 daily+weekly reviews · 5.4 unified agenda · 5.5 manual AI Daily Brief · 5.6 mobile/Rabbit daily-use polish · 5.7 gated production deployment.
+
+**Binding user amendments recorded with the approval:**
+
+1. **Overdue semantics:** `overdue ⟺ due_at < effectiveNow` (never end-of-local-day); `due_today` = the requested-timezone local calendar-day window `[startOfLocalDay(tz), startOfNextLocalDay(tz))`; occurrences likewise on `occurs_at`. One `effectiveNow` captured per request/read-model build. Tasks whose own timezone differs from the requested Today timezone are bucketed by instant; their own timezone formats display only.
+2. **Recurring dedupe:** where a materialized actionable occurrence exists, the occurrence IS the actionable representation; the parent recurring task must not also appear for that same due instance in Today or Agenda. Skipped/completed occurrences excluded; Upcoming excludes items already shown as overdue/today.
+3. **Brief uniqueness:** `ai_daily_briefs` identity is `(brief_date, timezone)` unique; upsert and get/current use the same identity.
+4. **Priority reality (verified before freezing next-action):** `tasks.priority` is an unconstrained nullable smallint written only by AI capture and ordered by nothing anywhere; frozen convention **lower value = higher priority**, comparator `due_at ASC NULLS LAST → priority ASC NULLS LAST → created_at DESC NULLS LAST → id ASC`.
+5. **Migration accounting:** Phase 5 adds exactly 0010 (project lifecycle), 0011 (reviews), 0012 (daily briefs). Post-Phase-5 production journal must contain exactly **0000–0012 = 13 migrations**.
+6. **Approved scope items stay in their assigned checkpoints:** `remind_at` accepted through `TaskUpdateSchema` in 5.4 (reminder reconciliation correctness preserved + physical verification later); Quick Capture `source` reflects real platform instead of hardcoded `"web"` in 5.6. Neither pulled into 5.1.
+7. **No production `daily_brief` route now:** 5.5 implements and locally verifies collector/no-provider behavior/routing/persistence/timeouts/UI; actual production provider/model selection is deferred to 5.7.
+
+Docs updated this step: `DECISIONS.md` ADR-038–041; `ARCHITECTURE.md` revised phase plan plus a new frozen-semantics section ("Today & agenda read models"). All Phase 0–4 evidence preserved unchanged.
 
 ## Phase 4 Checkpoint 4.1 — Events backend (COMPLETE, 2026-08-20)
 
@@ -1396,7 +1414,7 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-Phases 0–4 are complete and production-deployed. Checkpoint 4.7 closed 2026-08-21 with both reboot-survival tests passed physically, all closure audits green, and the full component lineage recorded above.
+Phase 5 (Daily Command Center + Projects) planning was approved with seven binding amendments on 2026-08-21; ADR-038–041 recorded and `ARCHITECTURE.md`'s phase plan reconciled. Step 0 (documentation reconciliation) and Step 1 (contract/core freeze across schema + core packages) are in progress; Checkpoint 5.1 (Today/Home command center) follows immediately after contracts freeze. Production remains untouched.
 
 ## Remaining warnings / technical debt
 
@@ -1420,7 +1438,7 @@ Phase 4 Checkpoint 4.7 closure verification (2026-08-21) — see "Phase 4 Checkp
 
 ## Next action
 
-Phase 4 is complete. Stop. Phase 5 (Finance) is the next phase per `ARCHITECTURE.md` but is gated on the open finance-source-of-truth decision — await explicit user direction before any Phase 5 work.
+Freeze Step 1 contracts (packages/schema Today/Agenda/Projects/Reviews/Brief contracts + packages/core actionability and project-lifecycle modules with tests, adversarially audited), run full workspace gates, then begin Checkpoint 5.1 (migration 0010, `GET /today`, index-tab → Today repurpose). No production changes before Checkpoint 5.7.
 
 ## Handoff rule
 

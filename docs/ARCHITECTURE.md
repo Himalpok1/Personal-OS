@@ -55,7 +55,7 @@ packages/
 
 A future Next.js app imports `schema`, `api-client`, and `core` unchanged and only writes new UI. If you find yourself putting a date calculation inside a React component, it belongs in `core`.
 
-The honest cost of this choice: when the finance and health dashboards arrive in Phases 5–6, dense data views in RN Web will be more friction than they'd be in Next.js. The monorepo boundary above is what makes that a contained, deferrable problem rather than a rewrite.
+The honest cost of this choice: when the finance and health dashboards arrive in later phases, dense data views in RN Web will be more friction than they'd be in Next.js. The monorepo boundary above is what makes that a contained, deferrable problem rather than a rewrite.
 
 ---
 
@@ -343,6 +343,22 @@ The parser can infer the anchor from phrasing — "every 3 days after I…", "ev
 
 ---
 
+## Today & agenda read models (frozen semantics, ADR-038/039/041)
+
+These are product semantics, not implementation details. Every aggregate read model (`/today`, `/agenda`, the Daily Brief collector) MUST follow them:
+
+1. **One `effectiveNow` per build.** Capture `now` once at the start of a request/read-model build; all categorization uses that single instant so sections cannot disagree mid-execution.
+2. **Overdue is instant comparison, not end-of-day.** For a task with `due_at`: `overdue ⟺ due_at < effectiveNow`. For an open scheduled occurrence of a recurring item: `overdue ⟺ occurs_at < effectiveNow`. Do not use end-of-current-local-day as the overdue threshold.
+3. **Due-today is a local calendar-day window.** `due_today ⟺ startOfLocalDay(tz) ≤ due_at < startOfNextLocalDay(tz)` (occurrences likewise on `occurs_at`), where `tz` is the timezone **requested by the client** for this Today view. DST-safe wall-clock math comes from `packages/core`.
+4. **A task's own timezone affects display, never bucketing.** A task created in `America/Chicago` viewed from a `Pacific/Auckland` Today request is bucketed by its instant against Auckland's local day; its stored timezone formats timestamps only.
+5. **Recurring dedupe — one representation per actionable instance.** Where a materialized actionable occurrence exists, the occurrence IS the actionable item (it carries id/completion target); the parent recurring task must NOT also appear as a separate row for that same due instance. The parent supplies metadata (title/project/recurrence context) to that occurrence's rendering. Skipped and completed occurrences are excluded. Upcoming lists exclude anything already shown as overdue or due-today.
+6. **Priority convention: lower value = higher priority** (P1-style). The column is an unconstrained nullable smallint historically written only by AI capture; nothing else may assume ordering semantics without this rule.
+7. **Project next action (computed, never stored):** the single active task of the project ordered by `due_at ASC NULLS LAST`, then `priority ASC NULLS LAST`, then `created_at DESC NULLS LAST`, then `id ASC`. A project whose active tasks have none of these set surfaces "no next action" honestly.
+8. **Stalled project (computed, never stored):** `status='active'`, ≥1 open task, no child activity signal (task completion, note write, occurrence completion) within 14 days AND no linked event starting within the next 14 days.
+9. **Brief identity:** one Daily Brief per `(brief_date, timezone)` — unique constraint and upsert/get identity alike.
+
+---
+
 ## The parse pipeline
 
 1. `POST /capture` → insert `inbox_items` row, status `pending`, return 202.
@@ -501,9 +517,11 @@ Live on Phases 0–3 for a month before continuing. Half of what you think you w
 
 **Phase 4 — Calendar UI + external sync + recurrence UI.** Month/week views, RRULE editor, Google Calendar or CalDAV two-way sync using the `external_*` columns already in place.
 
-**Phase 5 — Finance.** Copilot Money has no public API — decide between scheduled CSV import, going direct to Plaid or SimpleFIN Bridge, or self-hosting Actual Budget as the ledger. Voice transaction entry drops into the same capture pipeline.
+**Phase 5 — Daily Command Center + Projects (revised 2026-08-21, ADR-038).** The original Phase 5 entry (Finance) is **deferred to a later phase**, still gated on the open finance-source-of-truth decision. Phase 5 as approved: a Today/Home command center computed from existing primitives, operational project management (lifecycle/goal/target date/computed next action), daily + weekly review workflows with durable review history, a unified tasks+events agenda read model, a manual on-demand AI Daily Brief over the existing provider-agnostic layer, mobile/Rabbit daily-use polish, and a gated production deployment. Integrates existing primitives; no new external integrations; no new worker jobs; no scheduled or autonomous agents. Checkpoints 5.1–5.7; see `docs/STATUS.md` for the checkpoint record and ADRs 038–041 for locked decisions.
 
 **Phase 6 — Health.** HealthKit via `@kingstinct/react-native-healthkit`, Health Connect via `react-native-health-connect`. Requires the paid Apple account and a dev build. Read-only to start.
+
+**Later — Finance.** Copilot Money has no public API — decide between scheduled CSV import, going direct to Plaid or SimpleFIN Bridge, or self-hosting Actual Budget as the ledger. Voice transaction entry drops into the same capture pipeline.
 
 **Phase 7 — Email summaries + service monitoring.** Gmail/Graph polling, LLM digest, uptime checks against your live projects with alerting through the notification router.
 
