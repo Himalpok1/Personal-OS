@@ -71,6 +71,7 @@ import {
   listTasks,
   updateTask,
 } from "./tasks.js";
+import { getAgenda } from "./agenda.js";
 import { getToday } from "./today.js";
 import { transcribe } from "./transcribe.js";
 
@@ -115,6 +116,7 @@ export type {
 } from "./reviews.js";
 export type { Task, TaskCreate, TaskListParams, TaskStatus, TaskUpdate } from "./tasks.js";
 export type { TodayResponse } from "./today.js";
+export type { AgendaParams, AgendaResponse } from "./agenda.js";
 
 // A flat method bag, not a nested tasks.list()/notes.list() namespace --
 // matches the shape the original single health() method already had.
@@ -172,6 +174,7 @@ export function createApiClient(baseUrl: string) {
     linkEventToCalendar: linkEventToCalendar.bind(null, baseUrl),
 
     getToday: getToday.bind(null, baseUrl),
+    getAgenda: getAgenda.bind(null, baseUrl),
 
     listOccurrences: listOccurrences.bind(null, baseUrl),
     completeOccurrence: completeOccurrence.bind(null, baseUrl),
