@@ -42,6 +42,8 @@ export interface ProjectComputed {
 
 export interface ProjectSummariesOptions {
   includeArchived?: boolean;
+  /** Injected for one-effectiveNow-per-build callers (frozen semantics). */
+  now?: Date;
 }
 
 interface CandidateRow extends PrioritableTask {
@@ -322,7 +324,7 @@ export async function computeProjectSummaries(
   db: Db,
   options: ProjectSummariesOptions = {},
 ): Promise<ProjectSummaryItem[]> {
-  const effectiveNow = captureEffectiveNow();
+  const effectiveNow = options.now ?? captureEffectiveNow();
   const rows = await db
     .select()
     .from(projects)

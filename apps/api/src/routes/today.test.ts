@@ -1,11 +1,13 @@
 import {
+  dailyPeriodStart,
   localDayWindow,
   localDayWindowForDate,
   toWallClockComponents,
   wallClockToNaiveDate,
+  weeklyPeriodStart,
   type LocalDayWindow,
 } from "@personal-os/core";
-import { inboxItems, occurrences, projects, tasks } from "@personal-os/db";
+import { inboxItems, occurrences, projects, reviews, tasks } from "@personal-os/db";
 import { TodayResponseSchema } from "@personal-os/schema";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -107,7 +109,23 @@ describe("GET /today", () => {
       items: [],
     });
     expect(body.projects).toEqual({ active_count: 0, items: [] });
-    expect(body.reviews).toEqual({ last_daily_review_at: null, last_weekly_review_at: null });
+    // reviews is never top-level null from 5.3 on: an empty reviews table
+    // yields the nested all-nulls shape, with period_start values equal to
+    // the core-derived LOCAL period dates for the queried timezone.
+    expect(body.reviews).toEqual({
+      daily: {
+        period_start: dailyPeriodStart(TZ),
+        review_id: null,
+        status: null,
+        last_completed_at: null,
+      },
+      weekly: {
+        period_start: weeklyPeriodStart(TZ),
+        review_id: null,
+        status: null,
+        last_completed_at: null,
+      },
+    });
     expect(body.brief).toBeNull();
   });
 
@@ -321,7 +339,36 @@ describe("GET /today", () => {
     expect(body.inbox.items.every((item) => item.status === "failed")).toBe(true);
     expect(body.inbox.items.some((item) => item.raw_text === "already confirmed")).toBe(false);
   });
-
+  it("resolves current-period review rows kind-scoped across differing daily/weekly periods", async () => {
+    const { dailyPeriodStart, weeklyPeriodStart } = await import("@personal-os/core");
+    const dailyPs = dailyPeriodStart(TZ);
+    const weeklyPs = weeklyPeriodStart(TZ);
+    const [dailyRow] = await app.db
+      .insert(reviews)
+      .values({ kind: "daily", periodStart: dailyPs, timezone: TZ })
+      .returning();
+    const [weeklyRow] = await app.db
+      .insert(reviews)
+      .values({
+        kind: "weekly",
+        periodStart: weeklyPs,
+        timezone: TZ,
+        status: "completed",
+        completedAt: new Date(),
+      })
+      .returning();
+    const response = await getToday(TZ);
+    expect(response.statusCode).toBe(200);
+    const body = TodayResponseSchema.parse(response.json());
+    expect(body.reviews.daily.period_start).toBe(dailyPs);
+    expect(body.reviews.weekly.period_start).toBe(weeklyPs);
+    expect(body.reviews.daily.review_id).toBe(dailyRow!.id);
+    expect(body.reviews.daily.status).toBe("in_progress");
+    expect(body.reviews.weekly.review_id).toBe(weeklyRow!.id);
+    expect(body.reviews.weekly.status).toBe("completed");
+    expect(body.reviews.daily.last_completed_at).toBeNull();
+    expect(body.reviews.weekly.last_completed_at).not.toBeNull();
+  });
   it("computes project next_action and stall state, sorting stalled projects first", async () => {
     const window = localDayWindow(TZ);
     const tomorrowMid = midWindowInstant(
@@ -412,5 +459,101 @@ describe("GET /today", () => {
     expect(body.projects.active_count).toBe(1);
     expect(body.projects.items.map((item) => item.id)).toEqual([active!.id]);
     expect(body.projects.items.map((item) => item.name)).toEqual(["Active project"]);
+  });
+
+  it("surfaces today's in-progress daily review and a completed weekly from last week", async () => {
+    const dailyPs = dailyPeriodStart(TZ);
+    const weeklyPs = weeklyPeriodStart(TZ);
+    const lastWeekPs = addLocalDays(weeklyPs, -7); // weeklyPs is a Monday
+    const [dailyRow] = await app.db
+      .insert(reviews)
+      .values({ kind: "daily", periodStart: dailyPs, timezone: TZ, status: "in_progress" })
+      .returning();
+    const weeklyCompletedAt = new Date(Date.now() - 2 * 24 * HOUR_MS);
+    await app.db.insert(reviews).values({
+      kind: "weekly",
+      periodStart: lastWeekPs,
+      timezone: TZ,
+      status: "completed",
+      completedAt: weeklyCompletedAt,
+    });
+
+    const response = await getToday(TZ);
+    expect(response.statusCode).toBe(200);
+    const body = TodayResponseSchema.parse(response.json());
+
+    // Daily row IS this period's row -> identity + live in_progress state,
+    // never completed so far.
+    expect(body.reviews.daily).toEqual({
+      period_start: dailyPs,
+      review_id: dailyRow!.id,
+      status: "in_progress",
+      last_completed_at: null,
+    });
+    // Weekly current-period row does not exist (last week's is historical),
+    // but its completion still feeds the kind-scoped aggregate.
+    expect(body.reviews.weekly).toEqual({
+      period_start: weeklyPs,
+      review_id: null,
+      status: null,
+      last_completed_at: weeklyCompletedAt.toISOString(),
+    });
+  });
+
+  it("reports a skipped daily review with status skipped and still-null last_completed_at", async () => {
+    const dailyPs = dailyPeriodStart(TZ);
+    await app.db
+      .insert(reviews)
+      .values({ kind: "daily", periodStart: dailyPs, timezone: TZ, status: "skipped" });
+
+    const response = await getToday(TZ);
+    expect(response.statusCode).toBe(200);
+    const body = TodayResponseSchema.parse(response.json());
+
+    expect(body.reviews.daily.period_start).toBe(dailyPs);
+    expect(body.reviews.daily.review_id).not.toBeNull();
+    expect(body.reviews.daily.status).toBe("skipped");
+    expect(body.reviews.daily.last_completed_at).toBeNull();
+    // Untouched kind stays fully null.
+    expect(body.reviews.weekly.review_id).toBeNull();
+    expect(body.reviews.weekly.status).toBeNull();
+    expect(body.reviews.weekly.last_completed_at).toBeNull();
+  });
+
+  it("takes last_completed_at from the most recent completion across historical periods", async () => {
+    const todayPs = dailyPeriodStart(TZ);
+    const completions = [
+      { daysBack: 3, at: new Date(Date.now() - 72 * HOUR_MS) },
+      { daysBack: 1, at: new Date(Date.now() - 24 * HOUR_MS) },
+      { daysBack: 2, at: new Date(Date.now() - 48 * HOUR_MS) },
+    ];
+    await app.db.insert(reviews).values([
+      ...completions.map(({ daysBack, at }) => ({
+        kind: "daily",
+        periodStart: addLocalDays(todayPs, -daysBack),
+        timezone: TZ,
+        status: "completed",
+        completedAt: at,
+      })),
+      // A non-completed historical row must not feed the max().
+      {
+        kind: "daily",
+        periodStart: addLocalDays(todayPs, -4),
+        timezone: TZ,
+        status: "skipped",
+      },
+    ]);
+
+    const response = await getToday(TZ);
+    expect(response.statusCode).toBe(200);
+    const body = TodayResponseSchema.parse(response.json());
+
+    // No row exists for TODAY'S period, but history still yields an honest
+    // last-completed timestamp.
+    expect(body.reviews.daily.review_id).toBeNull();
+    expect(body.reviews.daily.status).toBeNull();
+    expect(body.reviews.daily.last_completed_at).toBe(
+      completions.find(({ daysBack }) => daysBack === 1)!.at.toISOString(),
+    );
   });
 });

@@ -2,14 +2,25 @@ import {
   buildActionableView,
   captureEffectiveNow,
   computeProjectProgress,
+  dailyPeriodStart,
   isStalledProject,
   lastProjectActivity,
   localDayWindow,
   localDayWindowForDate,
   pickNextAction,
+  weeklyPeriodStart,
   type LocalDayWindow,
 } from "@personal-os/core";
-import { events, inboxItems, notes, occurrences, projects, tasks, type Db } from "@personal-os/db";
+import {
+  events,
+  inboxItems,
+  notes,
+  occurrences,
+  projects,
+  reviews,
+  tasks,
+  type Db,
+} from "@personal-os/db";
 import {
   TodayResponseSchema,
   type TodayEventItem,
@@ -580,6 +591,54 @@ export async function buildTodayResponse(db: Db, query: TodayQuery): Promise<Tod
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 
+  // Checkpoint 5.3: real review state. Period identity is the frozen pair
+  // (kind, period_start), period_start a LOCAL calendar date in query.tz
+  // derived from the same single effectiveNow as everything else. Exactly
+  // two queries -- one OR-paired fetch of both current-period rows (paired,
+  // not an IN-list on period_start alone: on a Monday the daily and weekly
+  // period starts are the SAME date and must stay kind-scoped) plus one
+  // grouped max() over completions of any period. No per-kind fan-out.
+  const dailyPeriod = dailyPeriodStart(query.tz, effectiveNow);
+  const weeklyPeriod = weeklyPeriodStart(query.tz, effectiveNow);
+
+  const currentReviewRows = await db
+    .select({ id: reviews.id, kind: reviews.kind, status: reviews.status })
+    .from(reviews)
+    .where(
+      or(
+        and(eq(reviews.kind, "daily"), eq(reviews.periodStart, dailyPeriod)),
+        and(eq(reviews.kind, "weekly"), eq(reviews.periodStart, weeklyPeriod)),
+      ),
+    );
+  const currentReviewByKind = new Map(currentReviewRows.map((row) => [row.kind, row]));
+
+  const lastCompletedRows = await db
+    .select({
+      kind: reviews.kind,
+      lastCompletedAt: sql<Date | null>`max(${reviews.completedAt})`.mapWith(toDateOrNull),
+    })
+    .from(reviews)
+    .where(and(inArray(reviews.kind, ["daily", "weekly"]), eq(reviews.status, "completed")))
+    .groupBy(reviews.kind);
+  const lastCompletedByKind = new Map(
+    lastCompletedRows.map((row) => [row.kind, row.lastCompletedAt]),
+  );
+
+  const reviewPeriodBlock = (
+    periodStart: string,
+    kind: "daily" | "weekly",
+  ): TodayResponse["reviews"]["daily"] => {
+    const current = currentReviewByKind.get(kind);
+    return {
+      period_start: periodStart,
+      review_id: current?.id ?? null,
+      // Enforced to this vocabulary by the reviews_status CHECK constraint
+      // (same taste as projects_status above).
+      status: (current?.status ?? null) as TodayResponse["reviews"]["daily"]["status"],
+      last_completed_at: lastCompletedByKind.get(kind)?.toISOString() ?? null,
+    };
+  };
+
   const generatedAt = effectiveNow.toISOString();
   return TodayResponseSchema.parse({
     generated_at: generatedAt,
@@ -615,7 +674,10 @@ export async function buildTodayResponse(db: Db, query: TodayQuery): Promise<Tod
       })),
     },
     projects: { active_count: projectRows.length, items: projectItems.slice(0, PROJECTS_CAP) },
-    reviews: { last_daily_review_at: null, last_weekly_review_at: null },
+    reviews: {
+      daily: reviewPeriodBlock(dailyPeriod, "daily"),
+      weekly: reviewPeriodBlock(weeklyPeriod, "weekly"),
+    },
     brief: null,
   });
 }
