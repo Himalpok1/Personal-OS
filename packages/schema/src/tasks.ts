@@ -125,6 +125,12 @@ export const TaskUpdateSchema = z
     title: z.string().min(1).optional(),
     body: z.string().nullable().optional(),
     due_at: FlexibleDatetimeSchema.nullable().optional(),
+    // Closes the recorded debt that a reminder time could previously only
+    // originate from AI capture -- this makes the field writable via a
+    // normal PATCH. Reminder SCHEDULING itself remains entirely
+    // client-side/native (local notification reconciliation on the
+    // primary device); this field only carries the stored instant.
+    remind_at: FlexibleDatetimeSchema.nullable().optional(),
     priority: z.number().int().nullable().optional(),
     project_id: z.string().uuid().nullable().optional(),
     rrule: z.string().nullable().optional(),

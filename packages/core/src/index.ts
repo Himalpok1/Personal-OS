@@ -7,6 +7,7 @@ export {
   type WallClockComponents,
 } from "./timezone.js";
 export * from "./recurrence/due-date-window.js";
+export * from "./recurrence/event-recurrence.js";
 export * from "./recurrence/lazy-next-occurrence.js";
 export * from "./recurrence/editor.js";
 export * from "./recurrence/validation.js";

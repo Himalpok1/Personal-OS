@@ -59,13 +59,61 @@ describe("Agenda schemas", () => {
       ).toBe(true);
     });
 
-    it("accepts a span of exactly 62 days and rejects 63", () => {
+    it("accepts a span of exactly 90 days and rejects 91", () => {
       expect(
-        AgendaQuerySchema.safeParse({ tz: "UTC", from: "2026-01-01", to: "2026-03-04" }).success,
+        AgendaQuerySchema.safeParse({ tz: "UTC", from: "2026-01-01", to: "2026-04-01" }).success,
       ).toBe(true);
+      const result = AgendaQuerySchema.safeParse({
+        tz: "UTC",
+        from: "2026-01-01",
+        to: "2026-04-02",
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(
+          result.error.issues.some((issue) => issue.message === "range must not exceed 90 days"),
+        ).toBe(true);
+      }
+    });
+
+    it("accepts an equal from/to (zero-day span)", () => {
       expect(
-        AgendaQuerySchema.safeParse({ tz: "UTC", from: "2026-01-01", to: "2026-03-05" }).success,
+        AgendaQuerySchema.safeParse({ tz: "UTC", from: "2026-08-21", to: "2026-08-21" }).success,
+      ).toBe(true);
+    });
+
+    it("accepts a valid project_id filter", () => {
+      expect(
+        AgendaQuerySchema.safeParse({
+          tz: "UTC",
+          from: "2026-08-21",
+          to: "2026-08-21",
+          project_id: "123e4567-e89b-12d3-a456-426614174000",
+        }).success,
+      ).toBe(true);
+    });
+
+    it("rejects a non-uuid project_id", () => {
+      expect(
+        AgendaQuerySchema.safeParse({
+          tz: "UTC",
+          from: "2026-08-21",
+          to: "2026-08-21",
+          project_id: "not-a-uuid",
+        }).success,
       ).toBe(false);
+    });
+
+    it("treats project_id as optional", () => {
+      const result = AgendaQuerySchema.safeParse({
+        tz: "UTC",
+        from: "2026-08-21",
+        to: "2026-08-21",
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.project_id).toBeUndefined();
+      }
     });
 
     it("rejects an inverted range", () => {

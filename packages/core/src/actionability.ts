@@ -21,7 +21,7 @@ function pad2(value: number): string {
   return String(value).padStart(2, "0");
 }
 
-function formatLocalDate(components: WallClockComponents): string {
+export function formatLocalDate(components: WallClockComponents): string {
   return `${String(components.year).padStart(4, "0")}-${pad2(components.month)}-${pad2(components.day)}`;
 }
 
@@ -32,6 +32,20 @@ function nextCalendarDate(
 ): { year: number; month: number; day: number } {
   const next = new Date(Date.UTC(year, month - 1, day, 12) + 24 * 60 * 60 * 1000);
   return { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1, day: next.getUTCDate() };
+}
+
+// Shifts a "YYYY-MM-DD" local calendar date by `days` (may be negative),
+// anchored at noon UTC so month/year rollovers and DST can never skew the
+// result by a day -- the same idiom nextCalendarDate above uses for a
+// single-day step, generalized to an arbitrary offset.
+export function addCalendarDays(localDate: string, days: number): string {
+  const match = LOCAL_DATE.exec(localDate);
+  if (!match) throw new Error(`invalid local date "${localDate}", expected YYYY-MM-DD`);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const shifted = new Date(Date.UTC(year, month - 1, day, 12) + days * 24 * 60 * 60 * 1000);
+  return `${String(shifted.getUTCFullYear()).padStart(4, "0")}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())}`;
 }
 
 function firstInstantOfLocalDate(timezone: string, target: WallClockComponents): Date {

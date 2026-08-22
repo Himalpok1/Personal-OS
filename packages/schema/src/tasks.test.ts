@@ -97,6 +97,15 @@ describe("Task schemas", () => {
       });
       expect(result.success).toBe(false);
     });
+
+    it("still rejects remind_at -- creation stays capture-only this checkpoint", () => {
+      const result = TaskCreateSchema.safeParse({
+        title: "New task",
+        timezone: "America/Chicago",
+        remind_at: "2026-09-01T15:00:00-05:00",
+      });
+      expect(result.success).toBe(false);
+    });
   });
 
   describe("TaskUpdateSchema", () => {
@@ -111,6 +120,29 @@ describe("Task schemas", () => {
 
     it("rejects empty object update", () => {
       const result = TaskUpdateSchema.safeParse({});
+      expect(result.success).toBe(false);
+    });
+
+    it("accepts remind_at as an offset-bearing ISO datetime", () => {
+      const result = TaskUpdateSchema.safeParse({
+        remind_at: "2026-09-01T15:00:00-05:00",
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts remind_at explicitly set to null (clearing it)", () => {
+      const result = TaskUpdateSchema.safeParse({ remind_at: null });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.remind_at).toBeNull();
+      }
+    });
+
+    it("still rejects unknown keys via .strict()", () => {
+      const result = TaskUpdateSchema.safeParse({
+        remind_at: "2026-09-01T15:00:00-05:00",
+        made_up_field: true,
+      });
       expect(result.success).toBe(false);
     });
   });

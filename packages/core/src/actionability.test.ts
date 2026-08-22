@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { toWallClockComponents } from "./timezone.js";
 import {
+  addCalendarDays,
   buildActionableView,
   captureEffectiveNow,
   categorizeInstant,
+  formatLocalDate as formatLocalDateExport,
   localDayWindow,
   localDayWindowForDate,
 } from "./actionability.js";
@@ -466,5 +468,46 @@ describe("captureEffectiveNow", () => {
     const after = Date.now();
     expect(captured.getTime()).toBeGreaterThanOrEqual(before);
     expect(captured.getTime()).toBeLessThanOrEqual(after);
+  });
+});
+
+describe("formatLocalDate (exported)", () => {
+  it("formats zero-padded wall-clock components as YYYY-MM-DD", () => {
+    expect(
+      formatLocalDateExport({ year: 2026, month: 1, day: 5, hour: 0, minute: 0, second: 0 }),
+    ).toBe("2026-01-05");
+  });
+
+  it("zero-pads single-digit month/day and keeps a 4-digit year", () => {
+    expect(
+      formatLocalDateExport({ year: 99, month: 3, day: 9, hour: 12, minute: 0, second: 0 }),
+    ).toBe("0099-03-09");
+  });
+});
+
+describe("addCalendarDays", () => {
+  it("adds a positive offset within the same month", () => {
+    expect(addCalendarDays("2026-09-10", 3)).toBe("2026-09-13");
+  });
+
+  it("adds a negative offset within the same month", () => {
+    expect(addCalendarDays("2026-09-10", -3)).toBe("2026-09-07");
+  });
+
+  it("rolls over a month boundary", () => {
+    expect(addCalendarDays("2026-09-29", 3)).toBe("2026-10-02");
+  });
+
+  it("rolls over a year boundary", () => {
+    expect(addCalendarDays("2026-12-30", 3)).toBe("2027-01-02");
+  });
+
+  it("zero offset returns the same date", () => {
+    expect(addCalendarDays("2026-09-10", 0)).toBe("2026-09-10");
+  });
+
+  it("throws on a malformed input string", () => {
+    expect(() => addCalendarDays("not-a-date", 1)).toThrow(/invalid local date/);
+    expect(() => addCalendarDays("2026-9-10", 1)).toThrow(/invalid local date/);
   });
 });

@@ -10,6 +10,9 @@ export const AgendaQuerySchema = z
     tz: z.string().refine(isValidTimezone, { message: "unknown IANA timezone" }),
     from: z.string().date(),
     to: z.string().date(),
+    // Server-side filter, item-ownership only -- an item is included when
+    // its own project_id matches; no client-side re-filtering needed.
+    project_id: z.string().uuid().optional(),
   })
   .superRefine((value, ctx) => {
     if (value.to < value.from) {
@@ -23,8 +26,13 @@ export const AgendaQuerySchema = z
     const [fromYear, fromMonth, fromDay] = value.from.split("-");
     const fromMs = Date.UTC(Number(fromYear), Number(fromMonth) - 1, Number(fromDay));
     const spanDays = (toMs - fromMs) / 86_400_000;
-    if (spanDays > 62) {
-      ctx.addIssue({ code: "custom", path: ["to"], message: "range must not exceed 62 days" });
+    // The cap matches the 90-day materialized `occurrences` horizon
+    // (WINDOW_DAYS = 90 in apps/worker/src/jobs/expand-due-date-window.ts,
+    // and the same 90 hardcoded in apps/api/src/routes/tasks.ts) so an
+    // Agenda request can never ask for a range in which recurring task
+    // occurrences have silently stopped being pre-expanded.
+    if (spanDays > 90) {
+      ctx.addIssue({ code: "custom", path: ["to"], message: "range must not exceed 90 days" });
     }
   });
 export type AgendaQuery = z.infer<typeof AgendaQuerySchema>;

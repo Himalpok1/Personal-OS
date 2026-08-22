@@ -208,12 +208,24 @@ export type EventRangeQuery = z.infer<typeof EventRangeQuerySchema>;
 // recurring instance that's the parent series, not a per-occurrence id,
 // since occurrences aren't guaranteed to be materialized rows.
 //
-// starts_at/ends_at/start_date/end_date always describe the *source event
-// itself* (for a recurring series, that's its dtstart/dtend template, the
-// same value on every instance) -- they are NOT re-pointed at the specific
-// instance. occurs_at/occurs_ends_at carry the instance-specific real
-// instants and are the fields a calendar view should actually position a
-// recurring entry with; both are null for a one-off entry
+// Deliberately asymmetric rule (recorded in ADR-042) for how these fields
+// behave on a recurring instance:
+//
+// - TIMED recurring instances: starts_at/ends_at remain the *source event's*
+//   template (its dtstart/dtend, the same value on every instance) -- they
+//   are NOT re-pointed at the specific instance. occurs_at/occurs_ends_at
+//   carry the instance-specific real instants and are the fields a calendar
+//   view should actually position a recurring entry with.
+//
+// - ALL-DAY recurring instances: start_date/end_date ARE re-pointed to that
+//   instance's actual calendar dates (preserving the original day-span).
+//   This is the deliberate exception: an all-day entry has no
+//   occurs_at/occurs_ends_at date-typed equivalent to position by, and
+//   neither EventRangeItem nor the Today/Agenda item shapes carry any other
+//   per-instance date field -- without re-pointing, the instance's date
+//   would be inexpressible.
+//
+// occurs_at/occurs_ends_at are both null for a one-off entry
 // (is_recurring_instance: false), where starts_at/ends_at (or
 // start_date/end_date) already are the instance.
 export const EventDetachSchema = z
