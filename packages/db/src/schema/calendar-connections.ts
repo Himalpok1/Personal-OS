@@ -13,7 +13,9 @@ export const calendarConnections = pgTable(
     provider: text("provider").notNull(),
     // Google-specific fields
     googleAccountEmail: text("google_account_email"),
-    googleAccountId: text("google_account_id"),
+    googleAccountId: text("google_account_id").unique(
+      "calendar_connections_google_account_id_unique",
+    ),
     accessTokenCiphertext: bytea("access_token_ciphertext"),
     accessTokenIv: bytea("access_token_iv"),
     accessTokenAuthTag: bytea("access_token_auth_tag"),
