@@ -1,5 +1,6 @@
 export * from "./heartbeat.js";
 export * from "./projects.js";
+export * from "./reviews.js";
 export * from "./tags.js";
 export * from "./item-tags.js";
 export * from "./ai-provider-connections.js";

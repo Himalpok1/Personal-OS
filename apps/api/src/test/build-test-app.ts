@@ -11,6 +11,7 @@ import {
   notificationDispatchLog,
   occurrences,
   projects,
+  reviews,
   tasks,
 } from "@personal-os/db";
 import type { FastifyInstance } from "fastify";
@@ -50,4 +51,7 @@ export async function truncateTestTables(app: FastifyInstance): Promise<void> {
   await app.db.delete(devices);
   await app.db.delete(devicePairingCodes);
   await app.db.delete(notificationDispatchLog);
+  // reviews has no foreign keys -- order relative to the tables above is
+  // irrelevant; kept last so future FK additions fail loudly here first.
+  await app.db.delete(reviews);
 }

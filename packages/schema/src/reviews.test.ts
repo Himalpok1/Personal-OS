@@ -18,7 +18,12 @@ function reviewRecord(overrides: Record<string, unknown> = {}) {
     period_start: "2026-08-21",
     timezone: "America/Chicago",
     status: "in_progress",
-    content: { checklist: [{ text: "Inbox zero", done: false }] },
+    content: {
+      version: 1,
+      kind: "daily",
+      checklist: { inbox: true, priorities: false },
+      selected_priorities: [{ kind: "task", id: "123e4567-e89b-12d3-a456-426614174009" }],
+    },
     summary: null,
     created_at: NOW,
     updated_at: NOW,
@@ -103,10 +108,22 @@ describe("Review schemas", () => {
 
   describe("ReviewUpdateSchema", () => {
     it("accepts content-only, summary-only, and null-summary updates", () => {
-      expect(ReviewUpdateSchema.safeParse({ content: { done: true } }).success).toBe(true);
+      expect(
+        ReviewUpdateSchema.safeParse({
+          content: {
+            version: 1,
+            kind: "daily",
+            checklist: { inbox: true },
+            selected_priorities: [],
+          },
+        }).success,
+      ).toBe(true);
       expect(ReviewUpdateSchema.safeParse({ summary: "Wrapped up" }).success).toBe(true);
       expect(ReviewUpdateSchema.safeParse({ summary: null }).success).toBe(true);
-      expect(ReviewUpdateSchema.safeParse({ content: null, summary: null }).success).toBe(true);
+      // v1 content is a typed object -- explicit null-clearing is not part of
+      // the contract (summary remains clearable).
+      expect(ReviewUpdateSchema.safeParse({ content: null }).success).toBe(false);
+      expect(ReviewUpdateSchema.safeParse({ summary: null }).success).toBe(true);
     });
 
     it("rejects an empty update", () => {
@@ -117,6 +134,57 @@ describe("Review schemas", () => {
       expect(ReviewUpdateSchema.safeParse({ content: {}, status: "completed" }).success).toBe(
         false,
       );
+    });
+
+    it("enforces v1 content bounds (audit: version, priority cap, ref shape, unknown keys)", () => {
+      const base = {
+        version: 1 as const,
+        kind: "daily" as const,
+        checklist: {},
+        selected_priorities: [] as { kind: "task"; id: string }[],
+      };
+      expect(ReviewSchema.safeParse({ ...reviewRecord({ content: { ...base } }) }).success).toBe(
+        true,
+      );
+      // wrong version
+      expect(
+        ReviewSchema.safeParse({
+          ...reviewRecord({ content: { ...base, version: 2 } }),
+        }).success,
+      ).toBe(false);
+      // >10 priorities
+      const eleven = Array.from({ length: 11 }, (_, i) => ({
+        kind: "task" as const,
+        id: `123e4567-e89b-12d3-a456-4266141740${i.toString().padStart(2, "0")}`,
+      }));
+      expect(
+        ReviewSchema.safeParse({
+          ...reviewRecord({ content: { ...base, selected_priorities: eleven } }),
+        }).success,
+      ).toBe(false);
+      // non-uuid ref
+      expect(
+        ReviewSchema.safeParse({
+          ...reviewRecord({
+            content: { ...base, selected_priorities: [{ kind: "task", id: "nope" }] },
+          }),
+        }).success,
+      ).toBe(false);
+      // unknown checklist key (strict)
+      expect(
+        ReviewSchema.safeParse({
+          ...reviewRecord({
+            content: { ...base, checklist: { not_a_step: true } },
+          }),
+        }).success,
+      ).toBe(false);
+      // summary bound (2000)
+      expect(
+        ReviewSchema.safeParse({ ...reviewRecord({ summary: "x".repeat(2001) }) }).success,
+      ).toBe(false);
+      expect(
+        ReviewSchema.safeParse({ ...reviewRecord({ summary: "x".repeat(2000) }) }).success,
+      ).toBe(true);
     });
 
     it("rejects a non-string summary", () => {

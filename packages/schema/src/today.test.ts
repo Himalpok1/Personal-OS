@@ -297,7 +297,15 @@ describe("Today schemas", () => {
             },
           ],
         },
-        reviews: { last_daily_review_at: null, last_weekly_review_at: NOW },
+        reviews: {
+          daily: { period_start: DATE, review_id: null, status: null, last_completed_at: null },
+          weekly: {
+            period_start: DATE,
+            review_id: UUID2,
+            status: "completed",
+            last_completed_at: NOW,
+          },
+        },
         brief: { generated_at: NOW, model_id: null },
       });
       expect(result.success).toBe(true);
@@ -329,7 +337,10 @@ describe("Today schemas", () => {
       };
       const result = TodayResponseSchema.safeParse({
         ...base,
-        reviews: { last_daily_review_at: null, last_weekly_review_at: null },
+        reviews: {
+          daily: { period_start: DATE, review_id: null, status: null, last_completed_at: null },
+          weekly: { period_start: DATE, review_id: null, status: null, last_completed_at: null },
+        },
         brief: null,
       });
       expect(result.success).toBe(true);

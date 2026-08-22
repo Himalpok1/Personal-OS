@@ -6,6 +6,11 @@ import { z } from "zod";
 import { InboxItemStatusSchema } from "./inbox.js";
 import { ProjectStatusSchema } from "./projects.js";
 
+// Deliberate literal duplication of reviews.ts's ReviewStatusSchema: importing
+// it here creates a module cycle (reviews.ts reuses Today's item schemas).
+// Kept in lockstep by tests; same taste as PROJECT_STATUSES's duplication.
+const TodayReviewStatusSchema = z.enum(["in_progress", "completed", "skipped"]);
+
 // GET /today's only input -- everything else about the read model is
 // computed server-side against this timezone (frozen semantics,
 // docs/ARCHITECTURE.md "Today & agenda read models").
@@ -142,8 +147,18 @@ export const TodayResponseSchema = z.object({
     items: z.array(TodayProjectSummarySchema),
   }),
   reviews: z.object({
-    last_daily_review_at: z.string().datetime({ offset: true }).nullable(),
-    last_weekly_review_at: z.string().datetime({ offset: true }).nullable(),
+    daily: z.object({
+      period_start: z.string().date(),
+      review_id: z.string().uuid().nullable(),
+      status: TodayReviewStatusSchema.nullable(),
+      last_completed_at: z.string().datetime({ offset: true }).nullable(),
+    }),
+    weekly: z.object({
+      period_start: z.string().date(),
+      review_id: z.string().uuid().nullable(),
+      status: TodayReviewStatusSchema.nullable(),
+      last_completed_at: z.string().datetime({ offset: true }).nullable(),
+    }),
   }),
   brief: z
     .object({
