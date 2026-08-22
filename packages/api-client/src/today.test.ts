@@ -48,7 +48,10 @@ const todayResponse = {
     ],
   },
   projects: { active_count: 0, items: [] },
-  reviews: { last_daily_review_at: null, last_weekly_review_at: null },
+  reviews: {
+    daily: { period_start: "2026-08-21", review_id: null, status: null, last_completed_at: null },
+    weekly: { period_start: "2026-08-21", review_id: null, status: null, last_completed_at: null },
+  },
   brief: null,
 };
 

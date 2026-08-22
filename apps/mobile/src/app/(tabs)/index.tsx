@@ -7,7 +7,7 @@ import type {
   TodayTaskItem,
 } from "@personal-os/schema";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link, useRouter } from "expo-router";
+import { Link, useRouter, type Href } from "expo-router";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import { useCompleteTask } from "@/queries/tasks";
@@ -364,6 +364,76 @@ function Chip({
   );
 }
 
+type ReviewRollup = TodayResponse["reviews"]["daily"];
+
+// Entry banner for the daily/weekly review. status null offers Start;
+// in_progress resumes; settled states render subtle and read-only.
+function ReviewBanner({
+  title,
+  resumeTitle,
+  doneTitle,
+  skippedTitle,
+  href,
+  info,
+}: {
+  title: string;
+  resumeTitle: string;
+  doneTitle: string;
+  skippedTitle: string;
+  href: Href;
+  info: ReviewRollup;
+}) {
+  const router = useRouter();
+  if (info.status === null) {
+    return (
+      <View className="min-h-[44px] flex-row items-center justify-between rounded-xl border border-neutral-200 px-4 dark:border-neutral-800">
+        <Text className="text-sm font-medium text-black dark:text-white">{title}</Text>
+        <Pressable
+          onPress={() => router.push(href)}
+          hitSlop={8}
+          accessibilityRole="button"
+          className="rounded-lg bg-blue-600 px-3 py-2 active:bg-blue-700"
+        >
+          <Text className="text-sm font-semibold text-white">Start</Text>
+        </Pressable>
+      </View>
+    );
+  }
+  if (info.status === "in_progress") {
+    return (
+      <Pressable
+        onPress={() => router.push(href)}
+        accessibilityRole="button"
+        className="min-h-[44px] flex-row items-center justify-between rounded-xl border border-blue-200 bg-blue-50 px-4 active:bg-blue-100 dark:border-blue-900 dark:bg-blue-950 dark:active:bg-blue-900"
+      >
+        <Text className="text-sm font-medium text-blue-700 dark:text-blue-300">
+          {resumeTitle}
+        </Text>
+        <Text className="text-sm font-semibold text-blue-700 dark:text-blue-300">→</Text>
+      </Pressable>
+    );
+  }
+  return (
+    <View
+      className={
+        info.status === "completed"
+          ? "min-h-[40px] flex-row items-center rounded-xl bg-green-50 px-4 py-2 dark:bg-green-950"
+          : "min-h-[40px] flex-row items-center rounded-xl px-4 py-2"
+      }
+    >
+      <Text
+        className={
+          info.status === "completed"
+            ? "text-xs font-medium uppercase text-green-700 dark:text-green-300"
+            : "text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400"
+        }
+      >
+        {info.status === "completed" ? doneTitle : skippedTitle}
+      </Text>
+    </View>
+  );
+}
+
 export default function TodayScreen() {
   const router = useRouter();
   const { data, isLoading, isError, refetch } = useToday();
@@ -418,6 +488,25 @@ export default function TodayScreen() {
           label="Projects"
           count={data.summary.active_project_count}
           onPress={() => router.push("/(tabs)/projects")}
+        />
+      </View>
+
+      <View className="mt-3 gap-2 px-4">
+        <ReviewBanner
+          title="Daily review"
+          resumeTitle="Resume daily review"
+          doneTitle="✓ Daily review completed"
+          skippedTitle="Daily review skipped"
+          href="/reviews/daily"
+          info={data.reviews.daily}
+        />
+        <ReviewBanner
+          title="Weekly review"
+          resumeTitle="Resume weekly review"
+          doneTitle="✓ Weekly review completed"
+          skippedTitle="Weekly review skipped"
+          href="/reviews/weekly"
+          info={data.reviews.weekly}
         />
       </View>
 

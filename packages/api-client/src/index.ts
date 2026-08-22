@@ -51,6 +51,17 @@ import {
   updateProject,
 } from "./projects.js";
 import {
+  completeReview,
+  createReview,
+  getDailyReviewContext,
+  getLatestReview,
+  getReview,
+  getWeeklyReviewContext,
+  listReviews,
+  skipReview,
+  updateReview,
+} from "./reviews.js";
+import {
   activateTask,
   archiveTask,
   completeTask,
@@ -94,6 +105,14 @@ export type {
   ProjectSummaryItem,
   ProjectSummaryListResponse,
 } from "./projects.js";
+export type {
+  Review,
+  ReviewCreate,
+  ReviewKind,
+  ReviewListQuery,
+  ReviewStatus,
+  ReviewUpdate,
+} from "./reviews.js";
 export type { Task, TaskCreate, TaskListParams, TaskStatus, TaskUpdate } from "./tasks.js";
 export type { TodayResponse } from "./today.js";
 
@@ -157,6 +176,16 @@ export function createApiClient(baseUrl: string) {
     listOccurrences: listOccurrences.bind(null, baseUrl),
     completeOccurrence: completeOccurrence.bind(null, baseUrl),
     skipOccurrence: skipOccurrence.bind(null, baseUrl),
+
+    listReviews: listReviews.bind(null, baseUrl),
+    getReview: getReview.bind(null, baseUrl),
+    createReview: createReview.bind(null, baseUrl),
+    updateReview: updateReview.bind(null, baseUrl),
+    getLatestReview: getLatestReview.bind(null, baseUrl),
+    completeReview: completeReview.bind(null, baseUrl),
+    skipReview: skipReview.bind(null, baseUrl),
+    getDailyReviewContext: getDailyReviewContext.bind(null, baseUrl),
+    getWeeklyReviewContext: getWeeklyReviewContext.bind(null, baseUrl),
 
     connectGoogleCalendar: connectGoogleCalendar.bind(null, baseUrl),
     connectCaldavCalendar: connectCaldavCalendar.bind(null, baseUrl),
