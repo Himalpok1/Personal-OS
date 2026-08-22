@@ -1,7 +1,7 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 5 — Daily Command Center + Projects — **IN PROGRESS** (plan approved with amendments 2026-08-21; Step 0 documentation reconciliation + Step 1 contract/core freeze; Checkpoint 5.1 is the first implementation checkpoint). Phases 0–4 remain COMPLETE, production-deployed, and physically verified — see below.
+**Current phase:** Phase 5 — Daily Command Center + Projects — **IN PROGRESS** (plan approved with amendments 2026-08-21; Step 0 + Step 1 + **Checkpoint 5.1 COMPLETE** 2026-08-21, local verification incl. physical Rabbit pass; Checkpoint 5.2 next pending user approval). Phases 0–4 remain COMPLETE, production-deployed, and physically verified — see below.
 **Implementation status:** Phases 0–4 are implemented and production-deployed. Checkpoint 4.7 deployed Phase 4 to production and passed both reboot-survival tests physically (Rabbit device and Ubuntu host) on 2026-08-21.
 **Next phase allowed:** Phase 5 checkpoints proceed sequentially under the approved plan (5.1 Today/Home → 5.2 Projects → 5.3 Reviews → 5.4 Agenda → 5.5 Daily Brief → 5.6 polish → 5.7 gated deployment). **No production changes before 5.7.** Finance is deferred to a later phase (ADR-038), still gated on the open finance-source-of-truth decision.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
@@ -23,6 +23,46 @@ Phase 5 was redefined by explicit user direction (ADR-038): the original "Phase 
 7. **No production `daily_brief` route now:** 5.5 implements and locally verifies collector/no-provider behavior/routing/persistence/timeouts/UI; actual production provider/model selection is deferred to 5.7.
 
 Docs updated this step: `DECISIONS.md` ADR-038–041; `ARCHITECTURE.md` revised phase plan plus a new frozen-semantics section ("Today & agenda read models"). All Phase 0–4 evidence preserved unchanged.
+
+## Phase 5 Step 0 + Step 1 — documentation reconciliation + contract/core freeze (COMPLETE, 2026-08-21)
+
+**Step 0** (`986a495`): ADR-038 (Phase 5 redefinition, Finance deferred), ADR-039 (project lifecycle vocabulary, archived_at axis separation), ADR-040 (durable reviews model), ADR-041 (manual bounded Daily Brief); `ARCHITECTURE.md` phase plan amended + frozen-semantics section added; this file's header/planning record updated.
+
+**Step 1** (`d328412`): contracts and domain core frozen before any feature work —
+- `packages/core/src/actionability.ts`: DST-safe local day windows (`localDayWindow`/`localDayWindowForDate`, including **nonexistent-midnight zones** like America/Santiago), instant-overdue vs local-day due-today categorization with strict precedence, `buildActionableView` recurring dedupe, one-effectiveNow-per-build helper.
+- `packages/core/src/project-lifecycle.ts`: active/paused/completed transition predicates (archive axis independent), frozen next-action comparator (`dueAt ASC NULLS LAST → priority ASC NULLS LAST → createdAt DESC NULLS LAST → id ASC`; lower priority value = higher priority — verified reality: column written only by AI capture, ordered by nothing anywhere), stalled predicate (14d, event window disqualifier), progress counts.
+- `packages/schema`: today/agenda/reviews/brief contracts; projects extended per ADR-039.
+- **Independent adversarial audit (Agent D)** found 8 defects; #1–#6 fixed with regression tests: nonexistent-midnight day-start correction (Santiago), trust-nothing dedupe guard (parent suppressed whenever scheduled occurrences exist regardless of flags), duplicate occKey first-wins, occurrence-must-carry-parent refine, honest-total refine, agenda-overdue restricted to tasks/occurrences. #7 (projects route not yet persisting goal/target_date) accepted as interim-only — closed by Checkpoint 5.1's data layer below. #8 deliberate duplication pinned by tests.
+- Gates: all clean; **680 tests** (+137 vs Phase 4 baseline).
+
+## Phase 5 Checkpoint 5.1 — Today / Home command center (COMPLETE, 2026-08-21)
+
+Built with the approved multi-agent split (data-layer agent → parallel API/client agents → independent read-only auditor), main session as integration owner. Local development only; production untouched throughout.
+
+**What was built:**
+
+1. **Migration `0010_project_lifecycle.sql`** — purely additive: `projects.goal text`, `target_date date`, `completed_at timestamptz`, `updated_at timestamptz NOT NULL DEFAULT now()`, CHECK `projects_status IN ('active','paused','completed')` (ADR-039 vocabulary; `'archived'` forbidden), partial index `projects_target_date_active_idx`. Hand-written SQL + hand-appended journal entry (0009 precedent — snapshots stop at 0008; naive generate would re-emit CalDAV DDL). Applied to dev + `personalos_test` as `posops_migrator`; `posops_app` read/write verified, `CREATE TABLE` still denied (SQLSTATE 42501); CHECK rejects `'archived'`, accepts `'active'`/`'paused'`. Drizzle schema updated to declare the index AND check (audit fix — prevents future generate from emitting destructive drops).
+2. **`GET /today?tz=`** — `apps/api/src/read-models/today.ts` collector + perimeter-only route. One effectiveNow per build; overdue = instant `< effectiveNow` (strict; earlier-today → overdue, later-today → due-today); due-today = requested-tz local calendar-day window; totals derived from post-dedupe buckets so summary can never contradict sections; recurring parents represented ONLY via their scheduled occurrences (done/skipped excluded); events classified with **local date-string bucketing for all-day items** (fixing the `/events/range` UTC simplification inside Today's own path without touching that route); upcoming = next 7 local days, disjoint from overdue/today; inbox counts pending+needs_confirm+failed with newest needs_confirm/failed previews; projects section with computed next action (frozen comparator), open/overdue/done counts, last activity, stalled flag; `reviews`/`brief` returned as forward-compatible nulls WITHOUT querying nonexistent tables (0011/0012 deliberately not created yet). Response parsed against frozen `TodayResponseSchema` before send.
+3. **Event-range extraction** — the existing three-source assembly moved verbatim into exported `apps/api/src/read-models/event-range.ts` (`assembleEventRange`) now used by both `GET /events/range` (unchanged contract; `events.test.ts` diff empty) and the Today collector. Phase 4 calendar infrastructure not redesigned.
+4. **Projects persistence** — POST/PATCH persist goal/target_date; PATCH/archive bump `updated_at` (mirroring tasks conventions); response maps real columns (interim shim removed).
+5. **Client** — `packages/api-client` `getToday` (+3 tests, URL-encoding + boundary parse); `useToday()` hook (device timezone with Hermes/web-safe fallback); `(tabs)/index.tsx` rebuilt as the Today command center (header + local date, summary chips, Overdue/Due-today task rows with the exact 409→occurrence completion fallback, Today's Events with all-day group, Upcoming days (empty days omitted), Inbox-needs-attention, Active Projects cards with status chip/stalled badge/next action/target date, loading/error+Retry states, per-section empty states); Tasks list moved verbatim to stack route `/tasks` registered in both ProductionContent and UiTestContent stacks; tab title "Tasks"→"Today"; tab count stays 5; FAB/PTT/notification/reconciliation code untouched.
+
+**Independent audit (Agent D) — CHANGES_REQUIRED verdict, all findings fixed:** D1 missing drizzle index/check declarations (destructive-drift hazard) → declared; D2 unbounded-below occurrence/task queries could starve today's occurrence under accumulated stale rows → limits removed (honest full sets; single-user scale; accumulation noted as debt); D3 stall disqualifier ignored recurring-event occurrences → folded `occurrences(parent_type='event')` within the 14-day horizon into nextEventStarts; D4 duplicate React keys for multi-occurrence parents → occurrence-aware keys. Post-fix gates green.
+
+**Verification actually run:**
+
+| # | Check | Result |
+|---|---|---|
+| 1 | `pnpm build && typecheck && lint && format:check` | All clean workspace-wide |
+| 2 | Full test suite | **691 tests pass, 14/14 turbo tasks** (core 185, schema 114, calendar-providers 57, ai-providers 20, api-client 30, api 138 incl. 8 new today-route tests, worker 70, mobile 77) — zero regressions vs Phase 4's 543 |
+| 3 | Migration 0010 on dev + test DBs as migrator | Applied once each; columns/index/CHECK verified via `\d`; role denials re-proven |
+| 4 | Live HTTP `/today` with seeded fixtures over real curl | Earlier-today task → overdue while later-today task → due_today; recurring chore appeared twice as merged occurrences with `occurrence_id` set and **zero bare-parent leak**; skipped occurrence excluded; honest totals == sections; Auckland-style UTC-vs-local all-day distinction proven live (a `CURRENT_DATE`(UTC) seed correctly landed in tomorrow's local bucket; corrected local-date seed landed in events_today); invalid tz → 400; smoke cleanup count-verified (11 rows, zero residue, zero orphan occurrences) |
+| 5 | Web SPA regression | Exported bundle served: `/`, `/tasks`, `/tasks/<uuid>` all HTTP 200 via SPA fallback; `expo export --platform web` clean |
+| 6 | Physical Rabbit R1 pass (480×640) via side-by-side `com.himal.personalos.dev` UI-test identity — production package never targeted | Today renders as default tab with live dev-API data through adb reverse (API log shows device-originated `GET /today?tz=America/Chicago`): header date, summary chips, OVERDUE·2 / DUE TODAY·1 rows, TODAY'S EVENTS with ALL-DAY group, INBOX NEEDS ATTENTION (9 waiting + previews), ACTIVE PROJECTS empty state; error state + Retry genuinely exercised mid-pass; "All tasks" opens the `/tasks` list (filters/actions intact); cold-start deep link `personal-os-ui-test://tasks/<uuid>` opened the correct task detail; Calendar month grid intact ("Fri Aug 21 2026, 1 event"); five tab labels visible and separated. `.dev` build uninstalled afterward; production `com.himal.personalos` versionCode 4, install/update timestamps identical before/after |
+
+**Device-pass incident, diagnosed to root cause:** the release-mode UI-test APK initially could not reach the dev API at all. Cause: the committed (gitignored-generated) `android/` manifest predates UI-test mode and lacks `android:usesCleartextTraffic`, so SDK 36 silently blocks the app's cleartext `http://localhost:3000` fetch before any packet leaves the device — shell curl worked while the app never connected. Fixed temporarily during the pass only (manifest edit reverted afterward; EAS/production builds regenerate manifests from `app.config.ts`, which sets the flag for ui-test builds). This also retroactively explains Checkpoint 4.2's recorded need for local fixtures ("Rabbit could not open the Mac's development TCP port").
+
+**Honest limitations recorded:** FAB/PTT physical clearance was NOT verifiable in this pass — the UI-test identity deliberately does not mount them; their code is untouched by 5.1 and prior physical verification stands; re-verify during Checkpoint 5.6's production-identity pass. `active_project_count` counts all non-archived projects (including paused/completed) — naming to revisit if it ever matters. Never-completed scheduled occurrences accumulate without bound (pre-existing behavior, now visible honestly in totals) — candidate for a future sweep job, deliberately not built speculatively.
 
 ## Phase 4 Checkpoint 4.1 — Events backend (COMPLETE, 2026-08-20)
 
@@ -218,6 +258,8 @@ Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, 
 - [x] **Phase 3 Checkpoint 5 — real-device lifecycle verification: the full five-state lifecycle matrix, primary-device/revocation/re-pair, task eligibility, offline-capture durability, real foreground and background push, network transitions, small-screen UX, a web regression pass, and the full PTT lifecycle driven by the user's real voice — all run on the physical Rabbit R1, surfacing five defects, all five fixed and re-verified; Stage H found zero application defects.** Full details below under "Phase 3 Checkpoint 5".
 - [x] **Phase 3 Checkpoint 6 — production deployment: migration `0004`, targeted API/worker/web rollout, Groq-only voice transcription, stable EAS-signed Rabbit transition and pairing, physical reminder/PTT/push acceptance, security verification, and targeted restart recovery — complete.** Full evidence is recorded below.
 - [x] **Phase 4 Checkpoints 4.1–4.7 — calendar UI, RRULE editor, occurrence detach/cancel, Google Calendar + CalDAV sync (local dev), then production deployment with reboot-survival verification on both the Rabbit and the host — complete (2026-08-21).** Full evidence in "Phase 4 Checkpoint 4.7" above.
+- [x] Phase 5 Step 0 (docs reconciliation) + Step 1 (contract/core freeze) — complete 2026-08-21.
+- [x] Phase 5 Checkpoint 5.1 — Today / Home command center: migration 0010, GET /today read model, Today as default landing tab, /tasks stack route — complete 2026-08-21 (local only; production untouched).
 
 ## Phase 3 Checkpoint 6 — Stage 2A artifact gate (2026-08-19)
 
@@ -1414,7 +1456,7 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-Phase 5 (Daily Command Center + Projects) planning was approved with seven binding amendments on 2026-08-21; ADR-038–041 recorded and `ARCHITECTURE.md`'s phase plan reconciled. Step 0 (documentation reconciliation) and Step 1 (contract/core freeze across schema + core packages) are in progress; Checkpoint 5.1 (Today/Home command center) follows immediately after contracts freeze. Production remains untouched.
+Phase 5 Checkpoint 5.1 (Today / Home command center) is complete and locally verified end-to-end, including a physical Rabbit R1 pass via the side-by-side UI-test identity. Production remains untouched. Checkpoint 5.2 (operational project management) has not started.
 
 ## Remaining warnings / technical debt
 
@@ -1434,11 +1476,11 @@ Phase 5 (Daily Command Center + Projects) planning was approved with seven bindi
 
 ## Last verification
 
-Phase 4 Checkpoint 4.7 closure verification (2026-08-21) — see "Phase 4 Checkpoint 4.7" above. Strongest evidence: Rabbit reboot test passed with Tailscale auto-establishing after enabling Always-on VPN; host reboot test passed with identical container IDs/images, unchanged volumes/journal/Serve/bindings; migrations exactly 0000–0009 with runtime DDL denied; **543 tests pass across 60 test files** at hotfix HEAD `121cf375`; Expo web export clean; `git diff --check` and gitleaks clean; Gate C and Gate H incidents documented above without sanitization.
+Phase 5 Checkpoint 5.1 closure verification (2026-08-21): build/typecheck/lint/format clean workspace-wide; **691 tests pass across 14 turbo tasks** (vs Phase 4 baseline 543 — zero regressions); migration 0010 applied to dev + `personalos_test` as `posops_migrator` with runtime-role DDL denial re-proven; live HTTP `/today` verification with seeded fixtures (amendment semantics proven: instant-overdue vs local-day due-today, recurring occurrence dedupe with zero bare-parent leak, honest totals, local-date all-day bucketing, tz validation); Expo web export clean; SPA deep links 200; physical Rabbit pass on the side-by-side `.dev` identity (production package untouched, versionCode 4 and install timestamps identical before/after); `git diff --check` clean.
 
 ## Next action
 
-Freeze Step 1 contracts (packages/schema Today/Agenda/Projects/Reviews/Brief contracts + packages/core actionability and project-lifecycle modules with tests, adversarially audited), run full workspace gates, then begin Checkpoint 5.1 (migration 0010, `GET /today`, index-tab → Today repurpose). No production changes before Checkpoint 5.7.
+Checkpoint 5.1 is complete — stop and await explicit user approval before beginning Checkpoint 5.2 (operational project management: lifecycle action endpoints, goal/target-date UI, project detail rebuild with events section/activity/stalled indicators). No production changes before Checkpoint 5.7.
 
 ## Handoff rule
 

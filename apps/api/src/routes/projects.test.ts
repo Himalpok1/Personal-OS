@@ -22,10 +22,21 @@ describe("projects routes", () => {
     const created = await app.inject({
       method: "POST",
       url: "/projects",
-      payload: { name: "Personal OS", color: "#336699" },
+      payload: {
+        name: "Personal OS",
+        color: "#336699",
+        goal: "Ship Phase 5",
+        target_date: "2026-09-30",
+      },
     });
     expect(created.statusCode).toBe(201);
-    const id = created.json<Project>().id;
+    const createdBody = created.json<Project>();
+    expect(createdBody.goal).toBe("Ship Phase 5");
+    expect(createdBody.target_date).toBe("2026-09-30");
+    // Lifecycle fields start empty -- transitions belong to Checkpoint 5.2.
+    expect(createdBody.completed_at).toBeNull();
+    expect(createdBody.updated_at).toBe(createdBody.created_at);
+    const id = createdBody.id;
 
     const list = await app.inject({ method: "GET", url: "/projects" });
     const projects = list.json<Project[]>();
@@ -35,9 +46,14 @@ describe("projects routes", () => {
     const patched = await app.inject({
       method: "PATCH",
       url: `/projects/${id}`,
-      payload: { name: "Renamed" },
+      payload: { name: "Renamed", goal: null, target_date: "2026-10-15" },
     });
-    expect(patched.json<Project>().name).toBe("Renamed");
+    expect(patched.statusCode).toBe(200);
+    const patchedBody = patched.json<Project>();
+    expect(patchedBody.name).toBe("Renamed");
+    expect(patchedBody.goal).toBeNull();
+    expect(patchedBody.target_date).toBe("2026-10-15");
+    expect(Date.parse(patchedBody.updated_at)).toBeGreaterThan(Date.parse(createdBody.updated_at));
   });
 
   it("rejects a status field on create/update -- projects.status stays unexposed in Phase 2", async () => {

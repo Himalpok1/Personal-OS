@@ -53,6 +53,7 @@ import {
   listTasks,
   updateTask,
 } from "./tasks.js";
+import { getToday } from "./today.js";
 import { transcribe } from "./transcribe.js";
 
 export { ApiClientError, type ZodLikeSchema } from "./client.js";
@@ -82,6 +83,7 @@ export type { InboxListParams } from "./inbox.js";
 export type { NoteListParams } from "./notes.js";
 export type { ProjectListParams } from "./projects.js";
 export type { Task, TaskCreate, TaskListParams, TaskStatus, TaskUpdate } from "./tasks.js";
+export type { TodayResponse } from "./today.js";
 
 // A flat method bag, not a nested tasks.list()/notes.list() namespace --
 // matches the shape the original single health() method already had.
@@ -130,6 +132,8 @@ export function createApiClient(baseUrl: string) {
     cancelEventOccurrence: cancelEventOccurrence.bind(null, baseUrl),
     linkEventToGoogleCalendar: linkEventToGoogleCalendar.bind(null, baseUrl),
     linkEventToCalendar: linkEventToCalendar.bind(null, baseUrl),
+
+    getToday: getToday.bind(null, baseUrl),
 
     listOccurrences: listOccurrences.bind(null, baseUrl),
     completeOccurrence: completeOccurrence.bind(null, baseUrl),

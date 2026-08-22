@@ -21,6 +21,7 @@ import notesRoutes from "./routes/notes.js";
 import occurrencesRoutes from "./routes/occurrences.js";
 import projectsRoutes from "./routes/projects.js";
 import tasksRoutes from "./routes/tasks.js";
+import todayRoutes from "./routes/today.js";
 import transcribeRoutes from "./routes/transcribe.js";
 
 const STALE_AFTER_MS = 5 * 60_000;
@@ -128,6 +129,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await app.register(notesRoutes);
   await app.register(projectsRoutes);
   await app.register(eventsRoutes);
+  await app.register(todayRoutes);
   await app.register(calendarConnectionsRoutes);
   await app.register(aiConfigRoutes);
   await app.register(devicesRoutes);

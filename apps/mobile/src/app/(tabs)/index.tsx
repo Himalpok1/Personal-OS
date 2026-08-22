@@ -1,40 +1,100 @@
 import { ApiClientError } from "@personal-os/api-client";
-import type { Task, TaskStatus } from "@personal-os/schema";
-import { useCompleteOccurrence } from "@/queries/occurrences";
-import {
-  useActivateTask,
-  useArchiveTask,
-  useCompleteTask,
-  useDropTask,
-  useTasks,
-} from "@/queries/tasks";
+import type {
+  TodayEventItem,
+  TodayInboxItem,
+  TodayProjectSummary,
+  TodayResponse,
+  TodayTaskItem,
+} from "@personal-os/schema";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter } from "expo-router";
-import { useState } from "react";
-import { FlatList, Pressable, SafeAreaView, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
+import { useCompleteOccurrence } from "@/queries/occurrences";
+import { useCompleteTask } from "@/queries/tasks";
+import { useToday } from "@/queries/today";
 
-type Filter = "new" | "active" | "done" | "dropped";
+function parseLocalDate(date: string): Date {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(year!, (month ?? 1) - 1, day ?? 1);
+}
 
-const FILTER_STATUS: Record<Filter, TaskStatus[]> = {
-  new: ["inbox"],
-  active: ["active"],
-  done: ["done"],
-  dropped: ["dropped"],
+// The response's local_date is authoritative for the header; parsed as local
+// wall-clock parts so no timezone conversion shifts the weekday.
+function formatHeaderDate(localDate: string): string {
+  return parseLocalDate(localDate).toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function eventStartMs(event: TodayEventItem): number {
+  const iso = event.occurs_at ?? event.starts_at;
+  return iso === null ? Number.MAX_SAFE_INTEGER : Date.parse(iso);
+}
+
+function upcomingDayLabel(date: string, todayLocalDate: string): string {
+  if (date === addLocalDays(todayLocalDate, 1)) return "Tomorrow";
+  return parseLocalDate(date).toLocaleDateString(undefined, { weekday: "long" });
+}
+
+function addLocalDays(localDate: string, days: number): string {
+  const d = parseLocalDate(localDate);
+  d.setDate(d.getDate() + days);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// raw_text when the capture has one; otherwise an honest per-status label.
+function inboxPreviewLabel(item: TodayInboxItem): string {
+  if (item.raw_text) return item.raw_text;
+  if (item.status === "needs_confirm") return "Needs confirmation";
+  if (item.status === "failed") return "Parse failed";
+  return "Pending capture";
+}
+
+const PROJECT_STATUS_CHIP: Record<TodayProjectSummary["status"], string> = {
+  active: "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300",
+  paused: "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300",
+  completed: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
 };
 
-function TaskRow({ task }: { task: Task }) {
+// Completing from Today must refresh this read model plus everything the
+// completion can move. The task/occurrence hooks already invalidate their
+// own domains ("tasks" / ["occurrences", "tasks"]); this adds "today" so
+// the command center refetches too.
+function useInvalidateAfterCompletion() {
+  const queryClient = useQueryClient();
+  return () => {
+    void queryClient.invalidateQueries({ queryKey: ["today"] });
+    void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    void queryClient.invalidateQueries({ queryKey: ["occurrences"] });
+  };
+}
+
+// Same completion rule as the Tasks list: completeTask first, fall back to
+// the occurrence on the recurring-task 409 (ApiClientError.body.occurrence_id).
+function TaskRow({ item }: { item: TodayTaskItem }) {
   const router = useRouter();
-  const activate = useActivateTask();
   const complete = useCompleteTask();
   const completeOccurrence = useCompleteOccurrence();
-  const drop = useDropTask();
-  const archive = useArchiveTask();
+  const invalidate = useInvalidateAfterCompletion();
 
   const onComplete = () => {
-    complete.mutate(task.id, {
+    complete.mutate(item.id, {
+      onSuccess: invalidate,
       onError: (err) => {
         if (err instanceof ApiClientError && err.status === 409) {
           const occurrenceId = (err.body as { occurrence_id?: string | null })?.occurrence_id;
-          if (occurrenceId) completeOccurrence.mutate(occurrenceId);
+          if (occurrenceId) completeOccurrence.mutate(occurrenceId, { onSuccess: invalidate });
         }
       },
     });
@@ -42,84 +102,351 @@ function TaskRow({ task }: { task: Task }) {
 
   return (
     <Pressable
-      onPress={() => router.push(`/tasks/${task.id}`)}
-      className="flex-row items-center justify-between border-b border-neutral-200 px-4 py-3 dark:border-neutral-800"
+      onPress={() => router.push(`/tasks/${item.id}`)}
+      className="flex-row items-center gap-3 px-4 py-3"
     >
-      <View className="flex-1 pr-2">
-        <Text className="text-base text-black dark:text-white">{task.title}</Text>
-        {task.due_at ? (
-          <Text className="text-xs text-neutral-500">
-            Due {new Date(task.due_at).toLocaleString()}
-          </Text>
+      <Pressable
+        onPress={onComplete}
+        hitSlop={8}
+        accessibilityLabel={`Complete ${item.title}`}
+        className="h-8 w-8 items-center justify-center rounded-full border-2 border-neutral-400 dark:border-neutral-600"
+      >
+        {complete.isPending || completeOccurrence.isPending ? (
+          <View className="h-2 w-2 rounded-full bg-neutral-400" />
         ) : null}
-        {task.rrule ? <Text className="text-xs text-neutral-400">Recurring</Text> : null}
-      </View>
-      <View className="flex-row gap-2">
-        {task.status === "inbox" ? (
-          <Pressable onPress={() => activate.mutate(task.id)} className="rounded bg-blue-100 px-2 py-1 dark:bg-blue-950">
-            <Text className="text-xs text-blue-700 dark:text-blue-300">Start</Text>
-          </Pressable>
-        ) : null}
-        {task.status === "active" ? (
-          <>
-            <Pressable onPress={onComplete} className="rounded bg-green-100 px-2 py-1 dark:bg-green-950">
-              <Text className="text-xs text-green-700 dark:text-green-300">Done</Text>
-            </Pressable>
-            <Pressable onPress={() => drop.mutate(task.id)} className="rounded bg-neutral-100 px-2 py-1 dark:bg-neutral-800">
-              <Text className="text-xs text-neutral-600 dark:text-neutral-300">Drop</Text>
-            </Pressable>
-          </>
-        ) : null}
-        <Pressable onPress={() => archive.mutate(task.id)} className="rounded bg-neutral-100 px-2 py-1 dark:bg-neutral-800">
-          <Text className="text-xs text-neutral-600 dark:text-neutral-300">Archive</Text>
-        </Pressable>
+      </Pressable>
+      <View className="flex-1">
+        <Text className="text-base text-black dark:text-white">{item.title}</Text>
+        <View className="mt-0.5 flex-row items-center gap-2">
+          {item.due_at ? (
+            <Text className="text-xs text-neutral-500 dark:text-neutral-400">
+              {formatTime(item.due_at)}
+            </Text>
+          ) : null}
+          {item.project_name ? (
+            <View className="flex-row items-center gap-1">
+              <View className="h-2 w-2 rounded-full bg-neutral-400 dark:bg-neutral-500" />
+              <Text className="text-xs text-neutral-500 dark:text-neutral-400">
+                {item.project_name}
+              </Text>
+            </View>
+          ) : null}
+          {item.rrule ? (
+            <Text className="text-xs text-neutral-500 dark:text-neutral-400">⟲</Text>
+          ) : null}
+        </View>
       </View>
     </Pressable>
   );
 }
 
-export default function TasksScreen() {
-  const [filter, setFilter] = useState<Filter>("active");
-  const { data, isLoading, isError } = useTasks({ status: FILTER_STATUS[filter] });
+function SectionHeader({
+  title,
+  tone,
+}: {
+  title: string;
+  tone: "red" | "blue" | "neutral";
+}) {
+  const toneClass =
+    tone === "red"
+      ? "text-red-600 dark:text-red-400"
+      : tone === "blue"
+        ? "text-blue-600 dark:text-blue-400"
+        : "text-neutral-500 dark:text-neutral-400";
+  return (
+    <Text className={`px-4 pb-2 pt-5 text-sm font-semibold uppercase ${toneClass}`}>{title}</Text>
+  );
+}
+
+function EventRow({ event }: { event: TodayEventItem }) {
+  const router = useRouter();
+  const timeRange =
+    event.starts_at && event.ends_at
+      ? `${formatTime(event.starts_at)}–${formatTime(event.ends_at)}`
+      : (event.starts_at
+          ? formatTime(event.starts_at)
+          : (event.occurs_at ? formatTime(event.occurs_at) : "All-day"));
+  return (
+    <Pressable
+      onPress={() => router.push(`/events/${event.id}`)}
+      className="flex-row items-baseline gap-3 px-4 py-3"
+    >
+      <Text className="w-28 shrink-0 text-xs text-neutral-500 dark:text-neutral-400">
+        {timeRange}
+      </Text>
+      <View className="flex-1">
+        <Text className="text-base text-black dark:text-white">{event.title}</Text>
+        {event.location ? (
+          <Text className="text-xs text-neutral-500 dark:text-neutral-400">{event.location}</Text>
+        ) : null}
+      </View>
+    </Pressable>
+  );
+}
+
+function EventsSection({ events }: { events: TodayEventItem[] }) {
+  const timed = events.filter((e) => !e.all_day).sort((a, b) => eventStartMs(a) - eventStartMs(b));
+  const allDay = events.filter((e) => e.all_day);
+  return (
+    <View>
+      <SectionHeader title="Today's events" tone="neutral" />
+      {events.length === 0 ? (
+        <Text className="px-4 py-3 text-sm text-neutral-500 dark:text-neutral-400">
+          No events today.
+        </Text>
+      ) : (
+        <>
+          {timed.map((event) => (
+            <EventRow key={event.id} event={event} />
+          ))}
+          {allDay.length > 0 ? (
+            <Text className="px-4 pt-2 text-xs font-semibold uppercase text-neutral-500 dark:text-neutral-400">
+              All-day
+            </Text>
+          ) : null}
+          {allDay.map((event) => (
+            <EventRow key={event.id} event={event} />
+          ))}
+        </>
+      )}
+    </View>
+  );
+}
+
+function UpcomingSection({ data }: { data: TodayResponse }) {
+  const days = data.upcoming.days.filter((day) => day.total > 0);
+  // Fully-empty horizon means no section at all -- not an empty-state block.
+  if (days.length === 0) return null;
+  return (
+    <View>
+      <SectionHeader title="Upcoming" tone="neutral" />
+      {days.map((day) => (
+        <View key={day.date}>
+          <Text className="px-4 pt-3 text-xs font-semibold uppercase text-neutral-500 dark:text-neutral-400">
+            {upcomingDayLabel(day.date, data.local_date)}
+          </Text>
+          {day.tasks.map((task) => (
+            <Text
+              key={`${day.date}-task-${task.id}`}
+              className="px-4 py-1 text-sm text-neutral-700 dark:text-neutral-300"
+              numberOfLines={1}
+            >
+              · {task.title}
+            </Text>
+          ))}
+          {day.events.map((event) => (
+            <Text
+              key={`${day.date}-event-${event.id}`}
+              className="px-4 py-1 text-sm text-neutral-500 dark:text-neutral-400"
+              numberOfLines={1}
+            >
+              · {event.title}
+            </Text>
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function InboxSection({ data }: { data: TodayResponse }) {
+  if (data.summary.inbox_attention_total === 0) return null;
+  return (
+    <Link href="/(tabs)/inbox" asChild>
+      <Pressable className="px-4 pt-5">
+        <SectionHeader title="Inbox needs attention" tone="neutral" />
+        <Text className="pb-1 text-sm text-neutral-500 dark:text-neutral-400">
+          {data.summary.inbox_attention_total} waiting
+        </Text>
+        {data.inbox.items.slice(0, 5).map((item) => (
+          <Text
+            key={item.id}
+            className="py-0.5 text-sm text-neutral-700 dark:text-neutral-300"
+            numberOfLines={1}
+          >
+            · {inboxPreviewLabel(item)}
+          </Text>
+        ))}
+      </Pressable>
+    </Link>
+  );
+}
+
+function ProjectCard({ project }: { project: TodayProjectSummary }) {
+  const router = useRouter();
+  return (
+    <Pressable
+      onPress={() => router.push(`/projects/${project.id}`)}
+      className="mx-4 mb-3 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800"
+    >
+      <View className="flex-row items-center gap-2">
+        <View
+          className="h-3 w-3 rounded-full"
+          style={{ backgroundColor: project.color ?? "#999999" }}
+        />
+        <Text className="flex-1 text-base font-medium text-black dark:text-white">
+          {project.name}
+        </Text>
+        {project.stalled ? (
+          <View className="rounded bg-amber-100 px-2 py-0.5 dark:bg-amber-900">
+            <Text className="text-[10px] uppercase text-amber-700 dark:text-amber-300">
+              Stalled
+            </Text>
+          </View>
+        ) : null}
+        <View
+          className={`rounded px-2 py-0.5 ${PROJECT_STATUS_CHIP[project.status]}`}
+        >
+          <Text className="text-[10px] uppercase">{project.status}</Text>
+        </View>
+      </View>
+      <Text className="mt-2 text-sm text-neutral-700 dark:text-neutral-300" numberOfLines={1}>
+        {project.next_action ? `Next: ${project.next_action.title}` : "No next action"}
+      </Text>
+      <Text className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+        {project.open_task_count} open · {project.done_task_count} done ·{" "}
+        {project.overdue_task_count} overdue
+      </Text>
+      {project.target_date ? (
+        <Text className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+          Target {formatHeaderDate(project.target_date)}
+        </Text>
+      ) : null}
+    </Pressable>
+  );
+}
+
+function ProjectsSection({ projects }: { projects: TodayProjectSummary[] }) {
+  return (
+    <View>
+      <SectionHeader title="Active projects" tone="neutral" />
+      {projects.length === 0 ? (
+        <Text className="px-4 py-3 text-sm text-neutral-500 dark:text-neutral-400">
+          No active projects.
+        </Text>
+      ) : (
+        projects.map((project) => <ProjectCard key={project.id} project={project} />)
+      )}
+    </View>
+  );
+}
+
+function Chip({
+  label,
+  count,
+  danger,
+  onPress,
+}: {
+  label: string;
+  count: number;
+  danger?: boolean;
+  onPress?: () => void;
+}) {
+  const dangerClass =
+    "border-red-300 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-950 dark:text-red-400";
+  const neutralClass = "border-neutral-300 bg-white dark:border-neutral-700 dark:bg-neutral-900";
+  return (
+    <Pressable onPress={onPress} hitSlop={4}>
+      <View
+        className={`rounded-full border px-3 py-2 ${
+          danger && count > 0 ? dangerClass : neutralClass
+        }`}
+      >
+        <Text
+          className={`text-sm ${
+            danger && count > 0 ? "text-red-600 dark:text-red-400" : "text-black dark:text-white"
+          }`}
+        >
+          {label} {count}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
+export default function TodayScreen() {
+  const router = useRouter();
+  const { data, isLoading, isError, refetch } = useToday();
+
+  if (isLoading) {
+    return (
+      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
+        <Text className="text-neutral-500">Loading…</Text>
+      </View>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <View className="flex-1 items-center justify-center gap-3 bg-white dark:bg-black">
+        <Text className="text-red-600">Couldn&apos;t load today.</Text>
+        <Pressable
+          onPress={() => void refetch()}
+          className="rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+        >
+          <Text className="font-semibold text-white">Retry</Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   return (
-    <SafeAreaView className="flex-1 bg-white dark:bg-black">
-      <View className="flex-row justify-around border-b border-neutral-200 py-2 dark:border-neutral-800">
-        {(["new", "active", "done", "dropped"] as Filter[]).map((f) => (
-          <Pressable key={f} onPress={() => setFilter(f)}>
-            <Text
-              className={
-                filter === f
-                  ? "font-semibold text-blue-600"
-                  : "text-neutral-500 dark:text-neutral-400"
-              }
-            >
-              {f[0]!.toUpperCase() + f.slice(1)}
-            </Text>
+    <ScrollView className="flex-1 bg-white dark:bg-black" contentContainerClassName="pb-24">
+      <View className="flex-row items-end justify-between px-4 pt-4">
+        <View className="flex-1">
+          <Text className="text-2xl font-bold text-black dark:text-white">Today</Text>
+          <Text className="text-sm text-neutral-500 dark:text-neutral-400">
+            {formatHeaderDate(data.local_date)}
+          </Text>
+        </View>
+        <Link href="/tasks" asChild>
+          <Pressable hitSlop={8}>
+            <Text className="text-sm text-blue-600 dark:text-blue-400">All tasks</Text>
           </Pressable>
-        ))}
+        </Link>
       </View>
 
-      {isLoading ? (
-        <Text className="p-4 text-neutral-500">Loading...</Text>
-      ) : isError ? (
-        <Text className="p-4 text-red-600">Couldn&apos;t load tasks.</Text>
-      ) : (
-        <FlatList
-          data={data?.items ?? []}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <TaskRow task={item} />}
-          ListEmptyComponent={
-            <Text className="p-4 text-neutral-500">No {filter} tasks.</Text>
-          }
+      <View className="mt-3 flex-row flex-wrap gap-2 px-4">
+        <Chip label="Overdue" count={data.summary.overdue_total} danger />
+        <Chip label="Due today" count={data.summary.due_today_total} />
+        <Chip
+          label="Inbox"
+          count={data.summary.inbox_attention_total}
+          onPress={() => router.push("/(tabs)/inbox")}
         />
-      )}
+        <Chip
+          label="Projects"
+          count={data.summary.active_project_count}
+          onPress={() => router.push("/(tabs)/projects")}
+        />
+      </View>
 
-      <Link href="/tasks/new" asChild>
-        <Pressable className="m-4 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700">
-          <Text className="font-semibold text-white">New task</Text>
-        </Pressable>
-      </Link>
-    </SafeAreaView>
+      <View>
+        <SectionHeader title={`Overdue · ${data.overdue.total}`} tone="red" />
+        {data.overdue.items.length === 0 ? (
+          <Text className="px-4 py-3 text-sm text-neutral-500 dark:text-neutral-400">
+            Nothing overdue.
+          </Text>
+        ) : (
+          data.overdue.items.map((item) => <TaskRow key={item.occurrence_id ?? item.id} item={item} />)
+        )}
+      </View>
+
+      <View>
+        <SectionHeader title={`Due today · ${data.due_today.total}`} tone="blue" />
+        {data.due_today.items.length === 0 ? (
+          <Text className="px-4 py-3 text-sm text-neutral-500 dark:text-neutral-400">
+            Nothing due today.
+          </Text>
+        ) : (
+          data.due_today.items.map((item) => <TaskRow key={item.occurrence_id ?? item.id} item={item} />)
+        )}
+      </View>
+
+      <EventsSection events={data.events_today.items} />
+      <UpcomingSection data={data} />
+      <InboxSection data={data} />
+      <ProjectsSection projects={data.projects.items} />
+    </ScrollView>
   );
 }

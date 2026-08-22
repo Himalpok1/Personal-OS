@@ -69,6 +69,7 @@ function ProductionContent() {
     <View style={{ flex: 1 }}>
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="tasks/index" options={{ title: "Tasks" }} />
         <Stack.Screen name="tasks/[id]" options={{ title: "Task" }} />
         <Stack.Screen name="tasks/new" options={{ title: "New Task" }} />
         <Stack.Screen name="notes/[id]" options={{ title: "Note" }} />
@@ -98,6 +99,9 @@ function UiTestContent() {
     <View style={{ flex: 1 }}>
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        {/* Tabs are mounted in this branch too, so keep stack-route parity
+            with ProductionContent for deep links (e.g. /tasks). */}
+        <Stack.Screen name="tasks/index" options={{ title: "Tasks" }} />
         <Stack.Screen name="events/[id]" options={{ title: "Event" }} />
         <Stack.Screen name="events/new" options={{ title: "New Event" }} />
       </Stack>
