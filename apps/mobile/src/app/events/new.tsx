@@ -1,7 +1,7 @@
 import { GoogleCalendarLinkPicker } from "@/components/calendar/google-calendar-link-picker";
 import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
 import { useLinkableGoogleCalendars, useLinkEventToGoogleCalendar } from "@/queries/calendar-connections";
-import { useProjects } from "@/queries/projects";
+import { coerceProjectIdParam, useProjects } from "@/queries/projects";
 import { useCreateEvent } from "@/queries/events";
 import {
   serializeEditorStateToRRule,
@@ -37,6 +37,7 @@ type NewEventParams = {
   startsAt?: string;
   endsAt?: string;
   allDay?: string;
+  projectId?: string;
 };
 
 export default function NewEventScreen() {
@@ -64,7 +65,10 @@ export default function NewEventScreen() {
   );
   const [startsAt, setStartsAt] = useState(() => params.startsAt ?? "");
   const [endsAt, setEndsAt] = useState(() => params.endsAt ?? "");
-  const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  // Preselected via /events/new?projectId=<uuid> (project detail "+ Event").
+  const [projectId, setProjectId] = useState<string | undefined>(() =>
+    coerceProjectIdParam(params.projectId),
+  );
   const [recurrence, setRecurrence] = useState<RecurrenceEditorState>({
     enabled: false,
     frequency: "DAILY",

@@ -302,6 +302,39 @@ describe("lastProjectActivity", () => {
       lastProjectActivity({ taskCompletions: [], noteWrites: [at], occurrenceCompletions: [] }),
     ).toEqual(at);
   });
+
+  it("returns null when every array is empty including an empty taskWrites", () => {
+    expect(
+      lastProjectActivity({
+        taskCompletions: [],
+        noteWrites: [],
+        occurrenceCompletions: [],
+        taskWrites: [],
+      }),
+    ).toBeNull();
+  });
+
+  it("considers taskWrites alone", () => {
+    const at = new Date("2026-07-07T07:07:07.000Z");
+    expect(
+      lastProjectActivity({
+        taskCompletions: [],
+        noteWrites: [],
+        occurrenceCompletions: [],
+        taskWrites: [at],
+      }),
+    ).toEqual(at);
+  });
+
+  it("returns the max across all four signal kinds", () => {
+    const result = lastProjectActivity({
+      taskCompletions: [new Date("2026-08-01T00:00:00.000Z")],
+      noteWrites: [new Date("2026-08-15T00:00:00.000Z"), new Date("2026-08-10T00:00:00.000Z")],
+      occurrenceCompletions: [new Date("2026-08-20T00:00:00.000Z")],
+      taskWrites: [new Date("2026-08-18T00:00:00.000Z"), new Date("2026-08-30T00:00:00.000Z")],
+    });
+    expect(result).toEqual(new Date("2026-08-30T00:00:00.000Z"));
+  });
 });
 
 describe("isStalledProject", () => {

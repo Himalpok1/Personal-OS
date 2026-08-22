@@ -362,7 +362,13 @@ export async function buildTodayResponse(db: Db, query: TodayQuery): Promise<Tod
     .orderBy(desc(inboxItems.capturedAt))
     .limit(INBOX_ITEMS_CAP);
 
-  const projectRows = await db.select().from(projects).where(isNull(projects.archivedAt));
+  // Today's projects section is ACTIVE projects only: non-archived AND
+  // status='active'. Paused/completed/archived never appear here, and by
+  // construction every row passed to the stalled predicate below is active.
+  const projectRows = await db
+    .select()
+    .from(projects)
+    .where(and(isNull(projects.archivedAt), eq(projects.status, "active")));
 
   const taskAggregates = new Map(
     (
@@ -374,7 +380,7 @@ export async function buildTodayResponse(db: Db, query: TodayQuery): Promise<Tod
               Number,
             ),
           overdueCount:
-            sql<number>`count(*) filter (where ${tasks.status} in ('inbox','active') and ${tasks.archivedAt} is null and ${tasks.dueAt} < ${effectiveNow})`.mapWith(
+            sql<number>`count(*) filter (where ${tasks.status} in ('inbox','active') and ${tasks.archivedAt} is null and (${tasks.dueAt} < ${effectiveNow} or exists (select 1 from occurrences oc where oc.parent_type = 'task' and oc.parent_id = "tasks"."id" and oc.status = 'scheduled' and oc.occurs_at < ${effectiveNow})))`.mapWith(
               Number,
             ),
           doneCount:
@@ -382,6 +388,10 @@ export async function buildTodayResponse(db: Db, query: TodayQuery): Promise<Tod
               Number,
             ),
           lastCompletion: sql<Date | null>`max(${tasks.completedAt})`.mapWith(toDateOrNull),
+          lastWrite:
+            sql<Date | null>`max(greatest(${tasks.createdAt}, ${tasks.updatedAt}))`.mapWith(
+              toDateOrNull,
+            ),
         })
         .from(tasks)
         .where(isNotNull(tasks.projectId))
@@ -511,6 +521,7 @@ export async function buildTodayResponse(db: Db, query: TodayQuery): Promise<Tod
     });
     const lastActivityAt = lastProjectActivity({
       taskCompletions: taskAgg?.lastCompletion ? [taskAgg.lastCompletion] : [],
+      taskWrites: taskAgg?.lastWrite ? [taskAgg.lastWrite] : [],
       noteWrites: noteAgg?.lastWrite ? [noteAgg.lastWrite] : [],
       occurrenceCompletions: occAgg?.lastCompletion ? [occAgg.lastCompletion] : [],
     });
@@ -557,7 +568,7 @@ export async function buildTodayResponse(db: Db, query: TodayQuery): Promise<Tod
 
   // Stalled first, then earliest next-action due ascending (nulls last),
   // deterministic id tiebreak, capped at 10. active_count stays the TRUE
-  // non-archived count regardless of the cap.
+  // non-archived status='active' count regardless of the cap.
   projectItems.sort((a, b) => {
     if (a.stalled !== b.stalled) return a.stalled ? -1 : 1;
     const aDue = a.next_action?.due_at ? Date.parse(a.next_action.due_at) : null;

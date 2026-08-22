@@ -356,14 +356,15 @@ describe("GET /today", () => {
       completedAt: new Date(Date.now() - 24 * HOUR_MS),
     });
 
-    // Stalled project: an open task, but no completion/note/occurrence
-    // activity signal ever and no linked event -- stalled immediately.
+    // Stalled project: an open task whose every activity signal is long cold
+    // (created AND last-written 20 days ago) and no linked event.
     await app.db.insert(tasks).values({
       title: "Lonely open task",
       timezone: TZ,
       status: "inbox",
       projectId: stalledProject!.id,
       createdAt: new Date(Date.now() - 20 * 24 * HOUR_MS),
+      updatedAt: new Date(Date.now() - 20 * 24 * HOUR_MS),
     });
 
     const response = await getToday(TZ);
@@ -391,5 +392,25 @@ describe("GET /today", () => {
     expect(second!.overdue_task_count).toBe(0);
     expect(second!.done_task_count).toBe(1);
     expect(second!.last_activity_at).not.toBeNull();
+  });
+
+  it("counts only non-archived status='active' projects, excluding paused and completed", async () => {
+    const [active] = await app.db
+      .insert(projects)
+      .values({ name: "Active project", status: "active" })
+      .returning();
+    await app.db.insert(projects).values({ name: "Paused project", status: "paused" });
+    await app.db
+      .insert(projects)
+      .values({ name: "Completed project", status: "completed", completedAt: new Date() });
+
+    const response = await getToday(TZ);
+    expect(response.statusCode).toBe(200);
+    const body = TodayResponseSchema.parse(response.json());
+
+    expect(body.summary.active_project_count).toBe(1);
+    expect(body.projects.active_count).toBe(1);
+    expect(body.projects.items.map((item) => item.id)).toEqual([active!.id]);
+    expect(body.projects.items.map((item) => item.name)).toEqual(["Active project"]);
   });
 });

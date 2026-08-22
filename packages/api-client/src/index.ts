@@ -38,9 +38,16 @@ import { archiveNote, createNote, getNote, listNotes, updateNote } from "./notes
 import { completeOccurrence, listOccurrences, skipOccurrence } from "./occurrences.js";
 import {
   archiveProject,
+  completeProject,
   createProject,
   getProject,
+  getProjectDetail,
+  getProjectSummaries,
   listProjects,
+  pauseProject,
+  reopenProject,
+  resumeProject,
+  unarchiveProject,
   updateProject,
 } from "./projects.js";
 import {
@@ -81,7 +88,12 @@ export type {
 } from "./events.js";
 export type { InboxListParams } from "./inbox.js";
 export type { NoteListParams } from "./notes.js";
-export type { ProjectListParams } from "./projects.js";
+export type {
+  ProjectDetailResponse,
+  ProjectListParams,
+  ProjectSummaryItem,
+  ProjectSummaryListResponse,
+} from "./projects.js";
 export type { Task, TaskCreate, TaskListParams, TaskStatus, TaskUpdate } from "./tasks.js";
 export type { TodayResponse } from "./today.js";
 
@@ -121,6 +133,13 @@ export function createApiClient(baseUrl: string) {
     createProject: createProject.bind(null, baseUrl),
     updateProject: updateProject.bind(null, baseUrl),
     archiveProject: archiveProject.bind(null, baseUrl),
+    getProjectSummaries: getProjectSummaries.bind(null, baseUrl),
+    getProjectDetail: getProjectDetail.bind(null, baseUrl),
+    pauseProject: pauseProject.bind(null, baseUrl),
+    resumeProject: resumeProject.bind(null, baseUrl),
+    completeProject: completeProject.bind(null, baseUrl),
+    reopenProject: reopenProject.bind(null, baseUrl),
+    unarchiveProject: unarchiveProject.bind(null, baseUrl),
 
     listEvents: listEvents.bind(null, baseUrl),
     getEvent: getEvent.bind(null, baseUrl),

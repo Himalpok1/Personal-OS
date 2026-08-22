@@ -1,17 +1,21 @@
-import { useProjects } from "@/queries/projects";
+import { coerceProjectIdParam, useProjects } from "@/queries/projects";
 import { useCreateNote } from "@/queries/notes";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 export default function NewNoteScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ projectId?: string }>();
   const createNote = useCreateNote();
   const { data: projects } = useProjects();
 
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  // Preselected via /notes/new?projectId=<uuid> (project detail "+ Note").
+  const [projectId, setProjectId] = useState<string | undefined>(() =>
+    coerceProjectIdParam(params.projectId),
+  );
 
   const submit = () => {
     if (!title.trim() || !body.trim()) return;

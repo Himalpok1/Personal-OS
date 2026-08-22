@@ -1,23 +1,27 @@
 import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
-import { useProjects } from "@/queries/projects";
+import { coerceProjectIdParam, useProjects } from "@/queries/projects";
 import { useCreateTask } from "@/queries/tasks";
 import {
   serializeEditorStateToRRule,
   type RecurrenceEditorState,
 } from "@personal-os/core/recurrence/editor";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 export default function NewTaskScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ projectId?: string }>();
   const createTask = useCreateTask();
   const { data: projects } = useProjects();
 
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [dueAt, setDueAt] = useState("");
-  const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  // Preselected via /tasks/new?projectId=<uuid> (project detail "+ Task").
+  const [projectId, setProjectId] = useState<string | undefined>(() =>
+    coerceProjectIdParam(params.projectId),
+  );
   const [recurrence, setRecurrence] = useState<RecurrenceEditorState>({
     enabled: false,
     frequency: "DAILY",

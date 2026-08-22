@@ -1,13 +1,20 @@
 import {
   ProjectCreateSchema,
+  ProjectDetailResponseSchema,
   ProjectSchema,
+  ProjectSummaryListResponseSchema,
   ProjectUpdateSchema,
   type Project,
   type ProjectCreate,
+  type ProjectDetailResponse,
+  type ProjectSummaryItem,
+  type ProjectSummaryListResponse,
   type ProjectUpdate,
 } from "@personal-os/schema";
 import { z } from "zod";
 import { buildQuery, fetchJson } from "./client.js";
+
+export type { ProjectDetailResponse, ProjectSummaryItem, ProjectSummaryListResponse };
 
 // Unlike tasks/notes/inbox, GET /projects returns a plain array -- small,
 // unbounded-need table, no pagination envelope (matches the API's own
@@ -22,8 +29,28 @@ export async function listProjects(baseUrl: string, params: ProjectListParams = 
   return fetchJson(baseUrl, `/projects${buildQuery(params)}`, ProjectListResponseSchema);
 }
 
+// Enriched read model for the Projects screen (Checkpoint 5.2): base rows plus
+// computed next action / stalled / activity / counts.
+export async function getProjectSummaries(
+  baseUrl: string,
+  includeArchived?: boolean,
+): Promise<ProjectSummaryListResponse> {
+  return fetchJson(
+    baseUrl,
+    `/projects/summaries${buildQuery({ include_archived: includeArchived })}`,
+    ProjectSummaryListResponseSchema,
+  );
+}
+
 export async function getProject(baseUrl: string, id: string): Promise<Project> {
   return fetchJson(baseUrl, `/projects/${id}`, ProjectSchema);
+}
+
+export async function getProjectDetail(
+  baseUrl: string,
+  id: string,
+): Promise<ProjectDetailResponse> {
+  return fetchJson(baseUrl, `/projects/${id}/detail`, ProjectDetailResponseSchema);
 }
 
 export async function createProject(baseUrl: string, body: ProjectCreate): Promise<Project> {
@@ -46,6 +73,33 @@ export async function updateProject(
   });
 }
 
-export async function archiveProject(baseUrl: string, id: string): Promise<Project> {
-  return fetchJson(baseUrl, `/projects/${id}/archive`, ProjectSchema, { method: "POST" });
+// Lifecycle/archive actions are bodyless POSTs exactly like archiveProject:
+// fetchJson only sets Content-Type when a body exists (a JSON Content-Type on
+// an empty body is rejected by Fastify's parser as a spurious 400).
+async function postProjectAction(baseUrl: string, id: string, action: string): Promise<Project> {
+  return fetchJson(baseUrl, `/projects/${id}/${action}`, ProjectSchema, { method: "POST" });
+}
+
+export function pauseProject(baseUrl: string, id: string): Promise<Project> {
+  return postProjectAction(baseUrl, id, "pause");
+}
+
+export function resumeProject(baseUrl: string, id: string): Promise<Project> {
+  return postProjectAction(baseUrl, id, "resume");
+}
+
+export function completeProject(baseUrl: string, id: string): Promise<Project> {
+  return postProjectAction(baseUrl, id, "complete");
+}
+
+export function reopenProject(baseUrl: string, id: string): Promise<Project> {
+  return postProjectAction(baseUrl, id, "reopen");
+}
+
+export function archiveProject(baseUrl: string, id: string): Promise<Project> {
+  return postProjectAction(baseUrl, id, "archive");
+}
+
+export function unarchiveProject(baseUrl: string, id: string): Promise<Project> {
+  return postProjectAction(baseUrl, id, "unarchive");
 }

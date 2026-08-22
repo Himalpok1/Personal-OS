@@ -91,6 +91,9 @@ export interface ProjectActivitySignals {
   taskCompletions: Date[];
   noteWrites: Date[];
   occurrenceCompletions: Date[];
+  /** Task creation/update timestamps; optional for backward compatibility
+   * with Checkpoint 5.1 callers that do not yet track writes. */
+  taskWrites?: Date[];
 }
 
 export function lastProjectActivity(signals: ProjectActivitySignals): Date | null {
@@ -99,6 +102,7 @@ export function lastProjectActivity(signals: ProjectActivitySignals): Date | nul
     ...signals.taskCompletions,
     ...signals.noteWrites,
     ...signals.occurrenceCompletions,
+    ...(signals.taskWrites ?? []),
   ]) {
     if (latest === null || at.getTime() > latest.getTime()) latest = at;
   }
