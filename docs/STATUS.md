@@ -1,7 +1,7 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 5 — Daily Command Center + Projects — **IN PROGRESS** (plan approved with amendments 2026-08-21; Steps 0–1 and **Checkpoints 5.1–5.3 COMPLETE** through 2026-08-22, local verification incl. physical Rabbit passes; Checkpoint 5.4 next pending user approval). Phases 0–4 remain COMPLETE, production-deployed, and physically verified — see below.
+**Current phase:** Phase 5 — Daily Command Center + Projects — **IN PROGRESS** (plan approved with amendments 2026-08-21; Steps 0–1 and **Checkpoints 5.1–5.4 COMPLETE** through 2026-08-22, local verification incl. physical Rabbit passes; Checkpoint 5.5 next pending user approval). Phases 0–4 remain COMPLETE, production-deployed, and physically verified — see below.
 **Implementation status:** Phases 0–4 are implemented and production-deployed. Checkpoint 4.7 deployed Phase 4 to production and passed both reboot-survival tests physically (Rabbit device and Ubuntu host) on 2026-08-21.
 **Next phase allowed:** Phase 5 checkpoints proceed sequentially under the approved plan (5.1 Today/Home → 5.2 Projects → 5.3 Reviews → 5.4 Agenda → 5.5 Daily Brief → 5.6 polish → 5.7 gated deployment). **No production changes before 5.7.** Finance is deferred to a later phase (ADR-038), still gated on the open finance-source-of-truth decision.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
@@ -263,6 +263,74 @@ Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, 
 - [x] Phase 5 Checkpoint 5.2 — Real project management: lifecycle actions, project summaries/detail read models, operational Projects UI, Today active-project correction — complete 2026-08-22 (local only; production untouched).
 - [x] Phase 5 Checkpoint 5.3 STEP 0 — Migration-tooling repair: drizzle tracking reconciled on dev/test with probe-gated reproducible script + permanent journal guards; fresh-DB and production-watermark paths proven — complete 2026-08-22 (commit 035301a).
 - [x] Phase 5 Checkpoint 5.3 — Daily + Weekly Review: migration 0011, review API/context collectors with TOCTOU hardening, resumable guided flows (daily + weekly), recently-completed collector, Today derived review state — complete 2026-08-22 (local only; production untouched).
+- [x] Phase 5 Checkpoint 5.4 — Smart Agenda / Planning: GET /agenda read model + route (90-day cap, project filter, chronological interleave), Calendar Month|Week|**Agenda**, the central canonical all-day recurrence fix (ADR-042) across core/API/worker/routes, AI-capture canonicalization, mobile UTC-date fix, and `remind_at` PATCH — complete 2026-08-22 (local only; production untouched; **zero migrations**).
+
+## Phase 5 Checkpoint 5.4 — Smart Agenda / Planning (COMPLETE, 2026-08-22)
+
+Built with maximum agent parallelism under the approved plan: a read-only planning wave (6 investigators), then two implementation waves (S1 core helpers · S2 schema · S3 event-range · S4 worker+capture · S5 events route · S6 Agenda read model/route · S7 remind_at · S8 api-client · S9 Agenda UI · S10 mobile fixes) with strict one-writer-per-file ownership, then a seven-agent adversarial audit wave. Main Opus owned all shared/integration files (`packages/core/src/index.ts`, `packages/api-client/src/index.ts`, `apps/api/src/server.ts`, `(tabs)/calendar.tsx`, docs) and every conflict/correctness decision. Local development only; **production untouched; zero migrations**.
+
+### The headline finding: recurring all-day events never expanded ANYWHERE
+
+Open Code reported that recurring all-day instances rendered with the parent's date repeated ("Aug 10, Aug 10, Aug 10"). Independent verification found the defect is **worse than reported** and the reported symptom was unreachable. Three independent layers all key recurrence off `events.starts_at`, which `EventCreateSchema` **forces to be NULL** for a canonical all-day event:
+
+1. `event-range.ts:146` — the recurring-parent SQL predicate `lte(events.startsAt, to)` drops NULL-`starts_at` rows via SQL three-valued logic, so they never reach expansion.
+2. `event-range.ts:29` — the private `buildRecurrenceRule` returned `null` when `!row.startsAt`.
+3. `expand-due-date-window.ts:114` — the nightly worker's identical guard, plus `events.ts` skipping creation/PATCH materialization and `isValidOccurrence` rejecting detach/cancel.
+
+Net effect: a recurring all-day event was **invisible** in `/events/range`, `/today`, review contexts, Month and Week, and the nightly cron never materialized a single occurrence for it. Not misplaced — absent.
+
+**Fix (ADR-042):** one shared `buildEventRecurrenceRule` in `packages/core/src/recurrence/event-recurrence.ts`, used by all four call sites, anchoring an all-day series' DTSTART at **local noon** derived from `start_date` — the convention already documented on `DueDateRecurrenceRule.dtstart` since Phase 1 but never used by any caller. `starts_at` is still **never** written for an all-day event; the SQL predicate was widened narrowly; and for `is_recurring_instance && all_day` the emitted `start_date`/`end_date` are re-pointed to that instance's actual dates (preserving the template day-span) from `occurrence.occursLocal`, with no UTC round-trip. Timed recurrence is byte-identical.
+
+Because `EventRangeItem`, `TodayEventItem` and `AgendaItem` carry **no per-instance date field**, re-pointing was the only way to express an all-day instance's date without breaking the frozen Agenda response shape. This contradicts the old `EventRangeItemSchema` doc comment, which was rewritten rather than left silently false.
+
+### Open Code findings — verified, rejected, corrected
+
+| Finding | Verdict |
+|---|---|
+| Agenda response shape should stay frozen | **Confirmed** — and load-bearing (see above) |
+| Agenda cap is 62 days; no `project_id` | **Confirmed** |
+| Raise cap 62 → 366 | **REJECTED.** Recurring TASK instances exist only as materialized `occurrences`, capped at 90 days by every writer (`WINDOW_DAYS = 90`, hardcoded `90` in POST/PATCH `/tasks`), and there is no on-demand task expansion anywhere. Worse, `AgendaOccurrenceItemSchema` requires a real `occurrence_id` uuid, so a virtual occurrence is **inexpressible** in the frozen contract. A 366-day Agenda would show recurring tasks for ~90 days then silently none, with no `total` field to admit it. Cap set to **90**, matching the materialization horizon exactly (user-approved) |
+| Event-range SQL / rule-builder / instance-date defects | **Confirmed**, and broader (above) |
+| Use the repo's "local noon" technique | **Confirmed as the repo's own documented, unused convention** |
+| AI capture can write malformed all-day rows | **Confirmed** — `commit-parsed-entity.ts` inserts directly via Drizzle, bypassing `EventCreateSchema`, always setting `startsAt` and never `startDate` while passing `all_day` straight from the LLM |
+| Calendar sync depends on `EventRangeItem` | **REJECTED** — zero references in `apps/worker` or `packages/calendar-providers`; sync reads `events` rows directly. The projection change is sync-safe |
+| Sort: all-day → all events → all tasks | **REJECTED** — type-grouping puts a 15:00 task after an 18:00 meeting. Frozen instead as all-day first, then **chronological interleave across kinds** (user-approved) |
+
+### Also fixed (latent bugs this checkpoint made reachable)
+
+- **Mobile UTC-date bug:** `computeOccurrenceTiming` derived an occurrence's date via `occursAt.slice(0, 10)` — the **UTC** date. With a noon anchor in Pacific/Auckland (UTC+13) local noon is 23:00 UTC the previous day, so it computed the wrong day. Dead code until all-day series could recur; now derives in the event's recurrence timezone via the existing client-safe `resolveInstantToLocalUntil`. Auckland/Chicago/UTC regressions added.
+- **AI capture canonicalization:** all-day captures now write canonical `start_date`/`end_date` with `starts_at`/`ends_at` null. This also removes a **live crash**: `calendar-push-event.ts` throws `event ... has all_day=true but no start_date` on the old malformed shape, so AI-captured all-day events could never push to Google/CalDAV. No migration, no backfill (local dev DB verified clean, 0 malformed rows); a read-only production audit is deferred to 5.7.
+- **Detach template fallback:** the all-day detach branch fell back to the parent's `start_date`, which would have stamped every detached instance with the series' first date.
+
+### Independent adversarial audit — 7 agents, 3 real defects found and fixed
+
+- **D3-8 (BROKEN):** a timed event with no end is a zero-duration instant; the half-open overlap test degenerates to the empty interval `[start, start)`, so an event starting **exactly at local midnight** matched no day window and vanished from the Agenda entirely. Fixed with point-membership for zero-duration instants (deliberately *not* by relaxing the general test to `>=`, which would duplicate real-duration events ending on a boundary). Two regressions added.
+- **D4-4 (BROKEN):** `recurrence_timezone` and `timezone` are independently settable, and the detach handler derived the child's date in the **display** timezone rather than the zone the occurrence instant was generated in — landing a detached all-day child a full day off from the EXDATE recorded against its own parent. Fixed by separating `occurrenceTz` from `targetTz`; regression uses `America/Los_Angeles` + `Pacific/Kiritimati`.
+- **D1-8:** `allDayInstanceDates` had no clamp on an inverted parent span (unreachable through the API today, but the shared helper must defend itself — mobile's parallel implementation already clamped). Fixed and pinned.
+
+Audits otherwise CLEAR: `starts_at` never written for all-day; timed recurrence byte-identical; **worker/on-demand parity holds**, and the DST duplicate-occurrence risk was specifically analysed and disproved (the noon anchor sits outside the 1–3 AM transition band, so `resolveWallClockToInstant` is idempotent per calendar date, and the `(parent_type, parent_id, occurs_at)` unique index collapses reruns); shared request-level recurrence budget charged pre-filter with whole-request failure and no partial results; overdue strictly `<`; overdue/days disjoint; events never overdue; recurring dedupe sound including synthetic-parent synthesis; SQL fully parameterized; route perimeter-only; **zero forbidden-file drift**; **zero calendar-provider drift**.
+
+### Verification actually run
+
+| # | Check | Result |
+|---|---|---|
+| 1 | `pnpm build && typecheck && lint && format:check` | Clean workspace-wide |
+| 2 | Full uncached suite (`turbo run test --force`) | **993 tests pass, 15/15 tasks** — core 257, db 5, schema 123, calendar-providers **57 (unchanged — zero-drift canary)**, ai-providers 20, api-client 62, api 276, worker 80, mobile 113. Baseline 876 → **+117**, zero regressions |
+| 3 | Migration invariant | Exactly 12 `.sql` files, 12 journal entries, no 0012; `db:reconcile --check` reports the tracking table consistent |
+| 4 | `git diff --check`, gitleaks | Clean; 63 commits scanned, no leaks |
+| 5 | Expo web export | Bundles cleanly (SPA single output) |
+| 6 | Live HTTP proof vs dev API | Canonical all-day weekly series expands to **6 distinct instance dates** with `starts_at` null and `occurs_at` = 17:00Z (noon Chicago); identical dates from Auckland/Chicago/UTC (no date shift); 90d accepted / 91d rejected with the exact message; invalid tz and invalid uuid → 400; overdue task in `overdue[]` with **no event ever overdue**; recurring task appears once as an `occurrence` with the parent suppressed; undated task excluded; **chronological interleave proven** (task 20:00 → event 20:30 → occurrence 21:00); project filter returns only the project's item and **survives the project being paused**; multi-day event appears on **all three** overlapping days; detach of the 2026-09-07 instance produced a child at **2026-09-07** (its own date, proving the template-fallback fix) with parent EXDATE `2026-09-07`, cancel removed 09-14, bogus instant → 400, and the series showed 5 items across 5 distinct dates with no template duplicate |
+| 7 | `remind_at` lifecycle | set (offset-less 09:00 → 14:00Z, resolved in the task's own timezone) → earlier → later → **unrelated title-only PATCH left it byte-identical** (the property the reconciler's exact-string comparison depends on) → cleared to null |
+| 8 | Smoke cleanup | Count-verified twice: 98 + 101 occurrences, 6 events, 8 tasks, 2 projects removed; zero residue, zero orphans; dev DB back to its pre-checkpoint 2 events / 3 tasks |
+| 9 | Browser (desktop + 480×640) | Month renders the recurring all-day series on **both Aug 24 and Aug 31** (previously invisible); Agenda shows the 90-day range, OVERDUE with `+1 day`, ALL-DAY first, interleaved rows, long scroll, project filter chips narrowing correctly, and a genuine error state (`Couldn't load the agenda.` + Retry) with recovery confirmed on remount |
+| 10 | **Physical Rabbit R1** (side-by-side `.dev` identity) | Three toggle pills measured at **48px** touch targets on real hardware; Agenda live against the dev API through `adb reverse`; range `2026-08-22 – 2026-11-19`; **MON, AUG 31 ALL-DAY showing the second recurring instance at its own date**; recurring occurrences with ⟲/Skip; long scrolling; a **live on-device Skip persisted to Postgres** (occurrence `2026-09-01 16:00+00` → `skipped`) and the now-empty day correctly disappeared from the list |
+
+**Rabbit production safety:** production `com.himal.personalos` evidence identical before and after — versionCode `4`, versionName `1.0.0`, `firstInstallTime 2026-08-19 16:26:10`, `lastUpdateTime 2026-08-21 15:28:16`, dataDir unchanged. The `.dev` package was uninstalled afterward and only production remains. **No production FAB/PTT or physical reminder-alarm claim is made** — those controls are deliberately not mounted in UI-test mode.
+
+### Root cause of the recurring "Rabbit can't reach the dev API" incident — finally diagnosed
+
+Checkpoints 5.1, 5.2 and 5.3 each hit this and each worked around it by hand-patching the generated manifest. The actual cause: **`android.usesCleartextTraffic` is not a valid Expo app-config property** — it was set in `app.config.ts` and silently ignored, and because `android/` is gitignored the hand-patch never showed up in review. The inert property has been removed and replaced with a comment naming the supported fix (`expo-build-properties`, not currently a dependency). Expo SDK 57 API usage was verified against the versioned docs per `apps/mobile/AGENTS.md`.
+
 
 ## Phase 5 Checkpoint 5.3 STEP 0 — Migration tooling repair (COMPLETE, 2026-08-22, commit 035301a)
 
@@ -1510,12 +1578,16 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-Phase 5 Checkpoint 5.3 (Daily + Weekly Review, including the STEP 0 migration-tooling repair) is complete and locally verified end-to-end — live HTTP lifecycle verification, web export, and a physical Rabbit pass exercising the daily flow on-device via the side-by-side UI-test identity. Production remains untouched. Checkpoint 5.4 (Smart Agenda) has not started.
+Phase 5 Checkpoint 5.4 (Smart Agenda / Planning) is complete and locally verified end-to-end — 993 tests, live HTTP fixture proof, web export, desktop + 480×640 browser passes, and a physical Rabbit pass that exercised the Agenda on-device including a live Skip persisted to Postgres. Its central correctness work (ADR-042: canonical all-day recurrence anchored at local noon, shared by on-demand expansion, the nightly worker, create/PATCH materialization and occurrence validation) fixed a defect that had made recurring all-day events invisible everywhere in the system. Production remains untouched and the migration level is unchanged at 0000–0011. Checkpoint 5.5 (manual AI Daily Brief) has not started.
 
 ## Remaining warnings / technical debt
 
 - **Drizzle snapshots stop at 0008** — `db:generate` remains unusable until faithful 0009/0010(+0011) snapshots are reconstructed or the hand-written-SQL + mandatory-`db:reconcile` methodology is superseded. Recorded decision from Step 0; each new hand-written migration must consciously extend the journal-guard allowlist and run reconcile.
-- **Recurring all-day event instances bucket by series anchor date in Today/review contexts** (inherited 5.1 behavior, mirrored by design) — backlog candidate for a future correctness pass.
+- ~~**Recurring all-day event instances bucket by series anchor date in Today/review contexts**~~ — **CLOSED by Checkpoint 5.4 (ADR-042)**. The real defect was broader than recorded: such events never expanded anywhere at all. Today/review contexts now receive per-instance dates and required no code change.
+- **`expo-build-properties` is not a dependency**, so UI-test builds needing cleartext access to a local dev API still require hand-patching `android/app/src/main/AndroidManifest.xml` after prebuild. `android.usesCleartextTraffic` is NOT a valid Expo config property (it was silently ignored for three checkpoints — see 5.4). Adding the plugin would close this permanently.
+- **No composite index on `occurrences(parent_type, status, occurs_at)` and no index on `events.start_date`** — the Agenda and event-range queries filter on both. Not a practical risk at single-user scale with a 90-day materialized horizon; two additive index migrations would close it if scale assumptions change.
+- **All-day `recurrence_until` must resolve to end-of-local-day.** The shipped mobile editor always serializes it to 23:59:59.999, so the product flow is correct, but the schema neither enforces nor documents it — a raw API caller sending midnight silently loses the final occurrence (a noon-anchored instance sorts after it). Untested; document or normalize server-side in a future pass.
+- **`ALL_DAY_ANCHOR_SLACK_MS` (36h) padding charges a few extra candidates against the shared 10,000 recurrence budget** per all-day series. Negligible for daily/weekly/monthly rules; only material for a pathological sub-daily all-day rule, which nothing currently forbids.
 - **Optimistic review-toggle state does not roll back on PATCH failure** (server truth restored on next refetch; error banner shown) — acceptable MVP tradeoff flagged for 5.6 polish.
 - **Priority chips ~37px without hitSlop on the daily flow** — below the 40px bar elsewhere; queued for 5.6.
 - **No UI to browse past settled reviews** (client list method exists; no screen) — intentional MVP scope.
@@ -1539,11 +1611,11 @@ Phase 5 Checkpoint 5.3 (Daily + Weekly Review, including the STEP 0 migration-to
 
 ## Last verification
 
-Phase 5 Checkpoint 5.3 closure verification (2026-08-22): build/typecheck/lint/format clean workspace-wide; **876 tests pass across 15 turbo tasks** (vs 754 at 5.2 closure — zero regressions); migration tooling repaired with all nine Step-0 acceptance proofs (fresh-DB path, affected-path, production-watermark simulation, role denial, zero false-applied); migration 0011 applied to dev+test as `posops_migrator` through the repaired workflow; live HTTP full-review-lifecycle verification; web export clean; physical Rabbit daily-flow pass on the side-by-side `.dev` identity with server-mid-flow persistence proof; `git diff --check` and gitleaks clean.
+Phase 5 Checkpoint 5.4 closure verification (2026-08-22): build/typecheck/lint/format clean workspace-wide; **993 tests pass across 15 turbo tasks** (876 → +117, zero regressions; `@personal-os/calendar-providers` unchanged at exactly 57 as the zero-drift canary); exactly 12 migrations / 12 journal entries with `db:reconcile --check` consistent and no 0012; `git diff --check` and gitleaks clean (63 commits, no leaks); Expo web export clean; live HTTP proof of all-day recurrence expansion, timezone stability across Auckland/Chicago/UTC, Agenda bucketing/interleave/dedupe/project-filter/range-caps, detach + cancel + EXDATE, and the full `remind_at` set/earlier/later/clear lifecycle; count-verified smoke cleanup with zero residue and zero orphans; desktop and 480×640 browser passes; physical Rabbit R1 pass on the side-by-side `.dev` identity with production evidence (versionCode 4, install timestamps, dataDir) identical before and after and `.dev` uninstalled afterward. Seven independent adversarial audits found three real defects (zero-duration midnight event vanishing, detach deriving dates in the wrong timezone, unclamped inverted day-span); all three were fixed and pinned with regressions.
 
 ## Next action
 
-Checkpoint 5.3 is complete — stop and await explicit user approval before beginning Checkpoint 5.4 (Smart Agenda / Planning: unified tasks+events time view). No production changes before Checkpoint 5.7.
+Checkpoint 5.4 is complete — stop and await explicit user approval before beginning Checkpoint 5.5 (manual AI Daily Brief, which owns migration 0012). No production changes before Checkpoint 5.7.
 
 ## Handoff rule
 
