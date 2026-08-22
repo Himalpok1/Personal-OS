@@ -493,6 +493,247 @@ describe("tasks routes", () => {
     expect(body.due_at).toBe("2026-09-01T14:00:00.000Z"); // 9am CDT -> 14:00 UTC
   });
 
+  describe("remind_at on PATCH", () => {
+    it("sets remind_at on a task that had none, and GET reflects it", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "No reminder yet", timezone: "America/Chicago" },
+      });
+      const id = created.json<Task>().id;
+      expect(created.json<Task>().remind_at).toBeNull();
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: "2026-09-01T09:00:00-05:00" },
+      });
+      expect(patched.statusCode).toBe(200);
+      expect(patched.json<Task>().remind_at).toBe("2026-09-01T14:00:00.000Z");
+
+      const fetched = await app.inject({ method: "GET", url: `/tasks/${id}` });
+      expect(fetched.json<Task>().remind_at).toBe("2026-09-01T14:00:00.000Z");
+    });
+
+    it("moves remind_at earlier", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "Move earlier", timezone: "America/Chicago" },
+      });
+      const id = created.json<Task>().id;
+
+      await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: "2026-09-10T10:00:00-05:00" },
+      });
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: "2026-09-05T08:00:00-05:00" },
+      });
+      expect(patched.json<Task>().remind_at).toBe("2026-09-05T13:00:00.000Z");
+    });
+
+    it("moves remind_at later", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "Move later", timezone: "America/Chicago" },
+      });
+      const id = created.json<Task>().id;
+
+      await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: "2026-09-05T08:00:00-05:00" },
+      });
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: "2026-09-10T10:00:00-05:00" },
+      });
+      expect(patched.json<Task>().remind_at).toBe("2026-09-10T15:00:00.000Z");
+    });
+
+    it("clears remind_at back to null with an explicit null", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "Clear me", timezone: "America/Chicago" },
+      });
+      const id = created.json<Task>().id;
+
+      await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: "2026-09-10T10:00:00-05:00" },
+      });
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: null },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json<Task>().remind_at).toBeNull();
+    });
+
+    it("leaves remind_at byte-identical when patching an unrelated field", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "Untouched reminder", timezone: "America/Chicago" },
+      });
+      const id = created.json<Task>().id;
+
+      const withReminder = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: "2026-09-10T10:00:00-05:00" },
+      });
+      const originalRemindAt = withReminder.json<Task>().remind_at;
+
+      const titleOnly = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { title: "Renamed, reminder untouched" },
+      });
+      expect(titleOnly.statusCode).toBe(200);
+      const body = titleOnly.json<Task>();
+      expect(body.title).toBe("Renamed, reminder untouched");
+      // Exact string equality matters: the mobile reminder reconciler diffs
+      // remind_at by exact ISO string, so any incidental churn would cancel
+      // and reschedule a live alarm for no reason.
+      expect(body.remind_at).toBe(originalRemindAt);
+    });
+
+    it("resolves an offset-less remind_at against the task's own stored timezone, not UTC", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "Chicago reminder", timezone: "America/Chicago" },
+      });
+      const id = created.json<Task>().id;
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: "2026-09-01T07:30:00" },
+      });
+      expect(patched.statusCode).toBe(200);
+      // 7:30am CDT (UTC-5) -> 12:30 UTC
+      expect(patched.json<Task>().remind_at).toBe("2026-09-01T12:30:00.000Z");
+    });
+
+    it("resolves an offset-less remind_at against a non-US task timezone (Pacific/Auckland)", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "Auckland reminder", timezone: "Pacific/Auckland" },
+      });
+      const id = created.json<Task>().id;
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: "2026-09-01T07:30:00" },
+      });
+      expect(patched.statusCode).toBe(200);
+      // Pacific/Auckland is NZST (UTC+12) in early September (before DST starts in late Sept).
+      expect(patched.json<Task>().remind_at).toBe("2026-08-31T19:30:00.000Z");
+    });
+
+    it("normalizes remind_at to stable ISO-8601-with-offset form across repeated round-trips", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "Round trip", timezone: "America/Chicago" },
+      });
+      const id = created.json<Task>().id;
+
+      const first = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: "2026-09-01T09:00:00-05:00" },
+      });
+      const firstValue = first.json<Task>().remind_at as string;
+      expect(firstValue).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+
+      // Re-send the exact same value the server just returned; it must round-trip unchanged.
+      const second = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: firstValue },
+      });
+      expect(second.json<Task>().remind_at).toBe(firstValue);
+
+      const fetched = await app.inject({ method: "GET", url: `/tasks/${id}` });
+      expect(fetched.json<Task>().remind_at).toBe(firstValue);
+    });
+
+    it("keeps a recurring task's reminder at series level, leaving its occurrence schedule equivalent", async () => {
+      const now = new Date();
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: {
+          title: "Recurring with reminder",
+          timezone: "America/Chicago",
+          due_at: now.toISOString(),
+          rrule: "FREQ=DAILY;INTERVAL=1",
+          recurrence_anchor: "due_date",
+        },
+      });
+      expect(created.statusCode).toBe(201);
+      const id = created.json<Task>().id;
+
+      const beforeRows = await app.db
+        .select()
+        .from(occurrences)
+        .where(eq(occurrences.parentId, id));
+      const beforeCount = beforeRows.length;
+      // Compare the SCHEDULE (the set of occurs_at instants), not row ids.
+      // Any PATCH to a due-date-anchored recurring task replaces its future
+      // scheduled occurrences and re-expands the 90-day window -- frozen
+      // Checkpoint 4.3 transition semantics that predate remind_at and apply
+      // equally to a title-only edit. What must hold here is that a reminder
+      // stays task/series-level: the schedule is unchanged and no
+      // per-occurrence reminder state is created.
+      const beforeInstants = new Set(beforeRows.map((o) => o.occursAt.getTime()));
+
+      const withReminder = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: "2026-09-01T09:00:00-05:00" },
+      });
+      expect(withReminder.statusCode).toBe(200);
+      expect(withReminder.json<Task>().remind_at).toBe("2026-09-01T14:00:00.000Z");
+
+      const afterSetRows = await app.db
+        .select()
+        .from(occurrences)
+        .where(eq(occurrences.parentId, id));
+      expect(afterSetRows.length).toBe(beforeCount);
+      expect(new Set(afterSetRows.map((o) => o.occursAt.getTime()))).toEqual(beforeInstants);
+
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { remind_at: null },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json<Task>().remind_at).toBeNull();
+
+      const afterClearRows = await app.db
+        .select()
+        .from(occurrences)
+        .where(eq(occurrences.parentId, id));
+      expect(afterClearRows.length).toBe(beforeCount);
+      expect(new Set(afterClearRows.map((o) => o.occursAt.getTime()))).toEqual(beforeInstants);
+    });
+  });
+
   it("404s on PATCH/archive/activate/complete/drop for an unknown id", async () => {
     const unknownId = "00000000-0000-0000-0000-000000000000";
     for (const req of [

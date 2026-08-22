@@ -209,6 +209,12 @@ export default function tasksRoutes(app: FastifyInstance): void {
           : existing.dueAt;
       const newPriority = body.priority !== undefined ? body.priority : existing.priority;
       const newProjectId = body.project_id !== undefined ? body.project_id : existing.projectId;
+      const newRemindAt =
+        body.remind_at !== undefined
+          ? body.remind_at
+            ? parseFlexibleDatetime(body.remind_at, existing.timezone)
+            : null
+          : existing.remindAt;
 
       const rruleExplicitlyNull = body.rrule === null;
       const newRrule = body.rrule !== undefined ? body.rrule : existing.rrule;
@@ -361,6 +367,7 @@ export default function tasksRoutes(app: FastifyInstance): void {
           title: newTitle,
           body: newBody,
           dueAt: newDueAt,
+          remindAt: newRemindAt,
           priority: newPriority,
           projectId: newProjectId,
           rrule: hasRecurrence ? newRrule : null,
