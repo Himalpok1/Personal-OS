@@ -1,5 +1,6 @@
 import {
   parseFlexibleDatetime,
+  resolveInstantToLocalUntil,
   toWallClockComponents,
   validateCompletionAnchoredRule,
   wallClockToNaiveDate,
@@ -127,17 +128,41 @@ export async function commitParsedEntity(
       return { committed: { entityType: "note", entityId: row.id }, unknownProjectReference };
     }
     case "create_event": {
+      const isAllDay = toolCall.args.all_day ?? false;
+
+      // Canonical shape per EventCreateSchema: all-day events carry
+      // start_date/end_date (calendar dates), never starts_at/ends_at; timed
+      // events carry starts_at/ends_at, never start_date/end_date. The parser
+      // only ever emits an instant-shaped `start`/`end`, so an all-day tool
+      // call must be converted into a local calendar date (in the capture's
+      // own timezone) rather than committed as the previous malformed inverse
+      // shape (all_day=true with starts_at set and start_date left null) --
+      // that shape breaks Google/CalDAV push and both calendar grids.
+      const startInstant = parseFlexibleDatetime(toolCall.args.start, ctx.timezone);
+      const endInstant = toolCall.args.end
+        ? parseFlexibleDatetime(toolCall.args.end, ctx.timezone)
+        : undefined;
+
+      const startDate = isAllDay
+        ? resolveInstantToLocalUntil(startInstant, ctx.timezone)
+        : undefined;
+      const endDate = isAllDay
+        ? endInstant
+          ? resolveInstantToLocalUntil(endInstant, ctx.timezone)
+          : startDate
+        : undefined;
+
       const [row] = await db
         .insert(events)
         .values({
           title: toolCall.args.title,
           location: toolCall.args.location,
-          startsAt: parseFlexibleDatetime(toolCall.args.start, ctx.timezone),
-          endsAt: toolCall.args.end
-            ? parseFlexibleDatetime(toolCall.args.end, ctx.timezone)
-            : undefined,
+          startsAt: isAllDay ? undefined : startInstant,
+          endsAt: isAllDay ? undefined : endInstant,
           timezone: ctx.timezone,
-          allDay: toolCall.args.all_day ?? false,
+          allDay: isAllDay,
+          startDate,
+          endDate,
           rrule: toolCall.args.rrule,
           recurrenceTimezone: toolCall.args.rrule ? ctx.timezone : undefined,
         })

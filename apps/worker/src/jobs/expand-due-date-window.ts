@@ -1,4 +1,5 @@
 import {
+  buildEventRecurrenceRule,
   expandDueDateWindow,
   toWallClockComponents,
   wallClockToNaiveDate,
@@ -111,15 +112,25 @@ export async function expandDueDateWindowJob(db: Db): Promise<void> {
     .where(and(isNotNull(events.rrule), isNull(events.archivedAt)));
 
   for (const event of recurringEvents) {
-    if (!event.rrule || !event.recurrenceTimezone || !event.startsAt) continue;
-    const rule = buildRule({
+    // Canonical shared builder (packages/core/src/recurrence/event-recurrence.ts)
+    // -- handles both timed events (dtstart from starts_at, byte-identical to
+    // the previous local buildRule usage) and all-day events (dtstart anchored
+    // at local noon on start_date, since EventCreateSchema forces all-day rows
+    // to have starts_at NULL / start_date set). Returns null when the row
+    // can't yet produce a rule (e.g. all-day with no start_date), which is the
+    // only skip condition now -- no more blanket `!event.startsAt` guard that
+    // silently dropped every all-day recurring series.
+    const rule = buildEventRecurrenceRule({
       rrule: event.rrule,
       recurrenceTimezone: event.recurrenceTimezone,
-      anchorInstant: event.startsAt,
+      allDay: event.allDay,
+      startsAt: event.startsAt,
+      startDate: event.startDate,
       recurrenceUntil: event.recurrenceUntil,
       recurrenceCount: event.recurrenceCount,
       recurrenceExdates: event.recurrenceExdates,
     });
+    if (!rule) continue;
     const generated = expandDueDateWindow(rule, WINDOW_DAYS, now);
     await upsertOccurrences(db, "event", event.id, generated);
   }

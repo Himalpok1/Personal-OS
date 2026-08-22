@@ -42,6 +42,31 @@ async function insertRecurringEvent(
   return row!.id;
 }
 
+// Canonical all-day shape per EventCreateSchema: allDay=true, startsAt/endsAt
+// NULL, startDate set. Before the buildEventRecurrenceRule fix, the job's
+// `!event.startsAt` guard silently skipped every row shaped like this.
+async function insertRecurringAllDayEvent(
+  db: Db,
+  overrides: Partial<typeof events.$inferInsert>,
+): Promise<string> {
+  const [row] = await db
+    .insert(events)
+    .values({
+      title: "Weekly all-day retro",
+      timezone: "America/Chicago",
+      allDay: true,
+      startsAt: null,
+      endsAt: null,
+      startDate: "2026-01-05",
+      endDate: "2026-01-05",
+      rrule: "FREQ=WEEKLY;INTERVAL=1",
+      recurrenceTimezone: "America/Chicago",
+      ...overrides,
+    })
+    .returning({ id: events.id });
+  return row!.id;
+}
+
 // Regression coverage for the Phase 2 fix: before this, the job's query had
 // no status/archived_at filter at all, so dropping or archiving a
 // recurring task did nothing to stop the nightly cron from continuing to
@@ -103,5 +128,73 @@ describe("expandDueDateWindowJob", () => {
 
     const rows = await db.select().from(occurrences).where(eq(occurrences.parentId, eventId));
     expect(rows).toHaveLength(0);
+  });
+
+  // Regression coverage for the buildEventRecurrenceRule fix: a canonical
+  // all-day recurring event (starts_at NULL, start_date set) must now
+  // materialize occurrences rows instead of being silently skipped by the
+  // old `!event.startsAt` guard.
+  it("expands occurrences for a canonical all-day recurring event", async () => {
+    const eventId = await insertRecurringAllDayEvent(db, {});
+    await expandDueDateWindowJob(db);
+
+    const rows = await db.select().from(occurrences).where(eq(occurrences.parentId, eventId));
+    expect(rows.length).toBeGreaterThan(0);
+  });
+
+  it("lands each generated all-day instance on its own correct calendar date, one week apart", async () => {
+    const eventId = await insertRecurringAllDayEvent(db, { startDate: "2026-01-05" });
+    await expandDueDateWindowJob(db);
+
+    const rows = await db
+      .select()
+      .from(occurrences)
+      .where(eq(occurrences.parentId, eventId))
+      .orderBy(occurrences.occursAt);
+
+    expect(rows.length).toBeGreaterThan(0);
+    // occursLocal is stored via wallClockToNaiveDate -- a Date whose UTC
+    // fields encode the wall-clock components (see packages/core/src/timezone.ts).
+    // Every instance should be a Monday (matching 2026-01-05), exactly 7 days
+    // apart from the previous one.
+    const localDates = rows.map((row) => row.occursLocal);
+    for (let i = 0; i < localDates.length; i++) {
+      expect(localDates[i]!.getUTCDay()).toBe(1); // Monday
+      if (i > 0) {
+        const diffDays =
+          (localDates[i]!.getTime() - localDates[i - 1]!.getTime()) / (24 * 60 * 60 * 1000);
+        expect(diffDays).toBe(7);
+      }
+    }
+  });
+
+  it("generates zero occurrences for an archived canonical all-day recurring event", async () => {
+    const eventId = await insertRecurringAllDayEvent(db, { archivedAt: new Date() });
+    await expandDueDateWindowJob(db);
+
+    const rows = await db.select().from(occurrences).where(eq(occurrences.parentId, eventId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("is idempotent -- re-running the job produces no duplicate rows for a canonical all-day event", async () => {
+    const eventId = await insertRecurringAllDayEvent(db, {});
+    await expandDueDateWindowJob(db);
+    const firstRun = await db.select().from(occurrences).where(eq(occurrences.parentId, eventId));
+
+    await expandDueDateWindowJob(db);
+    const secondRun = await db.select().from(occurrences).where(eq(occurrences.parentId, eventId));
+
+    expect(secondRun).toHaveLength(firstRun.length);
+  });
+
+  it("is idempotent -- re-running the job produces no duplicate rows for a timed recurring task", async () => {
+    const taskId = await insertRecurringTask(db, {});
+    await expandDueDateWindowJob(db);
+    const firstRun = await db.select().from(occurrences).where(eq(occurrences.parentId, taskId));
+
+    await expandDueDateWindowJob(db);
+    const secondRun = await db.select().from(occurrences).where(eq(occurrences.parentId, taskId));
+
+    expect(secondRun).toHaveLength(firstRun.length);
   });
 });

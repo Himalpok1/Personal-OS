@@ -1,11 +1,12 @@
 import {
+  allDayInstanceDates,
+  buildEventRecurrenceRule,
   expandDueDateWindow,
   expandRecurrenceInRange,
   parseFlexibleDatetime,
   resolveInstantToLocalUntil,
   toWallClockComponents,
   wallClockToNaiveDate,
-  type DueDateRecurrenceRule,
 } from "@personal-os/core";
 import {
   calendarConnectionCalendars,
@@ -85,15 +86,21 @@ async function enqueuePushIfLinked(app: FastifyInstance, eventId: string): Promi
 }
 
 function isValidOccurrence(parent: typeof events.$inferSelect, targetInstant: Date): boolean {
-  if (!parent.rrule || !parent.startsAt) return false;
-  const targetTz = parent.recurrenceTimezone ?? parent.timezone;
-  const ruleWithoutExdates: DueDateRecurrenceRule = {
+  // Deliberately omits recurrenceExdates -- this checks whether the target
+  // instant is a structurally valid slot of the series' rule, not whether
+  // it's currently excluded. Works for both timed (starts_at-anchored) and
+  // canonical all-day (start_date-anchored, noon dtstart) series via the
+  // same shared builder every other recurrence call site uses.
+  const ruleWithoutExdates = buildEventRecurrenceRule({
     rrule: parent.rrule,
-    recurrenceTimezone: targetTz,
-    dtstart: toWallClockComponents(parent.startsAt, targetTz),
-    recurrenceUntil: parent.recurrenceUntil ?? undefined,
-    recurrenceCount: parent.recurrenceCount ?? undefined,
-  };
+    recurrenceTimezone: parent.recurrenceTimezone ?? parent.timezone,
+    allDay: parent.allDay,
+    startsAt: parent.startsAt,
+    startDate: parent.startDate,
+    recurrenceUntil: parent.recurrenceUntil,
+    recurrenceCount: parent.recurrenceCount,
+  });
+  if (!ruleWithoutExdates) return false;
   const from = new Date(targetInstant.getTime() - 1000);
   const to = new Date(targetInstant.getTime() + 1000);
   const candidateOccurrences = expandRecurrenceInRange(ruleWithoutExdates, from, to);
@@ -212,16 +219,18 @@ export default function eventsRoutes(app: FastifyInstance): void {
         .returning();
       if (!inserted) throw new Error("insert into events returned no row");
 
-      if (body.rrule && startsAt) {
-        const rule: DueDateRecurrenceRule = {
-          rrule: body.rrule,
-          recurrenceTimezone: recurrenceTimezone!,
-          dtstart: toWallClockComponents(startsAt, recurrenceTimezone!),
-          recurrenceUntil: recurrenceUntil ?? undefined,
-          recurrenceCount: recurrenceCount ?? undefined,
-          recurrenceExdates: recurrenceExdates ?? undefined,
-        };
-        const generated = expandDueDateWindow(rule, 90, effectiveNow);
+      const creationRule = buildEventRecurrenceRule({
+        rrule: body.rrule ?? null,
+        recurrenceTimezone,
+        allDay: body.all_day ?? false,
+        startsAt: startsAt ?? null,
+        startDate: body.start_date ?? null,
+        recurrenceUntil,
+        recurrenceCount,
+        recurrenceExdates,
+      });
+      if (creationRule) {
+        const generated = expandDueDateWindow(creationRule, 90, effectiveNow);
         for (const occurrence of generated) {
           await tx
             .insert(occurrences)
@@ -352,16 +361,18 @@ export default function eventsRoutes(app: FastifyInstance): void {
             ),
           );
 
-        if (startsAt) {
-          const rule: DueDateRecurrenceRule = {
-            rrule: newRrule!,
-            recurrenceTimezone: newRecurrenceTimezone!,
-            dtstart: toWallClockComponents(startsAt, newRecurrenceTimezone!),
-            recurrenceUntil: newRecurrenceUntil ?? undefined,
-            recurrenceCount: newRecurrenceCount ?? undefined,
-            recurrenceExdates: newRecurrenceExdates ?? undefined,
-          };
-          const generated = expandDueDateWindow(rule, 90, effectiveNow);
+        const patchRule = buildEventRecurrenceRule({
+          rrule: newRrule,
+          recurrenceTimezone: newRecurrenceTimezone,
+          allDay,
+          startsAt: startsAt ?? null,
+          startDate: startDate ?? null,
+          recurrenceUntil: newRecurrenceUntil,
+          recurrenceCount: newRecurrenceCount,
+          recurrenceExdates: newRecurrenceExdates,
+        });
+        if (patchRule) {
+          const generated = expandDueDateWindow(patchRule, 90, effectiveNow);
           for (const occurrence of generated) {
             await tx
               .insert(occurrences)
@@ -452,6 +463,14 @@ export default function eventsRoutes(app: FastifyInstance): void {
     }
 
     const targetTz = body.timezone ?? parent.timezone;
+    // The zone the occurrence instant was GENERATED in -- distinct from
+    // targetTz, which is the detached child's own display timezone. These
+    // are independently settable (recurrence_timezone can diverge from
+    // timezone), and deriving the occurrence's calendar date in the wrong
+    // one lands the child a day off from the EXDATE recorded against its
+    // own parent. Matches the exdate derivation below and mobile's
+    // computeOccurrenceTiming.
+    const occurrenceTz = parent.recurrenceTimezone ?? parent.timezone;
     const allDay = body.all_day ?? parent.allDay;
     const title = body.title ?? parent.title;
     const description = body.description !== undefined ? body.description : parent.description;
@@ -464,11 +483,29 @@ export default function eventsRoutes(app: FastifyInstance): void {
     let endsAt: Date | null = null;
 
     if (allDay) {
-      startDate =
-        body.start_date ??
-        parent.startDate ??
-        resolveInstantToLocalUntil(originalStartAt, targetTz);
-      endDate = body.end_date !== undefined ? body.end_date : (parent.endDate ?? startDate);
+      // The detached child represents ONE occurrence, so its dates come from
+      // that occurrence's own instant -- never from the parent's dtstart
+      // template. Falling back to parent.startDate (as this did before
+      // Checkpoint 5.4) was harmless only while all-day series could not
+      // recur at all: parent.startDate was always null for a timed parent
+      // being detached into an all-day child, so the instant fallback was
+      // the only reachable branch. Now that canonical all-day series expand
+      // (ADR-042), a template fallback would stamp every detached instance
+      // with the series' first date.
+      startDate = body.start_date ?? resolveInstantToLocalUntil(originalStartAt, occurrenceTz);
+      if (body.end_date !== undefined) {
+        endDate = body.end_date;
+      } else if (parent.startDate && parent.endDate) {
+        // Preserve the series' original day-span on this instance.
+        const { endDate: derivedEnd } = allDayInstanceDates(
+          toWallClockComponents(originalStartAt, occurrenceTz),
+          parent.startDate,
+          parent.endDate,
+        );
+        endDate = derivedEnd;
+      } else {
+        endDate = startDate;
+      }
       if (startDate && endDate && endDate < startDate) {
         return reply.code(400).send({
           error: "validation_failed",

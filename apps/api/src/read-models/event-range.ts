@@ -1,14 +1,20 @@
 import {
   expandRecurrenceInRange,
-  toWallClockComponents,
+  buildEventRecurrenceRule,
+  allDayInstanceDates,
   RecurrenceExpansionLimitError,
-  type DueDateRecurrenceRule,
 } from "@personal-os/core";
 import { events, occurrences, type Db } from "@personal-os/db";
 import { EventRangeItemSchema, type EventRangeItem } from "@personal-os/schema";
 import { and, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 
 const MAX_EXPANDED_OCCURRENCES_PER_REQUEST = 10_000;
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// Widest real UTC offset is +14h/-12h; a local-noon anchor adds another 12h
+// on top. 36h clears both ends with margin.
+const ALL_DAY_ANCHOR_SLACK_MS = 36 * 60 * 60 * 1000;
 
 // UTC calendar date of a real instant, as a plain YYYY-MM-DD string --
 // the documented, deliberate simplification for deriving date-only bounds
@@ -20,21 +26,16 @@ function toUtcCalendarDate(instant: Date): string {
   return iso.slice(0, 10);
 }
 
-// Recomputed fresh from the real anchor instant + zone on every call rather
-// than trusting a possibly-stale start_local column, same reasoning as
-// apps/worker's expand-due-date-window.ts buildRule -- kept as a local copy
-// rather than shared, since it's a five-line adapter from a `events`
-// row to the recurrence package's input shape, not new domain logic.
-function buildRecurrenceRule(row: typeof events.$inferSelect): DueDateRecurrenceRule | null {
-  if (!row.rrule || !row.recurrenceTimezone || !row.startsAt) return null;
-  return {
-    rrule: row.rrule,
-    recurrenceTimezone: row.recurrenceTimezone,
-    dtstart: toWallClockComponents(row.startsAt, row.recurrenceTimezone),
-    recurrenceUntil: row.recurrenceUntil ?? undefined,
-    recurrenceCount: row.recurrenceCount ?? undefined,
-    recurrenceExdates: row.recurrenceExdates ?? undefined,
-  };
+// Day-span (inclusive start to inclusive end, in whole days) of an all-day
+// series' own template dates -- used only to pad the recurrence-expansion
+// window backward for a multi-day all-day series, mirroring what durationMs
+// does for timed series. Pure calendar-date arithmetic, never through an
+// instant, so it can't be shifted by a client's timezone.
+function allDayTemplateSpanDays(startDate: string, endDate: string | null): number {
+  if (endDate === null) return 0;
+  const start = Date.parse(`${startDate}T00:00:00.000Z`);
+  const end = Date.parse(`${endDate}T00:00:00.000Z`);
+  return Math.round((end - start) / (24 * 60 * 60 * 1000));
 }
 
 export interface AssembleEventRangeParams {
@@ -143,7 +144,10 @@ export async function assembleEventRange(
       and(
         isNotNull(events.rrule),
         archivedFilter,
-        lte(events.startsAt, to),
+        or(
+          and(isNotNull(events.startsAt), lte(events.startsAt, to)),
+          and(isNotNull(events.startDate), lte(events.startDate, toDate)),
+        ),
         or(isNull(events.recurrenceUntil), gte(events.recurrenceUntil, from)),
       ),
     );
@@ -218,16 +222,42 @@ export async function assembleEventRange(
   }
 
   for (const row of recurringRows) {
-    const rule = buildRecurrenceRule(row);
+    const rule = buildEventRecurrenceRule({
+      rrule: row.rrule,
+      recurrenceTimezone: row.recurrenceTimezone,
+      allDay: row.allDay,
+      startsAt: row.startsAt,
+      startDate: row.startDate,
+      recurrenceUntil: row.recurrenceUntil,
+      recurrenceCount: row.recurrenceCount,
+      recurrenceExdates: row.recurrenceExdates,
+    });
     if (!rule) continue; // defensive -- mirrors expand-due-date-window's own guard
 
     const durationMs =
       row.startsAt && row.endsAt ? row.endsAt.getTime() - row.startsAt.getTime() : 0;
-    const paddedFrom = new Date(from.getTime() - durationMs);
+    // All-day series pad the expansion window backward by their own
+    // day-span (not durationMs, which is always 0 for a canonical all-day
+    // row whose starts_at/ends_at are null) so a multi-day instance that
+    // started before `from` but still spans into the range isn't missed.
+    const allDaySpanDays = row.allDay ? allDayTemplateSpanDays(row.startDate!, row.endDate) : 0;
+    const paddedFrom = row.allDay
+      ? new Date(from.getTime() - allDaySpanDays * MS_PER_DAY - ALL_DAY_ANCHOR_SLACK_MS)
+      : new Date(from.getTime() - durationMs);
+    // An all-day instance is anchored at LOCAL NOON (ADR-042), so its real
+    // instant can sit up to a full UTC-offset span plus twelve hours away
+    // from the caller's arbitrary instant bounds -- e.g. noon in a UTC-6
+    // zone on the range's last calendar day lands hours after a `to` that
+    // was itself derived from a UTC+13 local midnight. Expanding on the raw
+    // bounds would drop that candidate before the authoritative date-string
+    // overlap test below ever sees it. Over-expanding is safe: every extra
+    // candidate is rejected by that same date test, at the cost of a few
+    // charges against the shared expansion budget.
+    const expandTo = row.allDay ? new Date(to.getTime() + ALL_DAY_ANCHOR_SLACK_MS) : to;
 
     let expanded;
     try {
-      expanded = expandRecurrenceInRange(rule, paddedFrom, to, expansionBudget);
+      expanded = expandRecurrenceInRange(rule, paddedFrom, expandTo, expansionBudget);
     } catch (error) {
       if (error instanceof RecurrenceExpansionLimitError) {
         return { ok: false, eventId: row.id, limit: MAX_EXPANDED_OCCURRENCES_PER_REQUEST };
@@ -236,11 +266,43 @@ export async function assembleEventRange(
     }
     for (const occurrence of expanded) {
       const occursAtMs = occurrence.occursAt.getTime();
-      if (occursAtMs >= to.getTime()) continue;
-      if (occursAtMs + durationMs <= from.getTime()) continue;
-
       const real = realOccurrenceByKey.get(`${row.id}|${occursAtMs}`);
       if (real?.status === "skipped") continue;
+
+      if (row.allDay) {
+        // Date-based overlap, never through an instant -- the noon-anchor
+        // occurs_at is only a stable dedupe/status key here, not the value
+        // used to test range membership, so a client in a different zone
+        // never sees an all-day instance shift by a day.
+        const { startDate, endDate } = allDayInstanceDates(
+          occurrence.occursLocal,
+          row.startDate!,
+          row.endDate,
+        );
+        if (startDate > toDate || endDate < fromDate) continue;
+
+        items.push({
+          id: row.id,
+          title: row.title,
+          description: row.description,
+          location: row.location,
+          all_day: true,
+          starts_at: null,
+          ends_at: null,
+          start_date: startDate,
+          end_date: endDate,
+          is_recurring_instance: true,
+          occurs_at: occurrence.occursAt.toISOString(),
+          occurs_ends_at: null,
+          parent_event_id: null,
+          original_start_at: null,
+          status: (real?.status ?? "scheduled") as EventRangeItem["status"],
+        });
+        continue;
+      }
+
+      if (occursAtMs >= to.getTime()) continue;
+      if (occursAtMs + durationMs <= from.getTime()) continue;
 
       items.push({
         id: row.id,

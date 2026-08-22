@@ -261,6 +261,115 @@ describe("events routes", () => {
       // Skipped row preserved
       expect(allOccs.filter((o) => o.status === "skipped")).toHaveLength(1);
     });
+
+    // Checkpoint 5.4: a canonical all-day event has starts_at NULL and
+    // start_date set (EventCreateSchema forces this shape), so the creation
+    // path's old `body.rrule && startsAt` guard silently skipped window
+    // materialization entirely for an all-day recurring event. Confirms the
+    // shared buildEventRecurrenceRule-based check now materializes normally,
+    // anchored off start_date rather than a starts_at timestamp that must
+    // never be written for an all-day row.
+    it("materializes a 90-day occurrence window for a canonical all-day recurring event, anchored off start_date", async () => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Weekly all-day retro",
+          timezone: "America/Chicago",
+          all_day: true,
+          start_date: "2026-09-07",
+          end_date: "2026-09-07",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      const body = response.json<Event>();
+      expect(body.all_day).toBe(true);
+      expect(body.start_date).toBe("2026-09-07");
+      // The hard invariant: never write starts_at for an all-day event, even
+      // though it now recurs.
+      expect(body.starts_at).toBeNull();
+      expect(body.rrule).toBe("FREQ=WEEKLY;INTERVAL=1");
+
+      const occs = await app.db.select().from(occurrences).where(eq(occurrences.parentId, body.id));
+      // The materialization window is 90 days from NOW, not 90 days from the
+      // series' own start, so a series starting a couple of weeks out yields
+      // fewer than 90/7 instances. The exact per-instance dates are pinned by
+      // the range assertion below; this only guards "a real window was
+      // materialized at all".
+      expect(occs.length).toBeGreaterThanOrEqual(10);
+      expect(occs.every((o) => o.parentType === "event" && o.status === "scheduled")).toBe(true);
+
+      // Each materialized occurrence lands on a distinct instant (one per
+      // calendar week), confirmed independently via the range read model.
+      const rangeResp = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2026-09-01T00:00:00Z&to=2026-10-06T00:00:00Z",
+      });
+      const instances = rangeResp
+        .json<EventRangeItem[]>()
+        .filter((item) => item.title === "Weekly all-day retro");
+      expect(instances.map((i) => i.start_date)).toEqual([
+        "2026-09-07",
+        "2026-09-14",
+        "2026-09-21",
+        "2026-09-28",
+        "2026-10-05",
+      ]);
+      expect(instances.every((i) => i.is_recurring_instance && i.all_day)).toBe(true);
+    });
+
+    it("clears recurrence on a canonical all-day event, deleting scheduled occurrences while preserving skipped, and never backfills starts_at", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "All-day series to clear",
+          timezone: "America/Chicago",
+          all_day: true,
+          start_date: "2026-09-07",
+          end_date: "2026-09-07",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const eventId = created.json<Event>().id;
+
+      const pastSkippedInstant = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+      await app.db.insert(occurrences).values([
+        {
+          parentType: "event",
+          parentId: eventId,
+          occursAt: pastSkippedInstant,
+          occursLocal: pastSkippedInstant,
+          status: "skipped",
+          lazyGenerated: false,
+        },
+      ]);
+
+      const patchResp = await app.inject({
+        method: "PATCH",
+        url: `/events/${eventId}`,
+        payload: { rrule: null },
+      });
+      expect(patchResp.statusCode).toBe(200);
+      const body = patchResp.json<Event>();
+      expect(body.rrule).toBeNull();
+      expect(body.recurrence_timezone).toBeNull();
+      expect(body.all_day).toBe(true);
+      expect(body.start_date).toBe("2026-09-07");
+      expect(body.starts_at).toBeNull();
+
+      const allOccs = await app.db
+        .select()
+        .from(occurrences)
+        .where(eq(occurrences.parentId, eventId));
+
+      // All scheduled rows deleted
+      expect(allOccs.filter((o) => o.status === "scheduled")).toHaveLength(0);
+
+      // Skipped row preserved
+      expect(allOccs.filter((o) => o.status === "skipped")).toHaveLength(1);
+    });
   });
 
   it("rejects an unknown field on update with 400", async () => {
@@ -1476,6 +1585,244 @@ describe("events routes", () => {
         payload: { original_start_at: "2026-09-07T14:00:00.000Z" },
       });
       expect(cancelUnknown.statusCode).toBe(404);
+    });
+
+    // Checkpoint 5.4: a canonical all-day event (starts_at NULL, start_date
+    // set) recurs via a noon-anchored dtstart derived from start_date, built
+    // by the shared buildEventRecurrenceRule helper -- previously
+    // isValidOccurrence's `!parent.startsAt` guard rejected every detach/
+    // cancel attempt against such a series outright. These confirm that gate
+    // is gone and both endpoints now work symmetrically for all-day series.
+    it("detaches an occurrence of an all-day recurring parent, using the occurs_at instant GET /events/range reports", async () => {
+      const parentResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "All-Day Weekly Series",
+          timezone: "America/Chicago",
+          all_day: true,
+          start_date: "2026-09-07",
+          end_date: "2026-09-07",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      expect(parentResp.statusCode).toBe(201);
+      const parent = parentResp.json<Event>();
+      expect(parent.starts_at).toBeNull();
+
+      // Find the real occurs_at instant for the 2026-09-14 (second) instance
+      // via the same read contract a client would use -- never hand-derived.
+      const rangeBefore = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2026-09-10T00:00:00Z&to=2026-09-20T00:00:00Z",
+      });
+      const secondInstance = rangeBefore
+        .json<EventRangeItem[]>()
+        .find((item) => item.title === "All-Day Weekly Series" && item.start_date === "2026-09-14");
+      expect(secondInstance).toBeDefined();
+      const occurrenceInstant = secondInstance!.occurs_at!;
+
+      const detachResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/detach`,
+        payload: {
+          original_start_at: occurrenceInstant,
+          title: "Detached All-Day Instance",
+          all_day: true,
+          start_date: "2026-09-14",
+          end_date: "2026-09-14",
+        },
+      });
+      expect(detachResp.statusCode).toBe(201);
+      const detached = detachResp.json<Event>();
+      expect(detached.all_day).toBe(true);
+      expect(detached.starts_at).toBeNull();
+      expect(detached.start_date).toBe("2026-09-14");
+      expect(detached.parent_event_id).toBe(parent.id);
+      expect(detached.original_start_at).toBe(occurrenceInstant);
+
+      // Parent gained the correct exdate calendar date for that instance.
+      const parentGet = await app.inject({ method: "GET", url: `/events/${parent.id}` });
+      expect(parentGet.json<Event>().recurrence_exdates).toEqual(["2026-09-14"]);
+
+      // The detached child appears exactly once for that date -- no
+      // duplicate from the parent's own recurring expansion.
+      const rangeAfter = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2026-09-14T00:00:00Z&to=2026-09-15T00:00:00Z",
+      });
+      const onThatDate = rangeAfter.json<EventRangeItem[]>();
+      expect(onThatDate).toHaveLength(1);
+      expect(onThatDate[0]?.id).toBe(detached.id);
+      expect(onThatDate[0]?.is_recurring_instance).toBe(false);
+    });
+
+    it("cancels an occurrence of an all-day recurring parent, using the occurs_at instant GET /events/range reports", async () => {
+      const parentResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "All-Day Weekly To Cancel",
+          timezone: "America/Chicago",
+          all_day: true,
+          start_date: "2026-09-07",
+          end_date: "2026-09-07",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const parent = parentResp.json<Event>();
+
+      const rangeBefore = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2026-09-10T00:00:00Z&to=2026-09-20T00:00:00Z",
+      });
+      const thirdWeekCandidate = rangeBefore
+        .json<EventRangeItem[]>()
+        .find(
+          (item) => item.title === "All-Day Weekly To Cancel" && item.start_date === "2026-09-14",
+        );
+      expect(thirdWeekCandidate).toBeDefined();
+      const occurrenceInstant = thirdWeekCandidate!.occurs_at!;
+
+      const cancelResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/cancel-occurrence`,
+        payload: { original_start_at: occurrenceInstant },
+      });
+      expect(cancelResp.statusCode).toBe(200);
+      expect(cancelResp.json<Event>().recurrence_exdates).toEqual(["2026-09-14"]);
+
+      // The cancelled slot no longer appears in range at all.
+      const rangeAfter = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2026-09-14T00:00:00Z&to=2026-09-15T00:00:00Z",
+      });
+      expect(rangeAfter.json<EventRangeItem[]>()).toHaveLength(0);
+
+      // Neighboring instances of the same series are untouched.
+      const rangeWider = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2026-09-07T00:00:00Z&to=2026-09-08T00:00:00Z",
+      });
+      const firstInstance = rangeWider
+        .json<EventRangeItem[]>()
+        .find((item) => item.title === "All-Day Weekly To Cancel");
+      expect(firstInstance).toBeDefined();
+      expect(firstInstance?.status).toBe("scheduled");
+    });
+
+    // Regression (Checkpoint 5.4 audit finding D4-4): recurrence_timezone and
+    // timezone are independently settable. The occurrence instant is GENERATED
+    // in the recurrence timezone, so the detached child's calendar date must be
+    // derived there too. Deriving it in the event's display timezone put the
+    // child a full day off from the EXDATE recorded against its own parent.
+    it("derives a detached all-day child's date in the recurrence timezone, not the display timezone", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "Divergent-zone all-day series",
+          timezone: "America/Los_Angeles",
+          recurrence_timezone: "Pacific/Kiritimati",
+          all_day: true,
+          start_date: "2026-09-01",
+          end_date: "2026-09-01",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      expect(created.statusCode).toBe(201);
+      const parentId = created.json<Event>().id;
+
+      const range = await app.inject({
+        method: "GET",
+        url: "/events/range?from=2026-09-05T00:00:00Z&to=2026-09-12T00:00:00Z",
+      });
+      const instance = range
+        .json<EventRangeItem[]>()
+        .find((i) => i.id === parentId && i.start_date === "2026-09-08");
+      expect(instance).toBeDefined();
+
+      const detached = await app.inject({
+        method: "POST",
+        url: `/events/${parentId}/detach`,
+        // Deliberately omits start_date so the server-side derivation runs.
+        payload: { original_start_at: instance!.occurs_at },
+      });
+      expect(detached.statusCode).toBe(201);
+      expect(detached.json<Event>().start_date).toBe("2026-09-08");
+
+      const parentAfter = await app.inject({ method: "GET", url: `/events/${parentId}` });
+      expect(parentAfter.json<Event>().recurrence_exdates).toContain("2026-09-08");
+    });
+
+    it("rejects a bogus original_start_at for an all-day recurring parent with 400 validation_failed on both detach and cancel-occurrence", async () => {
+      const parentResp = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: "All-Day Weekly Bogus Target",
+          timezone: "America/Chicago",
+          all_day: true,
+          start_date: "2026-09-07",
+          rrule: "FREQ=WEEKLY;INTERVAL=1",
+        },
+      });
+      const parent = parentResp.json<Event>();
+
+      // Not a real occurrence instant of this series at all.
+      const bogusInstant = "2026-09-08T14:00:00.000Z";
+
+      const detachResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/detach`,
+        payload: { original_start_at: bogusInstant },
+      });
+      expect(detachResp.statusCode).toBe(400);
+      const detachBody = detachResp.json<{ error: string; issues: { message: string }[] }>();
+      expect(detachBody.error).toBe("validation_failed");
+      expect(detachBody.issues[0]?.message).toBe("not a valid occurrence instant for this event");
+
+      const cancelResp = await app.inject({
+        method: "POST",
+        url: `/events/${parent.id}/cancel-occurrence`,
+        payload: { original_start_at: bogusInstant },
+      });
+      expect(cancelResp.statusCode).toBe(400);
+      const cancelBody = cancelResp.json<{ error: string; issues: { message: string }[] }>();
+      expect(cancelBody.error).toBe("validation_failed");
+      expect(cancelBody.issues[0]?.message).toBe("not a valid occurrence instant for this event");
+    });
+
+    it("still detaches and cancels a timed recurring series' occurrence correctly (unchanged behavior)", async () => {
+      const parentId = await insertRecurringEvent(app, {
+        title: "Timed series regression check",
+        startsAt: new Date("2026-09-07T09:00:00-05:00"),
+        endsAt: new Date("2026-09-07T09:30:00-05:00"),
+        rrule: "FREQ=WEEKLY;INTERVAL=1",
+      });
+      const occurrenceInstant = "2026-09-14T14:00:00.000Z";
+
+      const detachResp = await app.inject({
+        method: "POST",
+        url: `/events/${parentId}/detach`,
+        payload: {
+          original_start_at: occurrenceInstant,
+          title: "Timed regression detached",
+        },
+      });
+      expect(detachResp.statusCode).toBe(201);
+      expect(detachResp.json<Event>().parent_event_id).toBe(parentId);
+
+      const nextOccurrenceInstant = "2026-09-21T14:00:00.000Z";
+      const cancelResp = await app.inject({
+        method: "POST",
+        url: `/events/${parentId}/cancel-occurrence`,
+        payload: { original_start_at: nextOccurrenceInstant },
+      });
+      expect(cancelResp.statusCode).toBe(200);
+      expect(cancelResp.json<Event>().recurrence_exdates).toEqual(
+        expect.arrayContaining(["2026-09-14", "2026-09-21"]),
+      );
     });
   });
 
