@@ -12,6 +12,7 @@ import {
 } from "@/queries/events";
 import {
   parseRRuleStringToEditorState,
+  resolveInstantToLocalUntil,
   serializeEditorStateToRRule,
   type RecurrenceEditorState,
 } from "@personal-os/core/recurrence/editor";
@@ -37,13 +38,31 @@ export function computeOccurrenceTiming(
     ends_at?: string | null;
     start_date?: string | null;
     end_date?: string | null;
+    timezone: string;
+    recurrence_timezone?: string | null;
   },
   occursAt: string,
 ) {
   if (event.all_day) {
-    const startDate = occursAt.slice(0, 10);
+    // `occursAt` is an ISO instant. All-day recurring occurrences are
+    // anchored at LOCAL NOON in the event's recurrence timezone (falling
+    // back to the event's own timezone, matching how the API derives
+    // EXDATEs -- `parent.recurrenceTimezone ?? parent.timezone` in
+    // apps/api/src/routes/events.ts). Slicing the raw instant string would
+    // read its UTC calendar date, which is off by a day in any zone whose
+    // offset carries local noon across a UTC day boundary (e.g. a positive
+    // offset >= 12, such as Pacific/Auckland at UTC+13).
+    const tz = event.recurrence_timezone ?? event.timezone;
+    const startDate = resolveInstantToLocalUntil(new Date(occursAt), tz);
     let endDate = startDate;
     if (event.start_date && event.end_date) {
+      // Pure calendar-date arithmetic performed entirely in UTC-epoch
+      // space: `startDate`/`event.start_date`/`event.end_date` are all
+      // plain "YYYY-MM-DD" strings (no wall-clock/timezone component), so
+      // parsing and re-serializing them via UTC is internally consistent
+      // and DST-agnostic -- it only ever preserves a day-count span, it
+      // never converts between timezones. The bug this function had was
+      // exclusively in how `startDate` itself was derived above, not here.
       const startMs = new Date(event.start_date).getTime();
       const endMs = new Date(event.end_date).getTime();
       const diffDays = Math.max(0, Math.round((endMs - startMs) / (24 * 60 * 60 * 1000)));

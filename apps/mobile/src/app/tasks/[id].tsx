@@ -21,6 +21,7 @@ export default function EditTaskScreen() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [dueAt, setDueAt] = useState("");
+  const [remindAt, setRemindAt] = useState("");
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
   const [recurrence, setRecurrence] = useState<RecurrenceEditorState>(() =>
     parseRRuleStringToEditorState(task?.rrule, {
@@ -37,6 +38,7 @@ export default function EditTaskScreen() {
     setTitle(task.title);
     setBody(task.body ?? "");
     setDueAt(task.due_at ?? "");
+    setRemindAt(task.remind_at ?? "");
     setProjectId(task.project_id ?? undefined);
     setRecurrence(
       parseRRuleStringToEditorState(task.rrule, {
@@ -65,6 +67,7 @@ export default function EditTaskScreen() {
         title: title.trim() || undefined,
         body: body.trim(),
         due_at: dueAt.trim() || null,
+        remind_at: remindAt.trim() || null,
         project_id: projectId ?? null,
         rrule: serialized.rrule,
         recurrence_timezone: serialized.recurrence_timezone,
@@ -103,6 +106,15 @@ export default function EditTaskScreen() {
       <TextInput
         value={dueAt}
         onChangeText={setDueAt}
+        placeholder="2026-08-20T15:00:00"
+        placeholderTextColor="#888"
+        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+      />
+
+      <Text className="mb-1 text-sm text-neutral-500">Reminder (ISO 8601)</Text>
+      <TextInput
+        value={remindAt}
+        onChangeText={setRemindAt}
         placeholder="2026-08-20T15:00:00"
         placeholderTextColor="#888"
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
