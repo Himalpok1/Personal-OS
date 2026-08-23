@@ -116,6 +116,34 @@ POST /capture
 → 202 Accepted, { inbox_id }
 ```
 
+### `source` is an entry path, not a platform (frozen, Checkpoint 5.6)
+
+The five members of `source` name **how a capture entered the system**, never
+which device or platform it came from. The vocabulary is closed and enforced in
+three places that must agree: `CaptureSourceSchema` in `packages/schema`, the
+`inbox_items_source` CHECK constraint in `packages/db`, and this document.
+
+| Entry path | `source` | Set by |
+|---|---|---|
+| In-app Quick Capture sheet — **web and native alike** | `web` | client |
+| In-app push-to-talk | `ptt` | **server** (`POST /transcribe` hardcodes it; never client-supplied) |
+| Siri Shortcut | `siri` | external caller |
+| Google Assistant | `assistant` | external caller |
+| OS share sheet | `share` | external caller |
+
+So a Quick Capture made on the Rabbit R1 is correctly `web`: it came through
+the in-app quick-add box, which is one entry path regardless of the platform
+rendering it. There is deliberately **no** `app`/`mobile`/`android` member —
+adding one would mean altering the CHECK constraint, i.e. a migration, and it
+would buy nothing today: the only code anywhere that branches on `source` is
+`isLowTranscriptionConfidence`, which tests for `ptt`.
+
+This was previously recorded as debt ("Android captures are labelled
+`source: "web"`"). It is not a defect; the label was being read as a platform
+tag. If a future need genuinely requires distinguishing platforms, that is a
+new field or a new enum member with its own migration — not a reinterpretation
+of these five.
+
 **Write the raw text to Postgres before doing anything else.** Return 202 immediately. Parse asynchronously. If the LLM is down, rate-limited, or returns nonsense, the thought is still captured — it just sits in the inbox unfiled. Never lose a capture because an upstream API had a bad minute.
 
 This pattern generalizes to every future module. A transaction, a project note, an idea, a health observation all enter the same door and differ only in what the parser emits.

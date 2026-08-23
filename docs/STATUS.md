@@ -1,7 +1,7 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 5 — Daily Command Center + Projects — **IN PROGRESS** (plan approved with amendments 2026-08-21; Steps 0–1 and **Checkpoints 5.1–5.5 COMPLETE** through 2026-08-23, local verification only; Checkpoint 5.6 next pending user approval). Phases 0–4 remain COMPLETE, production-deployed, and physically verified — see below.
+**Current phase:** Phase 5 — Daily Command Center + Projects — **IN PROGRESS** (plan approved with amendments 2026-08-21; Steps 0–1 and **Checkpoints 5.1–5.6 COMPLETE** through 2026-08-23, local + physical-device verification only; Checkpoint 5.7 next pending user approval). Phases 0–4 remain COMPLETE, production-deployed, and physically verified — see below.
 **Implementation status:** Phases 0–4 are implemented and production-deployed. Checkpoint 4.7 deployed Phase 4 to production and passed both reboot-survival tests physically (Rabbit device and Ubuntu host) on 2026-08-21.
 **Next phase allowed:** Phase 5 checkpoints proceed sequentially under the approved plan (5.1 Today/Home → 5.2 Projects → 5.3 Reviews → 5.4 Agenda → 5.5 Daily Brief → 5.6 polish → 5.7 gated deployment). **No production changes before 5.7.** Finance is deferred to a later phase (ADR-038), still gated on the open finance-source-of-truth decision.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
@@ -264,7 +264,117 @@ Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, 
 - [x] Phase 5 Checkpoint 5.3 STEP 0 — Migration-tooling repair: drizzle tracking reconciled on dev/test with probe-gated reproducible script + permanent journal guards; fresh-DB and production-watermark paths proven — complete 2026-08-22 (commit 035301a).
 - [x] Phase 5 Checkpoint 5.3 — Daily + Weekly Review: migration 0011, review API/context collectors with TOCTOU hardening, resumable guided flows (daily + weekly), recently-completed collector, Today derived review state — complete 2026-08-22 (local only; production untouched).
 - [x] Phase 5 Checkpoint 5.4 — Smart Agenda / Planning: GET /agenda read model + route (90-day cap, project filter, chronological interleave), Calendar Month|Week|**Agenda**, the central canonical all-day recurrence fix (ADR-042) across core/API/worker/routes, AI-capture canonicalization, mobile UTC-date fix, and `remind_at` PATCH — complete 2026-08-22 (local only; production untouched; **zero migrations**).
+- [x] Phase 5 Checkpoint 5.6 — Mobile / Rabbit daily-use polish: reproducible dev harness via expo-build-properties (dev-profile only, production proved unaffected), dev-shell parity, FAB/PTT clearance, notification cold-start, all-day date off-by-one, serialized review saves, keyboard reachability, touch/layout polish — complete 2026-08-23 (physically verified on the Rabbit R1; production untouched; zero migrations).
 - [x] Phase 5 Checkpoint 5.5 — Personal OS Daily Brief: migration 0012 (`ai_daily_briefs`, identity `(brief_date, timezone)`), deterministic Today-derived collector, injection-guarded prompt, provider-agnostic generation with true model provenance, `POST /briefs` + `GET /briefs/current`, Today brief metadata, and the Today Brief card — complete 2026-08-23 (local only; production untouched; no paid provider call).
+
+## Phase 5 Checkpoint 5.6 — Mobile / Rabbit daily-use polish (COMPLETE, 2026-08-23)
+
+Built with maximum agent parallelism: a three-agent read-only planning wave, a Wave 0 contract freeze owned by main Opus, ten parallel single-file-ownership writers, then a three-agent adversarial audit wave and a main-session fix wave. **Local development only; production untouched; zero migrations (level stays 0000–0012 = 13).**
+
+The physical Rabbit R1 matrix was run on the real device via the side-by-side `com.himal.personalos.dev` identity. **Production `com.himal.personalos` was never installed over, uninstalled, cleared, paired, or mutated — its versionCode 4 / versionName 1.0.0 / firstInstallTime 2026-08-19 16:26:10 / lastUpdateTime 2026-08-21 15:28:16 / dataDir are byte-identical before and after**, and only the production package remained installed at the end.
+
+### The headline: the dev harness is reproducible in tracked config
+
+`expo-build-properties@~57.0.13` (exactly one new dependency, installed via `npx expo install` so it is SDK-matched) supplies `android.usesCleartextTraffic` for the **UI-test profile only**, via the same conditional-plugin idiom `app.config.ts` already used for `expo-audio`/`expo-notifications`. `apps/mobile/package.json` gained `android:ui-test`, so the build incantation no longer lives only as prose in this file.
+
+Production non-impact was **proved, not asserted**, by clean prebuilds of both identities:
+
+| Check | Result |
+|---|---|
+| Production `AndroidManifest.xml` | **no `usesCleartextTraffic` attribute** |
+| Production prebuild re-run | manifest **byte-identical** to the first run (deterministic) |
+| `gradle.properties`, `proguard-rules.pro` | **byte-identical between the two identities** — the plugin wrote nothing beyond the one manifest attribute |
+| Full manifest diff (prod vs ui-test) | exactly cleartext + scheme + the expo-audio permissions/service the dev build already omitted. **No unexpected delta** |
+| Plugin output vs the old hand-patch | identical apart from attribute ordering within the `<application>` tag |
+| Lockfile | exactly **one** package added, **zero** versions removed or changed (the rest of the diff is pnpm re-keying peer hashes) |
+
+**Two hazards caught during execution that the plan had not anticipated:**
+
+1. **The Checkpoint 5.1–5.4 cleartext hand-patch was never actually reverted.** `apps/mobile/android/app/src/main/AndroidManifest.xml` still carried `usesCleartextTraffic="true"` in the gitignored generated tree, contradicting this file's own claim (now corrected below). Any verification run against that tree would have been a **false positive**, so the tree was deleted and every proof above used `expo prebuild --clean`.
+2. **`android/app/debug.keystore` signs the dev build and its SHA-1 is the one registered with the Google OAuth Android client** (Checkpoint 4.5 Stage A). It was preserved outside the repo before deletion. It then turned out Expo ships a fixed template debug keystore, so the regenerated file has the identical SHA-1 (`5E:8F:…F6:25`) and the OAuth registration was never at risk — the precaution proved unnecessary, recorded honestly rather than presented as a save.
+
+**Additional hardening beyond the plan:** an audit noted the one link repo inspection cannot see — EAS's dashboard could in principle set `EXPO_PUBLIC_UI_TEST_MODE` for the `production` environment. `app.config.ts` now **throws at config-resolution time** if the UI-test flag is combined with an `EAS_BUILD_PROFILE` starting with `production`, turning an unverifiable trust assumption into a hard build failure. Verified: the guard fires on that combination, while a normal production build (`com.himal.personalos`, no build-properties) and a normal UI-test build (`com.himal.personalos.dev`, build-properties present) both resolve correctly.
+
+### Dev-identity parity (approved amendment)
+
+`UiTestContent` previously declared 3 of 13 stack routes and mounted neither floating control, which is precisely why FAB/PTT clearance had never been verified on hardware. It now shares one `AppStack` route table with production and mounts a **live** `QuickAddFab` plus `PttButton layoutOnly`.
+
+`layoutOnly` is a **component split, not a flag inside the hook**: `usePttRecorder` calls `useAudioRecorder` at mount, which constructs a native recorder, and the dev build ships no expo-audio plugin and therefore no `RECORD_AUDIO`. An independent audit confirmed no code path reaches `useAudioRecorder` in layout-only mode. Still absent from the dev shell: pairing/device identity, reminder reconciliation, notification lifecycle, push-token registration, background outbox flushing, EAS projectId, `google-services.json`.
+
+New `assertUiTestPackageIsolation` fails fast at module load if the JS bundle's UI-test flag disagrees with the native `applicationId` — the one path by which the two identities could collide, since `device-identity/storage.ts` uses the **same SecureStore key names** in both builds and isolation rests entirely on the differing Android package. An audit separately confirmed `assertUiTestApiIsolation` is fail-closed against every case tried, including the real production Tailscale hostname and its `100.64.0.0/10` CGNAT address.
+
+### Correctness defects found and fixed
+
+1. **Notification cold start was unhandled.** `use-notification-lifecycle.ts` used only `addNotificationResponseReceivedListener`, which the SDK 57 docs state is insufficient for a tap that launches a killed app — and `ProductionContent` gates rendering on loading + pairing, so the subscription landed late. Replaced with `useLastNotificationResponse()`, plus a once-only guard keyed on the notification's stable `identifier`. Reading the installed source also surfaced that the hook **cannot be called at all on web** (expo-notifications has no web implementation of `getLastNotificationResponse`), so the platform branch selects *which function* to call at module scope, keeping hook order constant.
+2. **A live all-day date off-by-one, above the Checkpoint 5.5 driver-boundary fix.** Seeding all-day dates from `params.startsAt?.slice(0, 10)` read the **UTC** date of a local wall-clock slot. Tapping a timed slot then flipping All-day on created the event one day late in negative-offset zones and one day early in positive-offset ones. **Mutation-tested**: reintroducing the bug fails with `expected '2026-08-24' to be '2026-08-23'`; the fix passes under Chicago, Auckland, UTC, Kolkata and Kiritimati.
+3. **Two CRITICAL review-save races** (found by adversarial audit, one of them introduced by this checkpoint's own first attempt at a fix). The initial per-toggle rollback-on-error was **unsound**: with two rapid toggles of the same key both failing, the guarded revert could settle on a value never persisted, and the screen cannot self-heal because the flow is keyed by `review.id` and seeds state once. Separately — and pre-existing since 5.3 — the PATCH body is the **whole** content object with no request sequencing, so a slower earlier request could silently overwrite a newer successful one server-side. Both fixed by **serializing saves through a promise chain and building each body at send time from the latest state**, and deliberately abandoning per-key rollback: a review checkbox that silently unchecks itself is a worse failure than one that says it has not saved yet.
+4. **A test file inside Expo Router's routes directory broke the web build.** A colocated `src/app/events/new.test.ts` became a route, so Metro bundled it and its `vitest` import dragged Node-only `vite` into the web bundle — `expo export --platform web` failed with an opaque `Invalid call at line 1018: import(filepath)`, while typecheck, lint and the whole test suite stayed green. **A writing agent reported this as a "pre-existing bundler issue"; it was not** — the pristine baseline exports cleanly, verified by stashing all work and re-running. The helper moved to `src/utils/all-day-seed.ts`, and a permanent `routes-hygiene` guard now fails loudly and names any test file under `src/app` (verified by planting one).
+
+### Polish delivered
+
+FAB/PTT geometry frozen in `components/floating-layout.ts` and lowered from `bottom-40` (a stale offset tuned for a "New task" button that Checkpoint 5.1 moved to `/tasks`) to `bottom-20`; **every** scroll container now pads to clear them — including the eight create/edit forms and Settings, which no writer owned and which an audit caught still unpadded. Those same forms gained `keyboardShouldPersistTaps="handled"`, fixing the two-tap submit problem (most concretely on Settings' CalDAV connect form). `SafeAreaProvider` is mounted at the root for the first time — `quick-add-fab.tsx` had consumed `SafeAreaView` from `react-native-safe-area-context` since Phase 3 with the provider never mounted, so those insets silently resolved to zero. Pairing screen made scrollable and keyboard-safe. Touch targets raised to ≥44px effective across Today, Agenda, Projects, Reviews, Brief, Calendar, Tasks, Inbox and Notes — the worst being the Projects task-completion circle at 24px with no hitSlop. Press-bleed guards added where a nested action Pressable sat inside a navigating row (Today's completion checkbox, the Tasks list's Start/Done/Drop/Archive, Notes archive, Projects unarchive). Brief prose clamped to 6 lines with a measured (`onTextLayout`, not string-length) expand/collapse that resets when the text changes. Outbox pending/failed badge added to the FAB, since that backlog was previously visible only in Settings. Five duplicated `parseLocalDate`/`formatTargetDate` copies replaced by one tested `utils/local-date` module.
+
+**Cross-agent inconsistencies caught by the integrator and reconciled:** two writers picked different time-gutter widths (80px vs 96px) for identical `HH:MM–HH:MM` content — 80px would have wrapped to two lines on Today, so both are now 96px; and the same event title used `numberOfLines={1}` on Today but `{2}` on Agenda, giving one event two row heights.
+
+### Verification actually run
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Fresh pre-change baseline | **exactly 1099 tests / 15 tasks**, matching the record before any edit |
+| 2 | `pnpm build && typecheck && lint && format:check` | Clean workspace-wide |
+| 3 | Full uncached suite (`turbo run test --force`) | **1154 tests / 15 tasks** (+55, all in mobile: 132 → 187). Server-side packages byte-identical: core 271, db 14, ai-providers 25, schema 123, api-client 70, api 327, worker 80, and **`calendar-providers` unchanged at exactly 57** as the zero-drift canary |
+| 4 | Migration invariant | **13 `.sql` files, 13 journal entries, no 0013** |
+| 5 | Forbidden-area drift | **Zero** across `packages/db/drizzle`, `apps/worker`, `apps/api`, `packages/calendar-providers`, `packages/core`, Docker/Compose, `eas.json`, `apps/mobile/plugins`, `apps/mobile/modules`, `google-services.json` |
+| 6 | Clean prebuild proofs | Both identities; production cleartext-free and deterministic (see table above) |
+| 7 | `expo export --platform web` | Clean, single-`index.html` SPA output — after diagnosing and fixing the routes-directory breakage |
+| 8 | Timezone sweep | `local-date` and `all-day-seed` suites pass under UTC, America/Chicago, Pacific/Auckland, Asia/Kolkata, Pacific/Kiritimati |
+| 9 | Mutation testing | The all-day fix and the routes-hygiene guard were both proved to FAIL when their defect is reintroduced |
+| 10 | Lint warnings | 3 remain, **all pre-existing** — verified by stashing all work and re-running (baseline also reports 3) |
+| 11 | `git diff --check`, gitleaks | Clean; 74 commits scanned, no leaks |
+
+Three independent adversarial auditors ran on the finished tree (native/production isolation; interaction correctness; layout/touch/keyboard). Their findings drove the fix wave above.
+
+### Physical Rabbit R1 verification (480x640, dev identity only)
+
+**The headline proof:** `pnpm --filter mobile android:ui-test` built and installed `com.himal.personalos.dev`, which reached the local dev API over `adb reverse` **with zero hand-edits to the generated AndroidManifest.xml** — the API log recorded device-originated `GET /today?tz=America/Chicago` and `GET /briefs/current`. Production's generated manifest carries no cleartext attribute; the dev one gets it purely from tracked config.
+
+| Area | Result |
+|---|---|
+| Dev/prod isolation | Both packages side-by-side; production evidence identical before/after; `.dev` uninstalled afterward |
+| Five tabs | Today / Inbox / Notes / Projects / Calendar all render and switch (verified twice around) |
+| Stack routes | `/tasks`, task detail, project detail, **Daily review**, **Weekly review**, event detail, new event, Settings — all resolve with correct titles (the review titles now come from the root layout, proving the inline-`Stack.Screen` refactor) |
+| FAB / PTT | Both mounted; PTT carries `Push to talk (layout only)`; no horizontal overlap (x 25-83 vs 397-455); 14px clear of the tab bar; **at max scroll on Today, Agenda, Projects, Notes, Tasks and both reviews the only things in the button band are the buttons themselves** |
+| PTT inertness | `RECORD_AUDIO` **not declared**; 3 taps produced no permission dialog, zero audio activity in logcat, zero `/transcribe` calls |
+| Quick Capture (online) | Exactly one `/capture`, exactly one row, **`source = "web"`** — the frozen entry-path rule verified on a native device |
+| Offline / outbox | API process stopped (removing `adb reverse` alone is unreliable — an established keep-alive socket survives it, as Checkpoint 5 recorded); "Saved offline" → badge "1 capture waiting" → force-stop + relaunch (badge survived) → API restored → Flush now → "Flushed 1, 0 pending" → **exactly one server row**, badge cleared |
+| Review saves | Normal save persisted; **5 rapid toggles ended with server and UI agreeing exactly** (`inbox:false`), proving serialization; API killed mid-toggle → error banner, intent kept on screen, no false "saved"; reconnect → coherent |
+| Weekly review | Start + toggle persisted with correct Monday period and `kind` discriminator |
+| Notification routes | Both resolver targets resolve physically: `/tasks/<id>` → Task detail, Inbox tab → Inbox. **Physical push delivery is NOT claimed** (the dev build ships no notifications capability) |
+| Date-only, America/Chicago | Today header "Sunday, August 23"; target date 2026-08-31; **timed 19:00 slot → All-day ON seeded 2026-08-23** (pre-fix: 2026-08-24) |
+| Date-only, Pacific/Auckland | Today header "Monday, August 24"; weekly period rolled to Aug 24; target date unshifted; **06:00 slot → All-day ON seeded 2026-08-24** (pre-fix: 2026-08-23) — the mirror case. Device timezone restored afterward |
+| Daily Brief | No-provider path returns **409** with the calm message and a working "Try again"; a locally seeded long brief clamped to 126px (6 lines) with Show more → 283px → Show less; **no paid model call** |
+| Calendar | Month, Week and Agenda all render; Agenda shows the 90-day range, project filter, and the all-day event on its correct date |
+| Keyboard | Quick Capture submits with the keyboard up; on Daily Review a **single tap on "Complete review" with the keyboard open completed the review** |
+| Touch targets | Sweep found no clickable under 44px on the exercised screens; calendar "Jump to today" 53px; lifecycle buttons 52px; view pills 47px |
+
+### Device-only defects found and fixed (none were visible to CI)
+
+1. **`android:ui-test` could build and try to install the PRODUCTION package over the real app.** `expo run:android` reuses an existing generated `android/`; with the tree last prebuilt for production it produced `com.himal.personalos` despite the UI-test env var. Only Android's signature check stopped the install — luck, not design. Replaced the script with `apps/mobile/scripts/run-ui-test-android.sh`, which always prebuilds for this identity and then **hard-asserts the generated applicationId before anything touches the device**.
+2. **The app froze after a few taps.** The new FAB outbox badge polled SQLite every 5s from a globally-mounted component; on this low-end device that starved the JS thread until the UI stopped responding. Proven by bisection on-device (polling off → navigation fine; on → frozen). The badge is now **event-driven**, refreshed by `["outbox"]` invalidation from capture and flush, which is exactly when the count can change.
+3. **The in-flow "New task/note/project" CTA sat underneath the floating buttons.** `FLOATING_CLEARANCE` pads a scroll container's *content*; the CTA is a sibling pinned near the bottom, so it was never moved. Fixed with two derived constants — `FLOATING_CTA_CLEARANCE` for tab screens and `FLOATING_CTA_CLEARANCE_NO_TABBAR` for pushed stack routes, which need more because no tab bar absorbs part of the offset.
+4. **Review Complete/Skip were unreachable with the keyboard open.** The app window does not resize for the IME, whose `touchableRegion` was measured as `(0,238,480,640)` — it swallows every touch below y=238, so `keyboardShouldPersistTaps` cannot help and scrolling could not lift the controls. Fixed by reusing the repo's own measured-keyboard-height technique (extracted to `use-keyboard-height.ts`) to pad the scroll containers.
+5. **The floating buttons overlapped the tab bar by 3px** at the original offset; raised from `bottom-20` to `bottom-24`, measured clear by 14px.
+
+### Debt recorded, deliberately not fixed
+
+- **Physical reminder-alarm verification remains impossible on the dev identity** (no pairing, no expo-notifications plugin) and production is out of scope — deferred to 5.7, per the approved amendment. 5.6 substituted 18 automated tests covering the previously-untested `useReminderReconciliation` paths (ineligible-cancel, 401, and the load-bearing "generic fetch failure preserves alarms" rule) plus the full `remind_at` lifecycle.
+- The reminder-hook tests use a **hand-rolled React hooks harness** (no renderer is installed). An audit judged it faithful for this module's fixed-order hooks but found two real gaps: stale `AppState` listeners accumulate across tests (inert today, would corrupt results the moment the foreground-triggered path is tested — which is itself untested), and its `useState` applies eagerly rather than batching.
+- No Retry affordance on the error states of Tasks, Projects, Notes, Inbox, Calendar and Settings (Today/Agenda/Reviews have one).
+- No `KeyboardAvoidingView` anywhere; 5.6 added only `keyboardShouldPersistTaps`. `adjustResize` covers the ScrollView cases.
+- Agenda standardized on `min-h-[40px]`+hitSlop while every other screen uses `min-h-[44px]`; both clear 44 effective, but the row density differs.
+- The left PTT button's x-band (24–80) still overlaps the completion-checkbox column (16–48); whether real rows land in that band needs the physical pass.
+- `source: "app"` enum member still requires a migration — see the reclassification above and the new capture-source section in `ARCHITECTURE.md`.
+- Worth one manual check before the next production build: that `EXPO_PUBLIC_UI_TEST_MODE` is not set on the EAS dashboard for the `production` environment. The new config guard now fails the build if it is.
 
 ## Phase 5 Checkpoint 5.5 — Personal OS Daily Brief (COMPLETE, 2026-08-23)
 
@@ -1629,7 +1739,11 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-Phase 5 Checkpoint 5.5 (Personal OS Daily Brief) is complete and locally verified end to end — 1099 tests, migration 0012 proven on dev/test/fresh databases, a live HTTP proof against a fake OpenAI-compatible provider covering every success and failure path, and desktop + 480×640 browser passes over all five card states. An eight-agent adversarial audit wave found four real defects — an undersized payload ceiling that made an "unreachable" throw reachable as an opaque 500, a silent `date`-column off-by-one on any server east of UTC, a dead-end no-provider UI state, and unsanitized resolution-phase errors reaching the logger — all four fixed and pinned with regressions. Production remains untouched, no production `daily_brief` route exists, and the migration level is now 0000–0012. Checkpoint 5.6 (mobile/Rabbit daily-use polish) has not started.
+Phase 5 Checkpoint 5.6 (mobile / Rabbit daily-use polish) is **complete and physically verified**. 1154 tests / 15 tasks pass uncached (1099 → +55, all in mobile), every server-side package is byte-identical with `calendar-providers` unchanged at exactly 57, the migration level is still 0000–0012, and there is zero forbidden-area drift.
+
+The dev harness is now reproducible in tracked config: `expo-build-properties` supplies cleartext for the UI-test profile only, and the physical pass confirmed the `.dev` build reaching the local API with no hand-edited manifest. Production's generated manifest has no cleartext attribute and is deterministic across prebuilds.
+
+Physical testing earned its place: it found five defects no CI gate could see — a dev script that could have installed the production package over the user's real app, an app-freezing 5-second SQLite poll on the globally-mounted FAB badge, an in-flow CTA sitting under the floating buttons, review Complete/Skip being unreachable behind the IME, and a 3px tab-bar overlap. All five are fixed and re-verified on the device.
 
 ## Remaining warnings / technical debt
 
@@ -1641,7 +1755,7 @@ Phase 5 Checkpoint 5.5 (Personal OS Daily Brief) is complete and locally verifie
 - **`callWithFallbackTracked` still invokes the attempt callback for candidates after the budget is exhausted** — each returns immediately without reaching a provider, so no call is made and no result changes; noted only because the timeout comment reads stricter than the loop behaves.
 - **Drizzle snapshots stop at 0008** — `db:generate` remains unusable until faithful 0009/0010(+0011) snapshots are reconstructed or the hand-written-SQL + mandatory-`db:reconcile` methodology is superseded. Recorded decision from Step 0; each new hand-written migration must consciously extend the journal-guard allowlist and run reconcile.
 - ~~**Recurring all-day event instances bucket by series anchor date in Today/review contexts**~~ — **CLOSED by Checkpoint 5.4 (ADR-042)**. The real defect was broader than recorded: such events never expanded anywhere at all. Today/review contexts now receive per-instance dates and required no code change.
-- **`expo-build-properties` is not a dependency**, so UI-test builds needing cleartext access to a local dev API still require hand-patching `android/app/src/main/AndroidManifest.xml` after prebuild. `android.usesCleartextTraffic` is NOT a valid Expo config property (it was silently ignored for three checkpoints — see 5.4). Adding the plugin would close this permanently.
+- ~~**`expo-build-properties` is not a dependency**~~ — **CLOSED by Checkpoint 5.6.** `expo-build-properties@~57.0.13` is now a dependency and supplies `android.usesCleartextTraffic` for the UI-test profile only; a clean prebuild of both identities proved production's manifest carries no cleartext attribute and its `gradle.properties`/`proguard-rules.pro` are byte-identical to the UI-test build's. Hand-patching the generated manifest is no longer required.
 - **No composite index on `occurrences(parent_type, status, occurs_at)` and no index on `events.start_date`** — the Agenda and event-range queries filter on both. Not a practical risk at single-user scale with a 90-day materialized horizon; two additive index migrations would close it if scale assumptions change.
 - **All-day `recurrence_until` must resolve to end-of-local-day.** The shipped mobile editor always serializes it to 23:59:59.999, so the product flow is correct, but the schema neither enforces nor documents it — a raw API caller sending midnight silently loses the final occurrence (a noon-anchored instance sorts after it). Untested; document or normalize server-side in a future pass.
 - **`ALL_DAY_ANCHOR_SLACK_MS` (36h) padding charges a few extra candidates against the shared 10,000 recurrence budget** per all-day series. Negligible for daily/weekly/monthly rules; only material for a pathological sub-daily all-day rule, which nothing currently forbids.
@@ -1652,8 +1766,8 @@ Phase 5 Checkpoint 5.5 (Personal OS Daily Brief) is complete and locally verifie
 
 ## Remaining warnings / technical debt
 
-- **`remind_at` cannot be set or changed through the API.** Neither `TaskCreateSchema` nor `TaskUpdateSchema` accepts it, so a reminder time can only originate from AI capture.
-- **Android captures are labelled `source: "web"`** — `apps/mobile/src/components/quick-add-fab.tsx` hardcodes it regardless of platform.
+- ~~**`remind_at` cannot be set or changed through the API.**~~ — **STALE, corrected 2026-08-23.** Checkpoint 5.4 added `remind_at` to `TaskUpdateSchema` (`PATCH /tasks/:id`), and an editor exists at `apps/mobile/src/app/tasks/[id].tsx`. What remains true, and is the real residual debt: that editor is a raw ISO-8601 `TextInput` with no picker or validation, and `tasks/new.tsx` still cannot set a reminder at creation time.
+- ~~**Android captures are labelled `source: "web"`**~~ — **NOT A DEFECT; reclassified in Checkpoint 5.6.** `source` is an ENTRY-PATH vocabulary, not a platform tag, and is closed by both `CaptureSourceSchema` and the `inbox_items_source` CHECK constraint. `web` correctly denotes the in-app Quick Capture sheet on every platform. There is no native member, and adding one would require altering the CHECK constraint (a migration). The rule is now documented in `docs/ARCHITECTURE.md` and pinned by a test. See ADR note in the 5.6 entry.
 - **Revoking a device does not clear its `is_primary_reminder_device` flag**, so a revoked row can keep holding primary and no device schedules reminders until primary is reassigned.
 - **The exact-alarm grant does not survive reinstall.** Every rebuild silently returns the app to inexact reminders until the user re-grants "Alarms & reminders".
 - **Duplicate-alarm repair is covered by unit tests only.**
@@ -1668,11 +1782,11 @@ Phase 5 Checkpoint 5.5 (Personal OS Daily Brief) is complete and locally verifie
 
 ## Last verification
 
-Phase 5 Checkpoint 5.5 closure verification (2026-08-23): fresh pre-change baseline re-established at **993 tests / 15 tasks** before any edit; after implementation build/typecheck/lint/format clean workspace-wide and **1099 tests pass across 15 turbo tasks, fully uncached** (993 → +106, zero regressions; core 271, db 14, ai-providers 25, calendar-providers **57 — unchanged zero-drift canary**, schema 123, api-client 70, api 327, worker 80, mobile 132); exactly **13 migrations / 13 journal entries** with `db:reconcile --check` consistent on dev and test; migration 0012 applied once per database as `posops_migrator` with unique index and `ON DELETE SET NULL` FK verified in the catalog, a disposable fresh database migrated 0000→0012 to a schema **byte-identical to dev** (358 objects, empty diff) then dropped, `posops_app` DDL denied (`42501`) while DML succeeds, and duplicate `(brief_date, timezone)` rejected (`23505`); `git diff --check` and gitleaks clean (69 commits, no leaks); Expo web export clean (single-`index.html` SPA); live HTTP proof against a local fake OpenAI-compatible provider of 409/404/200/upsert-same-row/two-timezones-two-rows/502-with-cache-intact/504-at-31s/three-way-concurrency-one-row, with the outgoing prompt inspected at the wire (separate system+user roles, `max_tokens: 800`, no tools, zero UUIDs, no secret substrings, valid fenced JSON at 1334 of 12000 chars) and `GET /today` returning real brief metadata with zero provider calls; count-verified smoke cleanup with zero residue; desktop and 480×640 browser passes over all five card states including a failed regeneration that kept the cached brief visible. Eight independent adversarial audits found four real defects; all four were fixed and pinned with regressions. **No physical Rabbit pass and no paid provider call were part of this checkpoint** — both are recorded as deferred rather than claimed.
+Phase 5 Checkpoint 5.6 (2026-08-23): baseline re-established at **exactly 1099 tests / 15 tasks** before any edit; final state build/typecheck/lint/format clean workspace-wide and **1154 tests pass across 15 turbo tasks, fully uncached** (core 271, db 14, ai-providers 25, calendar-providers **57 — unchanged zero-drift canary**, schema 123, api-client 70, api 327, worker 80, mobile 187). Exactly 13 migrations / 13 journal entries, no 0013. Zero forbidden-area drift. Clean prebuilds of both Android identities: production carries **no** cleartext attribute and reproduces byte-identically across runs, while `gradle.properties` and `proguard-rules.pro` are identical between identities — the plugin writes nothing beyond the one dev-only manifest attribute. `expo export --platform web` clean (single-`index.html` SPA). Timezone sweeps across UTC/Chicago/Auckland/Kolkata/Kiritimati. Mutation testing proved the all-day fix and the routes-hygiene guard both fail when their defect is reintroduced. 3 lint warnings remain, all pre-existing (confirmed by stashing all work). `git diff --check` clean; gitleaks found no leaks. The live `EXPO_TOKEN` in the gitignored `apps/mobile/.env` was confirmed absent from tracked content, the working diff, and all of git history — no rotation needed; its misleading "safe to commit" comment was corrected there and in the tracked `.env.example`. Physical Rabbit R1 matrix run on the dev identity with production byte-identical before and after. Four independent adversarial audits ran across the checkpoint and drove fix waves, including one HIGH (a shared review mutation masking an earlier failure) fixed before commit.
 
 ## Next action
 
-Checkpoint 5.5 is complete — stop and await explicit user approval before beginning Checkpoint 5.6 (mobile/Rabbit daily-use polish, which owns the `expo-build-properties` dev-harness debt and the deferred physical Brief-card verification). No production changes before Checkpoint 5.7, where the production `daily_brief` provider/model registration is decided.
+Checkpoint 5.6 is complete — stop and await explicit user approval before beginning Checkpoint 5.7 (gated production deployment), which owns the production `daily_brief` provider/model registration and the deferred physical reminder-alarm verification. **No production changes have been made in Phase 5 to date, and none may be made before 5.7.**
 
 ## Handoff rule
 
