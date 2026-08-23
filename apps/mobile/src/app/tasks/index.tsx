@@ -8,6 +8,7 @@ import {
   useDropTask,
   useTasks,
 } from "@/queries/tasks";
+import { FLOATING_CLEARANCE, FLOATING_CTA_CLEARANCE_NO_TABBAR } from "@/components/floating-layout";
 import { Link, useRouter } from "expo-router";
 import { useState } from "react";
 import { FlatList, Pressable, SafeAreaView, Text, View } from "react-native";
@@ -46,7 +47,9 @@ function TaskRow({ task }: { task: Task }) {
       className="flex-row items-center justify-between border-b border-neutral-200 px-4 py-3 dark:border-neutral-800"
     >
       <View className="flex-1 pr-2">
-        <Text className="text-base text-black dark:text-white">{task.title}</Text>
+        <Text className="text-base text-black dark:text-white" numberOfLines={2}>
+          {task.title}
+        </Text>
         {task.due_at ? (
           <Text className="text-xs text-neutral-500">
             Due {new Date(task.due_at).toLocaleString()}
@@ -54,23 +57,56 @@ function TaskRow({ task }: { task: Task }) {
         ) : null}
         {task.rrule ? <Text className="text-xs text-neutral-400">Recurring</Text> : null}
       </View>
+      {/* Each action Pressable stops propagation so it does not ALSO trigger
+          the row's navigate-to-detail onPress. Same precedent as
+          components/calendar/day-cell.tsx: on native the touch responder
+          already grants to the inner view, but Pressable maps to bubbling DOM
+          events under react-native-web, where this app also ships. */}
       <View className="flex-row gap-2">
         {task.status === "inbox" ? (
-          <Pressable onPress={() => activate.mutate(task.id)} className="rounded bg-blue-100 px-2 py-1 dark:bg-blue-950">
+          <Pressable
+            onPress={(e) => {
+              e.stopPropagation();
+              activate.mutate(task.id);
+            }}
+            hitSlop={8}
+            className="min-h-[44px] items-center justify-center rounded bg-blue-100 px-2 dark:bg-blue-950"
+          >
             <Text className="text-xs text-blue-700 dark:text-blue-300">Start</Text>
           </Pressable>
         ) : null}
         {task.status === "active" ? (
           <>
-            <Pressable onPress={onComplete} className="rounded bg-green-100 px-2 py-1 dark:bg-green-950">
+            <Pressable
+              onPress={(e) => {
+                e.stopPropagation();
+                onComplete();
+              }}
+              hitSlop={8}
+              className="min-h-[44px] items-center justify-center rounded bg-green-100 px-2 dark:bg-green-950"
+            >
               <Text className="text-xs text-green-700 dark:text-green-300">Done</Text>
             </Pressable>
-            <Pressable onPress={() => drop.mutate(task.id)} className="rounded bg-neutral-100 px-2 py-1 dark:bg-neutral-800">
+            <Pressable
+              onPress={(e) => {
+                e.stopPropagation();
+                drop.mutate(task.id);
+              }}
+              hitSlop={8}
+              className="min-h-[44px] items-center justify-center rounded bg-neutral-100 px-2 dark:bg-neutral-800"
+            >
               <Text className="text-xs text-neutral-600 dark:text-neutral-300">Drop</Text>
             </Pressable>
           </>
         ) : null}
-        <Pressable onPress={() => archive.mutate(task.id)} className="rounded bg-neutral-100 px-2 py-1 dark:bg-neutral-800">
+        <Pressable
+          onPress={(e) => {
+            e.stopPropagation();
+            archive.mutate(task.id);
+          }}
+          hitSlop={8}
+          className="min-h-[44px] items-center justify-center rounded bg-neutral-100 px-2 dark:bg-neutral-800"
+        >
           <Text className="text-xs text-neutral-600 dark:text-neutral-300">Archive</Text>
         </Pressable>
       </View>
@@ -84,9 +120,14 @@ export default function TasksScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-white dark:bg-black">
-      <View className="flex-row justify-around border-b border-neutral-200 py-2 dark:border-neutral-800">
+      <View className="flex-row justify-around border-b border-neutral-200 dark:border-neutral-800">
         {(["new", "active", "done", "dropped"] as Filter[]).map((f) => (
-          <Pressable key={f} onPress={() => setFilter(f)}>
+          <Pressable
+            key={f}
+            onPress={() => setFilter(f)}
+            hitSlop={8}
+            className="min-h-[44px] min-w-[44px] items-center justify-center"
+          >
             <Text
               className={
                 filter === f
@@ -109,6 +150,7 @@ export default function TasksScreen() {
           data={data?.items ?? []}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => <TaskRow task={item} />}
+          contentContainerClassName={FLOATING_CLEARANCE}
           ListEmptyComponent={
             <Text className="p-4 text-neutral-500">No {filter} tasks.</Text>
           }
@@ -116,7 +158,7 @@ export default function TasksScreen() {
       )}
 
       <Link href="/tasks/new" asChild>
-        <Pressable className="m-4 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700">
+        <Pressable className={`mx-4 mt-4 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700 ${FLOATING_CTA_CLEARANCE_NO_TABBAR}`}>
           <Text className="font-semibold text-white">New task</Text>
         </Pressable>
       </Link>

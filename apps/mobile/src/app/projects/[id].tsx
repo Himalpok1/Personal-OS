@@ -4,6 +4,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useKeyboardHeight } from "@/components/use-keyboard-height";
+import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import {
   useArchiveProject,
@@ -16,6 +18,7 @@ import {
   useUpdateProject,
 } from "@/queries/projects";
 import { useCompleteTask } from "@/queries/tasks";
+import { formatShortDate } from "@/utils/local-date";
 
 const STATUS_PILL = {
   active: "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300",
@@ -35,17 +38,8 @@ function formatShortDateTime(iso: string): string {
   });
 }
 
-function formatTargetDate(date: string): string {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(year!, month! - 1, day ?? 1).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
 function eventStartLabel(event: ProjectDetailEvent): string | null {
-  if (event.all_day) return event.start_date ? formatTargetDate(event.start_date) : null;
+  if (event.all_day) return event.start_date ? formatShortDate(event.start_date) : null;
   return event.starts_at ? `Starts ${formatShortDateTime(event.starts_at)}` : null;
 }
 
@@ -64,7 +58,7 @@ function ActionButton({
     <Pressable
       onPress={onPress}
       disabled={disabled}
-      className={`flex-1 items-center rounded-lg py-2.5 active:opacity-80 disabled:opacity-50 ${className ?? "bg-neutral-100 dark:bg-neutral-800"}`}
+      className={`min-h-[44px] flex-1 items-center justify-center rounded-lg py-2.5 active:opacity-80 disabled:opacity-50 ${className ?? "bg-neutral-100 dark:bg-neutral-800"}`}
     >
       <Text className="font-semibold text-neutral-700 dark:text-neutral-200">{label}</Text>
     </Pressable>
@@ -72,6 +66,7 @@ function ActionButton({
 }
 
 export default function ProjectDetailScreen() {
+  const keyboardHeight = useKeyboardHeight();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -161,7 +156,13 @@ export default function ProjectDetailScreen() {
   const closedTasks = tasks.items.filter((t) => t.status === "done" || t.status === "dropped");
 
   return (
-    <ScrollView className="flex-1 bg-white p-4 dark:bg-black">
+    <ScrollView
+      className="flex-1 bg-white dark:bg-black"
+      // Extra room so lower controls can be scrolled clear of the IME --
+      // see components/use-keyboard-height.ts for why insets alone don't do it.
+      contentContainerStyle={{ padding: 16, paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
+      keyboardShouldPersistTaps="handled"
+    >
       <View className="mb-4 flex-row items-center gap-2">
         <View className="h-4 w-4 rounded-full" style={{ backgroundColor: project.color ?? "#999" }} />
         <TextInput
@@ -189,7 +190,7 @@ export default function ProjectDetailScreen() {
           const trimmed = goal.trim();
           if (trimmed !== (project.goal ?? "")) commitMetadata({ goal: trimmed || null });
         }}
-        className="mb-2 min-h-[48px] rounded-lg border border-neutral-300 p-2 text-black dark:border-neutral-700 dark:text-white"
+        className="mb-2 max-h-[120px] min-h-[48px] rounded-lg border border-neutral-300 p-2 text-black dark:border-neutral-700 dark:text-white"
       />
 
       <Text className="mb-1 text-sm text-neutral-500">Target date (YYYY-MM-DD)</Text>
@@ -272,9 +273,12 @@ export default function ProjectDetailScreen() {
           <>
             <Pressable
               onPress={() => router.push(`/tasks/${computed.next_action!.task_id}`)}
-              className="mt-1"
+              className="mt-1 min-h-[44px] justify-center"
             >
-              <Text className="text-base font-medium text-black dark:text-white">
+              <Text
+                numberOfLines={2}
+                className="text-base font-medium text-black dark:text-white"
+              >
                 {computed.next_action.title}
               </Text>
             </Pressable>
@@ -314,7 +318,7 @@ export default function ProjectDetailScreen() {
         <Text className="text-sm font-semibold text-neutral-500">Tasks ({tasks.total})</Text>
         <Pressable
           onPress={() => router.push(`/tasks/new?projectId=${project.id}`)}
-          className="px-2 py-1.5"
+          className="min-h-[44px] items-center justify-center px-2"
         >
           <Text className="text-sm font-semibold text-blue-600">+ Task</Text>
         </Pressable>
@@ -331,11 +335,14 @@ export default function ProjectDetailScreen() {
               <Pressable
                 onPress={() => onCompleteTask(task.id)}
                 disabled={completeTask.isPending || completeOccurrence.isPending}
-                className="mr-3 h-6 w-6 items-center justify-center rounded-full border-2 border-neutral-400 dark:border-neutral-500"
+                hitSlop={8}
+                className="mr-3 h-8 w-8 items-center justify-center rounded-full border-2 border-neutral-400 dark:border-neutral-500"
                 accessibilityLabel={`Mark "${task.title}" done`}
               />
               <Pressable onPress={() => router.push(`/tasks/${task.id}`)} className="flex-1">
-                <Text className="text-black dark:text-white">{task.title}</Text>
+                <Text numberOfLines={2} className="text-black dark:text-white">
+                  {task.title}
+                </Text>
                 {task.due_at ? (
                   <Text className="text-xs text-neutral-500">
                     Due {formatShortDateTime(task.due_at)}
@@ -349,9 +356,11 @@ export default function ProjectDetailScreen() {
             <Pressable
               key={task.id}
               onPress={() => router.push(`/tasks/${task.id}`)}
-              className="border-b border-neutral-200 py-2 opacity-50 dark:border-neutral-800"
+              className="min-h-[44px] justify-center border-b border-neutral-200 py-2 opacity-50 dark:border-neutral-800"
             >
-              <Text className="line-through text-black dark:text-white">{task.title}</Text>
+              <Text numberOfLines={2} className="line-through text-black dark:text-white">
+                {task.title}
+              </Text>
               <Text className="text-xs text-neutral-500">
                 {task.status === "done"
                   ? task.completed_at
@@ -373,7 +382,7 @@ export default function ProjectDetailScreen() {
         <Text className="text-sm font-semibold text-neutral-500">Notes ({notes.total})</Text>
         <Pressable
           onPress={() => router.push(`/notes/new?projectId=${project.id}`)}
-          className="px-2 py-1.5"
+          className="min-h-[44px] items-center justify-center px-2"
         >
           <Text className="text-sm font-semibold text-blue-600">+ Note</Text>
         </Pressable>
@@ -382,9 +391,11 @@ export default function ProjectDetailScreen() {
         <Pressable
           key={note.id}
           onPress={() => router.push(`/notes/${note.id}`)}
-          className="border-b border-neutral-200 py-2 dark:border-neutral-800"
+          className="min-h-[44px] justify-center border-b border-neutral-200 py-2 dark:border-neutral-800"
         >
-          <Text className="text-black dark:text-white">{note.title}</Text>
+          <Text numberOfLines={2} className="text-black dark:text-white">
+            {note.title}
+          </Text>
         </Pressable>
       ))}
       {notes.items.length === 0 ? (
@@ -399,7 +410,7 @@ export default function ProjectDetailScreen() {
         <Text className="text-sm font-semibold text-neutral-500">Events ({events.total})</Text>
         <Pressable
           onPress={() => router.push(`/events/new?projectId=${project.id}`)}
-          className="px-2 py-1.5"
+          className="min-h-[44px] items-center justify-center px-2"
         >
           <Text className="text-sm font-semibold text-blue-600">+ Event</Text>
         </Pressable>
@@ -410,9 +421,9 @@ export default function ProjectDetailScreen() {
           <Pressable
             key={event.id}
             onPress={() => router.push(`/events/${event.id}`)}
-            className="border-b border-neutral-200 py-2 dark:border-neutral-800"
+            className="min-h-[44px] justify-center border-b border-neutral-200 py-2 dark:border-neutral-800"
           >
-            <Text className="text-black dark:text-white">
+            <Text numberOfLines={2} className="text-black dark:text-white">
               {event.title}
               {event.rrule ? " ↻" : ""}
             </Text>

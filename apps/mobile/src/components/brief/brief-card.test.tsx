@@ -39,7 +39,7 @@
 import { Pressable, Text, View } from "react-native";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useCurrentBrief, useGenerateBrief } from "@/queries/brief";
-import { BriefCard } from "./brief-card";
+import { BRIEF_COLLAPSED_LINES, BriefCard, ClampedBriefText } from "./brief-card";
 
 vi.mock("@/queries/brief", () => ({
   useCurrentBrief: vi.fn(),
@@ -51,14 +51,40 @@ const HOST_TYPES = new Set<unknown>([View, Text, Pressable]);
 // Expands any app-defined function component (e.g. the local ActionButton)
 // into its actual rendered output, recursively, while leaving react-native's
 // own host components (View/Text/Pressable) untouched as leaves. Safe here
-// because every such component in this tree is a plain, hookless function of
-// its props -- there is no internal state to lose by invoking it directly.
+// because every such function component in this tree is a plain, hookless
+// function of its props -- there is no internal state to lose by invoking it
+// directly.
+//
+// ClampedBriefText is the one exception: it's a class component (see
+// brief-card.tsx's comment on why), so `typeof el.type === "function"` is
+// true for it too (ES6 classes are functions), but it cannot be invoked
+// without `new`. Detected via `Component.prototype.isReactComponent`, the
+// same stable marker React itself uses to tell class components apart from
+// plain functions -- not an internals hack. Instantiated directly and its
+// render() output is walked exactly like any other node; its own dedicated
+// tests below construct instances directly for state control instead of
+// going through this path.
+function isClassComponentType(
+  type: unknown,
+): type is new (props: unknown) => { render: () => unknown } {
+  return (
+    typeof type === "function" &&
+    typeof (type as { prototype?: unknown }).prototype === "object" &&
+    (type as { prototype: { isReactComponent?: unknown } }).prototype.isReactComponent != null
+  );
+}
+
 function deepRender(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(deepRender);
   if (node === null || typeof node !== "object") return node;
 
   const el = node as { type?: unknown; props?: Record<string, unknown> };
   if (!("type" in el)) return node;
+
+  if (isClassComponentType(el.type)) {
+    const instance = new el.type(el.props ?? {});
+    return deepRender(instance.render());
+  }
 
   if (typeof el.type === "function" && !HOST_TYPES.has(el.type)) {
     const rendered = (el.type as (props: unknown) => unknown)(el.props ?? {});
@@ -239,5 +265,150 @@ describe("<BriefCard />", () => {
     expect(buttons).toHaveLength(1);
     expect(getTextContent(buttons[0])).toBe("Generate Daily Brief");
     expect(buttons[0].props.disabled).toBeFalsy();
+  });
+});
+
+// ClampedBriefText owns the Checkpoint 5.6 line-clamp/expand behavior for the
+// brief prose. Tested in isolation, constructed directly (bypassing
+// React.createElement) exactly like the class-component-detection comment on
+// deepRender above explains -- this gives full control over its instance
+// state without needing a real renderer.
+//
+// One consequence of bare instantiation worth calling out: `this.setState`
+// on a class instance that was never mounted through a real reconciler is a
+// documented React no-op (it warns and does not touch `this.state`), so
+// these tests split into two techniques rather than one:
+//   - Behavior of handleMeasureLayout/toggleExpanded/componentDidUpdate is
+//     verified by spying on `setState` and asserting what it was (or wasn't)
+//     called with -- this is what actually exercises the decision logic.
+//   - render() output for a *given* state is verified by constructing an
+//     instance already in that state (Object.assign onto the class-field
+//     default) -- this is what exercises the rendered tree.
+describe("<ClampedBriefText />", () => {
+  const TEXT_CLASS = "text-sm leading-5 text-neutral-700 dark:text-neutral-300";
+
+  function makeInstance(
+    text: string,
+    initialState?: Partial<{ expanded: boolean; isClamped: boolean }>,
+  ): ClampedBriefText {
+    const instance = new ClampedBriefText({ text, textClassName: TEXT_CLASS });
+    if (initialState) Object.assign(instance.state, initialState);
+    return instance;
+  }
+
+  // A real onTextLayout event only ever needs `nativeEvent.lines.length` for
+  // this component's logic -- everything else on the real event shape is
+  // irrelevant here.
+  function fakeLayoutEvent(lineCount: number): any {
+    return { nativeEvent: { lines: Array.from({ length: lineCount }, () => ({})) } };
+  }
+
+  function visibleTextNode(tree: unknown): any {
+    // The visible Text is the one WITHOUT onTextLayout -- the hidden
+    // measurement Text is the one with it.
+    return findAll(tree, (n) => n.type === Text && n.props?.onTextLayout === undefined)[0];
+  }
+
+  it("shows no toggle before any real line count has been measured", () => {
+    const instance = makeInstance("A short brief.");
+    const tree = deepRender(instance.render());
+
+    expect(findButtons(tree)).toHaveLength(0);
+    expect(visibleTextNode(tree).props.numberOfLines).toBe(BRIEF_COLLAPSED_LINES);
+  });
+
+  it("does not offer a toggle for text that measures within the collapse budget -- exactly at the budget does not count as clamped", () => {
+    const instance = makeInstance("A brief.");
+    const setStateSpy = vi.spyOn(instance, "setState");
+
+    instance.handleMeasureLayout(fakeLayoutEvent(BRIEF_COLLAPSED_LINES));
+
+    expect(setStateSpy).not.toHaveBeenCalled();
+  });
+
+  it("flags text as clamped only once the real measured line count exceeds the budget -- never guessing from string length", () => {
+    // Deliberately short string, to prove the decision comes from the fake
+    // layout event alone, not from string length.
+    const instance = makeInstance("x");
+    const setStateSpy = vi.spyOn(instance, "setState");
+
+    instance.handleMeasureLayout(fakeLayoutEvent(BRIEF_COLLAPSED_LINES + 1));
+
+    expect(setStateSpy).toHaveBeenCalledExactlyOnceWith({ isClamped: true });
+  });
+
+  it("does not re-call setState for a repeat measurement that doesn't change the clamped verdict", () => {
+    const instance = makeInstance("A long brief.", { isClamped: true });
+    const setStateSpy = vi.spyOn(instance, "setState");
+
+    instance.handleMeasureLayout(fakeLayoutEvent(BRIEF_COLLAPSED_LINES + 5));
+
+    expect(setStateSpy).not.toHaveBeenCalled();
+  });
+
+  it("renders a >=44px, accessible 'Show more' toggle once clamped, and clamps the visible text to the collapse budget", () => {
+    const instance = makeInstance("A long brief.", { isClamped: true, expanded: false });
+    const tree = deepRender(instance.render());
+
+    const buttons = findButtons(tree);
+    expect(buttons).toHaveLength(1);
+    expect(getTextContent(buttons[0])).toBe("Show more");
+    expect(buttons[0].props.accessibilityRole).toBe("button");
+    expect(buttons[0].props.accessibilityState).toEqual({ expanded: false });
+    expect(buttons[0].props.hitSlop).toBe(8);
+    expect(String(buttons[0].props.className)).toContain("min-h-[44px]");
+
+    expect(visibleTextNode(tree).props.numberOfLines).toBe(BRIEF_COLLAPSED_LINES);
+  });
+
+  it("expanded state shows the full, unclamped text and flips the toggle to 'Show less'", () => {
+    const instance = makeInstance("A long brief.", { isClamped: true, expanded: true });
+    const tree = deepRender(instance.render());
+
+    const buttons = findButtons(tree);
+    expect(buttons).toHaveLength(1);
+    expect(getTextContent(buttons[0])).toBe("Show less");
+    expect(buttons[0].props.accessibilityState).toEqual({ expanded: true });
+    expect(visibleTextNode(tree).props.numberOfLines).toBeUndefined();
+  });
+
+  it("toggleExpanded flips the expanded flag via a functional setState update", () => {
+    const instance = makeInstance("A long brief.", { isClamped: true, expanded: false });
+    const setStateSpy = vi.spyOn(instance, "setState");
+
+    instance.toggleExpanded();
+
+    expect(setStateSpy).toHaveBeenCalledTimes(1);
+    const updater = setStateSpy.mock.calls[0]![0] as unknown as (prev: {
+      expanded: boolean;
+    }) => { expanded: boolean };
+    expect(updater({ expanded: false })).toEqual({ expanded: true });
+    expect(updater({ expanded: true })).toEqual({ expanded: false });
+  });
+
+  it("does not reset when componentDidUpdate fires but the text is unchanged", () => {
+    const instance = makeInstance("Same text.", { isClamped: true, expanded: true });
+    const setStateSpy = vi.spyOn(instance, "setState");
+
+    instance.componentDidUpdate({ text: "Same text.", textClassName: TEXT_CLASS });
+
+    expect(setStateSpy).not.toHaveBeenCalled();
+  });
+
+  it("resets expanded/measured state when the underlying brief text changes -- a regenerate must not leave a stale expanded view of the old text", () => {
+    const instance = makeInstance("Old text.", { isClamped: true, expanded: true });
+    const setStateSpy = vi.spyOn(instance, "setState");
+    const prevProps = { text: "Old text.", textClassName: TEXT_CLASS };
+
+    // Simulate React having already applied the new props to the instance
+    // before invoking the lifecycle hook with the previous ones -- exactly
+    // how React calls componentDidUpdate.
+    (instance as unknown as { props: typeof prevProps }).props = {
+      text: "New text.",
+      textClassName: TEXT_CLASS,
+    };
+    instance.componentDidUpdate(prevProps);
+
+    expect(setStateSpy).toHaveBeenCalledExactlyOnceWith({ expanded: false, isClamped: false });
   });
 });

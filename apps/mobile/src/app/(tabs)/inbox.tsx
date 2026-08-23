@@ -1,4 +1,5 @@
 import type { InboxItem } from "@personal-os/schema";
+import { FLOATING_CLEARANCE } from "@/components/floating-layout";
 import { useConfirmInboxItem, useInbox } from "@/queries/inbox";
 import { FlatList, Pressable, SafeAreaView, Text, View } from "react-native";
 
@@ -15,7 +16,7 @@ function InboxRow({ item }: { item: InboxItem }) {
 
   return (
     <View className="border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
-      <Text className="text-base text-black dark:text-white">
+      <Text className="text-base text-black dark:text-white" numberOfLines={3}>
         {item.raw_text !== null
           ? item.raw_text
           : item.status === "failed"
@@ -30,7 +31,8 @@ function InboxRow({ item }: { item: InboxItem }) {
         {item.status === "needs_confirm" ? (
           <Pressable
             onPress={() => confirm.mutate({ id: item.id })}
-            className="rounded bg-blue-100 px-2 py-1 dark:bg-blue-950"
+            hitSlop={8}
+            className="min-h-[44px] items-center justify-center rounded bg-blue-100 px-2 dark:bg-blue-950"
             disabled={confirm.isPending}
           >
             <Text className="text-xs text-blue-700 dark:text-blue-300">
@@ -62,6 +64,7 @@ export default function InboxScreen() {
           data={data?.items ?? []}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => <InboxRow item={item} />}
+          contentContainerClassName={FLOATING_CLEARANCE}
           ListEmptyComponent={<Text className="p-4 text-neutral-500">Inbox is empty.</Text>}
         />
       )}

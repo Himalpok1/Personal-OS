@@ -117,7 +117,9 @@ export function AgendaTaskRow({ item }: { item: AgendaTaskItem | AgendaOccurrenc
         className="flex-1"
         accessibilityRole="button"
       >
-        <Text className="text-base text-black dark:text-white">{item.title}</Text>
+        <Text className="text-base text-black dark:text-white" numberOfLines={2}>
+          {item.title}
+        </Text>
         <View className="mt-0.5 flex-row items-center gap-2">
           {item.due_at ? (
             <Text className="text-xs text-neutral-500 dark:text-neutral-400">
@@ -184,13 +186,20 @@ export function AgendaEventRow({ item }: { item: AgendaEventItem }) {
       className="min-h-[40px] flex-row items-baseline gap-3 px-4 py-3"
       accessibilityRole="button"
     >
-      <Text className="w-28 shrink-0 text-xs text-neutral-500 dark:text-neutral-400">
+      <Text
+        className="w-24 shrink-0 text-xs text-neutral-500 dark:text-neutral-400"
+        numberOfLines={1}
+      >
         {timeLabel}
       </Text>
       <View className="flex-1">
-        <Text className="text-base text-black dark:text-white">{item.title}</Text>
+        <Text className="text-base text-black dark:text-white" numberOfLines={2}>
+          {item.title}
+        </Text>
         {item.location ? (
-          <Text className="text-xs text-neutral-500 dark:text-neutral-400">{item.location}</Text>
+          <Text className="text-xs text-neutral-500 dark:text-neutral-400" numberOfLines={1}>
+            {item.location}
+          </Text>
         ) : null}
       </View>
     </Pressable>

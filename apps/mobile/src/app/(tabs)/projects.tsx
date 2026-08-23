@@ -2,6 +2,8 @@ import type { ProjectSummaryItem } from "@personal-os/schema";
 import { useProjectSummaries, useUnarchiveProject } from "@/queries/projects";
 import { Link, useRouter } from "expo-router";
 import { FlatList, Pressable, SafeAreaView, Text, View } from "react-native";
+import { FLOATING_CLEARANCE, FLOATING_CTA_CLEARANCE } from "@/components/floating-layout";
+import { formatShortDate } from "@/utils/local-date";
 
 type DisplayStatus = ProjectSummaryItem["status"] | "archived";
 
@@ -11,17 +13,6 @@ const STATUS_PILL: Record<DisplayStatus, string> = {
   completed: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
   archived: "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300",
 };
-
-// Plain local formatting of a YYYY-MM-DD date string -- no relative-time lib
-// in the repo, so dates stay absolute.
-function formatTargetDate(date: string): string {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(year!, month! - 1, day ?? 1).toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
 
 type Row =
   | { kind: "header"; key: string; title: string }
@@ -65,18 +56,29 @@ function ProjectRow({ project }: { project: ProjectSummaryItem }) {
       ) : null}
       <Text className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
         {project.counts.open} open · {project.counts.done} done · {project.counts.overdue} overdue
-        {project.target_date ? ` · Target ${formatTargetDate(project.target_date)}` : ""}
+        {project.target_date ? ` · Target ${formatShortDate(project.target_date)}` : ""}
       </Text>
       {displayStatus === "archived" ? (
-        <Pressable
-          onPress={() => unarchive.mutate(project.id)}
-          disabled={unarchive.isPending}
-          className="mt-2 self-start rounded bg-neutral-100 px-3 py-1.5 active:bg-neutral-200 disabled:opacity-50 dark:bg-neutral-800 dark:active:bg-neutral-700"
-        >
-          <Text className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">
-            Unarchive
-          </Text>
-        </Pressable>
+        <>
+          <Pressable
+            onPress={(e) => {
+              // Stop the tap from also triggering the row's onPress
+              // (navigate to detail) -- both handlers are on nested
+              // Pressables, same pattern as calendar/day-cell.tsx.
+              e.stopPropagation();
+              unarchive.mutate(project.id);
+            }}
+            disabled={unarchive.isPending}
+            className="mt-2 min-h-[44px] min-w-[44px] items-center justify-center self-start rounded bg-neutral-100 px-3 active:bg-neutral-200 disabled:opacity-50 dark:bg-neutral-800 dark:active:bg-neutral-700"
+          >
+            <Text className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">
+              Unarchive
+            </Text>
+          </Pressable>
+          {unarchive.isError ? (
+            <Text className="mt-1 text-xs text-red-600">Couldn&apos;t unarchive.</Text>
+          ) : null}
+        </>
       ) : null}
     </Pressable>
   );
@@ -127,6 +129,7 @@ export default function ProjectsScreen() {
         <FlatList
           data={rows}
           keyExtractor={(row) => row.key}
+          contentContainerClassName={FLOATING_CLEARANCE}
           renderItem={({ item }) => {
             if (item.kind === "header") {
               return (
@@ -145,7 +148,7 @@ export default function ProjectsScreen() {
         />
       )}
       <Link href="/projects/new" asChild>
-        <Pressable className="m-4 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700">
+        <Pressable className={`mx-4 mt-4 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700 ${FLOATING_CTA_CLEARANCE}`}>
           <Text className="font-semibold text-white">New project</Text>
         </Pressable>
       </Link>

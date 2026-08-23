@@ -98,7 +98,13 @@ export default function CalendarScreen() {
             <Text className="text-lg text-black dark:text-white">‹</Text>
           </Pressable>
 
-          <Pressable onPress={() => setAnchor(new Date())}>
+          <Pressable
+            onPress={() => setAnchor(new Date())}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Jump to today"
+            className="min-h-[44px] items-center justify-center px-2"
+          >
             <Text className="text-base font-semibold text-black dark:text-white">{label}</Text>
           </Pressable>
 

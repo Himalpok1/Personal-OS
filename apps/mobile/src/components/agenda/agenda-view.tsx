@@ -7,6 +7,7 @@ import { useMemo, useState, type JSX } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useAgenda } from "@/queries/agenda";
 import { useProjects } from "@/queries/projects";
+import { FLOATING_CLEARANCE } from "@/components/floating-layout";
 import { AgendaItemRow, SectionHeader, agendaItemKey } from "./agenda-rows";
 import { defaultAgendaRange, filterNonEmptyDays, formatAgendaDayLabel } from "./agenda-grouping";
 
@@ -122,6 +123,7 @@ export function AgendaView(): JSX.Element {
         <Text className="text-red-600">Couldn&apos;t load the agenda.</Text>
         <Pressable
           onPress={() => void refetch()}
+          hitSlop={4}
           className="min-h-[40px] rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
         >
           <Text className="font-semibold text-white">Retry</Text>
@@ -134,10 +136,15 @@ export function AgendaView(): JSX.Element {
   const isWhollyEmpty = data.overdue.length === 0 && visibleDays.length === 0;
 
   return (
-    <ScrollView className="flex-1 bg-white dark:bg-black" contentContainerClassName="pb-24">
+    <ScrollView
+      className="flex-1 bg-white dark:bg-black"
+      contentContainerClassName={FLOATING_CLEARANCE}
+    >
       <View className="px-4 pt-4">
         <Text className="text-2xl font-bold text-black dark:text-white">Agenda</Text>
-        <Text className="text-sm text-neutral-500 dark:text-neutral-400">{data.from}{" "}–{" "}{data.to}</Text>
+        <Text className="text-sm text-neutral-500 dark:text-neutral-400">
+          {data.from} – {data.to}
+        </Text>
       </View>
 
       <ProjectFilterBar selectedProjectId={projectId} onSelect={setProjectId} />

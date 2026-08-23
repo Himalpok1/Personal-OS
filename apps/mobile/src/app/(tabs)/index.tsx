@@ -10,24 +10,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, type Href } from "expo-router";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { BriefCard } from "@/components/brief/brief-card";
+import { FLOATING_CLEARANCE } from "@/components/floating-layout";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import { useCompleteTask } from "@/queries/tasks";
 import { useToday } from "@/queries/today";
-
-function parseLocalDate(date: string): Date {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(year!, (month ?? 1) - 1, day ?? 1);
-}
-
-// The response's local_date is authoritative for the header; parsed as local
-// wall-clock parts so no timezone conversion shifts the weekday.
-function formatHeaderDate(localDate: string): string {
-  return parseLocalDate(localDate).toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-}
+import { addLocalDays, formatHeaderDate, parseLocalDate } from "@/utils/local-date";
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, {
@@ -45,13 +32,6 @@ function eventStartMs(event: TodayEventItem): number {
 function upcomingDayLabel(date: string, todayLocalDate: string): string {
   if (date === addLocalDays(todayLocalDate, 1)) return "Tomorrow";
   return parseLocalDate(date).toLocaleDateString(undefined, { weekday: "long" });
-}
-
-function addLocalDays(localDate: string, days: number): string {
-  const d = parseLocalDate(localDate);
-  d.setDate(d.getDate() + days);
-  const pad = (n: number): string => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 // raw_text when the capture has one; otherwise an honest per-status label.
@@ -107,7 +87,16 @@ function TaskRow({ item }: { item: TodayTaskItem }) {
       className="flex-row items-center gap-3 px-4 py-3"
     >
       <Pressable
-        onPress={onComplete}
+        onPress={(e) => {
+          // Stop the tap from also triggering the row's onPress (navigate to
+          // task detail) -- both handlers are on nested Pressables. Same
+          // precedent as components/calendar/day-cell.tsx. On native the touch
+          // responder already grants to the inner view, but Pressable maps to
+          // bubbling DOM events under react-native-web, where this app also
+          // ships, so the guard is load-bearing there.
+          e.stopPropagation();
+          onComplete();
+        }}
         hitSlop={8}
         accessibilityLabel={`Complete ${item.title}`}
         className="h-8 w-8 items-center justify-center rounded-full border-2 border-neutral-400 dark:border-neutral-600"
@@ -117,7 +106,9 @@ function TaskRow({ item }: { item: TodayTaskItem }) {
         ) : null}
       </Pressable>
       <View className="flex-1">
-        <Text className="text-base text-black dark:text-white">{item.title}</Text>
+        <Text className="text-base text-black dark:text-white" numberOfLines={2}>
+          {item.title}
+        </Text>
         <View className="mt-0.5 flex-row items-center gap-2">
           {item.due_at ? (
             <Text className="text-xs text-neutral-500 dark:text-neutral-400">
@@ -172,13 +163,24 @@ function EventRow({ event }: { event: TodayEventItem }) {
       onPress={() => router.push(`/events/${event.id}`)}
       className="flex-row items-baseline gap-3 px-4 py-3"
     >
-      <Text className="w-28 shrink-0 text-xs text-neutral-500 dark:text-neutral-400">
+      {/* w-24, matching components/agenda/agenda-rows.tsx: the widest real
+          value is a range like "14:30–15:00" (11 chars at text-xs, ~80px),
+          so 96px leaves margin. Narrower risks a two-line wrap here, which
+          would misalign the row -- this Text has no numberOfLines. */}
+      <Text className="w-24 shrink-0 text-xs text-neutral-500 dark:text-neutral-400" numberOfLines={1}>
         {timeRange}
       </Text>
       <View className="flex-1">
-        <Text className="text-base text-black dark:text-white">{event.title}</Text>
+        {/* numberOfLines={2} matches components/agenda/agenda-rows.tsx for the
+            same field -- otherwise one long event title truncates on Today but
+            wraps on Agenda, giving the same event two different row heights. */}
+        <Text className="text-base text-black dark:text-white" numberOfLines={2}>
+          {event.title}
+        </Text>
         {event.location ? (
-          <Text className="text-xs text-neutral-500 dark:text-neutral-400">{event.location}</Text>
+          <Text className="text-xs text-neutral-500 dark:text-neutral-400" numberOfLines={1}>
+            {event.location}
+          </Text>
         ) : null}
       </View>
     </Pressable>
@@ -285,7 +287,10 @@ function ProjectCard({ project }: { project: TodayProjectSummary }) {
           className="h-3 w-3 rounded-full"
           style={{ backgroundColor: project.color ?? "#999999" }}
         />
-        <Text className="flex-1 text-base font-medium text-black dark:text-white">
+        <Text
+          className="flex-1 text-base font-medium text-black dark:text-white"
+          numberOfLines={1}
+        >
           {project.name}
         </Text>
         {project.stalled ? (
@@ -347,9 +352,9 @@ function Chip({
     "border-red-300 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-950 dark:text-red-400";
   const neutralClass = "border-neutral-300 bg-white dark:border-neutral-700 dark:bg-neutral-900";
   return (
-    <Pressable onPress={onPress} hitSlop={4}>
+    <Pressable onPress={onPress} hitSlop={8}>
       <View
-        className={`rounded-full border px-3 py-2 ${
+        className={`min-h-[44px] items-center justify-center rounded-full border px-3 py-2 ${
           danger && count > 0 ? dangerClass : neutralClass
         }`}
       >
@@ -453,7 +458,8 @@ export default function TodayScreen() {
         <Text className="text-red-600">Couldn&apos;t load today.</Text>
         <Pressable
           onPress={() => void refetch()}
-          className="rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          hitSlop={8}
+          className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
         >
           <Text className="font-semibold text-white">Retry</Text>
         </Pressable>
@@ -462,7 +468,10 @@ export default function TodayScreen() {
   }
 
   return (
-    <ScrollView className="flex-1 bg-white dark:bg-black" contentContainerClassName="pb-24">
+    <ScrollView
+      className="flex-1 bg-white dark:bg-black"
+      contentContainerClassName={FLOATING_CLEARANCE}
+    >
       <View className="flex-row items-end justify-between px-4 pt-4">
         <View className="flex-1">
           <Text className="text-2xl font-bold text-black dark:text-white">Today</Text>
@@ -471,7 +480,7 @@ export default function TodayScreen() {
           </Text>
         </View>
         <Link href="/tasks" asChild>
-          <Pressable hitSlop={8}>
+          <Pressable hitSlop={8} className="min-h-[44px] items-center justify-center">
             <Text className="text-sm text-blue-600 dark:text-blue-400">All tasks</Text>
           </Pressable>
         </Link>
