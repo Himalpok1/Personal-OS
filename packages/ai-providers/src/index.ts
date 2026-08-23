@@ -11,7 +11,11 @@ export {
   resolveModelForTask,
   type ResolvedModel,
 } from "./resolve-model.js";
-export { callWithFallback } from "./call-with-fallback.js";
+export {
+  callWithFallback,
+  callWithFallbackTracked,
+  type TrackedCallResult,
+} from "./call-with-fallback.js";
 export {
   transcribeAudio,
   type TranscriptionAudio,

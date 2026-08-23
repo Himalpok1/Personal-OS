@@ -16,7 +16,9 @@ export class NoProviderConfiguredError extends Error {
 
 export interface ResolvedModel {
   model: LanguageModel;
+  modelRowId: string;
   fallbacks: LanguageModel[];
+  fallbackModelRowIds: string[];
 }
 
 async function loadModel(
@@ -107,9 +109,11 @@ export async function resolveModelForTask(
 
   const model = await loadModel(db, route.primaryModelId, encryptionKey);
   const fallbacks: LanguageModel[] = [];
+  const fallbackModelRowIds: string[] = [];
   for (const fallbackModelId of route.fallbackModelIds ?? []) {
     fallbacks.push(await loadModel(db, fallbackModelId, encryptionKey));
+    fallbackModelRowIds.push(fallbackModelId);
   }
 
-  return { model, fallbacks };
+  return { model, modelRowId: route.primaryModelId, fallbacks, fallbackModelRowIds };
 }
