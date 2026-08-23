@@ -1,4 +1,5 @@
 import { Pressable, Text, View } from "react-native";
+import { FLOATING_BUTTON_BOTTOM, FLOATING_BUTTON_SIZE } from "@/components/floating-layout";
 import { usePttRecorder } from "./use-ptt-recorder";
 
 const LABEL_BY_STATUS: Record<string, string> = {
@@ -18,7 +19,35 @@ const LABEL_BY_STATUS: Record<string, string> = {
 // use-ptt-recorder.ts); a plain tap is the entire interaction, so the app
 // works identically on a normal Android phone with no hardware wheel/button
 // at all.
-export function PttButton() {
+export function PttButton({ layoutOnly = false }: { layoutOnly?: boolean } = {}) {
+  // Deliberately a component split, not a flag threaded through the hook:
+  // usePttRecorder calls useAudioRecorder at mount, which instantiates a native
+  // expo-audio recorder. The UI-test build ships no expo-audio config plugin
+  // and therefore no RECORD_AUDIO permission, so layout-only mode must never
+  // reach that hook at all -- only then is the button genuinely inert.
+  if (layoutOnly) return <PttButtonLayoutOnly />;
+  return <PttButtonLive />;
+}
+
+// Real geometry and idle styling, no recorder, no permission, no-op on tap --
+// so FAB/PTT clearance can be verified on hardware without granting the
+// layout-verification build a microphone.
+function PttButtonLayoutOnly() {
+  return (
+    <View className={`absolute ${FLOATING_BUTTON_BOTTOM} left-6 items-start`}>
+      <Pressable
+        accessibilityLabel="Push to talk (layout only)"
+        accessibilityState={{ disabled: true }}
+        disabled
+        className={`${FLOATING_BUTTON_SIZE} items-center justify-center rounded-full bg-neutral-700 shadow-lg`}
+      >
+        <Text className="text-2xl">{LABEL_BY_STATUS["idle"]}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function PttButtonLive() {
   const ptt = usePttRecorder();
   const busy =
     ptt.status === "preparing" ||
@@ -47,14 +76,13 @@ export function PttButton() {
           : "bg-neutral-700 active:bg-neutral-800";
 
   return (
-    // bottom-40, matching QuickAddFab's rationale -- clears both the tab
-    // bar and the Tasks tab's own "New task" button on small screens like
-    // the R1 instead of rendering on top of them.
-    <View className="absolute bottom-40 left-6 items-start">
+    // Offset and size come from components/floating-layout.ts, shared with
+    // QuickAddFab and with every scroll container's bottom padding.
+    <View className={`absolute ${FLOATING_BUTTON_BOTTOM} left-6 items-start`}>
       <Pressable
         onPress={onPress}
         disabled={busy}
-        className={`h-14 w-14 items-center justify-center rounded-full shadow-lg ${bg}`}
+        className={`${FLOATING_BUTTON_SIZE} items-center justify-center rounded-full shadow-lg ${bg}`}
         accessibilityLabel="Push to talk"
       >
         <Text className="text-2xl">{LABEL_BY_STATUS[ptt.status]}</Text>

@@ -8,7 +8,7 @@ import { useNotificationLifecycle } from "@/notifications/use-notification-lifec
 import { usePushTokenRegistration } from "@/notifications/use-push-token-registration";
 import { useOutboxFlushOnReconnect } from "@/outbox/use-outbox-flush-on-reconnect";
 import { PttButton } from "@/ptt/ptt-button";
-import { UI_TEST_MODE } from "@/config/ui-test-mode";
+import { UI_TEST_MODE, assertUiTestPackageIsolation } from "@/config/ui-test-mode";
 import { queryClient } from "@/queries/client";
 import { useQueryLifecycle } from "@/queries/use-query-lifecycle";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -20,17 +20,30 @@ import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
 // strategy's read path without triggering a set.
 import { useColorScheme } from "nativewind";
 import { SafeAreaView, Text, View } from "react-native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import * as Application from "expo-application";
+
+// Fail fast, at import, if the JS bundle's UI-test flag disagrees with the
+// native applicationId. See config/ui-test-mode.ts -- both builds share
+// SecureStore key names, so the package boundary is the only thing keeping the
+// UI-test identity away from the real device's bearer token.
+assertUiTestPackageIsolation(Application.applicationId ?? null);
 
 export default function RootLayout() {
   const { colorScheme } = useColorScheme();
   return (
-    <QueryClientProvider client={queryClient}>
-      <DeviceIdentityProvider>
-        <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-          <RootContent />
-        </ThemeProvider>
-      </DeviceIdentityProvider>
-    </QueryClientProvider>
+    // SafeAreaProvider is required by react-native-safe-area-context's
+    // SafeAreaView, which quick-add-fab.tsx has consumed since Phase 3 -- it
+    // was never actually mounted, so those insets silently resolved to zero.
+    <SafeAreaProvider>
+      <QueryClientProvider client={queryClient}>
+        <DeviceIdentityProvider>
+          <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+            <RootContent />
+          </ThemeProvider>
+        </DeviceIdentityProvider>
+      </QueryClientProvider>
+    </SafeAreaProvider>
   );
 }
 
@@ -67,20 +80,7 @@ function ProductionContent() {
 
   return (
     <View style={{ flex: 1 }}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="tasks/index" options={{ title: "Tasks" }} />
-        <Stack.Screen name="tasks/[id]" options={{ title: "Task" }} />
-        <Stack.Screen name="tasks/new" options={{ title: "New Task" }} />
-        <Stack.Screen name="notes/[id]" options={{ title: "Note" }} />
-        <Stack.Screen name="notes/new" options={{ title: "New Note" }} />
-        <Stack.Screen name="projects/[id]" options={{ title: "Project" }} />
-        <Stack.Screen name="projects/new" options={{ title: "New Project" }} />
-        <Stack.Screen name="events/[id]" options={{ title: "Event" }} />
-        <Stack.Screen name="events/new" options={{ title: "New Event" }} />
-        <Stack.Screen name="settings" options={{ title: "Settings" }} />
-        <Stack.Screen name="hardware-debug" options={{ title: "Hardware spike" }} />
-      </Stack>
+      <AppStack />
       {/* Global, reachable from every screen -- see decision 5 in
           docs/STATUS.md's Phase 2 entry. */}
       <QuickAddFab />
@@ -89,22 +89,56 @@ function ProductionContent() {
   );
 }
 
-// A deliberately capability-minimal shell for the temporary side-by-side
-// Rabbit layout build. It bypasses device identity entirely and never mounts
-// pairing, push, reminder, outbox, notification, PTT, or quick-add lifecycles.
+// One route table, shared by both shells. Previously the UI-test branch
+// declared only 3 of these, so every other pushed screen rendered with a
+// filename-derived title -- which made the layout build unrepresentative of
+// the thing it was supposed to verify.
+function AppStack() {
+  return (
+    <Stack>
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="tasks/index" options={{ title: "Tasks" }} />
+      <Stack.Screen name="tasks/[id]" options={{ title: "Task" }} />
+      <Stack.Screen name="tasks/new" options={{ title: "New Task" }} />
+      <Stack.Screen name="notes/[id]" options={{ title: "Note" }} />
+      <Stack.Screen name="notes/new" options={{ title: "New Note" }} />
+      <Stack.Screen name="projects/[id]" options={{ title: "Project" }} />
+      <Stack.Screen name="projects/new" options={{ title: "New Project" }} />
+      <Stack.Screen name="events/[id]" options={{ title: "Event" }} />
+      <Stack.Screen name="events/new" options={{ title: "New Event" }} />
+      {/* Declared here rather than inline per render branch, matching every
+          other stack route (Checkpoint 5.6). */}
+      <Stack.Screen name="reviews/daily" options={{ title: "Daily review" }} />
+      <Stack.Screen name="reviews/weekly" options={{ title: "Weekly review" }} />
+      <Stack.Screen name="settings" options={{ title: "Settings" }} />
+      <Stack.Screen name="hardware-debug" options={{ title: "Hardware spike" }} />
+    </Stack>
+  );
+}
+
+// The side-by-side Rabbit layout build. It must LOOK like production -- that is
+// the entire point of a layout-verification identity, and until Checkpoint 5.6
+// it did not, which is why FAB/PTT clearance had never been verified on real
+// hardware. What it must never do is act like production:
+//
+//   mounted   -- the full route table, the tab bar, QuickAddFab (its captures
+//                go to the local dev API, which assertUiTestApiIsolation
+//                already pins to loopback/RFC1918), and PttButton in
+//                layoutOnly mode: real geometry and styling, inert on tap.
+//   NOT mounted -- device identity and pairing, reminder reconciliation,
+//                notification lifecycle, push-token registration, background
+//                outbox flushing. The build also ships no expo-audio or
+//                expo-notifications config plugin and no EAS projectId, so
+//                there is no microphone permission and no push capability to
+//                mount even if this shell asked for one.
 function UiTestContent() {
   useQueryLifecycle();
 
   return (
     <View style={{ flex: 1 }}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        {/* Tabs are mounted in this branch too, so keep stack-route parity
-            with ProductionContent for deep links (e.g. /tasks). */}
-        <Stack.Screen name="tasks/index" options={{ title: "Tasks" }} />
-        <Stack.Screen name="events/[id]" options={{ title: "Event" }} />
-        <Stack.Screen name="events/new" options={{ title: "New Event" }} />
-      </Stack>
+      <AppStack />
+      <QuickAddFab />
+      <PttButton layoutOnly />
     </View>
   );
 }
