@@ -8,10 +8,12 @@ import type {
   TodayEventItem,
 } from "@personal-os/schema";
 import { REVIEW_CONTENT_VERSION } from "@personal-os/schema";
-import { Link, Stack, useRouter, type Href } from "expo-router";
-import { useState } from "react";
+import { Link, useRouter, type Href } from "expo-router";
+import { useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useKeyboardHeight } from "@/components/use-keyboard-height";
+import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import {
   ReviewStepList,
   activeStepIndex,
@@ -23,6 +25,7 @@ import {
   savedChecklist,
   savedPriorities,
 } from "@/components/reviews/review-content";
+import { formatHeaderDate } from "@/utils/local-date";
 import {
   useCompleteReview,
   useDailyReviewContext,
@@ -32,20 +35,8 @@ import {
   useStartReview,
 } from "@/queries/reviews";
 
-// ---- Formatting helpers (local wall-clock parsing, mirroring weekly.tsx) ----
-
-function parseLocalDate(date: string): Date {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(year!, (month ?? 1) - 1, day ?? 1);
-}
-
-function formatHeaderDate(localDate: string): string {
-  return parseLocalDate(localDate).toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-}
+// ---- Formatting helpers (formatHeaderDate/parseLocalDate now live in
+// @/utils/local-date, shared with weekly.tsx and the tab screens) ----
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, {
@@ -366,7 +357,12 @@ function PrioritiesBody({
               accessibilityState={{ checked, disabled: chipDisabled }}
               onPress={() => onToggle(ref)}
               disabled={chipDisabled}
-              className={`rounded-full border px-3 py-2 ${
+              hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+              // min-h-[44px] + centering brings the ~36px visual chip up to
+              // the >=44px effective touch target; max-w tightened so 3
+              // chips fit per row on the Rabbit's 480px width (448 usable -
+              // 2*8px gaps, /3 ~= 144px, minus the chip's own px-3 padding).
+              className={`min-h-[44px] items-center justify-center rounded-full border px-3 ${
                 checked
                   ? "border-blue-600 bg-blue-600 active:bg-blue-700"
                   : chipDisabled
@@ -375,7 +371,7 @@ function PrioritiesBody({
               }`}
             >
               <Text
-                className={`max-w-[240px] text-sm ${checked ? "font-medium text-white" : "text-black dark:text-white"}`}
+                className={`max-w-[130px] text-sm ${checked ? "font-medium text-white" : "text-black dark:text-white"}`}
                 numberOfLines={1}
               >
                 {checked ? "✓ " : ""}
@@ -473,7 +469,8 @@ function StepSection({
         accessibilityRole="checkbox"
         accessibilityState={{ checked: step.done }}
         onPress={onToggle}
-        className="min-h-[40px] flex-row items-center justify-between px-4"
+        hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+        className="min-h-[44px] flex-row items-center justify-between px-4"
       >
         <Text
           className={`flex-1 pr-2 text-base font-semibold ${
@@ -511,7 +508,16 @@ function DailyFlow({ review, context }: { review: Review; context: DailyReviewCo
   const [checklist, setChecklist] = useState<DailyReviewChecklist>(() => savedChecklist(review));
   const [selected, setSelected] = useState<ReviewPriorityRef[]>(() => savedPriorities(review));
   const [summaryText, setSummaryText] = useState(() => review.summary ?? "");
-  const save = useSaveReview();
+  // Two SEPARATE mutation instances, deliberately. TanStack Query resets a
+  // mutation's error state on each new call, so a single shared instance would
+  // let an unrelated later save clear an earlier failure's flag: fail a
+  // checklist toggle (never persisted), then blur the summary field and have
+  // that summary PATCH succeed, and the "Saving failed" banner silently
+  // disappears while the toggle is still unsaved -- on next mount it reverts
+  // from server truth. That is the exact silent-revert failure this design
+  // exists to prevent, so content and summary track their errors independently.
+  const saveContent = useSaveReview();
+  const saveSummary = useSaveReview();
   const complete = useCompleteReview();
   const skip = useSkipReview();
   const router = useRouter();
@@ -519,24 +525,62 @@ function DailyFlow({ review, context }: { review: Review; context: DailyReviewCo
   const steps = deriveSteps(context, "daily", checklist);
   const activeIndex = activeStepIndex(steps);
 
-  // Incremental-save engine: optimistic local flip + immediate whole-content
-  // v1 PATCH, so a reload at any moment restores exactly what was shown.
+  // Incremental-save engine.
+  //
+  // Saves are SERIALIZED through a promise chain, and each request body is
+  // built at SEND time from the latest state. Both properties are load-bearing,
+  // because the PATCH body is the WHOLE content object: with concurrent
+  // requests a slower earlier one can land after a newer one and overwrite it
+  // with a stale snapshot -- silently, even when both "succeed" -- so a
+  // priority selection could be reverted server-side with nothing shown to the
+  // user. Serialized + built-at-send-time means the request in flight always
+  // carries the newest complete intent, and the last to land is the newest.
+  //
+  // Deliberately NOT a per-toggle rollback-on-error. That was implemented first
+  // and is unsound here: with two rapid toggles of the same key that both fail,
+  // the guarded revert can settle on a value that was never persisted, leaving
+  // the screen disagreeing with the server and unable to self-heal (this
+  // component is keyed by review.id, so nothing re-seeds local state). Keeping
+  // the user's intent on screen and surfacing an explicit Retry is simpler and
+  // more honest -- a review checkbox that silently unchecks itself is a worse
+  // failure than one that says it has not saved yet.
+  const latest = useRef({ checklist, selected });
+  latest.current = { checklist, selected };
+  const saveChain = useRef<Promise<unknown>>(Promise.resolve());
+
+  const queueContentSave = () => {
+    saveChain.current = saveChain.current
+      .then(() =>
+        saveContent.mutateAsync({
+          id: review.id,
+          patch: { content: dailyContent(latest.current.checklist, latest.current.selected) },
+        }),
+      )
+      // Swallowed here only so one failure cannot break the chain for every
+      // later save; the failure itself is surfaced through saveContent.isError.
+      .catch(() => undefined);
+  };
+
   const toggleStep = (key: keyof DailyReviewChecklist) => {
     const next = toggledChecklist(checklist, key);
     setChecklist(next);
-    save.mutate({ id: review.id, patch: { content: dailyContent(next, selected) } });
+    latest.current = { ...latest.current, checklist: next };
+    queueContentSave();
   };
 
   const togglePriority = (ref: ReviewPriorityRef) => {
     const next = toggleRef(selected, ref);
     setSelected(next);
-    save.mutate({ id: review.id, patch: { content: dailyContent(checklist, next) } });
+    latest.current = { ...latest.current, selected: next };
+    queueContentSave();
   };
 
   const commitSummary = () => {
     const next = summaryText.trim().length > 0 ? summaryText.trim() : null;
     if (next === review.summary) return;
-    save.mutate({ id: review.id, patch: { summary: next } });
+    saveChain.current = saveChain.current
+      .then(() => saveSummary.mutateAsync({ id: review.id, patch: { summary: next } }))
+      .catch(() => undefined);
   };
 
   const renderBody = (key: string) => {
@@ -603,12 +647,12 @@ function DailyFlow({ review, context }: { review: Review; context: DailyReviewCo
       )}
 
       <View className="mt-6 gap-3 px-4 pb-8">
-        {save.isError || complete.isError || skip.isError ? (
+        {saveContent.isError || saveSummary.isError || complete.isError || skip.isError ? (
           <Text className="text-sm text-red-600 dark:text-red-400">
             Saving failed — check your connection and try again.
           </Text>
         ) : null}
-        {save.isPending ? (
+        {saveContent.isPending || saveSummary.isPending ? (
           <Text className="text-xs text-neutral-500 dark:text-neutral-400">Saving…</Text>
         ) : null}
         <Pressable
@@ -708,6 +752,7 @@ function StartGate({
 }
 
 export default function DailyReviewScreen() {
+  const keyboardHeight = useKeyboardHeight();
   const context = useDailyReviewContext();
   const latest = useLatestReview("daily");
   const start = useStartReview();
@@ -715,7 +760,6 @@ export default function DailyReviewScreen() {
   if (context.isLoading || latest.isLoading) {
     return (
       <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <Stack.Screen options={{ title: "Daily review" }} />
         <Text className="text-neutral-500 dark:text-neutral-400">Loading…</Text>
       </View>
     );
@@ -724,14 +768,14 @@ export default function DailyReviewScreen() {
   if (context.isError || latest.isError || !context.data) {
     return (
       <View className="flex-1 items-center justify-center gap-3 bg-white dark:bg-black">
-        <Stack.Screen options={{ title: "Daily review" }} />
         <Text className="text-red-600 dark:text-red-400">Couldn&apos;t load the review.</Text>
         <Pressable
           onPress={() => {
             void context.refetch();
             void latest.refetch();
           }}
-          className="rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 active:bg-blue-700"
         >
           <Text className="font-semibold text-white">Retry</Text>
         </Pressable>
@@ -745,10 +789,11 @@ export default function DailyReviewScreen() {
   return (
     <ScrollView
       className="flex-1 bg-white dark:bg-black"
-      contentContainerClassName="pb-24"
+      // Extra room so lower controls can be scrolled clear of the IME --
+      // see components/use-keyboard-height.ts for why insets alone don't do it.
+      contentContainerStyle={{ paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
+      keyboardShouldPersistTaps="handled"
     >
-      <Stack.Screen options={{ title: "Daily review" }} />
-
       {review &&
       review.status === "in_progress" &&
       isCurrentPeriod(review, data.period_start) ? (
