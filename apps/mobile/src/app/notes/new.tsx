@@ -1,3 +1,5 @@
+import { useKeyboardHeight } from "@/components/use-keyboard-height";
+import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { coerceProjectIdParam, useProjects } from "@/queries/projects";
 import { useCreateNote } from "@/queries/notes";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -5,6 +7,7 @@ import { useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 export default function NewNoteScreen() {
+  const keyboardHeight = useKeyboardHeight();
   const router = useRouter();
   const params = useLocalSearchParams<{ projectId?: string }>();
   const createNote = useCreateNote();
@@ -26,7 +29,20 @@ export default function NewNoteScreen() {
   };
 
   return (
-    <ScrollView className="flex-1 bg-white p-4 dark:bg-black">
+    <ScrollView
+      className="flex-1 bg-white dark:bg-black"
+      // Padding lives entirely in contentContainerStyle (no
+      // contentContainerClassName) because NativeWind remaps that class onto
+      // this same prop -- see FLOATING_CLEARANCE_PX. The clearance keeps the
+      // globally-mounted QuickAdd/PTT buttons off this form's Save/Archive
+      // control; the keyboard height gives room to scroll it clear of the IME.
+      // Extra room so lower controls can be scrolled clear of the IME --
+      // see components/use-keyboard-height.ts for why insets alone don't do it.
+      contentContainerStyle={{ padding: 16, paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
+      // Without this the first tap on a submit button below a focused field
+      // only dismisses the keyboard instead of submitting.
+      keyboardShouldPersistTaps="handled"
+    >
       <Text className="mb-1 text-sm text-neutral-500">Title</Text>
       <TextInput
         value={title}

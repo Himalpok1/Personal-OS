@@ -12,6 +12,11 @@ export function useCapture() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["inbox"] });
+      // The capture may have been queued rather than sent, which changes the
+      // outbox count the FAB badge renders. That badge is deliberately not
+      // polled (see components/quick-add-fab.tsx), so this invalidation is how
+      // it learns about a new pending item.
+      void queryClient.invalidateQueries({ queryKey: ["outbox"] });
     },
   });
 }

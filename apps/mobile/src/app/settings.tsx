@@ -1,3 +1,5 @@
+import { useKeyboardHeight } from "@/components/use-keyboard-height";
+import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import type { CalendarConnection, Device } from "@personal-os/schema";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ExactAlarmStatus from "../../modules/exact-alarm-status";
@@ -787,13 +789,20 @@ function ConnectedCalendarsCard() {
 }
 
 export default function SettingsScreen() {
+  const keyboardHeight = useKeyboardHeight();
   const { identity, clearIdentity } = useDeviceIdentity();
   const { data, isLoading, isError } = useDevices();
   const thisDevice = data?.items.find((device) => device.id === identity?.deviceId);
 
   return (
     <SafeAreaView className="flex-1 bg-white dark:bg-black">
-      <ScrollView className="flex-1 px-4 py-4">
+      <ScrollView
+        className="flex-1"
+        // Extra room so lower controls can be scrolled clear of the IME --
+        // see components/use-keyboard-height.ts for why insets alone don't do it.
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
+        keyboardShouldPersistTaps="handled"
+      >
         <Text className="mb-4 text-xl font-bold text-black dark:text-white">Devices</Text>
 
         <ReminderEligibilityBanner device={thisDevice} />

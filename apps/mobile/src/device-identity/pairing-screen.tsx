@@ -1,6 +1,7 @@
 import * as Device from "expo-device";
 import { useState } from "react";
-import { Platform, SafeAreaView, Text, TextInput, Pressable, View } from "react-native";
+import { Platform, ScrollView, Text, TextInput, Pressable } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRegisterDevice } from "@/queries/devices";
 import { useDeviceIdentity } from "./provider";
 
@@ -38,8 +39,23 @@ export function PairingScreen() {
   const canSubmit = name.trim().length > 0 && pairingCode.trim().length > 0 && !register.isPending;
 
   return (
+    // This is the first screen a brand-new device ever sees, so it has to
+    // work with the soft keyboard up on the Rabbit R1's 640px-tall display.
+    // Unlike quick-add-fab's modal sheet, this screen is not inside a
+    // react-native Modal -- it's rendered directly by the root layout in
+    // place of the whole app -- so AndroidManifest.xml's
+    // android:windowSoftInputMode="adjustResize" on MainActivity genuinely
+    // applies here: the window itself shrinks when the keyboard opens. A
+    // plain ScrollView is therefore enough to reach every field and the
+    // submit button; the measured-keyboard-height padding trick
+    // quick-add-fab needs (because adjustResize can't reach into a modal's
+    // own window) would be redundant here.
     <SafeAreaView className="flex-1 bg-white dark:bg-black">
-      <View className="flex-1 justify-center px-5">
+      <ScrollView
+        className="flex-1"
+        contentContainerClassName="flex-grow justify-center px-5"
+        keyboardShouldPersistTaps="handled"
+      >
         <Text className="mb-6 text-2xl font-bold text-black dark:text-white">Pair this device</Text>
 
         <Text className="mb-1 text-sm text-neutral-500">Device name</Text>
@@ -75,7 +91,7 @@ export function PairingScreen() {
           Generate a code on the server with `pnpm --filter api pairing:generate` — it expires in 15
           minutes and works once.
         </Text>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
