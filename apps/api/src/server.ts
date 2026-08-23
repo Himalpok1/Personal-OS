@@ -12,6 +12,7 @@ import { registerCalDavClient } from "./plugins/caldav-client.js";
 import { registerDb } from "./plugins/db.js";
 import { registerGoogleCalendarClient } from "./plugins/google-calendar-client.js";
 import agendaRoutes from "./routes/agenda.js";
+import briefsRoutes from "./routes/briefs.js";
 import aiConfigRoutes from "./routes/ai-config.js";
 import calendarConnectionsRoutes from "./routes/calendar-connections.js";
 import captureRoutes from "./routes/capture.js";
@@ -134,6 +135,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await app.register(eventsRoutes);
   await app.register(todayRoutes);
   await app.register(agendaRoutes);
+  await app.register(briefsRoutes);
   await app.register(calendarConnectionsRoutes);
   await app.register(aiConfigRoutes);
   await app.register(devicesRoutes);

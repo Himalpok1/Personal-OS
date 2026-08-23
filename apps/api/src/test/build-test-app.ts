@@ -1,4 +1,5 @@
 import {
+  aiDailyBriefs,
   calendarConnectionCalendars,
   calendarConnections,
   calendarEventInstances,
@@ -54,4 +55,7 @@ export async function truncateTestTables(app: FastifyInstance): Promise<void> {
   // reviews has no foreign keys -- order relative to the tables above is
   // irrelevant; kept last so future FK additions fail loudly here first.
   await app.db.delete(reviews);
+  // ai_daily_briefs references ai_models (ON DELETE set null), which route
+  // tests never populate, so it clears independently of everything above.
+  await app.db.delete(aiDailyBriefs);
 }

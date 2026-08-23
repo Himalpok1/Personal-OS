@@ -1,0 +1,148 @@
+// Checkpoint 5.5 shared contracts for the Daily Brief (ADR-041).
+//
+// Frozen by the main session before any parallel implementation work, so the
+// collector, prompt builder, generation service and route all build against
+// one definition. Nothing here reads the database or calls a provider.
+
+// ---------------------------------------------------------------------------
+// Bounded snapshot handed to the model
+// ---------------------------------------------------------------------------
+//
+// SECURITY: BriefInput is the ONLY thing that ever reaches a prompt. It is a
+// closed, scalar-only allowlist deliberately carrying no uuids, no ids, no
+// credential material and no free-text bodies -- a secret is structurally
+// inexpressible here, not merely discouraged by prompt wording.
+
+export interface BriefTaskItem {
+  title: string;
+  due_at: string | null;
+  project_name: string | null;
+  recurring: boolean;
+}
+
+export interface BriefEventItem {
+  title: string;
+  starts_at: string | null;
+  all_day: boolean;
+  location: string | null;
+}
+
+export interface BriefUpcomingItem {
+  date: string;
+  kind: "task" | "event";
+  title: string;
+}
+
+export interface BriefProjectItem {
+  name: string;
+  status: string;
+  stalled: boolean;
+  next_action: string | null;
+  open_task_count: number;
+  overdue_task_count: number;
+}
+
+export interface BriefInput {
+  generated_at: string;
+  tz: string;
+  local_date: string;
+  summary: {
+    overdue_total: number;
+    due_today_total: number;
+    inbox_attention_total: number;
+    active_project_count: number;
+  };
+  // `total` is always the honest pre-cap count from the Today read model, so
+  // capping items can never make the brief understate reality.
+  overdue: { items: BriefTaskItem[]; total: number };
+  due_today: { items: BriefTaskItem[]; total: number };
+  events_today: { items: BriefEventItem[]; total: number };
+  upcoming: { items: BriefUpcomingItem[]; total: number };
+  inbox: {
+    pending_count: number;
+    needs_confirm_count: number;
+    failed_count: number;
+    snippets: string[];
+  };
+  projects: { items: BriefProjectItem[]; total: number };
+  reviews: {
+    daily_status: string | null;
+    weekly_status: string | null;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic bounds
+// ---------------------------------------------------------------------------
+
+export const BRIEF_OVERDUE_CAP = 8;
+export const BRIEF_DUE_TODAY_CAP = 10;
+export const BRIEF_EVENTS_TODAY_CAP = 8;
+export const BRIEF_UPCOMING_PER_DAY_CAP = 3;
+export const BRIEF_UPCOMING_TOTAL_CAP = 12;
+export const BRIEF_INBOX_SNIPPET_CAP = 5;
+export const BRIEF_PROJECTS_CAP = 5;
+
+export const BRIEF_TITLE_MAX_CHARS = 120;
+export const BRIEF_LOCATION_MAX_CHARS = 80;
+export const BRIEF_INBOX_SNIPPET_MAX_CHARS = 160;
+
+// Whole-payload ceiling.
+//
+// Sized against MEASURED worst cases, not an assumption. An audit of the
+// original 6000 found it undersized: the three sections the drop ladder is
+// forbidden from touching (overdue 8 + due_today 10 + events_today 8) reach
+// ~8.6k chars on their own once their capped items carry realistic titles,
+// project names and locations -- so an ordinary busy day, not an adversarial
+// one, could exhaust the ladder and hit what the collector called an
+// "unreachable" throw. Full-stress (every field at its bound, every section
+// full) measures ~13.3k.
+//
+// 12000 keeps the prompt genuinely small (~3k tokens) while leaving normal
+// and busy days fully intact, and the collector's ladder now also trims the
+// previously-irreducible sections as a last resort, so the ceiling is a real
+// guarantee rather than a hope. Serialized JSON is never sliced -- whole
+// items and whole sections are dropped, and honest totals always survive.
+export const MAX_BRIEF_INPUT_CHARS = 12000;
+
+// ---------------------------------------------------------------------------
+// Generation bounds
+// ---------------------------------------------------------------------------
+
+export const BRIEF_ATTEMPT_TIMEOUT_MS = 30_000;
+export const BRIEF_TOTAL_BUDGET_MS = 45_000;
+export const BRIEF_MAX_OUTPUT_TOKENS = 800;
+
+// ---------------------------------------------------------------------------
+// Error taxonomy
+// ---------------------------------------------------------------------------
+//
+// NOTE for the route: server.ts's setErrorHandler only passes through a
+// thrown error's own statusCode when it is 4xx -- a 5xx falls through to
+// {error:"internal_error"}. These two are therefore caught and replied
+// explicitly by the route handler, never left to the generic handler.
+//
+// Messages are deliberately static: a raw provider/SDK error can echo request
+// headers or body, so it must never become this message nor reach the logger.
+
+export class BriefGenerationTimeoutError extends Error {
+  readonly statusCode = 504;
+  readonly code = "brief_generation_timeout";
+  constructor() {
+    super("AI provider request timed out");
+    this.name = "BriefGenerationTimeoutError";
+  }
+}
+
+export class BriefGenerationFailedError extends Error {
+  readonly statusCode = 502;
+  readonly code = "brief_generation_failed";
+  constructor() {
+    super("AI provider request failed");
+    this.name = "BriefGenerationFailedError";
+  }
+}
+
+// ai_task_routes.task_name this feature routes through. Not configured in
+// production during Checkpoint 5.5 -- that is 5.7.
+export const DAILY_BRIEF_TASK_NAME = "daily_brief";

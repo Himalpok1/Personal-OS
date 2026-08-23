@@ -12,6 +12,7 @@ import {
   type LocalDayWindow,
 } from "@personal-os/core";
 import {
+  aiDailyBriefs,
   events,
   inboxItems,
   notes,
@@ -177,9 +178,18 @@ function toTodayEventItem(
   };
 }
 
-export async function buildTodayResponse(db: Db, query: TodayQuery): Promise<TodayResponse> {
+// `options.now` is an INTERNAL test/derivation seam only -- it is deliberately
+// NOT part of TodayQuerySchema, so no HTTP client can ever pin or spoof the
+// clock this read model categorizes against. Checkpoint 5.5's Daily Brief
+// collector passes its single effectiveNow through here so the brief and the
+// Today screen can never disagree.
+export async function buildTodayResponse(
+  db: Db,
+  query: TodayQuery,
+  options?: { now?: Date },
+): Promise<TodayResponse> {
   // Frozen semantics item 1: exactly one effectiveNow per build.
-  const effectiveNow = captureEffectiveNow();
+  const effectiveNow = captureEffectiveNow(options?.now);
   const window = localDayWindow(query.tz, effectiveNow);
 
   // Horizon: the 7 local calendar days AFTER today. horizonEndUtc is the
@@ -639,6 +649,22 @@ export async function buildTodayResponse(db: Db, query: TodayQuery): Promise<Tod
     };
   };
 
+  // Checkpoint 5.5: real brief metadata. `TodayResponseSchema.brief` is
+  // frozen to generated_at/model_id ONLY -- no brief text -- so this is a
+  // single indexed lookup on the exact (brief_date, timezone) identity the
+  // `ai_daily_briefs_date_timezone_unique` index enforces, keyed on the SAME
+  // local calendar date already computed above (never re-derived by slicing
+  // an ISO instant). GET /today stays a pure read: it never calls an AI
+  // provider, never generates a brief, and never writes to ai_daily_briefs.
+  const [briefRow] = await db
+    .select({ generatedAt: aiDailyBriefs.generatedAt, modelId: aiDailyBriefs.modelId })
+    .from(aiDailyBriefs)
+    .where(and(eq(aiDailyBriefs.briefDate, window.localDate), eq(aiDailyBriefs.timezone, query.tz)))
+    .limit(1);
+  const briefBlock: TodayResponse["brief"] = briefRow
+    ? { generated_at: briefRow.generatedAt.toISOString(), model_id: briefRow.modelId }
+    : null;
+
   const generatedAt = effectiveNow.toISOString();
   return TodayResponseSchema.parse({
     generated_at: generatedAt,
@@ -678,6 +704,6 @@ export async function buildTodayResponse(db: Db, query: TodayQuery): Promise<Tod
       daily: reviewPeriodBlock(dailyPeriod, "daily"),
       weekly: reviewPeriodBlock(weeklyPeriod, "weekly"),
     },
-    brief: null,
+    brief: briefBlock,
   });
 }

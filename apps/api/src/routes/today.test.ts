@@ -7,7 +7,16 @@ import {
   weeklyPeriodStart,
   type LocalDayWindow,
 } from "@personal-os/core";
-import { inboxItems, occurrences, projects, reviews, tasks } from "@personal-os/db";
+import {
+  aiDailyBriefs,
+  aiModels,
+  aiProviderConnections,
+  inboxItems,
+  occurrences,
+  projects,
+  reviews,
+  tasks,
+} from "@personal-os/db";
 import { TodayResponseSchema } from "@personal-os/schema";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -555,5 +564,98 @@ describe("GET /today", () => {
     expect(body.reviews.daily.last_completed_at).toBe(
       completions.find(({ daysBack }) => daysBack === 1)!.at.toISOString(),
     );
+  });
+
+  describe("brief metadata (Checkpoint 5.5)", () => {
+    it("returns brief: null when no ai_daily_briefs row exists for today's (date, tz) identity", async () => {
+      const response = await getToday(TZ);
+      expect(response.statusCode).toBe(200);
+      const body = TodayResponseSchema.parse(response.json());
+
+      expect(body.brief).toBeNull();
+    });
+
+    it("surfaces a real brief row's generated_at for today's local date + requested tz, model_id null when unset", async () => {
+      const window = localDayWindow(TZ);
+      const generatedAt = new Date();
+      await app.db.insert(aiDailyBriefs).values({
+        briefDate: window.localDate,
+        timezone: TZ,
+        content: { version: 1 },
+        generatedAt,
+      });
+
+      const response = await getToday(TZ);
+      expect(response.statusCode).toBe(200);
+      const body = TodayResponseSchema.parse(response.json());
+
+      expect(body.brief).not.toBeNull();
+      expect(body.brief!.generated_at).toBe(generatedAt.toISOString());
+      expect(body.brief!.model_id).toBeNull();
+    });
+
+    it("surfaces the real ai_models.id as model_id when the brief row references one", async () => {
+      const window = localDayWindow(TZ);
+      const [connection] = await app.db
+        .insert(aiProviderConnections)
+        .values({
+          name: "Test provider",
+          providerType: "openai_compatible",
+          baseUrl: "https://example.invalid/v1",
+          apiKeyCiphertext: Buffer.from("ciphertext"),
+          apiKeyIv: Buffer.from("iv"),
+          apiKeyAuthTag: Buffer.from("authtag"),
+        })
+        .returning();
+      const [model] = await app.db
+        .insert(aiModels)
+        .values({ providerConnectionId: connection!.id, modelId: "test-model" })
+        .returning();
+      await app.db.insert(aiDailyBriefs).values({
+        briefDate: window.localDate,
+        timezone: TZ,
+        content: { version: 1 },
+        modelId: model!.id,
+      });
+
+      const response = await getToday(TZ);
+      expect(response.statusCode).toBe(200);
+      const body = TodayResponseSchema.parse(response.json());
+
+      expect(body.brief).not.toBeNull();
+      expect(body.brief!.model_id).toBe(model!.id);
+    });
+
+    it("does not surface a brief generated for a different timezone on the same local date -- identity is the (date, tz) pair, not the date alone", async () => {
+      const window = localDayWindow(TZ);
+      const otherTz = "Pacific/Auckland";
+      await app.db.insert(aiDailyBriefs).values({
+        briefDate: window.localDate,
+        timezone: otherTz,
+        content: { version: 1 },
+      });
+
+      const response = await getToday(TZ);
+      expect(response.statusCode).toBe(200);
+      const body = TodayResponseSchema.parse(response.json());
+
+      expect(body.brief).toBeNull();
+    });
+
+    it("does not surface a brief generated for a different (yesterday's) local date", async () => {
+      const window = localDayWindow(TZ);
+      const yesterday = addLocalDays(window.localDate, -1);
+      await app.db.insert(aiDailyBriefs).values({
+        briefDate: yesterday,
+        timezone: TZ,
+        content: { version: 1 },
+      });
+
+      const response = await getToday(TZ);
+      expect(response.statusCode).toBe(200);
+      const body = TodayResponseSchema.parse(response.json());
+
+      expect(body.brief).toBeNull();
+    });
   });
 });
