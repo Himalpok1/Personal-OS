@@ -9,6 +9,7 @@ import type {
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, type Href } from "expo-router";
 import { Pressable, ScrollView, Text, View } from "react-native";
+import { BriefCard } from "@/components/brief/brief-card";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import { useCompleteTask } from "@/queries/tasks";
 import { useToday } from "@/queries/today";
@@ -509,6 +510,11 @@ export default function TodayScreen() {
           info={data.reviews.weekly}
         />
       </View>
+
+      {/* Checkpoint 5.5: manual/on-demand Daily Brief (ADR-041). The card
+          owns its own GET /briefs/current query -- Today only carries brief
+          metadata, and rendering Today never triggers a model call. */}
+      <BriefCard />
 
       <View>
         <SectionHeader title={`Overdue · ${data.overdue.total}`} tone="red" />

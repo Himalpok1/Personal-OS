@@ -61,6 +61,7 @@ import {
   skipReview,
   updateReview,
 } from "./reviews.js";
+import { generateBrief, getCurrentBrief } from "./brief.js";
 import {
   activateTask,
   archiveTask,
@@ -114,6 +115,7 @@ export type {
   ReviewStatus,
   ReviewUpdate,
 } from "./reviews.js";
+export type { BriefContent, DailyBriefRecord } from "./brief.js";
 export type { Task, TaskCreate, TaskListParams, TaskStatus, TaskUpdate } from "./tasks.js";
 export type { TodayResponse } from "./today.js";
 export type { AgendaParams, AgendaResponse } from "./agenda.js";
@@ -185,6 +187,8 @@ export function createApiClient(baseUrl: string) {
     createReview: createReview.bind(null, baseUrl),
     updateReview: updateReview.bind(null, baseUrl),
     getLatestReview: getLatestReview.bind(null, baseUrl),
+    generateBrief: generateBrief.bind(null, baseUrl),
+    getCurrentBrief: getCurrentBrief.bind(null, baseUrl),
     completeReview: completeReview.bind(null, baseUrl),
     skipReview: skipReview.bind(null, baseUrl),
     getDailyReviewContext: getDailyReviewContext.bind(null, baseUrl),
