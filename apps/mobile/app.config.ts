@@ -2,6 +2,31 @@ import type { ExpoConfig } from "expo/config";
 
 const uiTestMode = process.env.EXPO_PUBLIC_UI_TEST_MODE === "true";
 
+// Defence in depth for the one link a repo audit cannot see: EXPO_PUBLIC_UI_TEST_MODE
+// could in principle be set on the EAS dashboard for the `production` environment,
+// which would silently produce a production-profile build carrying the UI-test
+// identity and cleartext traffic. Nothing in this repo sets it that way, but the
+// dashboard is outside the repo, so fail the build loudly rather than trust it.
+const easBuildProfile = process.env.EAS_BUILD_PROFILE;
+if (uiTestMode && easBuildProfile?.toLowerCase().startsWith("production")) {
+  throw new Error(
+    `Refusing to build: EXPO_PUBLIC_UI_TEST_MODE=true with EAS profile "${easBuildProfile}". ` +
+      "The UI-test identity enables cleartext traffic and must never ship as production.",
+  );
+}
+
+type ExpoPlugin = NonNullable<ExpoConfig["plugins"]>[number];
+
+// UI-test builds reach a cleartext http://localhost dev API over `adb reverse`,
+// which SDK 36 blocks without this manifest attribute. Absent entirely from the
+// production config, so production's native generation is unchanged --
+// production reaches the API over HTTPS via Tailscale and must NEVER enable
+// cleartext. (expo-build-properties writes nothing for a property it is not
+// given, so no other native output moves either.)
+const uiTestOnlyPlugins: ExpoPlugin[] = uiTestMode
+  ? [["expo-build-properties", { android: { usesCleartextTraffic: true } }]]
+  : [];
+
 const config: ExpoConfig = {
   name: uiTestMode ? "Personal OS UI Test" : "mobile",
   slug: "mobile",
@@ -15,20 +40,11 @@ const config: ExpoConfig = {
   },
   android: {
     package: uiTestMode ? "com.himal.personalos.dev" : "com.himal.personalos",
-    // NOTE (Checkpoint 5.4): there is deliberately no `usesCleartextTraffic`
-    // here. Expo's app-config schema has no such android property -- it was
-    // set here previously and SILENTLY IGNORED, which is the real root cause
-    // of the "Rabbit can't reach the dev API" incident re-diagnosed in
-    // Checkpoints 5.1, 5.2 and 5.3 (each time worked around by hand-patching
-    // the generated manifest, which android/ being gitignored made invisible
-    // in review). UI-test builds talk to a cleartext http://localhost dev API
-    // over `adb reverse`, and SDK 36 blocks that without the manifest flag.
-    // The supported fix is the expo-build-properties config plugin
-    // (`android.usesCleartextTraffic`), which is not currently a dependency;
-    // until it is added, a local UI-test pass must patch
-    // android/app/src/main/AndroidManifest.xml after prebuild. Production
-    // builds must NEVER enable cleartext -- they reach the API over HTTPS
-    // via Tailscale.
+    // Cleartext traffic is NOT configured here: Expo's app-config schema has
+    // no `android.usesCleartextTraffic` property, and setting one was silently
+    // ignored for three checkpoints (the real root cause of the recurring
+    // "Rabbit can't reach the dev API" incident). It is configured through the
+    // expo-build-properties plugin below, for UI-test builds only.
     ...(!uiTestMode && {
       googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json",
     }),
@@ -59,6 +75,7 @@ const config: ExpoConfig = {
     ...(!uiTestMode ? ["expo-audio"] : []),
     "expo-sqlite",
     ...(!uiTestMode ? ["expo-notifications"] : []),
+    ...uiTestOnlyPlugins,
   ],
   experiments: {
     typedRoutes: true,
