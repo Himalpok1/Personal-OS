@@ -1,3 +1,5 @@
+import { useKeyboardHeight } from "@/components/use-keyboard-height";
+import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { ApiClientError } from "@personal-os/api-client";
 import { GoogleCalendarLinkPicker } from "@/components/calendar/google-calendar-link-picker";
 import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
@@ -63,6 +65,21 @@ export function computeOccurrenceTiming(
       // and DST-agnostic -- it only ever preserves a day-count span, it
       // never converts between timezones. The bug this function had was
       // exclusively in how `startDate` itself was derived above, not here.
+      //
+      // SAFE ONLY under this precondition: `new Date(iso)` +
+      // `.toISOString().slice(0, 10)` round-trips correctly IF AND ONLY IF
+      // every value that ever enters it is a bare "YYYY-MM-DD" string (which
+      // `Date` parses as UTC midnight, then re-serializes as the same UTC
+      // date) -- never a full instant carrying a real wall-clock time. All
+      // three inputs here (`event.start_date`, `event.end_date`, and the
+      // just-computed `startDate`) satisfy that by construction. Do NOT
+      // "simplify" this to reuse `formatLocalDate` from `@/utils/local-date`
+      // or otherwise feed it a real ISO instant (e.g. a `starts_at`/
+      // `occursAt` value) -- that reintroduces exactly the
+      // UTC-vs-local-calendar-date bug fixed in `events/new.tsx`'s
+      // `deriveAllDaySeedDates` (Checkpoint 5.6), just from the opposite
+      // direction (an instant sliced as if it were a bare date, instead of a
+      // bare date treated as a local instant).
       const startMs = new Date(event.start_date).getTime();
       const endMs = new Date(event.end_date).getTime();
       const diffDays = Math.max(0, Math.round((endMs - startMs) / (24 * 60 * 60 * 1000)));
@@ -89,6 +106,8 @@ export function computeOccurrenceTiming(
 }
 
 export interface EditEventViewProps {
+  /** Measured IME height; optional so hook-free callers (tests) can omit it. */
+  keyboardHeight?: number;
   modalVisible: boolean;
   onDismissModal: () => void;
   onSelectEditOccurrence: () => void;
@@ -131,10 +150,28 @@ export interface EditEventViewProps {
 }
 
 export function EditEventView(props: EditEventViewProps) {
+  // Deliberately NO hooks in this component: events-screen.test.tsx invokes it
+  // directly as a plain function (no renderer, no dispatcher), so a hook call
+  // here throws "Cannot read properties of null (reading 'useState')".
+  // keyboardHeight is therefore passed in by the screen below.
+  const keyboardHeight = props.keyboardHeight ?? 0;
   const showRecurrenceEditor = !props.isDetached && props.editMode !== "occurrence";
 
   return (
-    <ScrollView className="flex-1 bg-white p-4 dark:bg-black">
+    <ScrollView
+      className="flex-1 bg-white dark:bg-black"
+      // Padding lives entirely in contentContainerStyle (no
+      // contentContainerClassName) because NativeWind remaps that class onto
+      // this same prop -- see FLOATING_CLEARANCE_PX. The clearance keeps the
+      // globally-mounted QuickAdd/PTT buttons off this form's Save/Archive
+      // control; the keyboard height gives room to scroll it clear of the IME.
+      // Extra room so lower controls can be scrolled clear of the IME --
+      // see components/use-keyboard-height.ts for why insets alone don't do it.
+      contentContainerStyle={{ padding: 16, paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
+      // Without this the first tap on a submit button below a focused field
+      // only dismisses the keyboard instead of submitting.
+      keyboardShouldPersistTaps="handled"
+    >
       <Modal
         visible={props.modalVisible}
         transparent
@@ -357,6 +394,7 @@ export function EditEventView(props: EditEventViewProps) {
 }
 
 export default function EditEventScreen() {
+  const keyboardHeight = useKeyboardHeight();
   const { id, occursAt } = useLocalSearchParams<{ id: string; occursAt?: string }>();
   const router = useRouter();
   const { data: event, isLoading } = useEvent(id);
@@ -577,6 +615,7 @@ export default function EditEventScreen() {
 
   return (
     <EditEventView
+      keyboardHeight={keyboardHeight}
       modalVisible={modalVisible}
       onDismissModal={() => setModalVisible(false)}
       onSelectEditOccurrence={handleSelectEditOccurrence}
