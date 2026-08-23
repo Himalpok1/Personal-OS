@@ -18,3 +18,4 @@ export * from "./calendar-connections.js";
 export * from "./calendar-connection-calendars.js";
 export * from "./event-external-links.js";
 export * from "./calendar-event-instances.js";
+export * from "./ai-daily-briefs.js";

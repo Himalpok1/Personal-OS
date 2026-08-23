@@ -20,3 +20,4 @@ export * from "./actionability.js";
 export * from "./project-lifecycle.js";
 export * from "./review-periods.js";
 export * from "./review-lifecycle.js";
+export * from "./text-bounds.js";

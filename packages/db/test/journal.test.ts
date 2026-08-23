@@ -19,6 +19,7 @@ const HAND_WRITTEN_WITHOUT_SNAPSHOT = new Set([
   "0009_caldav_provider_support",
   "0010_project_lifecycle",
   "0011_review_history",
+  "0012_ai_daily_briefs",
 ]);
 
 interface JournalEntry {

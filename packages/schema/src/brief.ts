@@ -27,3 +27,13 @@ export const DailyBriefRecordSchema = z.object({
   generated_at: z.string().datetime({ offset: true }),
 });
 export type DailyBriefRecord = z.infer<typeof DailyBriefRecordSchema>;
+
+// GET /briefs/current?tz= -- read-only lookup of the persisted brief for that
+// timezone's local date. Never generates; a missing brief is 404, which the
+// client normalizes to null (the /reviews/latest convention).
+export const BriefCurrentQuerySchema = z
+  .object({
+    tz: z.string().refine(isValidTimezone, { message: "unknown IANA timezone" }),
+  })
+  .strict();
+export type BriefCurrentQuery = z.infer<typeof BriefCurrentQuerySchema>;
