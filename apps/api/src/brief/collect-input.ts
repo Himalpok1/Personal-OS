@@ -63,17 +63,37 @@ function taskInstantMs(item: TodayTaskItem): number | null {
   return item.due_at !== null ? Date.parse(item.due_at) : null;
 }
 
-// A recurring instance's TodayEventItem.starts_at stays the series
-// template's original start (ADR-042); occurs_at carries the real instant
-// for that instance when one applies. Preferring occurs_at here reports the
-// event's actual time, not the template's, matching the same taste as
-// apps/api/src/read-models/agenda.ts's eventStartMs.
+// For a TIMED recurring instance, TodayEventItem.starts_at stays the series
+// template's original start (ADR-042) while occurs_at carries that instance's
+// real instant, so preferring occurs_at reports the event's actual time.
+//
+// For an ALL-DAY event this is wrong and was the Checkpoint 5.7.1 defect:
+// ADR-042 anchors an all-day series' DTSTART at LOCAL NOON, so a materialized
+// all-day instance has starts_at === null and occurs_at === noon-local-as-UTC.
+// Handing that to the model produced the production brief sentence
+// "an all-day weekly event beginning at 12:00 PM".
+//
+// The all_day short-circuit is therefore load-bearing and must stay FIRST.
+// (apps/api/src/read-models/review-contexts.ts holds the same expression and
+// is safe only because a date-string branch returns above it.)
 function eventEffectiveStart(item: TodayEventItem): string | null {
+  if (item.all_day) return null;
   return item.occurs_at ?? item.starts_at;
 }
 
+// The instance's own calendar date, already re-pointed per instance by
+// assembleEventRange (ADR-042). This is the only correct way to say *when* an
+// all-day event happens.
+function eventAllDayDate(item: TodayEventItem): string | null {
+  return item.all_day ? item.start_date : null;
+}
+
+// Ordering only -- never rendered, never sent to the model. All-day items are
+// hoisted ahead of timed ones by the caller before this is consulted, and this
+// deliberately reads the raw fields (not eventEffectiveStart, which is now
+// null for all-day) so that ordering behaviour is unchanged by the 5.7.1 fix.
 function eventInstantMs(item: TodayEventItem): number | null {
-  const value = eventEffectiveStart(item);
+  const value = item.occurs_at ?? item.starts_at;
   return value !== null ? Date.parse(value) : null;
 }
 
@@ -81,6 +101,7 @@ function toBriefEventItem(item: TodayEventItem): BriefEventItem {
   return {
     title: truncated(item.title, BRIEF_TITLE_MAX_CHARS),
     starts_at: eventEffectiveStart(item),
+    date: eventAllDayDate(item),
     all_day: item.all_day,
     location: item.location !== null ? truncated(item.location, BRIEF_LOCATION_MAX_CHARS) : null,
   };

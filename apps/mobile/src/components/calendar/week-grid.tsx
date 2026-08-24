@@ -51,6 +51,12 @@ function minutesToPixels(minutes: number): number {
 }
 
 function formatTimeLabel(entry: EventRangeItem, startMinutes: number): string {
+  // Defensive (Checkpoint 5.7.1): all-day entries never reach here today --
+  // week-grid-layout.ts `continue`s past the timed path for them -- but this
+  // function reads occurs_at with no guard of its own, which is exactly the
+  // shape that shipped the "12:00" bug on Today. Safe by construction now,
+  // not merely by its single caller.
+  if (entry.all_day) return "";
   const startIso = entry.is_recurring_instance ? entry.occurs_at : entry.starts_at;
   if (!startIso) return "";
   // Re-derive from the real instant for correct minute-level formatting

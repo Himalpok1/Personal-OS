@@ -53,6 +53,7 @@ const SAMPLE_INPUT: BriefInput = {
       {
         title: "Sentinel-Marmoset standup",
         starts_at: "2026-08-22T14:30:00.000Z",
+        date: null,
         all_day: false,
         location: "Sentinel-ConferenceRoomNine",
       },

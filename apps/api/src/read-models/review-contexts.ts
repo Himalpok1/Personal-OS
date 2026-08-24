@@ -115,7 +115,11 @@ function classifyEventIntoWindows(
     const end = item.end_date ?? item.start_date;
     return windows.find((w) => item.start_date! <= w.localDate && w.localDate <= end) ?? null;
   }
-  const effectiveStart = item.occurs_at ?? item.starts_at;
+  // Defensive (Checkpoint 5.7.1): the all_day branch above already returns,
+  // but this is the SAME expression that leaked ADR-042's local-noon anchor in
+  // brief/collect-input.ts. Guarding here too makes the safety structural
+  // rather than dependent on the lines above staying in order.
+  const effectiveStart = item.all_day ? null : (item.occurs_at ?? item.starts_at);
   if (effectiveStart === null) return null;
   const startMs = Date.parse(effectiveStart);
   return (

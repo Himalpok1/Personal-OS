@@ -169,6 +169,14 @@ export async function assembleEventRange(
   );
 
   function sortKey(item: EventRangeItem): number {
+    // all_day FIRST (Checkpoint 5.7.1): an all-day recurring instance's
+    // occurs_at is ADR-042's local-noon anchor, so sorting by it placed such
+    // an instance between the day's morning and afternoon timed events, while
+    // a non-recurring all-day event on the same day sorted at midnight. Both
+    // are all-day and must sort alike. Today/Agenda re-sort and hoist all-day
+    // items so this was invisible through them, but a direct /events/range
+    // consumer trusting array order saw the artifact.
+    if (item.all_day && item.start_date) return Date.parse(`${item.start_date}T00:00:00.000Z`);
     if (item.is_recurring_instance && item.occurs_at) return Date.parse(item.occurs_at);
     if (item.starts_at) return Date.parse(item.starts_at);
     if (item.start_date) return Date.parse(`${item.start_date}T00:00:00.000Z`);

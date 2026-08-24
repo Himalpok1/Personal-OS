@@ -22,7 +22,18 @@ export interface BriefTaskItem {
 
 export interface BriefEventItem {
   title: string;
+  // Timed events only. ALWAYS null when all_day is true -- ADR-042 anchors a
+  // recurring all-day series at LOCAL NOON, and before Checkpoint 5.7.1 that
+  // internal anchor landed here and the model narrated a real all-day event
+  // as "beginning at 12:00 PM". An all-day event has no time, so it must have
+  // no way to express one.
   starts_at: string | null;
+  // All-day events only (YYYY-MM-DD, the instance's own calendar date); null
+  // for timed events, whose day is implied by starts_at. Added in 5.7.1 --
+  // previously the shape had no date field at all, so "all-day on date X" was
+  // literally inexpressible and fixing starts_at alone would have left the
+  // model with no day information.
+  date: string | null;
   all_day: boolean;
   location: string | null;
 }

@@ -8,6 +8,7 @@ import { ApiClientError } from "@personal-os/api-client";
 import type { AgendaItem, AgendaTaskItem, AgendaOccurrenceItem, AgendaEventItem } from "@personal-os/schema";
 import { useRouter } from "expo-router";
 import { Pressable, Text, View } from "react-native";
+import { eventTimeLabel } from "@/utils/event-time-label";
 import { useCompleteOccurrence, useSkipOccurrence } from "@/queries/occurrences";
 import { useCompleteTask, useUpdateTask } from "@/queries/tasks";
 import { useInvalidateAgenda } from "@/queries/agenda";
@@ -171,15 +172,11 @@ export function AgendaEventRow({ item }: { item: AgendaEventItem }) {
       router.push(`/events/${item.id}`);
     }
   };
-  const timeLabel = item.all_day
-    ? "ALL-DAY"
-    : item.starts_at && item.ends_at
-      ? `${formatTime(item.starts_at)}–${formatTime(item.ends_at)}`
-      : item.starts_at
-        ? formatTime(item.starts_at)
-        : item.occurs_at
-          ? formatTime(item.occurs_at)
-          : "";
+  // Routed through the shared helper (Checkpoint 5.7.1) so the
+  // all_day-checked-first rule has ONE source of truth with Today rather than
+  // two hand-maintained chains that can drift. This surface was already
+  // correct; sharing keeps it that way.
+  const timeLabel = eventTimeLabel(item, "ALL-DAY");
   return (
     <Pressable
       onPress={onPress}

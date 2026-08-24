@@ -14,6 +14,7 @@ import { FLOATING_CLEARANCE } from "@/components/floating-layout";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import { useCompleteTask } from "@/queries/tasks";
 import { useToday } from "@/queries/today";
+import { eventTimeLabel } from "@/utils/event-time-label";
 import { addLocalDays, formatHeaderDate, parseLocalDate } from "@/utils/local-date";
 
 function formatTime(iso: string): string {
@@ -152,12 +153,11 @@ function SectionHeader({
 
 function EventRow({ event }: { event: TodayEventItem }) {
   const router = useRouter();
-  const timeRange =
-    event.starts_at && event.ends_at
-      ? `${formatTime(event.starts_at)}–${formatTime(event.ends_at)}`
-      : (event.starts_at
-          ? formatTime(event.starts_at)
-          : (event.occurs_at ? formatTime(event.occurs_at) : "All-day"));
+  // all_day is decided inside eventTimeLabel, which returns before any
+  // instant is formatted -- see utils/event-time-label.ts. Previously this
+  // chain fell through to occurs_at, which for a recurring all-day instance
+  // is ADR-042's local-noon anchor, and rendered "12:00".
+  const timeRange = eventTimeLabel(event, "All day");
   return (
     <Pressable
       onPress={() => router.push(`/events/${event.id}`)}

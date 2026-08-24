@@ -493,4 +493,105 @@ describe("collectBriefInput", () => {
     expect(aucklandInput.local_date).toBe(localDayWindow("Pacific/Auckland", now).localDate);
     expect(chicagoInput.local_date).not.toBe(aucklandInput.local_date);
   });
+
+  // ---- Checkpoint 5.7.1: all-day events must never carry a clock time ----
+  //
+  // The shipped defect: ADR-042 anchors a recurring all-day series' DTSTART at
+  // LOCAL NOON, and `eventEffectiveStart` returned `occurs_at ?? starts_at`
+  // with no all_day guard -- so the model received a synthetic noon timestamp
+  // and the production brief said "an all-day weekly event beginning at
+  // 12:00 PM". These tests pin the fix at the payload boundary: whatever the
+  // model is handed must be inexpressible as a time for an all-day event.
+
+  for (const tz of ["America/Chicago", "Pacific/Auckland", "America/Santiago"]) {
+    it(`serializes a recurring all-day instance as a DATE with no time (${tz})`, async () => {
+      // Daily all-day series covering Aug 24, 25, 26; Today is Aug 25.
+      const [eventRow] = await app.db
+        .insert(events)
+        .values({
+          title: "Dentist appointment",
+          timezone: tz,
+          allDay: true,
+          startDate: "2026-08-24",
+          endDate: "2026-08-24",
+          rrule: "FREQ=DAILY;INTERVAL=1",
+          recurrenceTimezone: tz,
+          recurrenceCount: 3,
+        })
+        .returning({ id: events.id });
+
+      // Materialize the Aug 25 instance at its local-noon anchor, exactly as
+      // the recurrence engine does.
+      const noonAnchor = atLocal(tz, "2026-08-25", 12);
+      await app.db.insert(occurrences).values({
+        parentType: "event",
+        parentId: eventRow!.id,
+        occursAt: noonAnchor,
+        occursLocal: wallClockToNaiveDate(toWallClockComponents(noonAnchor, tz)),
+        status: "scheduled",
+      });
+
+      const { input } = await collectBriefInput(app.db, {
+        tz,
+        now: atLocal(tz, "2026-08-25", 9),
+      });
+
+      const item = input.events_today.items.find((e) => e.title === "Dentist appointment");
+      expect(item, "the all-day instance must appear on its own date").toBeDefined();
+      expect(item!.all_day).toBe(true);
+      // The date must be present and be Aug 25 -- the instance's own day.
+      expect(item!.date).toBe("2026-08-25");
+      // And no time may be expressible at all.
+      expect(item!.starts_at).toBeNull();
+
+      // Defensive: the serialized payload the model actually sees must contain
+      // the date and must NOT contain the noon anchor in any form.
+      const serialized = JSON.stringify(input);
+      expect(serialized).toContain("2026-08-25");
+      expect(serialized).not.toContain(noonAnchor.toISOString());
+      expect(serialized).not.toMatch(/T12:00/);
+    });
+  }
+
+  it("still reports a real clock time for a TIMED event, so the guard is not over-broad", async () => {
+    await app.db.insert(events).values({
+      title: "Standup",
+      timezone: TZ,
+      allDay: false,
+      startsAt: atLocal(TZ, "2026-08-25", 9),
+      endsAt: atLocal(TZ, "2026-08-25", 9, 30),
+    });
+
+    const { input } = await collectBriefInput(app.db, {
+      tz: TZ,
+      now: atLocal(TZ, "2026-08-25", 8),
+    });
+
+    const item = input.events_today.items.find((e) => e.title === "Standup");
+    expect(item).toBeDefined();
+    expect(item!.all_day).toBe(false);
+    expect(item!.starts_at).toBe(atLocal(TZ, "2026-08-25", 9).toISOString());
+    expect(item!.date).toBeNull();
+  });
+
+  it("serializes a NON-recurring all-day event as a date with no time", async () => {
+    await app.db.insert(events).values({
+      title: "Public holiday",
+      timezone: TZ,
+      allDay: true,
+      startDate: "2026-08-25",
+      endDate: "2026-08-25",
+    });
+
+    const { input } = await collectBriefInput(app.db, {
+      tz: TZ,
+      now: atLocal(TZ, "2026-08-25", 9),
+    });
+
+    const item = input.events_today.items.find((e) => e.title === "Public holiday");
+    expect(item).toBeDefined();
+    expect(item!.all_day).toBe(true);
+    expect(item!.starts_at).toBeNull();
+    expect(item!.date).toBe("2026-08-25");
+  });
 });
