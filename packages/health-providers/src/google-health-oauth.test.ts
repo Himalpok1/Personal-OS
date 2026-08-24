@@ -28,6 +28,7 @@ describe("buildAuthorizeUrl", () => {
       redirectUri: REDIRECT,
       scopes: PHASE_6A_SCOPES,
       state: "st-123",
+      forceConsent: true,
     }),
   );
 
@@ -36,6 +37,23 @@ describe("buildAuthorizeUrl", () => {
   it("requests offline access and forces the consent prompt", () => {
     expect(url.searchParams.get("access_type")).toBe("offline");
     expect(url.searchParams.get("prompt")).toBe("consent");
+  });
+
+  // Google caps an account at 100 live refresh tokens per client and evicts the
+  // oldest beyond that, so re-prompting on every reconnect would slowly destroy
+  // older grants. access_type=offline still goes every time.
+  it("omits prompt=consent when a refresh token is not required", () => {
+    const u = new URL(
+      buildAuthorizeUrl({
+        clientId: "cid",
+        redirectUri: REDIRECT,
+        scopes: PHASE_6A_SCOPES,
+        state: "st-123",
+        forceConsent: false,
+      }),
+    );
+    expect(u.searchParams.get("prompt")).toBeNull();
+    expect(u.searchParams.get("access_type")).toBe("offline");
   });
 
   it("sends exactly the three Phase 6A read scopes", () => {
@@ -109,6 +127,18 @@ describe("exchangeHealthAuthCode", () => {
     await expect(
       exchangeHealthAuthCode({ ...CREDS, code: "c", redirectUri: REDIRECT }, f),
     ).rejects.toThrow(/access_type=offline/);
+  });
+
+  // The reconnect path: consent was deliberately not re-prompted because a
+  // usable refresh token is already stored, so its absence is expected.
+  it("tolerates a missing refresh_token when the caller says one is not required", async () => {
+    const f = okJson({ access_token: "a", expires_in: 3600, scope: "s", token_type: "Bearer" });
+    const t = await exchangeHealthAuthCode(
+      { ...CREDS, code: "c", redirectUri: REDIRECT, requireRefreshToken: false },
+      f,
+    );
+    expect(t.refreshToken).toBeNull();
+    expect(t.accessToken).toBe("a");
   });
 
   it("surfaces Google's machine-readable error code", async () => {

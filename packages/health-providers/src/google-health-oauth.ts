@@ -27,7 +27,12 @@ export interface GoogleHealthOAuthCredentials {
 
 export interface ExchangedHealthTokens {
   accessToken: string;
-  refreshToken: string;
+  /**
+   * Null only when the caller passed requireRefreshToken: false AND Google
+   * omitted one -- which happens when consent was not re-prompted because a
+   * valid grant already exists. The caller must then keep its stored token.
+   */
+  refreshToken: string | null;
   expiresAt: Date;
   /** Space-delimited scopes Google actually granted -- may be a subset. */
   scope: string;
@@ -112,6 +117,15 @@ export interface BuildAuthorizeUrlParams {
   redirectUri: string;
   scopes: readonly string[];
   state: string;
+  /**
+   * Force the consent screen, which is what makes Google mint a refresh token.
+   *
+   * Only pass true when a refresh token is genuinely required -- a first
+   * connection, or one whose stored token is dead. Google caps an account at
+   * 100 live refresh tokens per client and silently evicts the oldest beyond
+   * that, so prompting on every reconnect would slowly destroy older grants.
+   */
+  forceConsent: boolean;
 }
 
 /**
@@ -128,11 +142,14 @@ export function buildAuthorizeUrl(params: BuildAuthorizeUrlParams): string {
     redirect_uri: params.redirectUri,
     response_type: "code",
     scope: params.scopes.join(" "),
+    // access_type=offline is ALWAYS sent: it is the precondition for offline
+    // access at all. prompt=consent is what actually re-mints a refresh token,
+    // and is sent only when one is needed.
     access_type: "offline",
-    prompt: "consent",
     include_granted_scopes: "false",
     state: params.state,
   });
+  if (params.forceConsent) query.set("prompt", "consent");
   return `${GOOGLE_AUTH_ENDPOINT}?${query.toString()}`;
 }
 
@@ -140,6 +157,13 @@ export interface ExchangeHealthAuthCodeParams extends GoogleHealthOAuthCredentia
   code: string;
   /** MUST match the redirect_uri used to obtain the code, and the allowlist. */
   redirectUri: string;
+  /**
+   * Whether a missing refresh_token is an error. Defaults to true.
+   *
+   * Pass false only when a usable refresh token is already stored for this
+   * account, i.e. when consent was deliberately not re-prompted.
+   */
+  requireRefreshToken?: boolean;
 }
 
 /**
@@ -163,7 +187,7 @@ export async function exchangeHealthAuthCode(
 
   const token = await readToken(await postForm(GOOGLE_TOKEN_ENDPOINT, body, fetchFn));
 
-  if (!token.refresh_token) {
+  if (!token.refresh_token && params.requireRefreshToken !== false) {
     throw new GoogleHealthOAuthError(
       "Google did not return a refresh_token on the authorization_code exchange " +
         "(this typically means the request omitted access_type=offline and/or prompt=consent)",
@@ -174,7 +198,7 @@ export async function exchangeHealthAuthCode(
 
   return {
     accessToken: token.access_token,
-    refreshToken: token.refresh_token,
+    refreshToken: token.refresh_token ?? null,
     expiresAt: new Date(Date.now() + token.expires_in * 1000),
     scope: token.scope,
   };
