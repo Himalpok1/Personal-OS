@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 5 — Daily Command Center + Projects — **IN PROGRESS** (plan approved with amendments 2026-08-21; Steps 0–1 and **Checkpoints 5.1–5.6 COMPLETE** through 2026-08-23, local + physical-device verification only; Checkpoint 5.7 next pending user approval). Phases 0–4 remain COMPLETE, production-deployed, and physically verified — see below.
-**Implementation status:** Phases 0–4 are implemented and production-deployed. Checkpoint 4.7 deployed Phase 4 to production and passed both reboot-survival tests physically (Rabbit device and Ubuntu host) on 2026-08-21.
-**Next phase allowed:** Phase 5 checkpoints proceed sequentially under the approved plan (5.1 Today/Home → 5.2 Projects → 5.3 Reviews → 5.4 Agenda → 5.5 Daily Brief → 5.6 polish → 5.7 gated deployment). **No production changes before 5.7.** Finance is deferred to a later phase (ADR-038), still gated on the open finance-source-of-truth decision.
+**Current phase:** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Implementation status:** Phases 0–5 are implemented and production-deployed. Production migration level is **0000–0012 = 13 migrations**. The production Rabbit runs `com.himal.personalos` versionCode **5**.
+**Next phase allowed:** **None without explicit user approval.** Phase 5 is closed. Finance remains deferred (ADR-038), still gated on the open finance-source-of-truth decision. Phase 6 (Health) and Phase 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 5 — Daily Command Center + Projects (plan approved 2026-08-21)
@@ -265,7 +265,292 @@ Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, 
 - [x] Phase 5 Checkpoint 5.3 — Daily + Weekly Review: migration 0011, review API/context collectors with TOCTOU hardening, resumable guided flows (daily + weekly), recently-completed collector, Today derived review state — complete 2026-08-22 (local only; production untouched).
 - [x] Phase 5 Checkpoint 5.4 — Smart Agenda / Planning: GET /agenda read model + route (90-day cap, project filter, chronological interleave), Calendar Month|Week|**Agenda**, the central canonical all-day recurrence fix (ADR-042) across core/API/worker/routes, AI-capture canonicalization, mobile UTC-date fix, and `remind_at` PATCH — complete 2026-08-22 (local only; production untouched; **zero migrations**).
 - [x] Phase 5 Checkpoint 5.6 — Mobile / Rabbit daily-use polish: reproducible dev harness via expo-build-properties (dev-profile only, production proved unaffected), dev-shell parity, FAB/PTT clearance, notification cold-start, all-day date off-by-one, serialized review saves, keyboard reachability, touch/layout polish — complete 2026-08-23 (physically verified on the Rabbit R1; production untouched; zero migrations).
+- [x] **Phase 5 Checkpoint 5.7 — Production deployment + Phase 5 closure: migrations 0010–0012 applied exactly once (level 0000–0012 = 13), api/worker/web rolled out from `656c1fc`, Rabbit upgraded in place to versionCode 5 with pairing/PRIMARY/credential preserved, production `daily_brief` route registered on the existing gpt-4.1 model, reminder real-fire + push delivery + PTT all physically verified, and BOTH reboot axes passed — complete 2026-08-24. PHASE 5 COMPLETE.**
 - [x] Phase 5 Checkpoint 5.5 — Personal OS Daily Brief: migration 0012 (`ai_daily_briefs`, identity `(brief_date, timezone)`), deterministic Today-derived collector, injection-guarded prompt, provider-agnostic generation with true model provenance, `POST /briefs` + `GET /briefs/current`, Today brief metadata, and the Today Brief card — complete 2026-08-23 (local only; production untouched; no paid provider call).
+
+## Phase 5 Checkpoint 5.7 — Production deployment + Phase 5 closure (COMPLETE, 2026-08-24)
+
+Executed under the approved gate sequence A–M with five explicit user-approval stops
+(migrations, APK install, `daily_brief` route, Rabbit reboot, host reboot). Main Opus was
+the sole production mutation owner throughout; every production command was issued from the
+integration session, never delegated. **Phase 5 is now live in production.**
+
+### Release lineage — one source commit for every component
+
+`main` was fast-forwarded from `c25e13a` to `efd466a` (all **seven** Checkpoint 5.6 commits;
+the prior record said six). Gate A then found a real, latent, test-only defect that had to be
+fixed to obtain a green baseline, so the release source is **`656c1fc`** = `efd466a` + that one
+commit. API, worker, web and the Android APK all derive from `656c1fc`. Unlike Checkpoint 4.7,
+no component comes from a different commit.
+
+**The Gate A defect (test-only, no production code):** `apps/api/src/routes/agenda.test.ts`'s
+"all-day events first, then everyone else interleaved" test seeded its fixture on *today's*
+window including a task at dayStart+15h. Once the suite runs after 15:00 local that task
+satisfies `due_at < effectiveNow` and is correctly routed to `overdue[]` rather than the day's
+items, so the assertion failed purely as a function of wall-clock time. The product was behaving
+exactly per frozen ADR-038 semantics — only the *task* disappeared, because events are never
+overdue. Latent since Checkpoint 5.4 and never caught because every prior baseline happened to
+run before 15:00. Fixed by seeding a future day (the `futureDayWindow` idiom its neighbours
+already use). Suite total unchanged at 1154. **This also means 5.6's recorded 1154-pass baseline
+was a pre-15:00 run.**
+
+### Two corrections to the approved plan, both caught before any production mutation
+
+1. **The plan's "migrate first, then build" ordering would have silently no-opped.** The
+   migration runs *from the api image*, and the deployed image contained only migrations
+   0000–0009 — the command would have applied **nothing** and still reported
+   `migrations applied successfully`, leaving production at 0009 while appearing to succeed.
+   Caught by inspecting the running image's `/repo/packages/db/drizzle` directly. Corrected to
+   build first (which does not touch running containers), then migrate from the new image.
+2. **Deployment uses a per-release source directory.** The host carries *two* trees:
+   `/home/himallinux/personal-os` holds the real `.env` but is **stale Phase 3 source**
+   (migrations only to 0004, no `events.ts`), while Checkpoint 4.7 actually built from
+   `/home/himallinux/personal-os-4.7-release`. This is why the frozen safety rule pins
+   `--env-file /home/himallinux/personal-os/.env`. Checkpoint 5.7 shipped `656c1fc` via
+   `git archive` into a **new** `/home/himallinux/personal-os-5.7-release` (472 tracked files,
+   verified free of `.env`, `google-services.json`, generated `android/`, `node_modules`).
+   This eliminated the Checkpoint 4.7 `rsync --delete` deletion-manifest hazard entirely and
+   left the 4.7 tree intact as a rollback source.
+
+### Component lineage
+
+| Component | Source | Image / artifact | Container |
+|---|---|---|---|
+| api | `656c1fc` | `sha256:833ecb08f8fde48501859cc8861b72824c421719f672ab58a274c8f382a1a235` | `d2ce2818cf7d` |
+| worker | `656c1fc` | `sha256:bb0f3ec47631023cd93a23f88d968c12092d6c7f6ba82ea8138d653898b3a98e` | `78d47c492a07` |
+| web | `656c1fc` | `sha256:ada43d9e133b5e56539af0b88eb09f9fa455acb6adcf6dca3c8f97867de658c5` | `d761de8456c6` |
+| postgres | unchanged | `sha256:d4bb0a8c1b7bb2e29f976d099e7bfb9a5d8858cffe9e46b35cd302cd1f1f8168` | `404de24ef86b` |
+| Android | `656c1fc` | EAS `66669534-9cc1-4999-b90f-e72245b3ca26`, APK SHA-256 `39ae353feff867f2feee5f6ec735ad613268002cd326b5c1b4187934258b513a` | versionCode 5 |
+
+Rollback tags `personal-os-{api,worker,web}:pre-phase5` were created **by image digest** from the
+exact serving images (`51f14ae98178`, `14f58997fd29`, `18b74c818966`) before any build. Because
+all three migrations are additive, those Phase 4 images run correctly against the 0012 schema —
+that is what makes the server rollback real. Mobile recovery is forward-only (same key,
+versionCode > 5); never a downgrade or uninstall.
+
+### Migrations (Gate D)
+
+| Tag | SHA-256 | journal `when` |
+|---|---|---|
+| `0010_project_lifecycle` | `00a4bcb994c384165f3f0f54bc6b3926572389ad9a2ac01e519ddb3ce0b6a3fc` | 1787362339000 |
+| `0011_review_history` | `7a2b45f4bebbba8dc66adf82a7e984df601b747e5961c2ccc57ae991680dc78e` | 1787398945193 |
+| `0012_ai_daily_briefs` | `33c6d041400ccb95308d6e017998f00b32d2a7eb9c6d4beffdcfb644bc5b988d` | 1787466808983 |
+
+Production went **10 tracking rows (watermark 1787268000000) → 13**, the three new rows carrying
+the exact journal `when` values rather than wall-clock, with no replay of 0000–0009. The one
+identified hazard — `0010`'s `projects_status` CHECK validates every existing row — was cleared
+by a read-only preflight showing `projects` was **empty (0 rows, 0 violations)**. A Gate C
+rehearsal on a disposable database seeded to production's exact watermark proved the arithmetic
+first, including that `'archived'` is rejected and that duplicate `(brief_date, timezone)` is
+rejected while the same date in a different timezone yields a separate row.
+
+**The Checkpoint 4.7 Gate C incident did not recur.** Postgres kept container `404de24ef86b`,
+its image digest, its start time `2026-08-21T22:02:03.921869141Z` and `restarts=0` across
+migration, both rollout steps and every subsequent gate; both volumes kept their original
+creation timestamps (`postgres_data` 2026-08-15, `audio_data` 2026-08-19). Every compose command
+pinned `-p personal-os`, `--env-file`, both compose files, and `--no-deps`, and never named
+`postgres`.
+
+**A pre-existing discrepancy recorded honestly:** the Checkpoint 4.7 record lists the postgres
+container as `bf484f07d7ef…`; at Gate B it was already `404de24ef86b…` (same image, same original
+volume). Postgres was therefore recreated at some point *after* that record was written and
+before Checkpoint 5.7 began. Not caused by this checkpoint; the Gate B baseline was used as the
+invariant instead of the stale documented value.
+
+### Server verification (Gate F)
+
+`/today` returned **404 before the rollout and 200 after** — direct proof Phase 5 went live.
+Agenda enforces its 90-day cap (91 → `400 range must not exceed 90 days`); invalid tz and invalid
+uuid both 400. Worker restarted clean with all five schedules, all queues listening and **zero
+brief queues and zero brief crons** — the ADR-041 invariant verified in production, not merely in
+source. Zero secret matches in api/worker logs, bindings identical to baseline, Postgres
+unpublished, Serve tailnet-only with no Funnel. CORS advertises GET/HEAD/POST/PATCH/DELETE to the
+approved origin and returns no `allow-origin` to an unapproved one.
+
+**`POST /briefs` returned `409 no_provider_configured` before the route existed** — the ADR-041
+graceful-degradation path captured in production as evidence.
+
+**Not verified, stated rather than claimed:** the real-browser CORS proof. The Chrome extension
+was not connected and the sandboxed browser pane cannot load `/_expo/static/*` on the
+non-standard `:8443` port (the documented Phase 2 limitation). curl proved the exact header
+contract, the deployed bundle audit is clean, and `WEB_APP_ORIGIN` plus the compose file are
+byte-identical to the Phase 4 state that *was* browser-verified — but no browser exercised it
+this pass.
+
+### APK audit (Gate G) — Category A adjudicated fresh, not inherited
+
+Profile `production-internal` with `--freeze-credentials`; versionCode derived remotely
+(4 → **5**). Signer SHA-256 `4601e3a2c4ecfe791b0bf6d960871c017fe1f3bc56087389f7ccc3a3f6cc23ea`
+(SHA-1 `7eac1aa400ac4450c322fb0936d240cd292eeae8`) — identical to the installed production signer.
+
+Manifest carries **no `usesCleartextTraffic`** (5.6's dev-only plugin correctly absent), is not
+debuggable, uses scheme `mobile`, and declares RECORD_AUDIO / SCHEDULE_EXACT_ALARM /
+RECEIVE_BOOT_COMPLETED / POST_NOTIFICATIONS. Bundle is Hermes bytecode, Expo Updates disabled,
+zero dev-launcher/menu/client entries, production API URL present, **`localhost:3000` absent**
+(proving EAS supplied `EXPO_PUBLIC_API_URL`), and no `EXPO_TOKEN`, OAuth secret or private key.
+
+The single `http://localhost:8081` literal was traced **fresh for this APK hash** to React Native
+0.86.2 `Libraries/Core/Devtools/getDevServer.js:15` (`const FALLBACK`), with `apps/mobile/src`
+containing zero `8081` references. Checkpoint 6's exception was deliberately **not** reused.
+Two further string hits were adjudicated as Hermes packed-string-table artifacts: the `sk-` match
+is the tail of `expo-tab-task----ExpoFetchFormBoundary` (from `task-`), and neither is a key value.
+
+**The EAS environment gap identified in planning was closed by verification, not assumption:** no
+build profile declares an `env` block and `queries/client.ts` falls back to `http://localhost:3000`,
+so the EAS `production` environment was inspected read-only and confirmed to hold exactly
+`EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_SERVICES_JSON`, with
+**`EXPO_PUBLIC_UI_TEST_MODE` absent**.
+
+### Rabbit upgrade (Gate H)
+
+A four-condition guard (package, signer, versionCode > installed, production profile at the
+release commit) was re-evaluated against the live device immediately before `adb install -r`.
+Post-install: versionCode 4 → **5**, `firstInstallTime` **unchanged** at `2026-08-19 16:26:10`
+(proving update, not reinstall), `lastUpdateTime` advanced, dataDir unchanged, only the
+production package installed.
+
+**No pairing screen, same device row `c6c0b43d-2eed-41f4-8ee1-4c1aff65bc61`, PRIMARY preserved,
+push token preserved, `last_seen_at` refreshed immediately** — the SecureStore credential survived
+the update. The production Google Calendar connection was still present in Settings.
+
+### Physical verification (Gate I) — both items deferred from 5.6 are now closed
+
+**FAB/PTT on the production identity** (which 5.6 could not do, since its dev shell mounts PTT
+only in `layoutOnly` mode): PTT `[25,482][83,540]` and FAB `[397,482][455,540]`, both 58px,
+314px apart, 14px clear of the tab bar. **At max scroll on Today the only clickable elements in
+the y482–540 band are the two buttons themselves** — this closes 5.6's open question about the
+left PTT x-band overlapping the completion-checkbox column.
+
+**Reminder — real fire.** `remind_at` 03:47 produced exactly one alarm at `window=0
+exactAllowReason=permission`; moving it to 03:48 removed handle `543a616` and left exactly one
+new handle `33a76a1`, still exact. It **fired while the app was backgrounded** at
+`when=1787561280096` = **03:48:00.096 CDT — 96 ms after the scheduled instant**, posting exactly
+one notification on channel `reminders` at importance 5 titled with the task name, consuming the
+alarm, and **tapping it opened the correct task detail**.
+
+> **ROM inconsistency re-confirmed:** `dumpsys package` reports `SCHEDULE_EXACT_ALARM
+> granted=false` while the scheduled alarm reports `exactAllowReason=permission` and delivers
+> exactly. This matches the Checkpoint 5 finding that the ROM's package/app-op report is
+> internally inconsistent and the alarm plus actual delivery are the deciding evidence. No user
+> action was required. An earlier advance warning in this session that a grant would be needed
+> was based on the package report and is corrected here.
+
+**Push.** One bounded `alert` was enqueued through the real `notifications.dispatch` worker path
+(the Settings screen ships no test-notification control, and the device bearer token is
+deliberately unreadable from SecureStore). Dispatch log recorded `accepted` with Expo ticket
+`01a032fa-a5e9-7269-a010-431d9e24b539` and no error, and the notification was **physically
+present on the device**, exactly one, with the tap routing correctly. Per ADR-030 the ticket
+proves acceptance only; the device-side record is the delivery proof.
+
+**PTT.** One real capture ran the full production chain — Rabbit mic → `/transcribe` → shared
+audio volume → Groq `whisper-large-v3-turbo` → transcript → gpt-4.1 `capture_parser` → committed
+entity. Inbox `cb7415d1…` reached `status=parsed` with a **real Groq `avg_logprob` of
+`-0.5232116`** propagated, `audio_path` cleared, `/data/audio` empty, exactly one `/transcribe`
+request and no duplicate. Driven by ambient audio rather than dictated speech — recorded honestly.
+
+**Capture/parser observation:** two deliberately ambiguous captures (including bare `asdf`) both
+parsed confidently as notes and never reached `needs_confirm`. Production gpt-4.1 is more decisive
+than the dev model Phase 3 used. Model behaviour, not a defect — the same class of observation
+Checkpoint 4 recorded.
+
+**Core Phase 5 smokes** all passed against production: project pause→resume→complete→reopen with
+`completed_at` set and cleared, 409 on an invalid transition, computed `next_action`/`stalled`/
+counts; `remind_at` PATCH lifecycle with a title-only PATCH leaving it **byte-identical**; daily
+review create → duplicate-returns-same-row → content v1 with kind binding → 400 on kind mismatch
+→ summary → complete, reflected in `/today`'s derived state; and **ADR-042 verified in production**
+— a recurring all-day weekly series expanded to 4 distinct dates each carrying its own
+`start_date`, a series that was invisible everywhere before Checkpoint 5.4.
+
+### Daily Brief production route (Gate J)
+
+Registered with a **single** `POST /ai/task-routes` reusing the existing gpt-4.1 model row
+`313633f4-2c52-4a06-a696-4f7740a95f28` — no new provider connection, no new model row, no
+fallback, no credential handling. Verified afterward: providers still 2 and models still 2,
+`capture_parser` and `voice_transcribe` byte-unchanged, and `/today` still makes no provider call.
+
+Generation returned HTTP 200 in ~4 s with `brief_date=2026-08-24` (the correct local calendar
+date), 707 characters of prose accurately narrating real state, and `model_id` equal to the
+gpt-4.1 row that **actually served** the call. `ai_daily_briefs` held exactly one row, proving the
+`(brief_date, timezone)` upsert; `/today` returned brief **metadata only with no `text` field**;
+and no brief queue or cron was created.
+
+**Honest accounting:** two `POST /briefs` calls were issued, not one — a duplicated `curl` line in
+the operator's own command, not a planned regenerate. The second upserted the first, which is why
+exactly one row existed; the upsert is proven by that accident and no third call was made.
+
+**There is no DELETE endpoint for task routes.** Returning to the no-provider state requires
+another upsert repointing `primary_model_id`, or direct SQL.
+
+### Reboot survival (Gates K and L) — both axes passed
+
+**Rabbit:** one normal reboot with **no manual app launch and no manual Tailscale start**. Fresh
+boot confirmed (uptime 1 min); `tun0` came up and `IPNService` ran on their own; MagicDNS resolved
+and the device pinged the server; versionCode 5, `firstInstallTime` and `lastUpdateTime` all
+unchanged; **no pairing screen**; Today rendered live production data including the **Daily Brief
+card with a working Show more/Show less clamp**; Calendar rendered Month/Week/Agenda; device row
+still PRIMARY with a fresh `last_seen_at`; crash buffer clean.
+
+**Ubuntu host:** one normal reboot (issued by the user — `sudo reboot` needs their password).
+Host down 04:34:57, back 04:35:37, fresh boot 04:35:23. All four containers auto-started with
+**identical container IDs and identical image digests**, `restarts=0`; both volume identities
+unchanged; migration level still exactly 13; 5 schedules; queues drained; heartbeat fresh within
+seconds; Serve tailnet-only on both ports; bindings identical; Postgres still unpublished; and the
+**Rabbit reconnected with no manual repair** (0% packet loss, ~14 ms). The worker's 54 log error
+entries were all timestamped in the shutdown window (`terminating connection due to administrator
+command`, `getaddrinfo EAI_AGAIN postgres`) and **zero errors occurred after the post-reboot
+`pg-boss started`** — correct graceful-shutdown behaviour, verified rather than assumed.
+
+### Defect found in production — recorded, deliberately not fixed mid-deployment
+
+**ADR-042's local-noon anchor surfaces as a real clock time for recurring all-day events.** One
+root cause, two surfaces:
+
+1. `apps/mobile/src/app/(tabs)/index.tsx:155` — `EventRow`'s `timeRange` fallback chain never
+   checks `event.all_day`. A canonical all-day event has `starts_at = null` (ADR-042), so a
+   **recurring instance** falls through to `occurs_at` (the noon anchor) and renders **`12:00`**.
+2. `apps/api/src/brief/collect-input.ts:72` — `eventEffectiveStart` returns
+   `item.occurs_at ?? item.starts_at`, so the **model is handed the noon anchor as a real start
+   time**. The production brief prose literally read *"an all-day weekly event beginning at
+   12:00 PM"* while the non-recurring all-day event was correctly *"start time not specified"*.
+
+Proven side by side on the device: `'12:00, P57-SMOKE all-day weekly'` versus
+`'All-day, P57-SMOKE all-day single'`. Dates are correct everywhere and Agenda grouping is
+correct, so this is **not** data corruption — but the AI narrating a wrong time is more than a
+display nit, and this entry deliberately upgrades an initial "cosmetic" assessment made earlier in
+the session. Newly reachable because recurring all-day events did not render at all before
+Checkpoint 5.4. Not fixed during deployment because it would require a new image, a new EAS build
+and install, and a release-lineage change.
+
+### Smoke data
+
+All smoke rows carried a `P57-SMOKE` prefix and were removed in one count-verified transaction:
+4 occurrences, 3 inbox items, 3 notes, 3 events, 1 task, 1 project, 1 review, 1 brief. Post-purge
+scans showed **zero residue, zero orphan occurrences and zero orphan `event_external_links`**, and
+preserved production data matched the Gate B baseline exactly (2 tasks, 3 notes, 6 inbox items,
+2 devices, 0 projects, 0 events, 13 tracking rows).
+
+The generated brief was **deleted** rather than kept: it narrated the now-deleted smoke rows, so
+retaining it would have been misleading. It regenerates on demand with one tap. The
+`daily_brief` route itself is retained — it is real configuration, not smoke. Notification
+dispatch history was preserved as audit lineage, consistent with the Checkpoint 6 precedent.
+
+### Verification actually run
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Gate A release gate at `656c1fc` | build/typecheck/lint/format clean; **1154 tests / 15 turbo tasks**; `calendar-providers` exactly **57**; 13 migrations / 13 journal entries; `git diff --check` clean; gitleaks 81 commits, no leaks; single-`index.html` SPA export |
+| 2 | Lint warnings | **0** — better than 5.6's recorded 3; recorded as an improvement rather than silently accepted |
+| 3 | Gate B read-only preflight | Every expected value matched: watermark `1787268000000`, `projects` empty, signer `4601e3a2…`, sole PRIMARY, 5 schedules, no `daily_brief` |
+| 4 | Gate C disposable rehearsal | Exactly 0010–0012 applied at production's watermark, 10→13, no replay; constraints/indexes/FK verified; `'archived'` and duplicate `(date,tz)` both rejected; re-run a clean no-op; DB destroyed |
+| 5 | Gate D production migrations | 13 rows, exact journal `when` values, all Phase 5 objects present, `posops_app` DDL denied (`42501` / must be owner) while DML succeeds, Postgres untouched |
+| 6 | Gate E rollout | api+worker then web, all `--no-deps --no-build --force-recreate`; Postgres never reconciled |
+| 7 | Gate F smoke + security | `/today` 404→200; `POST /briefs` 409; 5 schedules; **0 brief queues**; 0 secret matches; bindings unchanged; CORS contract correct |
+| 8 | Gate G APK audit | Signer/package/versionCode all correct; no cleartext; `localhost:3000` absent; Category A adjudicated fresh |
+| 9 | Gate H upgrade | versionCode 5; `firstInstallTime` unchanged; pairing, PRIMARY and push token preserved |
+| 10 | Gate I physical | Reminder fired at +96 ms with correct tap route; push accepted **and** delivered; PTT chain with real `avg_logprob`; FAB/PTT clearance on the production identity |
+| 11 | Gate J Daily Brief | One route POST; true model provenance; single-row upsert; Today metadata-only; no queue/cron |
+| 12 | Gates K/L reboots | Both passed; identical container IDs and image digests after host reboot; Rabbit self-recovered |
+| 13 | Gate M cleanup | Count-verified purge, zero residue, zero orphans, baseline data intact |
 
 ## Phase 5 Checkpoint 5.6 — Mobile / Rabbit daily-use polish (COMPLETE, 2026-08-23)
 
@@ -501,7 +786,7 @@ Executed with a parallel read-only audit wave (repo/journal/snapshot auditor, in
 
 **Additional fabrication found and fixed:** journal idx 10's appended `when` was future-dated (`1787528400000`) — under watermark semantics that would have permanently suppressed migration 0011. Corrected to the true authoring-commit epoch `1787362339000`. Idx 9's `1787268000000` was kept deliberately: it equals production's tracked row byte-for-byte, and raising it would replay 0009 on production at the next deploy.
 
-**Repair (reproducible, repo-level):** `packages/db/scripts/reconcile-drizzle-tracking.ts` (+`db:reconcile`, `--check` mode) — computes runner-exact hashes, mechanically derives fail-closed schema-effect probes from EVERY parsed DDL statement (column/constraintdef-equality/indexdef-equality/table existence; unhandled statement classes abort rather than mark applied), advisory-lock + in-tx watermark re-read, abort-on-ambiguous history, literal `(hash, journal.when)` inserts ascending as migrator role. Also: declared the orphaned-but-live unique constraint `calendar_connections_google_account_id_unique` in the Drizzle schema (as `.unique()` CONSTRAINT matching live contype='u', per critic — not an index); added permanent journal-guard tests (contiguous idx, tag↔file bijection, strictly increasing whens, no future-dated entries, exact snapshot allowlist {0009,0010}).
+**Repair (reproducible, repo-level):** `packages/db/scripts/reconcile-drizzle-tracking.ts` (+`db:reconcile`, `--check` mode) — computes runner-exact hashes, mechanically derives fail-closed schema-effect probes from EVERY parsed DDL statement (column/constraintdef-equality/indexdef-equality/table existence; unhandled statement classes abort rather than mark applied), advisory-lock + in-tx watermark re-read, abort-on-ambiguous history, literal `(hash, journal.when)` inserts ascending as migrator role. Also: declared the orphaned-but-live unique constraint `calendar_connections_google_account_id_unique` in the Drizzle schema (as `.unique()` CONSTRAINT matching live contype='u', per critic — not an index); added permanent journal-guard tests (contiguous idx, tag↔file bijection, strictly increasing whens, no future-dated entries, exact snapshot allowlist, which at the time was {0009,0010} and is now {0009,0010,0011,0012} — the test is authoritative and each addition is a deliberate, reviewed act).
 
 **Proofs (all PASS):** pre-repair failure reproduced on a cloned affected DB; affected dev+test reconciled to identical 11-row tables then `drizzle-kit migrate` up-to-date twice each with ZERO DDL; fresh disposable DB migrated 0000→0010 cleanly with EMPTY schema diff vs dev (325/325 objects); production-watermark simulation proved migrate applies exactly {0010} while skipping 0009; probes 34/34 (0009) + 6/6 (0010) verified before any insert; `posops_app` DDL denial intact; production untouched.
 
@@ -1739,13 +2024,46 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-Phase 5 Checkpoint 5.6 (mobile / Rabbit daily-use polish) is **complete and physically verified**. 1154 tests / 15 tasks pass uncached (1099 → +55, all in mobile), every server-side package is byte-identical with `calendar-providers` unchanged at exactly 57, the migration level is still 0000–0012, and there is zero forbidden-area drift.
+**None — Phase 5 is complete and deployed to production.**
 
-The dev harness is now reproducible in tracked config: `expo-build-properties` supplies cleartext for the UI-test profile only, and the physical pass confirmed the `.dev` build reaching the local API with no hand-edited manifest. Production's generated manifest has no cleartext attribute and is deterministic across prebuilds.
+Checkpoint 5.7 deployed Phase 5 on 2026-08-24 under the approved gate sequence with five
+user-approval stops. Production runs migration level 0000–0012, api/worker/web from `656c1fc`,
+and the Rabbit runs `com.himal.personalos` versionCode 5. The Daily Brief is live on the existing
+gpt-4.1 route. Both reboot-survival axes passed. Smoke data was purged with zero residue.
 
-Physical testing earned its place: it found five defects no CI gate could see — a dev script that could have installed the production package over the user's real app, an app-freezing 5-second SQLite poll on the globally-mounted FAB badge, an in-flow CTA sitting under the floating buttons, review Complete/Skip being unreachable behind the IME, and a 3px tab-bar overlap. All five are fixed and re-verified on the device.
+Two items are open for a future pass and are **not** blockers: the recurring-all-day noon-anchor
+defect described in the 5.7 entry (mobile Today shows `12:00`, and the AI brief narrates a wrong
+time), and the real-browser CORS proof that could not be run this pass.
+
+**Do not begin Phase 6 or any other phase without explicit user approval.**
 
 ## Remaining warnings / technical debt
+
+- **Recurring all-day events surface ADR-042's local-noon anchor as a real clock time.** One root
+  cause, two surfaces: `apps/mobile/src/app/(tabs)/index.tsx:155` (`EventRow`'s `timeRange`
+  fallback never checks `event.all_day`, so a recurring instance renders `12:00`) and
+  `apps/api/src/brief/collect-input.ts:72` (`eventEffectiveStart` returns
+  `item.occurs_at ?? item.starts_at`, handing the model the anchor as a real start time — the
+  production brief said *"beginning at 12:00 PM"*). Non-recurring all-day events are correct
+  (`occurs_at` is null → "All-day"). Dates and Agenda grouping are correct everywhere, so this is
+  not data corruption, but the AI narrates a wrong time. Found in production during Checkpoint 5.7.
+- **The real-browser CORS proof has not been run against the Phase 5 deployment.** The Chrome
+  extension was unavailable and the sandboxed browser pane cannot load `/_expo/static/*` on the
+  non-standard `:8443` port (documented Phase 2 limitation). curl proved the exact header contract
+  and `WEB_APP_ORIGIN`/compose are byte-identical to the browser-verified Phase 4 state.
+- **`/home/himallinux/personal-os` on the production host is stale Phase 3 source** (migrations
+  only to 0004) but holds the real `.env`. It is a trap for anyone who builds from it by habit.
+  The live build context is `/home/himallinux/personal-os-5.7-release`; `personal-os-4.7-release`
+  is retained as a rollback source.
+- **There is no DELETE endpoint for AI task routes.** Undoing the production `daily_brief`
+  registration requires another upsert repointing `primary_model_id`, or direct SQL.
+- **The Settings screen ships no test-notification control**, although
+  `POST /devices/:id/test-notification` and the api-client method both exist. Verifying push
+  therefore requires enqueuing a `notifications.dispatch` job server-side, since the device bearer
+  token is deliberately unreadable from SecureStore.
+- **Production gpt-4.1 rarely routes captures to `needs_confirm`.** Two deliberately ambiguous
+  captures (including bare `asdf`) both parsed confidently as notes. Model behaviour, not a defect,
+  but it means the confirmation-push path is hard to exercise on demand in production.
 
 - **Physical Rabbit verification of the Daily Brief card is deferred to 5.6.** Reaching a local dev API from a side-by-side `.dev` build still needs a hand-patched Android manifest (the `expo-build-properties` debt below), which 5.5 was explicitly told not to pull in. Desktop and 480×640 browser evidence stands in; no on-device claim is made.
 - **`ai_daily_briefs.model_id` FK violation is unhandled.** If the referenced `ai_models` row disappeared between resolution and the upsert, the insert would raise `23503` and surface as a generic 500, discarding an already-paid generation. Currently unreachable — the API exposes no delete endpoint for `ai_models` — so it is recorded rather than pre-solved.
@@ -1782,19 +2100,48 @@ Physical testing earned its place: it found five defects no CI gate could see �
 
 ## Last verification
 
-Phase 5 Checkpoint 5.6 (2026-08-23): baseline re-established at **exactly 1099 tests / 15 tasks** before any edit; final state build/typecheck/lint/format clean workspace-wide and **1154 tests pass across 15 turbo tasks, fully uncached** (core 271, db 14, ai-providers 25, calendar-providers **57 — unchanged zero-drift canary**, schema 123, api-client 70, api 327, worker 80, mobile 187). Exactly 13 migrations / 13 journal entries, no 0013. Zero forbidden-area drift. Clean prebuilds of both Android identities: production carries **no** cleartext attribute and reproduces byte-identically across runs, while `gradle.properties` and `proguard-rules.pro` are identical between identities — the plugin writes nothing beyond the one dev-only manifest attribute. `expo export --platform web` clean (single-`index.html` SPA). Timezone sweeps across UTC/Chicago/Auckland/Kolkata/Kiritimati. Mutation testing proved the all-day fix and the routes-hygiene guard both fail when their defect is reintroduced. 3 lint warnings remain, all pre-existing (confirmed by stashing all work). `git diff --check` clean; gitleaks found no leaks. The live `EXPO_TOKEN` in the gitignored `apps/mobile/.env` was confirmed absent from tracked content, the working diff, and all of git history — no rotation needed; its misleading "safe to commit" comment was corrected there and in the tracked `.env.example`. Physical Rabbit R1 matrix run on the dev identity with production byte-identical before and after. Four independent adversarial audits ran across the checkpoint and drove fix waves, including one HIGH (a shared review mutation masking an earlier failure) fixed before commit.
+Phase 5 Checkpoint 5.7 production deployment (2026-08-24). Release gate at `656c1fc`:
+build/typecheck/lint/format clean workspace-wide, **1154 tests across 15 turbo tasks**,
+`calendar-providers` exactly **57** (zero-drift canary), 13 migrations / 13 journal entries with
+no 0013, `git diff --check` clean, gitleaks 81 commits with no leaks, single-`index.html` SPA
+export, **0 lint warnings** (an improvement over 5.6's recorded 3).
+
+Production: migrations 0010–0012 applied exactly once taking the tracking table 10 → **13 rows**
+with the exact journal `when` values and no replay; **Postgres never recreated** (container
+`404de24ef86b`, start time and `restarts=0` unchanged across every gate) and both volume
+identities intact; `posops_app` DDL denied (`42501` / must be owner) while DML succeeds; api,
+worker and web recreated from `656c1fc` with `--no-deps`; `/today` moved 404 → 200; `POST /briefs`
+returned `409 no_provider_configured` before the route existed; five schedules and **zero brief
+queues**; zero secret matches in container logs; bindings unchanged, Postgres unpublished, Serve
+tailnet-only with no Funnel.
+
+Device: APK `39ae353f…` (versionCode 5, signer `4601e3a2…`) installed in place with
+`firstInstallTime`, pairing, PRIMARY and push token all preserved; reminder **physically fired at
+03:48:00.096 CDT, 96 ms after the scheduled instant**, exactly one alarm and one notification,
+tap deep-linked correctly; push accepted (Expo ticket `01a032fa…`) **and physically delivered**;
+PTT ran the real Groq → gpt-4.1 chain with `avg_logprob -0.5232116` and audio cleaned; ADR-042
+recurring all-day expansion verified in production. Both reboot axes passed, the host reboot
+returning all four containers with **identical container IDs and image digests**. Smoke purge was
+count-verified with zero residue and zero orphans.
+
+**Not verified and not claimed:** the real-browser CORS proof (Chrome extension not connected;
+the sandboxed pane cannot load `:8443` assets — documented Phase 2 limitation). curl proved the
+exact header contract and the configuration is byte-identical to the already-browser-verified
+Phase 4 state.
 
 ## Next action
 
-Checkpoint 5.6 is complete — stop and await explicit user approval before beginning Checkpoint 5.7 (gated production deployment), which owns the production `daily_brief` provider/model registration and the deferred physical reminder-alarm verification. **No production changes have been made in Phase 5 to date, and none may be made before 5.7.**
+**Phase 5 is complete. Stop and await explicit user direction before starting any new phase.**
 
-## Handoff rule
+Recommended follow-ups, in priority order, none of them blockers:
 
-After each meaningful task, update:
-- Completed
-- Blockers / user-provided items
-- Current work
-- Last verification
-- Next action
+1. **Fix the recurring-all-day noon-anchor defect** (one root cause, two surfaces:
+   `apps/mobile/src/app/(tabs)/index.tsx:155` and `apps/api/src/brief/collect-input.ts:72`). The
+   API half ships in a server image; the mobile half needs a new EAS build and in-place install at
+   versionCode > 5.
+2. **Run the real-browser CORS check** against `https://personal-os.tail62a68f.ts.net:8443` once a
+   browser is available.
+3. Generate a fresh Daily Brief on the device whenever wanted — the route is live and the smoke
+   brief was deliberately deleted.
 
-Do not replace this file with a generic progress report.
+Phase 6 (Health) has not been approved or planned. Finance remains deferred (ADR-038).
