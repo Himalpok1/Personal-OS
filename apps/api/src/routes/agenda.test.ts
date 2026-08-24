@@ -464,8 +464,15 @@ describe("GET /agenda", () => {
     );
   });
 
+  // Deliberately a FUTURE day, not today. This test asserts ordering within a
+  // day, but it seeds a task at dayStart+15h; on today's window that task is
+  // overdue (`due_at < effectiveNow`) once the suite runs after 15:00 local and
+  // is correctly routed to `overdue[]` instead of the day's items -- so the
+  // assertion failed purely as a function of wall-clock time. Events are never
+  // overdue, which is why only the task disappeared. A future day makes nothing
+  // overdue and tests the ordering intent deterministically.
   it("sorts a day's items with all-day events first, then everyone else interleaved strictly by instant", async () => {
-    const window = localDayWindow(TZ);
+    const window = futureDayWindow(2);
     const dayStart = window.startUtc;
 
     await createEvent({
