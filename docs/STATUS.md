@@ -1,8 +1,8 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 6 — Google Health Integration — **IN PROGRESS at Checkpoint 6.0** (ADRs + documentation reconciliation; no code). Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
-**Implementation status:** Phases 0–5 are implemented and production-deployed. Production migration level is **0000–0012 = 13 migrations**. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
+**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0 and 6.1 COMPLETE; HARD STOP before 6.2** pending the M2–M8 Google Cloud actions and a separate explicit approval. Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Implementation status:** Phases 0–5 are implemented and production-deployed. **Production migration level is unchanged at 0000–0012 = 13 migrations**; Phase 6's additive `0013` exists in local dev/test only and is not deployed. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
 **Next phase allowed:** **Phase 6 Checkpoints 6.0 and 6.1 ONLY** — approved 2026-08-24. Work stops completely after 6.1; Checkpoint 6.2 requires manual Google Cloud actions M2–M8 plus a separate explicit approval, and 6.3 onward requires the 6.2P probe to pass and be approved. Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
@@ -103,6 +103,84 @@ liveness probe, so Phase 6 uses `health-*` siblings throughout (C7).
 **Deliberately not yet changed (C6):** the three lines asserting "13 `.sql` files, 13
 journal entries, **no 0013**" remain **accurate** until migration `0013` actually lands in
 Checkpoint 6.1, and are updated then — not pre-emptively.
+
+### Checkpoint 6.1 — Contracts, migration 0013, provider fake (COMPLETE, 2026-08-24)
+
+Single-writer, per the plan. **Local development only; production untouched.** No Google
+credentials were needed or used, and none exist yet — 6.1 is deliberately buildable without
+them.
+
+**Migration `0013_google_health_sync`** — 39 statements in drizzle-kit style (7 `CREATE
+TABLE`, 6 FKs, 12 CHECKs, 14 indexes; 38 `--> statement-breakpoint`s). Only statement
+classes `reconcile-drizzle-tracking.ts` can process; **no `DROP CONSTRAINT`**, which is the
+`0009` lesson. Journal entry idx 13 appended with a real authoring epoch, and
+`0013_google_health_sync` added to `journal.test.ts`'s `HAND_WRITTEN_WITHOUT_SNAPSHOT` set
+(an exact-equality assertion — the suite fails without it).
+
+**Seven tables:** `health_connections` · `health_oauth_states` · `health_metric_streams` ·
+`health_daily_metrics` · `health_observations` · `health_sessions` · `health_sync_runs`.
+
+Design points worth recording because they were decided against an alternative:
+
+- **`health_daily_metrics` carries no physical instants and no UTC offsets.** `dailyRollUp`
+  documents `civilStartTime`/`civilEndTime` and supplies neither, so those columns could
+  only have held invented values. The consequence, accepted in ADR-048: duration-normalized
+  daily rates are not derivable and are not offered.
+- **No per-row "we checked" timestamp.** Verification lives on the stream
+  (`last_successful_sync_at`) and in `health_sync_runs`, so two identical consecutive syncs
+  can write zero health-data rows.
+- **`health_user_id` is `NOT NULL`.** A Postgres unique index permits unlimited NULLs, so a
+  nullable identity would let a partially-failed connect bypass the account-mismatch guard.
+- **All-or-nothing CHECKs on both encrypted credential triples** — a partially-populated
+  triple is undecryptable and is now unrepresentable.
+- **`provider`, `metric`, `source_family` and `failure_class` carry no CHECK** (ADR-050),
+  so adding a metric never requires an unreconcilable `DROP CONSTRAINT`.
+
+**`packages/core/src/health/`** — `civil-time.ts`, `day-attribution.ts` (the single home of
+the ADR-049 wake-date rule) and `windows.ts`. `packages/core`'s `exports` map gained
+`"./health/*"`, without which a mobile import would fail to resolve or would drag `rrule`
+into the web bundle for the first time.
+
+**A real defect its own tests caught, worth recording rather than quietly fixing:** the
+first `trailingWindow` used `endDate = today + 1` in a half-open range, so the last covered
+day was `today` — it never actually included the ahead-of-UTC local day the widening exists
+for. Worse, `densifiableRange` excluded one day at *each* edge, which (a) was insufficient,
+since at 19:00 UTC a user at −07:00 is still mid-way through their own current day, and
+(b) would have punched a systematic hole at every backfill chunk seam, because chunks abut.
+Corrected to: exclusive end `today + 2`; densification clamped by
+`lastGloballyCompleteDateExclusive(now)` (a date is knowably empty only once it has ended at
+−12:00, the maximum lag); and **no start-edge clamp at all**.
+
+**`packages/schema/src/health-metrics.ts`** — named to avoid the existing `health.ts`
+liveness schema. Response shapes are structurally credential-free, asserted by a test that
+walks the schema keys rather than trusting review.
+
+**`packages/health-providers`** (new package, 82 tests) — `google-health-catalog.ts` (the
+single source of truth for capability metadata, in code rather than in columns),
+`google-health-oauth.ts`, `google-health-client.ts` (injectable `fetchFn`, following the
+CalDAV client rather than the Google Calendar one, which has no test file at all),
+`google-health-client.fake.ts` (scripted queues that **throw on an unqueued call**, so an
+unexpected request fails loudly instead of returning an empty page and a green test) and
+`identity.ts`.
+
+The catalog pins the facts that were got wrong during planning: **`list` never carries
+`dataSourceFamily`**; **sleep filters on `sleep.interval.civil_end_time`, never
+`start_time`**; the 14-day cap is marked `documented_rollup_cap` while every `list`/
+`reconcile` window is marked `self_imposed`; and **`daily-vo2-max` sits under
+`activity_and_fitness`, not `health_metrics`** — verified against the data-types table
+after two research passes disagreed.
+
+**Deliberately NOT built in 6.1** (they belong to 6.2/6.3): API routes, worker jobs, queue
+registration, the rate limiter, record-to-row translation, and any client or UI. No
+`apps/api`, `apps/worker` or `apps/mobile` source file was modified — only their two test
+harnesses, to truncate the new tables in FK order.
+
+**Documentation correction made during this checkpoint:** the plan asserted that three
+`STATUS.md` lines claiming "13 `.sql` files, 13 journal entries, no 0013" would all become
+stale. Two of them are **historical verification records** for Checkpoints 5.6 and 5.7.1
+and were accurate when written; rewriting them would falsify the record. Only the live
+statements were changed — the header's implementation status (now distinguishing local from
+production migration level) and the "Last verification" section.
 
 ## Phase 5 — Daily Command Center + Projects (plan approved 2026-08-21)
 
@@ -2246,8 +2324,13 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-**Phase 6 Checkpoint 6.0 — ADRs and documentation reconciliation (no code).**
-Approved scope is **6.0 and 6.1 only**, then a full stop.
+**Phase 6 Checkpoints 6.0 and 6.1 are complete. Work has stopped, as planned.**
+
+6.0 delivered ADR-046..050 and reconciled seven documented conflicts. 6.1 delivered the
+shared contracts, additive migration `0013` (local dev/test only — **production is still at
+0000–0012**), the `packages/core/src/health/` helpers and the new
+`packages/health-providers` package with its in-memory fake. 1303 tests pass across 16
+turbo tasks; both zero-drift canaries held exactly.
 
 Phase 5 remains complete and deployed; the 5.7.1 hotfix closed the one production defect
 5.7 found.
@@ -2260,8 +2343,8 @@ One acceptance item remains genuinely unverified and is **not** a code defect: t
 real-browser CORS proof (see the 5.7.1 entry — both browser surfaces failed for
 environmental reasons). It needs a human with a browser, roughly fifteen seconds.
 
-**Phase 6 Checkpoints 6.0 and 6.1 are approved. Do not begin Checkpoint 6.2 — or any
-other phase — without the M2–M8 manual actions and a separate explicit user approval.**
+**Do not begin Checkpoint 6.2 without BOTH (a) the M2–M8 Google Cloud actions and
+(b) a separate explicit user approval.** Nothing further is authorized.
 
 ## Remaining warnings / technical debt
 
@@ -2323,10 +2406,40 @@ other phase — without the M2–M8 manual actions and a separate explicit user 
 
 ## Last verification
 
-Phase 5 Checkpoint 5.7.1 all-day noon-anchor hotfix (2026-08-24). Full gate at `b7f7bf1`:
-build/typecheck/lint/format clean, **1169 tests across 15 turbo tasks** (1154 → +15),
-`calendar-providers` exactly **57** and `worker` exactly **80** as zero-drift canaries,
-13 migrations / 13 journal entries with **no 0013**, gitleaks clean.
+**Phase 6 Checkpoint 6.1 — contracts, migration `0013`, provider fake (2026-08-24).**
+Local development only; production untouched.
+
+Full gate: build / typecheck / lint / format:check all clean; **1303 tests across 16 turbo
+tasks** (1169 → **+134**); `git diff --check` clean; gitleaks 85 commits, no leaks;
+`expo export --platform web` clean with a single `index.html`.
+
+**Both zero-drift canaries held exactly: `@personal-os/calendar-providers` 57 and `worker`
+80** — Phase 6 has not touched calendar sync, and the worker canary is re-baselined only
+when 6.3 legitimately adds worker tests.
+
+Per-package: core 308 (+37) · db 14 (unchanged — the journal guards pass *with* the new
+migration) · schema 138 (+15) · **health-providers 82 (new)** · calendar-providers 57 ·
+ai-providers 25 · api-client 70 · api 332 · worker 80 · mobile 197.
+
+Migration `0013_google_health_sync` applied once to dev and once to `personalos_test` as
+`posops_migrator`: **14 tracking rows, 7 tables, 12 CHECKs, 6 FKs, 21 indexes** in both.
+`db:reconcile --check` reports the tracking table consistent with the journal.
+
+**A fresh disposable database migrated `0000 → 0013` produced a `public` schema
+byte-identical to dev — an empty diff over 600 lines** — which is the proof that the
+hand-written `0013` matches what the Drizzle schema declares, so a future `generate` has
+no drift to "fix". The database was dropped afterwards.
+
+Constraints proven to bite, as `posops_app` against the real database: `CREATE TABLE` and
+`ALTER TABLE` both denied (`42501`); a partially-populated credential triple rejected; a
+bad status, a bad `external_key_source`, a bad run kind and an end-before-start session all
+rejected (`23514`); a duplicate `(connection, metric, local_date)` rejected (`23505`); and
+**a true zero (`has_data=true, value=0`) and a verified absence (`has_data=false`) both
+accepted and distinguishable** — the property ADR-047 exists to guarantee. Cascade delete
+left zero residue.
+
+*Previous verification — Phase 5 Checkpoint 5.7.1 all-day noon-anchor hotfix (2026-08-24),
+full gate at `b7f7bf1`: 1169 tests across 15 turbo tasks, 13 migrations, gitleaks clean.*
 
 Both guards are **mutation-tested**: removing the collector's `all_day` short-circuit
 fails exactly the three timezone tests, and removing the mobile helper's fails six.
@@ -2354,8 +2467,29 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Continue Phase 6 into Checkpoint 6.1 (contracts, additive migration `0013`, provider fake),
-then STOP COMPLETELY.** Checkpoint 6.1 needs no Google credentials and no production access.
+**Stopped. The approved scope (6.0 + 6.1) is complete.** Checkpoint 6.2 is blocked on
+user-only actions.
+
+**What is needed from the user, in order — none of which I can do:**
+
+1. **M4a first, because it can invalidate the shipped flow:** try registering
+   `https://personal-os.tail62a68f.ts.net/health-connections/google/callback` as an
+   Authorized redirect URI. If the Console rejects a `.ts.net` domain, **stop at the OAuth
+   gate** — there is no automatic loopback fallback (a `127.0.0.1` callback needs a listener
+   on the browser's own device, which neither the web app nor the Rabbit app has), and no
+   public ingress will be added under any circumstances.
+2. **M8, the other assumption that could break the plan:** press **Publish app** to reach
+   *In production* and confirm the Console permits it with only Restricted scopes and an
+   unverified domain. This is what stops the 7-day refresh-token expiry. If it is blocked,
+   the honest fallback is Testing mode with weekly reconnection — **not** a Cloud Identity
+   organization, which would restrict authorization to org accounts and cannot serve a
+   consumer Gmail account.
+3. M2 enable `health.googleapis.com` · M3 create a **separate** Web Server OAuth client ·
+   M5 External user type + your account as a test user · M6 select **exactly** the three
+   read scopes (not `settings.readonly`) · M7 put the client id and secret into `.env`
+   yourself — **never paste a secret into chat**.
+
+Then explicitly approve Checkpoint 6.2.
 
 One acceptance item is outstanding and needs a human with a browser (~15 seconds):
 

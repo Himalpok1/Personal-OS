@@ -9,6 +9,13 @@ import {
   devices,
   eventExternalLinks,
   events,
+  healthConnections,
+  healthDailyMetrics,
+  healthMetricStreams,
+  healthOauthStates,
+  healthObservations,
+  healthSessions,
+  healthSyncRuns,
   inboxItems,
   notificationDispatchLog,
   occurrences,
@@ -41,4 +48,15 @@ export async function truncateTestTables(db: Db): Promise<void> {
   await db.delete(aiTaskRoutes);
   await db.delete(aiModels);
   await db.delete(aiProviderConnections);
+  // Phase 6 health tables. FK order: health_sync_runs references
+  // health_metric_streams (set null) and health_connections (cascade); the
+  // other four child tables reference health_connections (cascade). Must match
+  // apps/api/src/test/build-test-app.ts's order.
+  await db.delete(healthSyncRuns);
+  await db.delete(healthObservations);
+  await db.delete(healthSessions);
+  await db.delete(healthDailyMetrics);
+  await db.delete(healthMetricStreams);
+  await db.delete(healthConnections);
+  await db.delete(healthOauthStates);
 }

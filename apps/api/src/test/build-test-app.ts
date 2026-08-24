@@ -7,6 +7,13 @@ import {
   devices,
   eventExternalLinks,
   events,
+  healthConnections,
+  healthDailyMetrics,
+  healthMetricStreams,
+  healthOauthStates,
+  healthObservations,
+  healthSessions,
+  healthSyncRuns,
   inboxItems,
   notes,
   notificationDispatchLog,
@@ -58,4 +65,16 @@ export async function truncateTestTables(app: FastifyInstance): Promise<void> {
   // ai_daily_briefs references ai_models (ON DELETE set null), which route
   // tests never populate, so it clears independently of everything above.
   await app.db.delete(aiDailyBriefs);
+  // Phase 6 health tables. FK order: every one of the five child tables
+  // references health_connections (cascade), and health_sync_runs additionally
+  // references health_metric_streams (set null) -- so runs clear before
+  // streams, and all five before connections. health_oauth_states has no
+  // foreign keys at all and clears independently.
+  await app.db.delete(healthSyncRuns);
+  await app.db.delete(healthObservations);
+  await app.db.delete(healthSessions);
+  await app.db.delete(healthDailyMetrics);
+  await app.db.delete(healthMetricStreams);
+  await app.db.delete(healthConnections);
+  await app.db.delete(healthOauthStates);
 }

@@ -20,6 +20,7 @@ const HAND_WRITTEN_WITHOUT_SNAPSHOT = new Set([
   "0010_project_lifecycle",
   "0011_review_history",
   "0012_ai_daily_briefs",
+  "0013_google_health_sync",
 ]);
 
 interface JournalEntry {

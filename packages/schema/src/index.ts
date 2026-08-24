@@ -15,3 +15,4 @@ export * from "./today.js";
 export * from "./agenda.js";
 export * from "./reviews.js";
 export * from "./brief.js";
+export * from "./health-metrics.js";
