@@ -1,7 +1,7 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0 and 6.1 COMPLETE; HARD STOP before 6.2** pending the M2–M8 Google Cloud actions and a separate explicit approval. Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0, 6.1 and 6.2 COMPLETE (local/mocked); HARD STOP before 6.2P**, which requires a live Google consent flow against the real account and a separate explicit approval. Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
 **Implementation status:** Phases 0–5 are implemented and production-deployed. **Production migration level is unchanged at 0000–0012 = 13 migrations**; Phase 6's additive `0013` exists in local dev/test only and is not deployed. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
 **Next phase allowed:** **Phase 6 Checkpoints 6.0 and 6.1 ONLY** — approved 2026-08-24. Work stops completely after 6.1; Checkpoint 6.2 requires manual Google Cloud actions M2–M8 plus a separate explicit approval, and 6.3 onward requires the 6.2P probe to pass and be approved. Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
@@ -103,6 +103,114 @@ liveness probe, so Phase 6 uses `health-*` siblings throughout (C7).
 **Deliberately not yet changed (C6):** the three lines asserting "13 `.sql` files, 13
 journal entries, **no 0013**" remain **accurate** until migration `0013` actually lands in
 Checkpoint 6.1, and are updated then — not pre-emptively.
+
+### Checkpoint 6.2 — Google Health OAuth connection (COMPLETE, mocked, 2026-08-24)
+
+**Local development only. Production untouched. The OAuth app remains in Testing, and no
+live Google consent flow was run** — every outbound call in this checkpoint is either a
+stubbed global `fetch` or the injected in-memory fake client. **No migration**: 6.2 uses the
+tables `0013` already created, so the level stays at 14 locally and 0000–0012 in production.
+
+**Google Cloud setup (performed by the user):** project `personal-os-196cf`;
+`health.googleapis.com` enabled; Audience External; **publishing status Testing**; the
+user's account added as a test user; exactly the three read scopes configured; a separate
+Web Application client `Personal OS Google Health Web`; and Google accepted the exact
+redirect URI `https://personal-os.tail62a68f.ts.net/health-connections/google/callback`.
+
+> **The M4a risk recorded in the plan is resolved: Google accepted the `.ts.net` callback.**
+> The plan's R3 ("`.ts.net` may be rejected as an Authorized Domain") did not materialise,
+> so the shipped flow is the tailnet server callback and the loopback path is not needed.
+
+> **M8 is deliberately NOT done and the prior instruction is superseded.** The app stays in
+> Testing through 6.2, which means **refresh tokens expire after 7 days**. Publishing is
+> reconsidered only after 6.2P proves authorization, encrypted refresh-token persistence,
+> access-token refresh, partial consent and reconnection.
+
+**Credential import.** The client id and secret were extracted from the user's Desktop
+credentials JSON into the local `.env` by a silent shell operation — never read with a
+model-facing file tool, never echoed, never placed in a command, and never copied into the
+repository. `.env` was confirmed git-ignored (`.gitignore:18`) and untracked *before*
+writing; it went from 13 to 16 keys with none lost and is mode 600. Verification was by
+variable NAME only. The JSON's own `redirect_uris` was cross-checked to contain the exact
+callback, which independently confirms the Console registration.
+
+**What was built.**
+
+- Configuration is a **separate OAuth client** from `GOOGLE_OAUTH_*` — a Calendar token is
+  never reused as a Health token. All three vars are **optional**, unlike the Calendar pair,
+  so the API still boots without them and Health routes degrade to `409
+  health_not_configured`. `docker-compose.yml` passes them with `:-` for the same reason: a
+  rollout must not hard-fail before the credentials exist. Both compose overlays validated.
+- `GOOGLE_HEALTH_OAUTH_REDIRECT_URI` is an **exact-match allowlist, not a default**. A
+  client may select among allowlisted redirects; it can never introduce one. No
+  normalization, no prefix matching, no wildcards, no trailing-slash tolerance.
+- **OAuth state**: 32 random bytes, stored only as a sha256 — never the raw value, mirroring
+  `device_pairing_codes` — single-use via an atomic
+  `UPDATE ... WHERE consumed_at IS NULL ... RETURNING`, expiry-checked, and bound to the
+  exact redirect it was issued for. **The redirect and state are validated before the code
+  is spent**, so a forged callback never causes a token exchange (pinned by a test).
+- **One shared internal service** backs both the GET callback and the manual POST path. If
+  each performed its own exchange, the allowlist, state check and account-mismatch guard
+  would have two implementations that could drift.
+- `prompt=consent` is now sent **only when a refresh token is genuinely required**.
+  `access_type=offline` still goes every time. Google caps an account at 100 live refresh
+  tokens per client and evicts the oldest beyond that, so prompting on every reconnect
+  would slowly destroy older grants.
+- **Identity comes from `users.getIdentity`, never a JWT** — the three read scopes carry no
+  identity claim and Google returns no `id_token`. The connection binds to `healthUserId`,
+  and a different account is rejected rather than silently rebound.
+- **Partial consent is resolved at connect time** from the granted scope, turning what would
+  be a storm of runtime 403s into one recorded fact. Intraday heart rate stays disabled even
+  when granted — it is the only high-volume stream and its identity strategy is unproven
+  until 6.2P. A reconnect deliberately does **not** re-enable a stream the user turned off.
+- Tokens are encrypted with the existing AES-256-GCM system under an unchanged
+  `CREDENTIALS_ENCRYPTION_KEY`. A refresh never overwrites the stored refresh token, since
+  Google often omits one. `invalid_grant` marks `needs_reauth`; a transient 5xx does not.
+  Disconnect best-effort revokes then unconditionally NULLs every secret column — including
+  when decryption itself fails after a key rotation — while **keeping the row** as history.
+
+**The security defect this checkpoint actually fixed.** The OAuth callback carries a live
+authorization code and its CSRF state in the **query string**, and two plausible mitigations
+were verified to be ineffective against the installed `fastify@5.12.0`:
+
+| Mitigation | Why it fails |
+|---|---|
+| An `onRequest` hook rewriting `req.url` | `lib/route.js:522` calls `incomingRequest()` **39 lines before** `onRequestHookRunner` at `:561`. The code is on disk before any hook runs |
+| `redact.paths` for `req.query.code` | The default serializer (`lib/logger-pino.js` `asReqValue`) emits only `{method, url, version, host, remoteAddress, remotePort}` — there is no `req.query` and no `req.body`, so those paths censor nothing |
+
+A **custom `req` serializer** runs inside that first log call and is the only place that
+covers it. **Corollary worth recording: the pre-existing `req.body.api_key` /
+`req.body.auth_code` / `req.body.password` redact entries are also no-ops today** — bodies
+are safe because the serializer never emits them, not because of the redact list. They are
+retained as defence in depth for any future change that does log bodies. Scrubbing applies
+on **every** route, not just the callback. It is verified against a **real captured log
+stream**, not against the config — a config-level assertion is exactly what would have
+passed while a code was still being written to disk — and covers percent-encoded parameter
+names (`%63ode`), repeated parameters, values containing separator characters, and
+malformed percent-escapes, which must never throw inside the logger.
+
+**Verification actually run**
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Full gate | build / typecheck / lint / format:check clean; `git diff --check` clean; `expo export --platform web` clean with a single `index.html` |
+| 2 | Full suite | **1382 tests across 17 turbo tasks** (1303 → **+79**); api 332 → 409 (41 route + 20 service + 16 logging) |
+| 3 | Zero-drift canaries | `calendar-providers` exactly **57**, `worker` exactly **80** |
+| 4 | Migration invariant | 14 `.sql` / 14 journal entries — **6.2 adds no migration** |
+| 5 | Working-tree secret scan | `gitleaks --no-git` found 71 findings, **0 of them in any file git would commit**; all confined to gitignored paths (66 in the generated `apps/mobile/android/` tree, 5 in `.env`). Staged scans clean on every commit |
+| 6 | Credential-value paranoia check | The real values in `.env` were compared against the staged diff directly (without printing them): **none present** |
+| 7 | Boundaries | `apps/mobile`, `packages/api-client` and `packages/calendar-providers` are **byte-unchanged**; no worker source touched; no `versionCode` change; no production access |
+
+**A test bug found and fixed rather than left passing for the wrong reason:** the
+expired-state test originally filtered with `eq(consumedAt, consumedAt)`, which is
+`NULL = NULL` and therefore matches nothing — so no row was ever backdated and the
+assertion passed without exercising expiry at all.
+
+**Deliberately NOT built** (6.3/6.4): the sync engine, worker jobs, queue registration, the
+rate limiter, record-to-row translation, `packages/api-client` methods, and any UI. `POST
+/health-connections/:id/sync` does not exist yet, and the connect path performs **zero job
+enqueues** — pinned by a test so a future change cannot start shipping a credential through
+pg-boss unnoticed.
 
 ### Checkpoint 6.1 — Contracts, migration 0013, provider fake (COMPLETE, 2026-08-24)
 
@@ -2324,13 +2432,14 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-**Phase 6 Checkpoints 6.0 and 6.1 are complete. Work has stopped, as planned.**
+**Phase 6 Checkpoints 6.0, 6.1 and 6.2 are complete. Work has stopped, as planned.**
 
 6.0 delivered ADR-046..050 and reconciled seven documented conflicts. 6.1 delivered the
 shared contracts, additive migration `0013` (local dev/test only — **production is still at
 0000–0012**), the `packages/core/src/health/` helpers and the new
-`packages/health-providers` package with its in-memory fake. 1303 tests pass across 16
-turbo tasks; both zero-drift canaries held exactly.
+`packages/health-providers` package with its in-memory fake. 6.2 delivered the Google
+Health OAuth connection flow, entirely against mocks — **no live consent flow has been
+run**. 1382 tests pass across 17 turbo tasks; both zero-drift canaries held exactly.
 
 Phase 5 remains complete and deployed; the 5.7.1 hotfix closed the one production defect
 5.7 found.
@@ -2343,8 +2452,9 @@ One acceptance item remains genuinely unverified and is **not** a code defect: t
 real-browser CORS proof (see the 5.7.1 entry — both browser surfaces failed for
 environmental reasons). It needs a human with a browser, roughly fifteen seconds.
 
-**Do not begin Checkpoint 6.2 without BOTH (a) the M2–M8 Google Cloud actions and
-(b) a separate explicit user approval.** Nothing further is authorized.
+**Do not begin Checkpoint 6.2P — the live-account probe — without a separate explicit
+user approval.** 6.2P is the first step that performs a real Google consent flow. Nothing
+further is authorized.
 
 ## Remaining warnings / technical debt
 
@@ -2467,29 +2577,27 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Stopped. The approved scope (6.0 + 6.1) is complete.** Checkpoint 6.2 is blocked on
-user-only actions.
+**Stopped. Checkpoints 6.0, 6.1 and 6.2 are complete — all local and fully mocked.**
 
-**What is needed from the user, in order — none of which I can do:**
+The next step, **Checkpoint 6.2P**, is the first that touches the real Google account, and
+it needs a separate explicit approval. What it requires:
 
-1. **M4a first, because it can invalidate the shipped flow:** try registering
-   `https://personal-os.tail62a68f.ts.net/health-connections/google/callback` as an
-   Authorized redirect URI. If the Console rejects a `.ts.net` domain, **stop at the OAuth
-   gate** — there is no automatic loopback fallback (a `127.0.0.1` callback needs a listener
-   on the browser's own device, which neither the web app nor the Rabbit app has), and no
-   public ingress will be added under any circumstances.
-2. **M8, the other assumption that could break the plan:** press **Publish app** to reach
-   *In production* and confirm the Console permits it with only Restricted scopes and an
-   unverified domain. This is what stops the 7-day refresh-token expiry. If it is blocked,
-   the honest fallback is Testing mode with weekly reconnection — **not** a Cloud Identity
-   organization, which would restrict authorization to org accounts and cannot serve a
-   consumer Gmail account.
-3. M2 enable `health.googleapis.com` · M3 create a **separate** Web Server OAuth client ·
-   M5 External user type + your account as a test user · M6 select **exactly** the three
-   read scopes (not `settings.readonly`) · M7 put the client id and secret into `.env`
-   yourself — **never paste a secret into chat**.
+1. **A live consent flow.** Open the authorize URL from
+   `GET /health-connections/google/authorize-url`, grant the three scopes, and let Google
+   redirect to the registered `.ts.net` callback. This is the first real authorization.
+2. **The capability probe** across all 19 catalog metrics, recording available / empty /
+   forbidden / unsupported per metric — the input 6.3's scope depends on.
+3. **The `reconcile` identity-stability gate (F5).** Reconcile an identical 24-hour window
+   twice, a day apart, and diff key stability and row count. **This gates the raw
+   heart-rate path in 6.3**, and nothing else.
+4. **Measure actual raw-HR sample density**, which determines volume and backfill cost.
+5. **Start the refresh-token clock.** The app is in **Testing**, so refresh tokens expire
+   after **7 days** — reconnection will be needed roughly weekly until publishing is
+   reconsidered, which is deliberately deferred until 6.2P proves the lifecycle.
 
-Then explicitly approve Checkpoint 6.2.
+**Publishing (the former M8) is superseded and deliberately not done.** It receives separate
+approval only after 6.2P proves authorization, encrypted refresh-token persistence, access
+token refresh, partial consent and reconnection.
 
 One acceptance item is outstanding and needs a human with a browser (~15 seconds):
 
