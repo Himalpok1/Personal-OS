@@ -34,6 +34,32 @@ const EnvSchema = z.object({
   // and must never be exposed to apps/mobile.
   GOOGLE_OAUTH_CLIENT_ID: z.string().min(1),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().min(1),
+
+  // Google Health OAuth (Phase 6 Checkpoint 6.2). A SEPARATE OAuth client from
+  // GOOGLE_OAUTH_* above -- a Calendar token is never reused as a Health token.
+  //
+  // OPTIONAL, unlike the Calendar pair, and deliberately so: the API and worker
+  // must still boot when Health is not configured, degrading to a structured
+  // "not configured" error rather than crash-looping. That mirrors how the AI
+  // layer returns 409 no_provider_configured instead of refusing to start.
+  //
+  // GOOGLE_HEALTH_OAUTH_REDIRECT_URI is the exact-match ALLOWLIST, not a
+  // default: it is comma-separated so a second entry can be added later, and a
+  // redirect_uri that is not in it is rejected outright. It is never taken from
+  // the client.
+  GOOGLE_HEALTH_OAUTH_CLIENT_ID: z.string().min(1).optional(),
+  GOOGLE_HEALTH_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
+  GOOGLE_HEALTH_OAUTH_REDIRECT_URI: z
+    .string()
+    .optional()
+    .transform((value) =>
+      value === undefined
+        ? []
+        : value
+            .split(",")
+            .map((uri) => uri.trim())
+            .filter((uri) => uri.length > 0),
+    ),
 });
 
 // Fail fast on missing config. This is distinct from DB *reachability*,

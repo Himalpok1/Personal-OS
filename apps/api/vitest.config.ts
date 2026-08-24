@@ -23,6 +23,16 @@ export default defineConfig({
       // directory a real local dev run also uses. transcribe.test.ts's
       // afterAll removes this directory entirely once tests finish.
       AUDIO_STORAGE_PATH: "/tmp/personal-os-audio-test-api",
+      // Deterministic Google Health OAuth config for route tests. These are
+      // not credentials -- they are placeholders; every outbound call is either
+      // a stubbed global fetch or the injected in-memory fake client, so no
+      // test ever reaches Google. The redirect list is deliberately the REAL
+      // registered callback plus a second entry, so allowlist and
+      // redirect-binding behaviour are exercised against realistic values.
+      GOOGLE_HEALTH_OAUTH_CLIENT_ID: "test-health-client-id",
+      GOOGLE_HEALTH_OAUTH_CLIENT_SECRET: "test-health-client-secret",
+      GOOGLE_HEALTH_OAUTH_REDIRECT_URI:
+        "https://personal-os.tail62a68f.ts.net/health-connections/google/callback,https://alt.example.ts.net/health-connections/google/callback",
     },
     // Fastify + pg-boss startup (registerBoss retries on connect) is slow
     // enough that the default 5s hook timeout can flake under load.
