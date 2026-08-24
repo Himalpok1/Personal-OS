@@ -2,7 +2,7 @@
 
 **Project:** Personal OS
 **Current phase:** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
-**Implementation status:** Phases 0–5 are implemented and production-deployed. Production migration level is **0000–0012 = 13 migrations**. The production Rabbit runs `com.himal.personalos` versionCode **5**.
+**Implementation status:** Phases 0–5 are implemented and production-deployed. Production migration level is **0000–0012 = 13 migrations**. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
 **Next phase allowed:** **None without explicit user approval.** Phase 5 is closed. Finance remains deferred (ADR-038), still gated on the open finance-source-of-truth decision. Phase 6 (Health) and Phase 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
@@ -266,7 +266,131 @@ Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, 
 - [x] Phase 5 Checkpoint 5.4 — Smart Agenda / Planning: GET /agenda read model + route (90-day cap, project filter, chronological interleave), Calendar Month|Week|**Agenda**, the central canonical all-day recurrence fix (ADR-042) across core/API/worker/routes, AI-capture canonicalization, mobile UTC-date fix, and `remind_at` PATCH — complete 2026-08-22 (local only; production untouched; **zero migrations**).
 - [x] Phase 5 Checkpoint 5.6 — Mobile / Rabbit daily-use polish: reproducible dev harness via expo-build-properties (dev-profile only, production proved unaffected), dev-shell parity, FAB/PTT clearance, notification cold-start, all-day date off-by-one, serialized review saves, keyboard reachability, touch/layout polish — complete 2026-08-23 (physically verified on the Rabbit R1; production untouched; zero migrations).
 - [x] **Phase 5 Checkpoint 5.7 — Production deployment + Phase 5 closure: migrations 0010–0012 applied exactly once (level 0000–0012 = 13), api/worker/web rolled out from `656c1fc`, Rabbit upgraded in place to versionCode 5 with pairing/PRIMARY/credential preserved, production `daily_brief` route registered on the existing gpt-4.1 model, reminder real-fire + push delivery + PTT all physically verified, and BOTH reboot axes passed — complete 2026-08-24. PHASE 5 COMPLETE.**
+- [x] **Phase 5 Checkpoint 5.7.1 — All-day noon-anchor hotfix: ADR-042's local-noon recurrence anchor no longer reaches presentation. Two live leaks fixed (Today `12:00`, Brief "beginning at 12:00 PM"), three latent spots hardened, `BriefEventItem` gained a `date` field, one shared all_day-first helper, regression + mutation tests across Chicago/Auckland/Santiago. api+web rebuilt, versionCode 6 installed in place. Google/CalDAV untouched and provably unaffected. **No migration.** — complete 2026-08-24.**
 - [x] Phase 5 Checkpoint 5.5 — Personal OS Daily Brief: migration 0012 (`ai_daily_briefs`, identity `(brief_date, timezone)`), deterministic Today-derived collector, injection-guarded prompt, provider-agnostic generation with true model provenance, `POST /briefs` + `GET /briefs/current`, Today brief metadata, and the Today Brief card — complete 2026-08-23 (local only; production untouched; no paid provider call).
+
+## Phase 5 Checkpoint 5.7.1 — All-day noon-anchor hotfix (COMPLETE, 2026-08-24)
+
+Closes the defect Checkpoint 5.7 found in production. **No migration — level stays
+0000–0012 = 13.**
+
+### The invariant now enforced
+
+ADR-042 anchors a recurring **all-day** series' DTSTART at **local noon** so date-only
+recurrence is DST-safe and correct in nonexistent-midnight zones. That value is
+implementation metadata. It escaped into presentation:
+
+- Today rendered **`12:00`** for an all-day event;
+- the Daily Brief narrated **"an all-day weekly event beginning at 12:00 PM"**.
+
+> `all_day === true` → date-only everywhere outside recurrence internals.
+> Never format, position, or narrate `occurs_at` for an all-day item.
+
+### Audit — every consumer, not just the two symptoms
+
+Two independent read-only audits covered all 30 files referencing
+`occurs_at`/`occursAt`/`occurs_local`/`starts_at`/`is_recurring_instance`/`all_day`
+across Today, Agenda, Month, Week, project sections, reviews, the Brief collector,
+notification text and the API client.
+
+**Exactly two live leaks**, both fixed:
+
+| File | Defect |
+|---|---|
+| `apps/mobile/src/app/(tabs)/index.tsx:155` | `EventRow` re-derived the time with no `all_day` knowledge. `EventsSection` *did* split all-day from timed, but both groups funnelled through the same row component — the grouping was discarded exactly where it was needed. |
+| `apps/api/src/brief/collect-input.ts:72` | `eventEffectiveStart` returned `occurs_at ?? starts_at` unguarded, handing the model a synthetic noon timestamp. |
+
+**Three further spots were safe only by accident** and are now structurally safe:
+
+- `read-models/event-range.ts` `sortKey` sorted an all-day *recurring* instance by its
+  noon anchor (17:00Z) while a non-recurring all-day event on the same day sorted at
+  midnight. Invisible through Today/Agenda (both re-sort and hoist all-day items), real
+  for any direct `/events/range` consumer trusting array order.
+- `read-models/review-contexts.ts:118` holds the **byte-identical** leaking expression,
+  protected only by four lines above it.
+- `calendar/week-grid.tsx` `formatTimeLabel` reads `occurs_at` with no guard of its own;
+  safe only because `week-grid-layout.ts` `continue`s past the timed path for all-day
+  entries.
+
+Everything else was genuinely safe, and the audit recorded *why* in each case —
+`reviews/daily.tsx` splits into groups and gives each a different `time` prop;
+`reviews/weekly.tsx` and `agenda-rows.tsx` check `all_day` inline before the fallback;
+`grid-math.ts` and `week-grid-layout.ts` branch on `all_day` before any instant math;
+`projects/[id].tsx` is structurally immune because `ProjectDetailEventSchema` carries no
+`occurs_at` at all.
+
+### A contract gap, not just a bad expression
+
+`BriefEventItem` was `{title, starts_at, all_day, location}` — **no date field**. Fixing
+`starts_at` alone would have left the model with `all_day: true` and no way to know
+*which day*. It now carries `date` (the instance's own calendar date, already re-pointed
+per instance by `assembleEventRange`), and `starts_at` is **always null** when `all_day`
+is true, so a time is inexpressible rather than merely discouraged.
+
+The system prompt previously contained **zero** `all_day` guidance, which made narrating
+the timestamp technically compliant with its own "state only facts present in the JSON"
+rule. It now states the rule explicitly as defense in depth.
+
+The `all_day`-first decision lives in one shared helper
+(`apps/mobile/src/utils/event-time-label.ts`) used by **both** Today and Agenda, so the
+two chains cannot drift apart again.
+
+### Google / CalDAV deliberately untouched — and provably safe
+
+Sync reads `events` rows directly (`row.allDay` / `row.startDate`) and has **zero**
+references to `EventRangeItem`, `TodayEventItem` or `AgendaItem` anywhere in
+`apps/worker` or `packages/calendar-providers`. The presentation change therefore cannot
+reach it. `calendar-providers` stayed at exactly **57** tests and `worker` at exactly
+**80** as the zero-drift canaries, and the worker image was **not rebuilt** because its
+dependency closure is unchanged.
+
+### Verification
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Full gate | build/typecheck/lint/format clean; **1169 tests / 15 tasks** (1154 → +15); `calendar-providers` **57**; worker **80** |
+| 2 | Migration invariant | 13 `.sql`, 13 journal entries, **no 0013** |
+| 3 | Timezone matrix | Regression tests across **America/Chicago, Pacific/Auckland, America/Santiago** — the noon anchor lands on a different UTC hour, and a different UTC *day*, in each |
+| 4 | Mutation testing | Removing the collector guard fails exactly the 3 timezone tests; removing the mobile helper's short-circuit fails 6 — **both guards proven load-bearing** |
+| 5 | Deployed web artifact | The exact leaking expression is **present in the pre-fix bundle and absent from the post-fix one**; the new `All day` label appears only in the new bundle |
+| 6 | Production Brief prose | Before: *"an all-day weekly event beginning at 12:00 PM"*. After: *"This event will also occur as an all-day event on both August 25 and August 26."* — **zero** mentions of 12:00 or noon |
+| 7 | Production read models | 3 instances on 3 distinct dates, each `start_date` equal to its own day, `starts_at` null |
+| 8 | Physical device (versionCode 6) | Today `'All day, P571-SMOKE all-day recurring'` (was `'12:00, …'`); Agenda ALL-DAY on all 3 dates; Week 3 all-day chips with no time; Month no time. **No `12:00` on any surface.** |
+| 9 | Google/CalDAV | Connection active, 1985 calendar jobs completed, **zero failures**; worker untouched |
+| 10 | Smoke cleanup | 3 occurrences + 1 event + 1 brief removed; **zero residue, zero orphan occurrences, zero orphan `event_external_links`, zero `calendar_event_instances`**; baseline preserved (2 tasks, 3 notes, 6 inbox, 2 devices, 13 tracking rows) |
+
+### Deployment
+
+Source `b7f7bf1`, shipped via `git archive` to `/home/himallinux/personal-os-5.7.1-release`.
+Rollback tags `personal-os-{api,web}:pre-5.7.1` taken by digest first.
+
+| Component | Rebuilt | Image |
+|---|---|---|
+| api | yes | `sha256:bf0f5ea055425a99bdc9d211b49afd9b25a09d503e83dfa1ce809073cdf23e45` |
+| web | yes | `sha256:9325077877fffaf13fcb87ec197a8336ec14f63b8f4d5c1dcb28edeb322cf26c` |
+| worker | **no** — dependency closure unchanged | `bb0f3ec47631` (unchanged) |
+| postgres | **no** | `404de24ef86b` (unchanged, `restarts=0`) |
+
+Android: EAS `f5b7955a-6cbb-4e79-9747-1f3e702aa2b4`, profile `production-internal`,
+versionCode **6**, APK SHA-256
+`9fe77d4aa70c6534215cfcca068585b69528242018cf5ac8d7044e3d915b2679`, signer
+`4601e3a2…6cc23ea` (unchanged). Installed with `adb install -r` only —
+`firstInstallTime` still `2026-08-19 16:26:10`, pairing and PRIMARY preserved, no
+pairing screen. The build **fingerprint is identical** to versionCode 5
+(`5e208f678a90699d930e3cdf40c6431dc7d32857`), which is the evidence that the native
+dependency graph — and therefore the React Native 0.86.2 `getDevServer.js`
+`localhost:8081` Category A adjudication — carries over unchanged.
+
+### Still open
+
+**The real-browser CORS proof remains the one uncompleted 5.7 acceptance item.** Both
+browser surfaces available to this session failed for environmental reasons, not because
+of the application: the Chrome extension was not connected, and the sandboxed browser
+pane returns `net::ERR_BLOCKED_BY_CLIENT`, which blocks the request before it leaves the
+browser and is therefore not a CORS result at all. Server-side evidence stands — the
+approved origin receives `access-control-allow-origin` plus GET/HEAD/POST/PATCH/DELETE,
+and an unapproved origin receives no `allow-origin` header — but no browser has exercised
+it against the Phase 5 deployment.
 
 ## Phase 5 Checkpoint 5.7 — Production deployment + Phase 5 closure (COMPLETE, 2026-08-24)
 
@@ -2024,29 +2148,26 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-**None — Phase 5 is complete and deployed to production.**
+**None — Phase 5 is complete and deployed, and the 5.7.1 hotfix has closed the one
+production defect 5.7 found.**
 
-Checkpoint 5.7 deployed Phase 5 on 2026-08-24 under the approved gate sequence with five
-user-approval stops. Production runs migration level 0000–0012, api/worker/web from `656c1fc`,
-and the Rabbit runs `com.himal.personalos` versionCode 5. The Daily Brief is live on the existing
-gpt-4.1 route. Both reboot-survival axes passed. Smoke data was purged with zero residue.
+Production runs migration level 0000–0012, api/web from `b7f7bf1`, worker from `656c1fc`
+(deliberately not rebuilt — unchanged dependency closure), and the Rabbit runs
+versionCode 6. The Daily Brief is live on the existing gpt-4.1 route.
 
-Two items are open for a future pass and are **not** blockers: the recurring-all-day noon-anchor
-defect described in the 5.7 entry (mobile Today shows `12:00`, and the AI brief narrates a wrong
-time), and the real-browser CORS proof that could not be run this pass.
+One acceptance item remains genuinely unverified and is **not** a code defect: the
+real-browser CORS proof (see the 5.7.1 entry — both browser surfaces failed for
+environmental reasons). It needs a human with a browser, roughly fifteen seconds.
 
 **Do not begin Phase 6 or any other phase without explicit user approval.**
 
 ## Remaining warnings / technical debt
 
-- **Recurring all-day events surface ADR-042's local-noon anchor as a real clock time.** One root
-  cause, two surfaces: `apps/mobile/src/app/(tabs)/index.tsx:155` (`EventRow`'s `timeRange`
-  fallback never checks `event.all_day`, so a recurring instance renders `12:00`) and
-  `apps/api/src/brief/collect-input.ts:72` (`eventEffectiveStart` returns
-  `item.occurs_at ?? item.starts_at`, handing the model the anchor as a real start time — the
-  production brief said *"beginning at 12:00 PM"*). Non-recurring all-day events are correct
-  (`occurs_at` is null → "All-day"). Dates and Agenda grouping are correct everywhere, so this is
-  not data corruption, but the AI narrates a wrong time. Found in production during Checkpoint 5.7.
+- ~~**Recurring all-day events surface ADR-042's local-noon anchor as a real clock time.**~~
+  — **CLOSED by Checkpoint 5.7.1.** Both live leaks fixed, three latent spots hardened,
+  `BriefEventItem` gained a `date` field, the rule centralised in one shared helper, and
+  regression + mutation tests added across three timezones. Verified on the production
+  device at versionCode 6.
 - **The real-browser CORS proof has not been run against the Phase 5 deployment.** The Chrome
   extension was unavailable and the sandboxed browser pane cannot load `/_expo/static/*` on the
   non-standard `:8443` port (documented Phase 2 limitation). curl proved the exact header contract
@@ -2100,48 +2221,53 @@ time), and the real-browser CORS proof that could not be run this pass.
 
 ## Last verification
 
-Phase 5 Checkpoint 5.7 production deployment (2026-08-24). Release gate at `656c1fc`:
-build/typecheck/lint/format clean workspace-wide, **1154 tests across 15 turbo tasks**,
-`calendar-providers` exactly **57** (zero-drift canary), 13 migrations / 13 journal entries with
-no 0013, `git diff --check` clean, gitleaks 81 commits with no leaks, single-`index.html` SPA
-export, **0 lint warnings** (an improvement over 5.6's recorded 3).
+Phase 5 Checkpoint 5.7.1 all-day noon-anchor hotfix (2026-08-24). Full gate at `b7f7bf1`:
+build/typecheck/lint/format clean, **1169 tests across 15 turbo tasks** (1154 → +15),
+`calendar-providers` exactly **57** and `worker` exactly **80** as zero-drift canaries,
+13 migrations / 13 journal entries with **no 0013**, gitleaks clean.
 
-Production: migrations 0010–0012 applied exactly once taking the tracking table 10 → **13 rows**
-with the exact journal `when` values and no replay; **Postgres never recreated** (container
-`404de24ef86b`, start time and `restarts=0` unchanged across every gate) and both volume
-identities intact; `posops_app` DDL denied (`42501` / must be owner) while DML succeeds; api,
-worker and web recreated from `656c1fc` with `--no-deps`; `/today` moved 404 → 200; `POST /briefs`
-returned `409 no_provider_configured` before the route existed; five schedules and **zero brief
-queues**; zero secret matches in container logs; bindings unchanged, Postgres unpublished, Serve
-tailnet-only with no Funnel.
+Both guards are **mutation-tested**: removing the collector's `all_day` short-circuit
+fails exactly the three timezone tests, and removing the mobile helper's fails six.
+Regression coverage spans America/Chicago, Pacific/Auckland and America/Santiago, where
+the noon anchor lands on a different UTC hour and a different UTC day.
 
-Device: APK `39ae353f…` (versionCode 5, signer `4601e3a2…`) installed in place with
-`firstInstallTime`, pairing, PRIMARY and push token all preserved; reminder **physically fired at
-03:48:00.096 CDT, 96 ms after the scheduled instant**, exactly one alarm and one notification,
-tap deep-linked correctly; push accepted (Expo ticket `01a032fa…`) **and physically delivered**;
-PTT ran the real Groq → gpt-4.1 chain with `avg_logprob -0.5232116` and audio cleaned; ADR-042
-recurring all-day expansion verified in production. Both reboot axes passed, the host reboot
-returning all four containers with **identical container IDs and image digests**. Smoke purge was
-count-verified with zero residue and zero orphans.
+Production: api and web rebuilt and rolled out with `--no-deps`; **worker and postgres
+never recreated**. The deployed web bundle was compared byte-level against the pre-fix
+one — the exact leaking expression is present in the old and absent from the new. The
+production Daily Brief went from *"an all-day weekly event beginning at 12:00 PM"* to
+*"an all-day event on both August 25 and August 26"*, with zero mentions of 12:00 or
+noon. Read models returned three instances on three distinct dates with `starts_at` null.
 
-**Not verified and not claimed:** the real-browser CORS proof (Chrome extension not connected;
-the sandboxed pane cannot load `:8443` assets — documented Phase 2 limitation). curl proved the
-exact header contract and the configuration is byte-identical to the already-browser-verified
-Phase 4 state.
+Device (versionCode 6, installed with `adb install -r`, `firstInstallTime` and pairing
+and PRIMARY all preserved): Today renders `All day, P571-SMOKE all-day recurring` where
+it previously rendered `12:00, …`; Agenda shows ALL-DAY on all three dates; Week shows
+three all-day chips with no time; Month shows no time. Google/CalDAV unaffected —
+connection active, 1985 calendar jobs completed with zero failures. Smoke cleanup was
+count-verified with zero residue and zero orphans of any kind.
+
+**Not verified and not claimed:** the real-browser CORS proof. Both available browser
+surfaces failed environmentally — the Chrome extension was not connected, and the
+sandboxed pane returns `net::ERR_BLOCKED_BY_CLIENT`, which blocks the request before it
+leaves the browser and so is not a CORS result. Server-side header evidence stands.
 
 ## Next action
 
 **Phase 5 is complete. Stop and await explicit user direction before starting any new phase.**
 
-Recommended follow-ups, in priority order, none of them blockers:
+One acceptance item is outstanding and needs a human with a browser (~15 seconds):
 
-1. **Fix the recurring-all-day noon-anchor defect** (one root cause, two surfaces:
-   `apps/mobile/src/app/(tabs)/index.tsx:155` and `apps/api/src/brief/collect-input.ts:72`). The
-   API half ships in a server image; the mobile half needs a new EAS build and in-place install at
-   versionCode > 5.
-2. **Run the real-browser CORS check** against `https://personal-os.tail62a68f.ts.net:8443` once a
-   browser is available.
-3. Generate a fresh Daily Brief on the device whenever wanted — the route is live and the smoke
-   brief was deliberately deleted.
+1. **Real-browser CORS proof.** Open `https://personal-os.tail62a68f.ts.net:8443` in a
+   real browser and, from the DevTools console, `fetch` the API origin
+   (`https://personal-os.tail62a68f.ts.net`) with a `PATCH` — any HTTP status proves the
+   preflight succeeded. The unapproved-origin half is already proven server-side.
+
+Optional, not blockers:
+
+2. Generate a fresh Daily Brief on the device whenever wanted — the route is live and the
+   verification brief was deliberately deleted with the smoke data.
+3. `week-grid.tsx` `formatTimeLabel` and Today's `eventStartMs` now carry defensive
+   guards, but both remain functions whose correctness would be easy to re-break by
+   changing a call site; they are covered by the shared-helper convention, not by tests
+   of their own.
 
 Phase 6 (Health) has not been approved or planned. Finance remains deferred (ADR-038).

@@ -501,6 +501,51 @@ If a Shortcut fires while the tunnel is genuinely down, it fails and you retry. 
 
 ---
 
+## Deployment order (frozen, Checkpoint 5.7)
+
+**Migrations execute from the release API image, not from the running one.**
+
+The migration container is `docker compose run --rm --no-deps --entrypoint sh api`,
+so it uses whatever `packages/db/drizzle` the **api image** contains. The image
+currently serving production was built from the *previous* release and does not
+contain the new migration files. Running the migration against it applies
+**nothing** and still prints `migrations applied successfully` — a silent no-op
+that leaves production at the old level while appearing to succeed. Checkpoint
+5.7 hit exactly this and caught it only by listing the migrations inside the
+running image before trusting the command.
+
+The order is therefore:
+
+1. Ship the release source to a **new per-release directory**
+   (`/home/himallinux/personal-os-<checkpoint>-release`, via `git archive` so
+   only tracked files transfer and no `.env`, `google-services.json`,
+   generated `android/` or `node_modules` can leak). The previous release
+   directory stays as a rollback source. `.env` lives at the stable path
+   `/home/himallinux/personal-os/.env` and is never copied.
+2. Tag the currently-serving images **by digest** as rollback targets. Never
+   `docker commit` a live container.
+3. **Build** the release images. Building does not touch running containers.
+4. **Verify** the new api image actually contains the expected migrations.
+5. **Migrate**, from the new image, with `--no-deps`.
+6. **Roll out** application services with
+   `up -d --no-deps --no-build --force-recreate <services>`, naming them
+   explicitly.
+
+Do **not** revert to "migrate first with the running image, then build".
+
+Every production compose command pins `-p personal-os`, `--env-file
+/home/himallinux/personal-os/.env`, and both compose files explicitly, and
+carries `--no-deps`. `postgres` is never named as a target of `up`, `run`,
+`restart`, `stop`, or `rm` — `api` and `worker` both declare
+`depends_on: postgres`, so omitting `--no-deps` reconciles and can recreate the
+database container. That is what happened in Phase 4 Checkpoint 4.7's Gate C
+incident; the volume survived and no data was lost, but the rule exists because
+of it.
+
+Rebuild only what changed. Migrations are additive and forward-only, so the
+previous release's images run correctly against the newer schema — that is what
+makes an image rollback real. A schema rollback is never performed.
+
 ## Secrets
 
 Personal OS has no backup system in the current architecture. PostgreSQL uses persistent Docker volume storage on the production server — this is durability against container restarts, not a backup. Backup infrastructure may be added in a future phase only if explicitly requested.
