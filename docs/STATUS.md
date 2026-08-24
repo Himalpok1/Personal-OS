@@ -1,10 +1,108 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Current phase:** Phase 6 — Google Health Integration — **IN PROGRESS at Checkpoint 6.0** (ADRs + documentation reconciliation; no code). Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
 **Implementation status:** Phases 0–5 are implemented and production-deployed. Production migration level is **0000–0012 = 13 migrations**. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
-**Next phase allowed:** **None without explicit user approval.** Phase 5 is closed. Finance remains deferred (ADR-038), still gated on the open finance-source-of-truth decision. Phase 6 (Health) and Phase 7/8 have not been approved or planned.
-**Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
+**Next phase allowed:** **Phase 6 Checkpoints 6.0 and 6.1 ONLY** — approved 2026-08-24. Work stops completely after 6.1; Checkpoint 6.2 requires manual Google Cloud actions M2–M8 plus a separate explicit approval, and 6.3 onward requires the 6.2P probe to pass and be approved. Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
+**Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
+
+## Phase 6 — Google Health Integration (plan approved 2026-08-24)
+
+Phase 6 was redefined by explicit user direction (ADR-046): the original `ARCHITECTURE.md`
+entry — HealthKit via `@kingstinct/react-native-healthkit`, Health Connect via
+`react-native-health-connect` — is **removed from scope entirely**. No native health
+access, no device-local health sync, no Apple Developer dependency. Phase 6 as approved is
+a **read-only, server-side Google Health API integration**.
+
+**Approved checkpoints:** 6.0 ADRs + repository verification + docs · 6.1 contracts +
+additive migration `0013` + provider fake · **⛔ full stop** · 6.2 OAuth · 6.2P real-account
+capability *and* identity-stability probe · **⛔ stop** · 6.3 sync engine · 6.4 dashboard
+(web + Rabbit) · 6.5 hardening · 6.6 full live proof · 6.7 gated production deployment.
+
+**Approved scope at this time is 6.0 and 6.1 only.**
+
+### Planning record — what the research actually changed
+
+Planning ran four parallel read-only investigation agents plus an independent adversarial
+review. It went through three revisions, and the corrections are worth recording because
+several were errors of fact that would have shipped:
+
+1. **There is no incremental-sync primitive.** The API documents no sync token, no
+   `updateTime` filter, no `showDeleted` and no tombstones, and `reconcile` is multi-source
+   de-duplication — not change tracking. The only change-detection mechanism is webhooks,
+   which require public ingress (excluded by ADR-018). Sync is therefore a bounded
+   trailing-window re-fetch with content hashing, carrying an accepted **35-day staleness
+   contract** (ADR-046).
+2. **The documented OAuth client type is Web Server with a required `redirect_uri`** —
+   directly contradicting Phase 4's proven native `AuthorizationClient` flow, which
+   deliberately sends none. `packages/calendar-providers/src/google-oauth.ts` is therefore
+   **not** reusable, and is deliberately near-duplicated rather than extended (that package
+   is also the standing 57-test zero-drift canary).
+3. **All Google Health scopes are Restricted**, but the documented personal-use exception
+   (<100 users) applies, so no verification and no CASA security assessment is triggered.
+   **Publishing status — not verification — governs the 7-day refresh-token expiry**, and
+   "In production + Unverified" is a documented supported state.
+4. **`dailyRollUp` documents `civilStartTime`/`civilEndTime` and supplies no physical
+   instants or UTC offsets.** So `local_date` is taken verbatim from the API and no IANA
+   timezone is stored (ADR-048) — but daily rows carry no physical bounds, so
+   duration-normalized daily rates are not derivable and are not offered.
+5. **Sleep is filtered by `sleep.interval.civil_end_time`**, a sleep-exclusive filter; the
+   generic session-start filter explicitly excludes sleep. Attribution, fetch filter and
+   deletion scope are therefore one axis (ADR-049), deleting a planned one-day widening.
+6. **`list` does not accept `dataSourceFamily`** — only `reconcile`, `rollUp` and
+   `dailyRollUp` do.
+7. **`pairedDevices.list` requires `googlehealth.settings.readonly`** — a fourth scope. All
+   paired-device functionality was cut rather than silently widening consent.
+8. **`DataSource` documents no stable identifier** (only `recordingMethod`,
+   `device.formFactor`, `application.platform`), and `ReconciledDataPoint` carries no
+   `dataSource` at all. Raw-heart-rate identity is therefore a fully-specified deterministic
+   key over every field the API actually returns, with an explicit collision strategy — and
+   **raw-HR rows are never tombstoned** until a live probe proves identity stability, since
+   `reconcile` recomputes off-wrist filtering per call and an omission is evidence of
+   upstream recomputation, not deletion.
+
+The adversarial review additionally caught three defects that would have reached
+production: an **OAuth authorization code written to the request log** (Fastify logs the URL
+at `lib/route.js:522`, before `onRequest` hooks at `:561`, and the default serializer emits
+neither query nor body — so the proposed hook and redact paths were both ineffective); a
+**bucket-count check that would have dead-lettered every backfill chunk** covering days the
+watch was not worn; and a **hot-sync path that could blank real daily data with NULL** on a
+single empty 200 response.
+
+**Scope decisions recorded with the approval:** exactly three read scopes
+(`activity_and_fitness`, `sleep`, `health_metrics_and_measurements`); raw heart-rate samples
+included (the one selection carrying ongoing cost); web **and** Rabbit delivery, so Phase 6
+ships an APK at versionCode 7; publishing status **In production, unverified**.
+
+### Checkpoint 6.0 — ADRs and documentation reconciliation (COMPLETE, 2026-08-24)
+
+No code. No migration. No dependency change. No credentials. No production access.
+
+**Repository baseline verified directly** (not inferred from prose): branch `main`, HEAD
+`e1effa4cadaca5440345841286bc06e846cd3203`, working tree clean, exactly **13** `.sql`
+migrations and **13** journal entries with `0012_ai_daily_briefs` (`when` 1787466808983)
+last, and ADR-045 the highest existing ADR.
+
+**Added:** `docs/DECISIONS.md` ADR-046 (Phase 6 redefinition; trailing-window sync; 35-day
+staleness contract; webhooks permanently excluded; densification restricted to
+warm/manual/backfill and clamped) · ADR-047 (daily-aggregate storage; intraday for
+`heart-rate` only; **no automatic health-data deletion**) · ADR-048 (`local_date` is the
+API's civil date; no timezone stored; no physical bounds on daily rows; sync window
+UTC-computed and widened one day each end; ADR-042/045 explicitly **not** reused) ·
+ADR-049 (sleep attributed *and queried* on the civil-end axis) · ADR-050 (CHECK only
+project-controlled closed vocabularies, citing the `0009` reconcile fallout).
+
+**Reconciled seven documented conflicts:** `ARCHITECTURE.md` Phase 6 entry replaced (C1);
+the Apple Developer gotcha narrowed — it still gates iOS builds, no longer Health (C2); the
+HealthKit reference removed from the native-module note (C3); this file's header, current
+work and next action updated (C4); the "passive vs proactive health" open question answered
+as **passive** in both `ARCHITECTURE.md` and `DECISIONS.md` (C5); the `health` namespace
+collision recorded — `GET /health` and `packages/schema/src/health.ts` are already the
+liveness probe, so Phase 6 uses `health-*` siblings throughout (C7).
+
+**Deliberately not yet changed (C6):** the three lines asserting "13 `.sql` files, 13
+journal entries, **no 0013**" remain **accurate** until migration `0013` actually lands in
+Checkpoint 6.1, and are updated then — not pre-emptively.
 
 ## Phase 5 — Daily Command Center + Projects (plan approved 2026-08-21)
 
@@ -2148,8 +2246,11 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-**None — Phase 5 is complete and deployed, and the 5.7.1 hotfix has closed the one
-production defect 5.7 found.**
+**Phase 6 Checkpoint 6.0 — ADRs and documentation reconciliation (no code).**
+Approved scope is **6.0 and 6.1 only**, then a full stop.
+
+Phase 5 remains complete and deployed; the 5.7.1 hotfix closed the one production defect
+5.7 found.
 
 Production runs migration level 0000–0012, api/web from `b7f7bf1`, worker from `656c1fc`
 (deliberately not rebuilt — unchanged dependency closure), and the Rabbit runs
@@ -2159,7 +2260,8 @@ One acceptance item remains genuinely unverified and is **not** a code defect: t
 real-browser CORS proof (see the 5.7.1 entry — both browser surfaces failed for
 environmental reasons). It needs a human with a browser, roughly fifteen seconds.
 
-**Do not begin Phase 6 or any other phase without explicit user approval.**
+**Phase 6 Checkpoints 6.0 and 6.1 are approved. Do not begin Checkpoint 6.2 — or any
+other phase — without the M2–M8 manual actions and a separate explicit user approval.**
 
 ## Remaining warnings / technical debt
 
@@ -2252,7 +2354,8 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Phase 5 is complete. Stop and await explicit user direction before starting any new phase.**
+**Continue Phase 6 into Checkpoint 6.1 (contracts, additive migration `0013`, provider fake),
+then STOP COMPLETELY.** Checkpoint 6.1 needs no Google credentials and no production access.
 
 One acceptance item is outstanding and needs a human with a browser (~15 seconds):
 
@@ -2270,4 +2373,12 @@ Optional, not blockers:
    changing a call site; they are covered by the shared-helper convention, not by tests
    of their own.
 
-Phase 6 (Health) has not been approved or planned. Finance remains deferred (ADR-038).
+**The Phase 6 gate after 6.1 is hard.** Checkpoint 6.2 requires all of M2–M8 (enable
+`health.googleapis.com`; create a **separate** Web Server OAuth client; register the
+Tailscale redirect URI; External user type + test user; select exactly the three read
+scopes; put the credentials in `.env` yourself; press **Publish app**) **and** a separate
+explicit approval. If the Tailscale callback cannot be registered or used, work stops at
+the OAuth gate — there is no automatic loopback fallback and no public ingress under any
+circumstances (Appendix A §A2).
+
+Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.

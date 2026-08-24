@@ -35,7 +35,7 @@ Single-user, self-hosted life dashboard. Notes, reminders, tasks, calendar, proj
 
 Expo Router targets iOS, Android, and web from a single tree. Practical consequences:
 
-- **Develop on the web target first.** The browser gives instant refresh with no EAS build in the loop. Only native-module work — notifications, audio, HealthKit — requires a dev build. Batch that work rather than interleaving it.
+- **Develop on the web target first.** The browser gives instant refresh with no EAS build in the loop. Only native-module work — notifications, audio — requires a dev build. Batch that work rather than interleaving it.
 - **Use NativeWind** for styling. It gives you Tailwind semantics that compile to RN styles on native and real CSS on web, which is the only way to keep one stylesheet honest across three platforms.
 - **Charts and dense tables are the weak spot.** React Native Web has no CSS grid and no native table primitives. Pick cross-platform-capable libraries from the start — `victory-native` (which shares an API with Victory on web) and `@shopify/flash-list` for long lists — rather than reaching for a web-only chart library you'd have to rip out.
 
@@ -562,7 +562,7 @@ Personal OS has no backup system in the current architecture. PostgreSQL uses pe
 1. **Timezones.** Always send the device timezone with the capture and resolve relative dates in *that* zone. A UTC server will silently schedule "tomorrow at 8" five hours off. The single most common bug in this category of app.
 2. **All-day events are dates, not timestamps.** Storing an all-day event as midnight-timestamptz makes it jump days for anyone crossing a zone, including you when you travel.
 3. **DST and recurrence.** Covered above, and worth the discipline — it's the bug that erodes trust in the whole system.
-4. **Apple Developer account.** $99/yr. Without it, iOS builds expire every 7 days. It gates the entire iOS path including Health in Phase 6.
+4. **Apple Developer account.** $99/yr. Without it, iOS builds expire every 7 days. It gates the entire iOS path. It no longer gates Health: ADR-046 moved Phase 6 to a server-side Google Health cloud integration, so health data reaches every client through the Personal OS API rather than through HealthKit.
 5. **EAS build times.** Native module changes require a real rebuild. Develop on the web target and batch native work.
 6. **`expo-notifications` on Android 13+.** Needs runtime notification permission *and* exact-alarm permission for precise scheduling. Request both during onboarding. Both are now requested (Phase 3 Checkpoint 5). The exact-alarm half is easy to get wrong and expensive to miss: the app targets SDK 36 and declares `SCHEDULE_EXACT_ALARM` without `USE_EXACT_ALARM`, so Android 14+ does **not** auto-grant it, there is no in-app dialog for it (the only route is a deep link into system settings), and the grant **does not survive reinstall**. Without it Android silently schedules reminders with a one-hour delivery window — verified on the physical Rabbit R1 in `dumpsys alarm` as `window=+1h0m0s0ms` with no `exactAllowReason`, versus `window=0 exactAllowReason=permission` once granted. A short test reminder delivers promptly either way, so this cannot be verified with a two-minute alarm; inspect the scheduled alarm itself.
 7. **Expo web is not Next.js.** No SSR, no file-based API routes, larger bundle. Fine for a single-user dashboard behind Tailscale; the tradeoff to accept knowingly.
@@ -592,7 +592,7 @@ Live on Phases 0–3 for a month before continuing. Half of what you think you w
 
 **Phase 5 — Daily Command Center + Projects (revised 2026-08-21, ADR-038).** The original Phase 5 entry (Finance) is **deferred to a later phase**, still gated on the open finance-source-of-truth decision. Phase 5 as approved: a Today/Home command center computed from existing primitives, operational project management (lifecycle/goal/target date/computed next action), daily + weekly review workflows with durable review history, a unified tasks+events agenda read model, a manual on-demand AI Daily Brief over the existing provider-agnostic layer, mobile/Rabbit daily-use polish, and a gated production deployment. Integrates existing primitives; no new external integrations; no new worker jobs; no scheduled or autonomous agents. Checkpoints 5.1–5.7; see `docs/STATUS.md` for the checkpoint record and ADRs 038–041 for locked decisions.
 
-**Phase 6 — Health.** HealthKit via `@kingstinct/react-native-healthkit`, Health Connect via `react-native-health-connect`. Requires the paid Apple account and a dev build. Read-only to start.
+**Phase 6 — Health (revised 2026-08-24, ADR-046).** The original Phase 6 entry (HealthKit via `@kingstinct/react-native-healthkit`, Health Connect via `react-native-health-connect`) is **removed from scope entirely** — no native health access, no device-local health sync, no Apple Developer dependency. Phase 6 as approved: a **read-only, server-side Google Health API integration** (`health.googleapis.com`, `/v4`) over OAuth 2.0 with exactly three read scopes, synchronised by `apps/worker` into PostgreSQL and rendered by the existing Expo client on web and the Rabbit R1. Because the API exposes no sync token, no `updateTime` filter and no tombstones — and its only change-detection mechanism is webhooks, which require public ingress this project will never add (ADR-018) — sync is a bounded trailing-window re-fetch with content hashing, carrying an accepted 35-day staleness contract. Health data is **passive**: displayed, never fed to the AI layer. Checkpoints 6.0–6.7; see `docs/STATUS.md` for the checkpoint record and ADRs 046–050 for locked decisions.
 
 **Later — Finance.** Copilot Money has no public API — decide between scheduled CSV import, going direct to Plaid or SimpleFIN Bridge, or self-hosting Actual Budget as the ledger. Voice transaction entry drops into the same capture pipeline.
 
@@ -605,7 +605,7 @@ Live on Phases 0–3 for a month before continuing. Half of what you think you w
 ## Open questions for later phases
 
 - Which email accounts, and is a summary enough or should the app act on mail?
-- Health: passive dashboard, or does it feed the AI layer proactively?
+- ~~Health: passive dashboard, or does it feed the AI layer proactively?~~ **Answered by ADR-046: passive.** Daily Brief integration is deferred to a separately approved checkpoint.
 - Finance: is Copilot the source of truth forever, or a stepping stone to owning the ledger?
 - Does the Pi 5 keep a wake-word role, or does capture become phone-only?
 - At what point does a dedicated Next.js dashboard become worth building?
