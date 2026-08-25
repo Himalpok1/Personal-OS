@@ -10,6 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, type Href } from "expo-router";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { BriefCard } from "@/components/brief/brief-card";
+import { HealthTodayCard } from "@/components/health/health-today-card";
 import { FLOATING_CLEARANCE } from "@/components/floating-layout";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import { useCompleteTask } from "@/queries/tasks";
@@ -524,6 +525,13 @@ export default function TodayScreen() {
           owns its own GET /briefs/current query -- Today only carries brief
           metadata, and rendering Today never triggers a model call. */}
       <BriefCard />
+
+      {/* Checkpoint 6.4. Like BriefCard, this owns its own query rather than
+          riding on /today's response -- Today must never wait on, or fail
+          because of, a Google Health sync. It renders null when there is no
+          connection, and shows only metrics that actually have a value today,
+          so a missing metric is never mistaken for a zero. */}
+      <HealthTodayCard />
 
       <View>
         <SectionHeader title={`Overdue · ${data.overdue.total}`} tone="red" />
