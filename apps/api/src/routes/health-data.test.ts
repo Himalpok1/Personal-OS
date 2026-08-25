@@ -411,12 +411,37 @@ describe("GET /health-summary — connection", () => {
   });
 
   it("flags a reconnect and leaks no error text or credential material", async () => {
-    const canary = "PGDETAIL-Failing-row-contains-super-secret";
+    // WHY THESE CANARIES AND NOT TOKEN-SHAPED BUFFERS.
+    //
+    // The obvious canary -- seeding accessTokenCiphertext with
+    // Buffer.from("ya29.…") and asserting the body omits "ya29." -- is a test
+    // that CANNOT FAIL. JSON.stringify renders a Buffer as
+    // {"type":"Buffer","data":[121,97,50,57,…]}, so the literal never appears
+    // in the response even if the whole row were spread into it verbatim. The
+    // same trap applies to scanning for snake_case column names: the Drizzle
+    // row carries camelCase properties (accessTokenCiphertext,
+    // refreshTokenCiphertext), so "ciphertext", "auth_tag" and
+    // "refresh_token" are strings that appear nowhere in a serialized row and
+    // assert nothing. Do not reinstate either form.
+    //
+    // A canary only bites if it is (a) a TEXT column, so it survives
+    // serialization as itself, and (b) on a field a careless projection could
+    // plausibly pick up. legacy_user_id and health_user_id sit immediately
+    // beside the exposed columns on the same row and are deliberately absent
+    // from HealthConnectionSummary, so they are exactly that.
+    const errorCanary = "PGDETAIL-Failing-row-contains-super-secret";
+    const legacyCanary = "ya29.LEGACY-CANARY-must-never-be-projected";
+    const identityCanary = "hu-IDENTITY-CANARY-must-never-be-projected";
+
     await seedConnection({
       status: "needs_reauth",
-      lastSyncError: canary,
+      healthUserId: identityCanary,
+      legacyUserId: legacyCanary,
+      lastSyncError: errorCanary,
       lastSyncErrorAt: new Date(),
-      accessTokenCiphertext: Buffer.from("ya29.not-a-real-token"),
+      // Retained so the row is a realistic connected account satisfying the
+      // all-or-nothing credential CHECK -- not as canaries, per the note above.
+      accessTokenCiphertext: Buffer.from("not-a-real-token"),
       accessTokenIv: Buffer.from("iv-123456789"),
       accessTokenAuthTag: Buffer.from("tag-0123456789ab"),
     });
@@ -427,13 +452,24 @@ describe("GET /health-summary — connection", () => {
     expect(body.connection?.has_sync_error).toBe(true);
     expect(body.connection?.last_sync_error_at).not.toBeNull();
 
-    // The message itself must be structurally inexpressible on this surface.
     const raw = res.body;
-    expect(raw).not.toContain(canary);
+
+    // POSITIVE CONTROL, first. Without it every absence below could be
+    // satisfied by the connection simply not reaching the serializer at all,
+    // which is the other way this test could pass for the wrong reason.
+    expect(raw).toContain(PHASE_6A_SCOPES[0]);
+    expect(raw).toContain(body.connection!.id);
+
+    // Now the absences, each on a string that genuinely could have appeared.
+    expect(raw).not.toContain(errorCanary);
+    expect(raw).not.toContain(legacyCanary);
+    expect(raw).not.toContain(identityCanary);
+    // The distinctive prefix on its own, so a truncated or re-cased projection
+    // is caught too.
     expect(raw).not.toContain("ya29.");
-    expect(raw).not.toContain("ciphertext");
-    expect(raw).not.toContain("auth_tag");
-    expect(raw).not.toContain("refresh_token");
+    expect(raw).not.toContain("LEGACY-CANARY");
+    expect(raw).not.toContain("IDENTITY-CANARY");
+    expect(raw).not.toContain("Failing row contains");
 
     // A substring scan for "last_sync_error" would trip on the deliberately
     // exposed last_sync_error_at TIMESTAMP, so the absence of the message is
@@ -455,6 +491,15 @@ describe("GET /health-summary — connection", () => {
     walk(body);
     expect(keys.has("last_sync_error")).toBe(false);
     expect(keys.has("last_sync_error_at")).toBe(true);
+
+    // The key walk in BOTH casings, since a raw Drizzle row spread into the
+    // response would arrive camelCase and every snake_case scan would miss it.
+    const forbiddenKey =
+      /token|ciphertext|auth_?tag|^iv$|secret|legacy_?user_?id|health_?user_?id/i;
+    expect([...keys].filter((k) => forbiddenKey.test(k))).toEqual([]);
+    // Proof the walker collected enough to make that filter meaningful.
+    expect(keys.has("granted_scopes")).toBe(true);
+    expect(keys.has("staleness_threshold_days")).toBe(true);
   });
 
   it("prefers the active connection over a disconnected one", async () => {
@@ -820,10 +865,77 @@ describe("health read surface source hygiene", () => {
     ["routes/health-data.ts", "./health-data.ts"],
   ];
 
+  /**
+   * Lines that legitimately default to zero, and why each one is safe.
+   *
+   * Widening the guard from `coalesce` to also catch `?? 0` and `|| 0` makes
+   * it trip on three existing lines in health-dashboard.ts. All three were
+   * read before being allowed through, and NONE of them substitutes zero for
+   * a health value:
+   *
+   *   1. `sleepAgg[0]?.nights ?? 0`   -- a COUNT of nights, and the very next
+   *      expression turns `nights === 0` into a null average rather than a
+   *      zero one. Defaulting the count is what MAKES the null happen.
+   *   2. `METRIC_ORDER.get(...) ?? 0` -- a display sort key for a metric with
+   *      no declared position. Not a measurement.
+   *   3. `counted[0]?.total ?? 0`     -- a COUNT(*) pagination total on an
+   *      empty result set, where zero rows genuinely is zero.
+   *
+   * Matched on distinctive expression text rather than line number, so the
+   * allowlist survives the file being reformatted or reordered but still
+   * fails the moment a FOURTH zero-default appears. Anything not on this list
+   * fails loudly with its file, line number and text.
+   */
+  const ZERO_DEFAULT_ALLOWLIST: { fragment: string; why: string }[] = [
+    { fragment: "sleepAgg[0]?.nights ?? 0", why: "COUNT of nights; 0 becomes a null average" },
+    { fragment: "METRIC_ORDER.get(", why: "display sort key, not a measurement" },
+    { fragment: "counted[0]?.total ?? 0", why: "COUNT(*) pagination total" },
+  ];
+
   for (const [label, relative] of sources) {
     it(`${label} never substitutes zero for a missing value`, () => {
       const text = readFileSync(new URL(relative, import.meta.url), "utf8");
+
+      // COALESCE in any casing is banned outright -- there is no legitimate
+      // use of it on this surface, so it needs no allowlist.
       expect(text.toLowerCase()).not.toContain("coalesce");
+
+      // `?? 0` and `|| 0` are the same defect spelled in JavaScript, and the
+      // original guard did not look for either.
+      const zeroDefault = /(\?\?|\|\|)\s*0(?![.\d])/;
+      const offenders = text
+        .split("\n")
+        .map((line, index) => ({ line, number: index + 1 }))
+        .filter(({ line }) => zeroDefault.test(line))
+        .filter(({ line }) => !ZERO_DEFAULT_ALLOWLIST.some((a) => line.includes(a.fragment)))
+        .map(({ line, number }) => `${label}:${number}: ${line.trim()}`);
+
+      expect(offenders).toEqual([]);
+    });
+
+    it(`${label}'s zero-default allowlist is still load-bearing`, () => {
+      // An allowlist nobody notices going stale is worse than no allowlist:
+      // it would keep excusing a line that has since been deleted while the
+      // reader assumes the guard is tight. Every entry must still match, and
+      // the detector must still fire on the shape it is meant to catch.
+      const text = readFileSync(new URL(relative, import.meta.url), "utf8");
+      const zeroDefault = /(\?\?|\|\|)\s*0(?![.\d])/;
+
+      expect(zeroDefault.test("const v = row.value ?? 0;")).toBe(true);
+      expect(zeroDefault.test("const v = row.value || 0;")).toBe(true);
+      // ...and does not fire on numbers that merely start with a zero.
+      expect(zeroDefault.test("const v = row.value ?? 0.5;")).toBe(false);
+      expect(zeroDefault.test("const v = row.value ?? null;")).toBe(false);
+
+      const stale = ZERO_DEFAULT_ALLOWLIST.filter((a) => !text.includes(a.fragment)).map(
+        (a) => `${a.fragment} (${a.why})`,
+      );
+      // Only health-dashboard.ts carries these; health-data.ts must carry none.
+      if (label.includes("health-dashboard")) {
+        expect(stale).toEqual([]);
+      } else {
+        expect(stale).toHaveLength(ZERO_DEFAULT_ALLOWLIST.length);
+      }
     });
 
     it(`${label} never reads the raw intraday table`, () => {

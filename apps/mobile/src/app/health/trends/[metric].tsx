@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Pressable, ScrollView, Text, useWindowDimensions, View } from "react-native";
 import { FLOATING_CLEARANCE } from "@/components/floating-layout";
 import { formatHealthValue, metricLabel } from "@/components/health/format";
-import { ChartDataSummary, HealthChart } from "@/components/health/health-chart";
+import { HealthChart } from "@/components/health/health-chart";
 import { METRIC_EXPLANATIONS, resolveMetricDisplay } from "@/components/health/metric-state";
 import { useHealthMetricSeries, useHealthSummary } from "@/queries/health";
 import { addLocalDays, formatShortDate, todayLocalDate } from "@/utils/local-date";
@@ -190,10 +190,6 @@ function TrendContent({
           width={chartWidth}
           height={compact ? 140 : 200}
         />
-      </View>
-
-      <View className="px-4 pt-2">
-        <ChartDataSummary metric={series.metric} points={series.points} unit={series.unit} />
       </View>
 
       {explanationKey === null ? null : (

@@ -479,9 +479,18 @@ export async function buildHealthSummary(
       // session contributes to NEITHER, so the mean is over the nights that
       // were actually recorded -- treating an unrecorded night as zero hours
       // would drag a real average toward a number the user never slept.
+      //
+      // DISTINCT on the wake date, not count(*): the unique index on
+      // health_sessions is (connection, metric, external_key), so two records
+      // can legitimately share one wake date -- a nap, or a night split across
+      // two provider records. Counting rows would make this a per-SESSION mean
+      // while calling itself a nightly average, and would understate a night
+      // the user actually slept in two stretches.
       db
         .select({
-          nights: sql<number>`count(*)`.mapWith(Number),
+          nights: sql<number>`count(distinct ${healthSessions.attributedLocalDate})`.mapWith(
+            Number,
+          ),
           totalSeconds: sql<string | null>`sum(${healthSessions.durationSeconds})`,
         })
         .from(healthSessions)

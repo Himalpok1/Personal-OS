@@ -68,7 +68,7 @@ function summary(
 const NONE: ReadonlySet<string> = new Set<string>();
 
 describe("shouldAutoRefresh", () => {
-  it("fires when the connection is stale and idle", () => {
+  it("fires when today is not yet covered and no sync is running", () => {
     expect(shouldAutoRefresh({ summary: summary(), alreadyRequested: NONE })).toEqual({
       connectionId: CONNECTION.id,
     });
@@ -81,11 +81,41 @@ describe("shouldAutoRefresh", () => {
     expect(shouldAutoRefresh({ summary: input, alreadyRequested: NONE })).toBeNull();
   });
 
-  it("does not fire when the data is not stale", () => {
-    // This is a staleness remedy, not a refresh-on-open. The hourly cron owns
-    // routine freshness.
-    const input = summary({ freshness: { is_stale: false, days_behind: 1 } });
+  it("does not fire once verified data already reaches today", () => {
+    // Nothing to top up: a hot pass could only re-fetch what we have.
+    const input = summary({
+      freshness: { verified_through_date: "2026-08-25", days_behind: 0, is_stale: false },
+    });
     expect(shouldAutoRefresh({ summary: input, alreadyRequested: NONE })).toBeNull();
+  });
+
+  it("does not fire when verified data runs AHEAD of today", () => {
+    // ADR-048 widens the sync window a day at each end, so this is reachable
+    // rather than nonsensical.
+    const input = summary({
+      freshness: { verified_through_date: "2026-08-26", days_behind: 0, is_stale: false },
+    });
+    expect(shouldAutoRefresh({ summary: input, alreadyRequested: NONE })).toBeNull();
+  });
+
+  it("still fires for a stale connection whose coverage stops short of today", () => {
+    // The mechanism cannot CLEAR staleness -- a hot pass is never
+    // authoritative, so it never advances verified_through_date -- but it can
+    // still fill in the days it covers, which is why the predicate keys on
+    // coverage rather than on the staleness flag.
+    const input = summary({
+      freshness: { verified_through_date: "2026-08-24", days_behind: 1, is_stale: true },
+    });
+    expect(shouldAutoRefresh({ summary: input, alreadyRequested: NONE })).toEqual({
+      connectionId: CONNECTION.id,
+    });
+  });
+
+  it("fires when nothing has ever been verified", () => {
+    const input = summary({ freshness: { verified_through_date: null, days_behind: null } });
+    expect(shouldAutoRefresh({ summary: input, alreadyRequested: NONE })).toEqual({
+      connectionId: CONNECTION.id,
+    });
   });
 
   it("does not fire when there is no connection", () => {

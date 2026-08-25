@@ -20,7 +20,33 @@ import type { HealthAggregation, HealthMetricPoint, HealthValueState } from "@pe
  * CHECK (ADR-047) exists to keep those apart in Postgres, and the chart is the
  * last place the distinction can be thrown away.
  */
-export const MIN_BAR_HEIGHT = 2;
+export const MIN_BAR_HEIGHT = 6;
+
+/**
+ * Geometry of the mark drawn for a day that has NO value.
+ *
+ * These live here, next to MIN_BAR_HEIGHT, because the only thing that makes
+ * a recorded zero readable is that it does not look like a gap -- and that is
+ * a relationship BETWEEN the two constants, not a property of either. When
+ * they sat in separate files they had drifted to the same 2px height in the
+ * same slot, leaving colour as the sole difference: unreadable in greyscale,
+ * at low contrast, or to a colour-blind reader, and exactly the distinction
+ * this whole surface exists to preserve.
+ *
+ * The gap is therefore narrower AND shorter than the thinnest possible bar,
+ * so shape carries the meaning three times over (width, height, colour) and
+ * `chartMarkInvariantHolds` below can assert it.
+ */
+export const GAP_MARKER_HEIGHT = 2;
+export const GAP_MARKER_WIDTH = 3;
+
+/**
+ * The invariant a renderer must not break: the smallest bar a real value can
+ * produce is still visibly taller than the mark for no value at all.
+ */
+export function chartMarkInvariantHolds(): boolean {
+  return MIN_BAR_HEIGHT > GAP_MARKER_HEIGHT;
+}
 
 /**
  * Head/foot padding applied to an `average` domain, as a fraction of the data
@@ -124,7 +150,7 @@ function readValue(point: HealthMetricPoint): number | null {
  * edge is returned unrounded so the last slot's right side lands precisely on
  * `width`.
  */
-function slotEdge(index: number, count: number, width: number): number {
+export function slotEdge(index: number, count: number, width: number): number {
   return index >= count ? width : Math.round((index * width) / count);
 }
 

@@ -142,43 +142,94 @@ describe("resolveHealthConnectionState precedence", () => {
 });
 
 describe("canRequestSync", () => {
-  it("blocks a duplicate request while a sync is already in flight", () => {
-    expect(canRequestSync("syncing")).toBe(false);
-  });
+  /**
+   * The decision for EVERY display state, written out rather than derived.
+   *
+   * `canRequestSync` is an exhaustive switch over a closed union, so asserting
+   * only that it returns a boolean is a tautology -- it cannot return anything
+   * else, and a case wrongly flipped from false to true would still be a
+   * boolean. The table below is the only form that can actually fail: it names
+   * the expected answer per state, so flipping any single case breaks exactly
+   * one entry.
+   */
+  const EXPECTED: Record<HealthConnectionDisplayState, boolean> = {
+    // Blocked: a sync could not do anything useful, or would duplicate one
+    // already in flight.
+    unavailable: false,
+    not_configured: false,
+    not_connected: false,
+    needs_reconnect: false,
+    syncing: false,
+    // Allowed: exactly the states a manual retry is for. `stale` and `error`
+    // are deliberately in this half -- refusing to retry the states that most
+    // need retrying is the failure mode worth pinning.
+    partial_scope: true,
+    stale: true,
+    error: true,
+    current: true,
+  };
 
-  it("blocks every state where a sync could not do anything useful", () => {
-    for (const state of [
-      "unavailable",
-      "not_configured",
-      "not_connected",
-      "needs_reconnect",
-      "syncing",
-    ] as const) {
-      expect(canRequestSync(state), state).toBe(false);
-    }
-  });
+  it.each(Object.entries(EXPECTED) as [HealthConnectionDisplayState, boolean][])(
+    "%s -> %s",
+    (state, expected) => {
+      expect(canRequestSync(state)).toBe(expected);
+    },
+  );
 
-  it("allows a manual retry from exactly the states a retry is for", () => {
-    for (const state of ["partial_scope", "stale", "error", "current"] as const) {
-      expect(canRequestSync(state), state).toBe(true);
-    }
-  });
-
-  it("has an answer for every display state", () => {
-    const states: HealthConnectionDisplayState[] = [
-      "unavailable",
-      "not_configured",
-      "not_connected",
-      "needs_reconnect",
-      "syncing",
-      "partial_scope",
-      "stale",
-      "error",
-      "current",
+  it("has a decision for every state the resolver can actually produce", () => {
+    // Ties the two functions together instead of restating the union a second
+    // time (the Record annotation above already fails typecheck on a missing
+    // or extra key). Each input below is a real reachable configuration, so
+    // this also proves the nine states are not merely declared but emittable.
+    const reachable = [
+      resolveHealthConnectionState({
+        configured: true,
+        connection: connection(),
+        freshness: freshness(),
+        isLoadError: true,
+      }),
+      resolveHealthConnectionState({ configured: false, connection: null, freshness: freshness() }),
+      resolveHealthConnectionState({ configured: true, connection: null, freshness: freshness() }),
+      resolveHealthConnectionState({
+        configured: true,
+        connection: connection({ needs_reconnect: true }),
+        freshness: freshness(),
+      }),
+      resolveHealthConnectionState({
+        configured: true,
+        connection: connection(),
+        freshness: freshness({ sync_in_progress: true }),
+      }),
+      resolveHealthConnectionState({
+        configured: true,
+        connection: connection({ has_partial_scope: true }),
+        freshness: freshness(),
+      }),
+      resolveHealthConnectionState({
+        configured: true,
+        connection: connection(),
+        freshness: freshness({ is_stale: true }),
+      }),
+      resolveHealthConnectionState({
+        configured: true,
+        connection: connection({ has_sync_error: true }),
+        freshness: freshness(),
+      }),
+      resolveHealthConnectionState({
+        configured: true,
+        connection: connection(),
+        freshness: freshness(),
+      }),
     ];
-    for (const state of states) {
-      expect(typeof canRequestSync(state), state).toBe("boolean");
-    }
+
+    expect(new Set(reachable).size).toBe(9);
+    expect([...new Set(reachable)].sort()).toEqual(Object.keys(EXPECTED).sort());
+  });
+
+  it("blocks strictly more states than it allows the moment a sync is in flight", () => {
+    // A second, independent statement of the one rule most likely to be
+    // relaxed by accident: whatever else changes, `syncing` must stay blocked.
+    expect(canRequestSync("syncing")).toBe(false);
   });
 });
 

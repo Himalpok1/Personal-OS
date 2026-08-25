@@ -12,27 +12,17 @@
 import { Text, View } from "react-native";
 import type { HealthAggregation, HealthMetricPoint } from "@personal-os/schema";
 import { formatShortDate } from "@/utils/local-date";
-import { buildHealthChart } from "./chart-geometry";
+import { GAP_MARKER_HEIGHT, GAP_MARKER_WIDTH, buildHealthChart, slotEdge } from "./chart-geometry";
 import { formatHealthValue, metricLabel } from "./format";
 
 const LINE_THICKNESS = 2;
 const POINT_DOT_SIZE = 4;
-/** Height of the faint marker that stands in for a day with no value. */
-const GAP_MARKER_HEIGHT = 2;
-
-/**
- * Slot edges, replicating `slotEdge` from chart-geometry.ts exactly.
- *
- * That helper is private to the geometry module and the alternative --
- * exporting it -- would mean editing a file this component does not own. The
- * duplication is therefore deliberate but GUARDED: a test asserts that a gap
- * marker's left edge lands exactly on the neighbouring bar's edge, so the two
- * tilings cannot silently drift apart. If they ever do, gap markers would
- * shift out from under the days they describe, which is worse than no markers.
- */
-function slotEdge(index: number, count: number, width: number): number {
-  return index >= count ? width : Math.round((index * width) / count);
-}
+// Slot tiling, the gap-marker geometry and MIN_BAR_HEIGHT all come from
+// chart-geometry.ts. `slotEdge` used to be hand-copied here, on the reasoning
+// that exporting it would mean editing a file this component "does not own" --
+// which was an authorship artifact, not a constraint. Two copies of a tiling
+// function can drift, and if they do the gap markers slide out from under the
+// days they describe. One definition, imported.
 
 interface LineSegment {
   key: string;
@@ -121,6 +111,28 @@ export function ChartDataSummary({
  * Shared by ChartDataSummary and the chart's own accessibilityLabel so the
  * spoken and printed descriptions cannot disagree.
  */
+/**
+ * The spoken description of ONE day.
+ *
+ * The aggregate summary tells a screen-reader user how many days have values;
+ * it cannot tell them what happened on a particular day, which is the whole
+ * point of a chart. Every mark -- bar or gap -- carries this, so the series is
+ * interrogable rather than merely summarised.
+ *
+ * A recorded zero says "0", explicitly, and is never phrased like an absence.
+ */
+export function describeDay(point: HealthMetricPoint, metric: string, unit: string): string {
+  const day = formatShortDate(point.local_date);
+  if (point.state === "value" && point.value !== null) {
+    const { text, unitLabel } = formatHealthValue(point.value, unit);
+    return `${metricLabel(metric)}, ${day}: ${text}${unitLabel === "" ? "" : ` ${unitLabel}`}.`;
+  }
+  if (point.state === "verified_absent") {
+    return `${metricLabel(metric)}, ${day}: checked, nothing recorded.`;
+  }
+  return `${metricLabel(metric)}, ${day}: not synced yet.`;
+}
+
 export function describeSeries(
   metric: string,
   points: readonly HealthMetricPoint[],
@@ -163,9 +175,9 @@ export function describeSeries(
     });
     if (min !== null && max !== null) {
       // String(number) is the shortest round-tripping form of the parsed
-      // double. Display-only, and the alternative -- carrying the original
-      // exact string through the geometry -- would mean changing a module
-      // this component does not own.
+      // double. Display-only: the exact per-day strings are never routed
+      // through the geometry, so nothing here can lose precision that a
+      // reader could act on.
       const lo = formatHealthValue(String(min), unit);
       const hi = formatHealthValue(String(max), unit);
       const suffix = lo.unitLabel ? ` ${lo.unitLabel}` : "";
@@ -230,6 +242,13 @@ export function HealthChart({
         {chart.bars.map((bar) => (
           <View
             key={`bar-${bar.localDate}`}
+            accessible
+            accessibilityRole="image"
+            accessibilityLabel={describeDay(
+              { local_date: bar.localDate, state: "value", value: bar.value, source_count: null },
+              metric,
+              unit,
+            )}
             style={{
               position: "absolute",
               left: bar.x,
@@ -284,11 +303,20 @@ export function HealthChart({
           gapDates.has(point.local_date) ? (
             <View
               key={`gap-${point.local_date}`}
+              accessible
+              accessibilityRole="image"
+              accessibilityLabel={describeDay(point, metric, unit)}
               style={{
                 position: "absolute",
-                left: slotEdge(index, count, width),
+                // Centred in the slot and only GAP_MARKER_WIDTH wide, so a
+                // gap differs from the thinnest real bar in width as well as
+                // height and colour. Three redundant channels, because colour
+                // alone is not a channel for everyone.
+                left:
+                  (slotEdge(index, count, width) + slotEdge(index + 1, count, width)) / 2 -
+                  GAP_MARKER_WIDTH / 2,
                 top: height - GAP_MARKER_HEIGHT,
-                width: Math.max(1, slotEdge(index + 1, count, width) - slotEdge(index, count, width) - 1),
+                width: GAP_MARKER_WIDTH,
                 height: GAP_MARKER_HEIGHT,
               }}
               className="bg-neutral-300 dark:bg-neutral-700"

@@ -620,7 +620,12 @@ export const HealthMetricSeriesResponseSchema = z.object({
   /** Inclusive. */
   to: LocalDateSchema,
   capability: HealthMetricCapabilitySchema,
-  /** Ascending by local_date, one entry per civil day in [from, to]. */
+  /**
+   * Ascending by local_date. One entry per civil day in [from, to] when
+   * include_empty is true (the default); when false, only days that have a
+   * stored row -- so a caller filtering empties must read `summary` for the
+   * honest day counts rather than `points.length`.
+   */
   points: z.array(HealthMetricPointSchema),
   summary: HealthSeriesSummarySchema,
 });

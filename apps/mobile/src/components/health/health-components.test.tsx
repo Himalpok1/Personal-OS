@@ -39,7 +39,13 @@ import type {
 import { Pressable, Text, View } from "react-native";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useHealthSummary } from "@/queries/health";
-import { HealthChart, describeSeries } from "./health-chart";
+import {
+  GAP_MARKER_HEIGHT,
+  GAP_MARKER_WIDTH,
+  MIN_BAR_HEIGHT,
+  chartMarkInvariantHolds,
+} from "./chart-geometry";
+import { HealthChart, describeDay, describeSeries } from "./health-chart";
 import { HealthConnectionCard, scopeLabel } from "./connection-card";
 import { HealthTodayCard } from "./health-today-card";
 import { METRIC_EXPLANATIONS } from "./metric-state";
@@ -51,7 +57,7 @@ import {
   WORKOUT_DETAIL_NOTE,
   WorkoutSessionRow,
 } from "./session-cards";
-import type { HealthConnectionDisplayState } from "./connection-state";
+import { canRequestSync, type HealthConnectionDisplayState } from "./connection-state";
 
 vi.mock("@/queries/health", () => ({ useHealthSummary: vi.fn() }));
 
@@ -470,14 +476,23 @@ const ALL_STATES: HealthConnectionDisplayState[] = [
   "current",
 ];
 
-/** States where a manual sync must be impossible -- either no control at all,
- *  or a control that is genuinely disabled. */
-const SYNC_BLOCKED: HealthConnectionDisplayState[] = [
-  "unavailable",
-  "not_configured",
-  "not_connected",
-  "needs_reconnect",
-  "syncing",
+/**
+ * States where a manual sync must be impossible, and HOW each one achieves it.
+ *
+ * The two mechanisms are not interchangeable and must be asserted separately:
+ * `not_configured` and `not_connected` render no sync control at all (there is
+ * nothing to sync), while the rest render one that is genuinely disabled. A
+ * test that accepted "either" would pass if a control silently disappeared
+ * from a state that is supposed to offer a disabled one -- or, worse, if a
+ * control appeared where none should exist and simply happened to be absent
+ * from the tree the walker searched.
+ */
+const SYNC_BLOCKED: [HealthConnectionDisplayState, "absent" | "disabled"][] = [
+  ["unavailable", "disabled"],
+  ["not_configured", "absent"],
+  ["not_connected", "absent"],
+  ["needs_reconnect", "disabled"],
+  ["syncing", "disabled"],
 ];
 
 function renderConnectionCard(
@@ -507,11 +522,28 @@ describe("<HealthConnectionCard />", () => {
     expect(new Set(bodies).size).toBe(ALL_STATES.length);
   });
 
-  it.each(SYNC_BLOCKED)("%s: a manual sync cannot be requested", (state) => {
+  it.each(SYNC_BLOCKED)("%s: a manual sync cannot be requested (%s control)", (state, how) => {
     const button = syncButton(renderConnectionCard(state));
-    if (button === undefined) return; // no control at all is a stronger guarantee
-    expect(button.props?.disabled).toBe(true);
-    expect(button.props?.accessibilityState).toEqual({ disabled: true });
+    if (how === "absent") {
+      // Asserted, never skipped. The previous form returned early here, so
+      // these two states were parameterised but examined nothing at all.
+      expect(button).toBeUndefined();
+      return;
+    }
+    expect(button).toBeDefined();
+    expect(button!.props?.disabled).toBe(true);
+    expect(button!.props?.accessibilityState).toEqual({ disabled: true });
+  });
+
+  it("covers every blocked state, and no state is both blocked and enabled", () => {
+    // The two tables are the test's own premise; if they ever disagree with
+    // canRequestSync the parameterised cases above would silently test the
+    // wrong thing rather than fail.
+    const blocked = SYNC_BLOCKED.map(([state]) => state);
+    const enabled = ALL_STATES.filter((state) => !blocked.includes(state));
+    expect(blocked.filter((state) => canRequestSync(state))).toEqual([]);
+    expect(enabled.filter((state) => !canRequestSync(state))).toEqual([]);
+    expect([...blocked, ...enabled].sort()).toEqual([...ALL_STATES].sort());
   });
 
   it.each<HealthConnectionDisplayState>(["partial_scope", "stale", "error", "current"])(
@@ -591,7 +623,7 @@ describe("<HealthConnectionCard />", () => {
     expect(text).toContain("35 days ago");
   });
 
-  it("error never renders a provider error string -- only the consequence", () => {
+  it("error states that the sync did not finish and that it will be retried", () => {
     const text = getTextContent(
       renderConnectionCard("error", {
         connection: connection({
@@ -601,11 +633,68 @@ describe("<HealthConnectionCard />", () => {
       }),
     );
 
+    // The consequence, in words a reader can act on -- not the cause, which
+    // HealthConnectionSummary deliberately cannot carry.
     expect(text).toContain("didn't complete");
     expect(text).toContain("try again");
-    // The contract cannot even express one, but assert it anyway: this is the
-    // rule most likely to be broken by a future "helpful" addition.
-    expect(text).not.toMatch(/INVALID_|Error:|SQLSTATE|invalid_grant/);
+    // And it must not read as data loss: an incomplete sync leaves what was
+    // already stored intact.
+    expect(text).not.toMatch(/\blost\b|\bdeleted\b|\bcorrupt/i);
+  });
+
+  it("no state anywhere renders a raw-looking error token", () => {
+    // Previously this scanned one state for a handful of strings the response
+    // contract cannot express, so it could not fail. Two changes make it real:
+    // the detector is exercised against a known-bad sample first, and it is
+    // then applied to EVERY state and to every user-visible string prop --
+    // including accessibilityLabel and accessibilityHint, which a screen
+    // reader speaks and which no previous assertion looked at.
+    const rawErrorToken =
+      /\bError:|\bSQLSTATE\b|\bECONNREFUSED\b|\bEAI_AGAIN\b|\binvalid_grant\b|\bINVALID_[A-Z_]+\b|\n\s+at /;
+
+    // Positive control: the detector genuinely fires on the shape of thing it
+    // is looking for, so the absences below are evidence and not an artefact
+    // of a pattern that matches nothing.
+    expect("Error: connect ECONNREFUSED 127.0.0.1:443\n    at onConnect").toMatch(rawErrorToken);
+    expect("SQLSTATE 23514").toMatch(rawErrorToken);
+    expect("INVALID_ROLLUP_QUERY_DURATION").toMatch(rawErrorToken);
+    // ...and does not fire on ordinary product copy.
+    expect("That sync didn't complete. Personal OS will try again.").not.toMatch(rawErrorToken);
+
+    // Every string the component puts anywhere -- text children AND string
+    // props such as accessibilityLabel, accessibilityHint or a label handed to
+    // a child component before it becomes children. getTextContent alone sees
+    // only the first kind, so a message routed through a prop would slip past.
+    const stringsIn = (tree: unknown): string[] => {
+      const out: string[] = [];
+      for (const el of findAll(tree, () => true)) {
+        for (const [key, value] of Object.entries(el.props ?? {})) {
+          if (key !== "children" && typeof value === "string") out.push(value);
+        }
+      }
+      out.push(getTextContent(tree));
+      return out.filter((value) => value !== "");
+    };
+
+    let examined = 0;
+    for (const state of ALL_STATES) {
+      const tree = renderConnectionCard(state, {
+        connection: connection({
+          has_sync_error: true,
+          last_sync_error_at: "2026-08-25T03:00:00.000Z",
+        }),
+        freshness: freshness({ is_stale: true, days_behind: 41 }),
+      });
+
+      for (const value of stringsIn(tree)) {
+        examined += 1;
+        expect(value, state).not.toMatch(rawErrorToken);
+      }
+    }
+
+    // A scan that examined nothing would pass for the worst possible reason,
+    // which is the exact failure mode this rewrite exists to remove.
+    expect(examined).toBeGreaterThan(ALL_STATES.length);
   });
 
   it("never claims anything about paired devices or a wearable's last sync", () => {
@@ -717,7 +806,9 @@ describe("sleep and workout cards", () => {
   });
 
   it("SleepSummaryCard is honest, not blank, when there is no session", () => {
-    const text = getTextContent(deepRender(SleepSummaryCard({ session: null, averageSeconds: null })));
+    const text = getTextContent(
+      deepRender(SleepSummaryCard({ session: null, averageSeconds: null })),
+    );
     expect(text).toContain("No sleep sessions have reached Google Health yet");
     expect(text).not.toMatch(/\d+h \d+m/);
   });
@@ -747,7 +838,10 @@ describe("sleep and workout cards", () => {
     const text = getTextContent(
       deepRender(
         WorkoutSessionRow({
-          session: workoutSession({ session_type: "SESSION_TYPE_UNKNOWN_42", session_subtype: null }),
+          session: workoutSession({
+            session_type: "SESSION_TYPE_UNKNOWN_42",
+            session_subtype: null,
+          }),
         }),
       ),
     );
@@ -838,12 +932,32 @@ describe("<HealthChart />", () => {
       }),
     );
 
-    const slotWidth = 300 / 6;
+    // A gap marker is a narrow mark CENTRED in its slot, while a bar fills its
+    // slot from the left edge, so their left edges are deliberately different.
+    // The invariant that still matters -- and the one this test has always
+    // been for -- is that both land on the slot the day actually occupies, so
+    // a marker never drifts out from under the day it describes. Asserted on
+    // centres, computed here from raw slot arithmetic rather than by calling
+    // the component's own helper, so the test is an independent oracle.
+    const slotCentre = (index: number): number => ((index + 0.5) * 300) / 6;
+
     const gap = findByKeyPrefix(tree, "gap-2026-08-22")[0]!;
     const bar = findByKeyPrefix(tree, "bar-2026-08-23")[0]!;
 
-    expect(styleOf(gap).left).toBe(Math.round(2 * slotWidth));
-    expect(styleOf(bar).left).toBe(Math.round(3 * slotWidth));
+    // A bar is rendered one pixel narrower than its slot so adjacent bars stay
+    // visually separate, which shifts its centre half a pixel left. Named and
+    // asserted exactly, rather than absorbed into a loose tolerance that would
+    // also hide a real misalignment.
+    const HAIRLINE_INSET = 1;
+
+    const gapCentre = Number(styleOf(gap).left) + GAP_MARKER_WIDTH / 2;
+    const barCentre = Number(styleOf(bar).left) + Number(styleOf(bar).width) / 2;
+
+    expect(gapCentre).toBeCloseTo(slotCentre(2), 5);
+    expect(barCentre).toBeCloseTo(slotCentre(3) - HAIRLINE_INSET / 2, 5);
+    // And the two sit exactly one slot apart, which is what makes this a claim
+    // about tiling rather than two independently-correct numbers.
+    expect(barCentre - gapCentre).toBeCloseTo(300 / 6 - HAIRLINE_INSET / 2, 5);
   });
 
   it("renders a genuine recorded zero as a visible bar, distinct from a missing day", () => {
@@ -863,10 +977,72 @@ describe("<HealthChart />", () => {
     );
 
     const bars = findByKeyPrefix(tree, "bar-");
+    const gaps = findByKeyPrefix(tree, "gap-");
     expect(bars).toHaveLength(1);
     expect(bars[0]!.key).toBe("bar-2026-08-24");
-    expect(Number(styleOf(bars[0]!).height)).toBeGreaterThan(0);
-    expect(findByKeyPrefix(tree, "gap-")).toHaveLength(1);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]!.key).toBe("gap-2026-08-25");
+
+    // The distinction must survive colour being unavailable -- colour-blind
+    // vision, a monochrome screenshot, a high-contrast theme. So it is carried
+    // redundantly in SHAPE: the zero bar is both taller and wider than the gap
+    // marker. Asserted against the exported constants rather than hardcoded
+    // pixels, so lowering either one fails here instead of silently making a
+    // recorded zero indistinguishable from a day nobody synced.
+    const zeroHeight = Number(styleOf(bars[0]!).height);
+    const zeroWidth = Number(styleOf(bars[0]!).width);
+    const gapHeight = Number(styleOf(gaps[0]!).height);
+    const gapWidth = Number(styleOf(gaps[0]!).width);
+
+    expect(zeroHeight).toBeGreaterThanOrEqual(MIN_BAR_HEIGHT);
+    expect(gapHeight).toBe(GAP_MARKER_HEIGHT);
+    expect(gapWidth).toBe(GAP_MARKER_WIDTH);
+    expect(zeroHeight).toBeGreaterThan(gapHeight);
+    expect(zeroWidth).toBeGreaterThan(gapWidth);
+  });
+
+  it("keeps the mark invariant that makes the two shapes distinguishable at all", () => {
+    // One-line canary. If MIN_BAR_HEIGHT is ever lowered back to the gap
+    // height, a recorded zero and a data gap become the same rectangle again
+    // and only colour tells them apart -- the defect this checkpoint's audit
+    // found. That regression fails here immediately, without needing a render.
+    expect(chartMarkInvariantHolds()).toBe(true);
+    expect(MIN_BAR_HEIGHT).toBeGreaterThan(GAP_MARKER_HEIGHT);
+  });
+
+  it("describeDay speaks a zero as a number and never as an absence", () => {
+    // The same redundancy in the audio channel: a screen-reader user gets the
+    // shape distinction as words, or not at all.
+    const zero = describeDay(
+      point({ local_date: "2026-08-24", state: "value", value: "0" }),
+      "steps",
+      "count",
+    );
+    const absent = describeDay(
+      point({ local_date: "2026-08-24", state: "verified_absent", value: null }),
+      "steps",
+      "count",
+    );
+    const unknown = describeDay(
+      point({ local_date: "2026-08-24", state: "unknown", value: null }),
+      "steps",
+      "count",
+    );
+
+    // Three genuinely different sentences, not three renderings of "no data".
+    expect(new Set([zero, absent, unknown]).size).toBe(3);
+
+    expect(zero).toContain("0");
+    expect(zero).toContain("Steps");
+    // The whole point: a real zero must not borrow any of the missing-state
+    // vocabulary, in either direction.
+    expect(zero).not.toMatch(/not synced|nothing recorded|no data|unavailable|missing/i);
+
+    expect(absent).toContain("checked, nothing recorded");
+    expect(unknown).toContain("not synced yet");
+    // ...and neither absence may be phrased as a quantity.
+    expect(absent).not.toMatch(/\b0\b/);
+    expect(unknown).not.toMatch(/\b0\b/);
   });
 
   it("EMPTY: renders an honest empty state, not a blank box", () => {
@@ -907,10 +1083,60 @@ describe("<HealthChart />", () => {
     expect(text).toContain("4 of 6 days have a recorded value");
     expect(text).toContain("1 day was checked with nothing recorded");
     expect(text).toContain("1 day has not been synced");
+  });
 
-    // The spoken label carries the same content, so the chart is not
-    // colour-only for a screen reader.
-    expect(tree.props?.accessibilityLabel).toBe(describeSeries("steps", GAPPED_SERIES, "count"));
+  it("speaks the metric and all three day counts to a screen reader", () => {
+    // Asserted against literal expected content, NOT against describeSeries --
+    // comparing the label to the same function that produced it is true by
+    // construction and would survive that function returning an empty string,
+    // the exact regression that leaves a chart colour-only.
+    const tree = deepRender(
+      HealthChart({
+        metric: "steps",
+        points: GAPPED_SERIES,
+        unit: "count",
+        aggregation: "sum",
+        kind: "bar",
+        width: 300,
+        height: 100,
+      }),
+    ) as WalkedElement;
+
+    const label = tree.props?.accessibilityLabel;
+    expect(typeof label).toBe("string");
+    const spoken = label as string;
+
+    // GAPPED_SERIES: 6 days, 4 with values, 1 verified_absent, 1 unknown.
+    expect(spoken).toContain("Steps");
+    expect(spoken).toContain("4 of 6 days have a recorded value");
+    expect(spoken).toContain("1 day was checked with nothing recorded");
+    expect(spoken).toContain("1 day has not been synced");
+    // A summary that silently dropped the two non-value days would leave a
+    // listener believing the series is complete.
+    expect(spoken).not.toContain("6 of 6");
+  });
+
+  it("prints and speaks the SAME string, so the two descriptions cannot drift", () => {
+    // This one IS an identity check, and is named as such: its only claim is
+    // that the visible summary and the spoken label share a single source, so
+    // a change to one cannot leave the other stale. It deliberately asserts
+    // nothing about the content -- the test above owns that.
+    const tree = deepRender(
+      HealthChart({
+        metric: "steps",
+        points: GAPPED_SERIES,
+        unit: "count",
+        aggregation: "sum",
+        kind: "bar",
+        width: 300,
+        height: 100,
+      }),
+    ) as WalkedElement;
+
+    const spoken = tree.props?.accessibilityLabel as string;
+    const printed = getTextContent(tree);
+    expect(spoken.length).toBeGreaterThan(0);
+    expect(printed).toContain(spoken);
   });
 
   it("describes a series with no readable values without claiming a zero", () => {

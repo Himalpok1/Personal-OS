@@ -183,12 +183,19 @@ function copyFor(
       };
 
     case "stale": {
+      // daysBehind can legitimately be 0 here: ADR-048 widens the sync window
+      // by a day at each end, so verified_through_date can sit level with (or
+      // ahead of) the requested local date while the server still considers
+      // the connection stale. "Data is 0 days behind" would be nonsense, so
+      // that case states what IS true -- how far the data reaches -- instead.
       const behind =
         described.daysBehind === null
           ? "Data hasn't been verified yet."
-          : `Data is ${described.daysBehind} ${described.daysBehind === 1 ? "day" : "days"} behind${
-              through ? `, through ${through}` : ""
-            }.`;
+          : described.daysBehind === 0
+            ? `Data reaches ${through || "the current day"}.`
+            : `Data is ${described.daysBehind} ${described.daysBehind === 1 ? "day" : "days"} behind${
+                through ? `, through ${through}` : ""
+              }.`;
       return {
         status: "Data is behind",
         body:
@@ -310,7 +317,7 @@ export function HealthConnectionCard({
           ) : null}
           {showSync ? (
             <ActionButton
-              label={state === "syncing" ? "Syncing…" : isSyncPending === true ? "Syncing…" : "Sync now"}
+              label={state === "syncing" || isSyncPending === true ? "Syncing…" : "Sync now"}
               onPress={onSync!}
               disabled={syncDisabled}
               tone="secondary"

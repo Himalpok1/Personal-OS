@@ -219,8 +219,10 @@ export interface ShouldAutoRefreshInput {
  * - `canRequestSync`            -- the same frozen precedence the banner shows,
  *                                  so we never fire while the UI says the
  *                                  connection needs reconnecting.
- * - `is_stale`                  -- this is a STALENESS remedy, not a refresh
- *                                  button. Firing on every app open would hit
+ * - today not yet covered      -- this tops up TODAY, it is not a refresh
+ *                                  button and not a staleness remedy (a hot
+ *                                  pass cannot clear staleness -- see the
+ *                                  predicate). Firing unconditionally would hit
  *                                  the provider on a schedule nobody asked for,
  *                                  on top of the hourly cron that already runs.
  * - `sync_in_progress`          -- redundant with `canRequestSync` today, since
@@ -240,8 +242,30 @@ export function shouldAutoRefresh(input: ShouldAutoRefreshInput): { connectionId
   const state = resolveHealthConnectionState({ configured, connection, freshness });
   if (!canRequestSync(state)) return null;
 
-  if (!freshness.is_stale) return null;
   if (freshness.sync_in_progress) return null;
+
+  // The trigger is "today is not covered yet", NOT `is_stale`, and the
+  // difference is load-bearing rather than cosmetic.
+  //
+  // This hook requests a `hot` window, which is correct and must not change: a
+  // hot pass is the one mode ADR-046a/047a forbid from densifying or
+  // tombstoning, so it is the only kind safe to fire automatically without the
+  // user asking. But `hot` is also, by that same rule, never authoritative --
+  // and the worker writes `verified_through_date` only on an authoritative
+  // pass. `is_stale` derives purely from `verified_through_date`, so a hot
+  // sync can NEVER clear it. Triggering on staleness therefore meant firing a
+  // request on every app open, polling for 90 seconds, and leaving the banner
+  // exactly as it was: work the user pays for that cannot change what prompted
+  // it. Staleness is resolved by the manual button (which resolves to `manual`)
+  // or by the hourly cron's warm pass -- both authoritative.
+  //
+  // What a hot pass CAN do is fill in today's numbers, which is precisely what
+  // a user opening the app wants and precisely what the dashboard is showing as
+  // "not synced yet". So the condition is now the one this mechanism can
+  // actually satisfy.
+  if (freshness.verified_through_date !== null && freshness.verified_through_date >= summary.local_date) {
+    return null;
+  }
 
   return { connectionId: connection.id };
 }
