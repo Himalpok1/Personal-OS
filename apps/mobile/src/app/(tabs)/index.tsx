@@ -459,6 +459,8 @@ export default function TodayScreen() {
         <Text className="text-red-600">Couldn&apos;t load today.</Text>
         <Pressable
           onPress={() => void refetch()}
+          accessibilityRole="button"
+          accessibilityLabel="Retry loading today"
           hitSlop={8}
           className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
         >

@@ -80,13 +80,20 @@ export default function EditTaskScreen() {
         <Text className="text-red-600">
           {status === 404 ? "This task couldn't be found." : "Couldn't load this task."}
         </Text>
-        <Pressable
-          onPress={() => void refetch()}
-          hitSlop={8}
-          className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-        >
-          <Text className="font-semibold text-white">Retry</Text>
-        </Pressable>
+        {/* A 404 is terminal -- refetching the same id repeats the same
+            answer -- so the affordance appears only for a failure that could
+            actually clear. */}
+        {status === 404 ? null : (
+          <Pressable
+            onPress={() => void refetch()}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading this task"
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          >
+            <Text className="font-semibold text-white">Retry</Text>
+          </Pressable>
+        )}
       </View>
     );
   }
@@ -184,8 +191,8 @@ export default function EditTaskScreen() {
             accessibilityState={{ selected: projectId === project.id }}
             className={
               projectId === project.id
-                ? "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
-                : "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
+                ? "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
+                : "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
             }
           >
             <Text className={projectId === project.id ? "text-white" : "text-black dark:text-white"}>

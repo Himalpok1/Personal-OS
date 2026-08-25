@@ -69,8 +69,8 @@ export default function NewNoteScreen() {
             accessibilityState={{ selected: projectId === project.id }}
             className={
               projectId === project.id
-                ? "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
-                : "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
+                ? "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
+                : "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
             }
           >
             <Text className={projectId === project.id ? "text-white" : "text-black dark:text-white"}>

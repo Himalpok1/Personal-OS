@@ -122,11 +122,14 @@ export function QuickAddFab() {
       {outbox.pending > 0 || outbox.failed > 0 ? (
         <View
           pointerEvents="none"
-          // No accessibilityLabel here -- pointerEvents="none" already keeps
-          // this out of the touch target, and the count it would announce is
-          // now folded into the FAB's own accessibilityLabel above, so a
-          // screen reader would otherwise hear it announced twice for the
-          // same button.
+          // The count is folded into the FAB's own accessibilityLabel above,
+          // so this must be structurally excluded rather than merely
+          // unlabelled: `pointerEvents` governs touch dispatch, not the
+          // accessibility tree, and a bare <Text> stays discoverable on its
+          // own. Without these two props a screen reader lands on a
+          // context-free "3" next to the button.
+          accessible={false}
+          importantForAccessibility="no-hide-descendants"
           className={`absolute h-6 min-w-[24px] items-center justify-center rounded-full px-1 ${
             outbox.failed > 0 ? "bg-red-600" : "bg-amber-500"
           }`}

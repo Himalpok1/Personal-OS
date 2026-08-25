@@ -62,8 +62,9 @@ export default function InboxScreen() {
           <Text className="text-red-600">Couldn&apos;t load the inbox.</Text>
           <Pressable
             onPress={() => void refetch()}
-            hitSlop={8}
             accessibilityRole="button"
+            accessibilityLabel="Retry loading the inbox"
+            hitSlop={8}
             className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
           >
             <Text className="font-semibold text-white">Retry</Text>

@@ -1040,7 +1040,7 @@ function ConnectedHealthCard() {
 export default function SettingsScreen() {
   const keyboardHeight = useKeyboardHeight();
   const { identity, clearIdentity } = useDeviceIdentity();
-  const { data, isLoading, isError, error } = useDevices();
+  const { data, isLoading, isError, error, refetch } = useDevices();
   const thisDevice = data?.items.find((device) => device.id === identity?.deviceId);
 
   const forgetThisDevice = async () => {
@@ -1106,7 +1106,18 @@ export default function SettingsScreen() {
               </Pressable>
             </View>
           ) : (
-            <Text className="text-red-600">Couldn&apos;t load devices.</Text>
+            <View className="mb-4 items-start gap-2">
+              <Text className="text-red-600">Couldn&apos;t load devices.</Text>
+              <Pressable
+                onPress={() => void refetch()}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Retry loading devices"
+                className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+              >
+                <Text className="font-semibold text-white">Retry</Text>
+              </Pressable>
+            </View>
           )
         ) : null}
 

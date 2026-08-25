@@ -345,8 +345,8 @@ export function EditEventView(props: EditEventViewProps) {
             accessibilityState={{ selected: props.projectId === project.id }}
             className={
               props.projectId === project.id
-                ? "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
-                : "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
+                ? "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
+                : "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
             }
           >
             <Text
@@ -493,13 +493,20 @@ export default function EditEventScreen() {
         <Text className="text-red-600">
           {status === 404 ? "This event couldn't be found." : "Couldn't load this event."}
         </Text>
-        <Pressable
-          onPress={() => void refetch()}
-          hitSlop={8}
-          className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-        >
-          <Text className="font-semibold text-white">Retry</Text>
-        </Pressable>
+        {/* A 404 is terminal -- refetching the same id repeats the same
+            answer -- so the affordance appears only for a failure that could
+            actually clear. */}
+        {status === 404 ? null : (
+          <Pressable
+            onPress={() => void refetch()}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading this event"
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          >
+            <Text className="font-semibold text-white">Retry</Text>
+          </Pressable>
+        )}
       </View>
     );
   }
@@ -554,8 +561,13 @@ export default function EditEventScreen() {
             setGoogleCalendarLinkNote("Already syncing to Google.");
             return;
           }
+          // Never the raw message: `ApiClientError.message` is the
+          // developer-shaped `API error 400: validation_failed`, and a future
+          // route change could put provider text behind it.
           setGoogleCalendarLinkNote(
-            `Couldn't link to Google Calendar: ${err instanceof Error ? err.message : String(err)}`,
+            err instanceof ApiClientError && err.code === "validation_failed"
+              ? "Couldn't link to Google Calendar: that calendar isn't valid for this event."
+              : "Couldn't link to Google Calendar. Please try again.",
           );
         },
       },

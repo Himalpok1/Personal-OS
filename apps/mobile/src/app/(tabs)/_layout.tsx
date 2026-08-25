@@ -8,7 +8,12 @@ import { UI_TEST_MODE } from "@/config/ui-test-mode";
 function SettingsHeaderButton() {
   return (
     <Link href="/settings" asChild>
-      <Pressable hitSlop={12} className="px-3">
+      <Pressable
+        hitSlop={12}
+        accessibilityRole="button"
+        accessibilityLabel="Settings"
+        className="min-h-[44px] justify-center px-3"
+      >
         <Text className="text-xl">⚙️</Text>
       </Pressable>
     </Link>

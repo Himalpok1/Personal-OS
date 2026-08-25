@@ -33,8 +33,8 @@ export function GoogleCalendarLinkPicker({
           accessibilityState={{ selected: selectedGoogleCalendarId === undefined }}
           className={
             selectedGoogleCalendarId === undefined
-              ? "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
-              : "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
+              ? "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
+              : "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
           }
         >
           <Text
@@ -58,8 +58,8 @@ export function GoogleCalendarLinkPicker({
             }}
             className={
               selectedGoogleCalendarId === calendar.google_calendar_id
-                ? "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
-                : "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
+                ? "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
+                : "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
             }
           >
             <Text
