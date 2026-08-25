@@ -4,6 +4,7 @@ import { Alert, Modal, Pressable, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { getOutboxStats } from "@/outbox/queue";
+import { usePlaceholderColor } from "@/components/placeholder-color";
 import { useCapture } from "@/queries/capture";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import {
@@ -47,8 +48,20 @@ export function QuickAddFab() {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const keyboardHeight = useKeyboardHeight();
+  const placeholderColor = usePlaceholderColor();
   const capture = useCapture();
   const outbox = useOutboxBadge();
+
+  // The badge beside the FAB carries pending/failed counts visually, but the
+  // FAB itself is the only focusable element here (the badge is
+  // pointerEvents="none" and non-accessible) -- so its own accessible name
+  // must say what the badge shows, not just "Quick add".
+  const fabAccessibilityLabel =
+    outbox.failed > 0
+      ? `Quick add, ${outbox.failed} ${outbox.failed === 1 ? "capture needs" : "captures need"} attention`
+      : outbox.pending > 0
+        ? `Quick add, ${outbox.pending} ${outbox.pending === 1 ? "capture" : "captures"} waiting to send`
+        : "Quick add";
 
   const submit = () => {
     const trimmed = text.trim();
@@ -97,7 +110,7 @@ export function QuickAddFab() {
         // PttButton and with every scroll container's bottom padding -- see
         // that file for why the old bottom-40 was wrong.
         className={`absolute ${FLOATING_BUTTON_BOTTOM} right-6 ${FLOATING_BUTTON_SIZE} items-center justify-center rounded-full bg-blue-600 shadow-lg active:bg-blue-700`}
-        accessibilityLabel="Quick add"
+        accessibilityLabel={fabAccessibilityLabel}
       >
         <Text className="text-2xl font-bold text-white">+</Text>
       </Pressable>
@@ -109,11 +122,11 @@ export function QuickAddFab() {
       {outbox.pending > 0 || outbox.failed > 0 ? (
         <View
           pointerEvents="none"
-          accessibilityLabel={
-            outbox.failed > 0
-              ? `${outbox.failed} ${outbox.failed === 1 ? "capture needs" : "captures need"} attention`
-              : `${outbox.pending} ${outbox.pending === 1 ? "capture" : "captures"} waiting to send`
-          }
+          // No accessibilityLabel here -- pointerEvents="none" already keeps
+          // this out of the touch target, and the count it would announce is
+          // now folded into the FAB's own accessibilityLabel above, so a
+          // screen reader would otherwise hear it announced twice for the
+          // same button.
           className={`absolute h-6 min-w-[24px] items-center justify-center rounded-full px-1 ${
             outbox.failed > 0 ? "bg-red-600" : "bg-amber-500"
           }`}
@@ -146,7 +159,7 @@ export function QuickAddFab() {
                 value={text}
                 onChangeText={setText}
                 placeholder="Remind me to... / Idea: ... / Meeting tomorrow at..."
-                placeholderTextColor="#888"
+                placeholderTextColor={placeholderColor}
                 multiline
                 autoFocus
                 className="min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"

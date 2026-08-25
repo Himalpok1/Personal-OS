@@ -12,6 +12,7 @@ import { Link, useRouter, type Href } from "expo-router";
 import { useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { usePlaceholderColor } from "@/components/placeholder-color";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import {
@@ -163,6 +164,7 @@ function TaskRow({ id, title, dueAt }: { id: string; title: string; dueAt: strin
   return (
     <Pressable
       onPress={() => router.push(`/tasks/${id}`)}
+      hitSlop={4}
       className="min-h-[40px] flex-row items-center justify-between py-1"
     >
       <Text className="flex-1 text-sm text-black dark:text-white" numberOfLines={1}>
@@ -236,6 +238,7 @@ function MissingNextActionRow({ id, name }: { id: string; name: string }) {
   return (
     <Pressable
       onPress={() => router.push(`/projects/${id}`)}
+      hitSlop={4}
       className="min-h-[40px] flex-row items-center justify-between py-1"
     >
       <Text className="flex-1 text-sm text-black dark:text-white" numberOfLines={1}>
@@ -261,6 +264,7 @@ function AgendaRow({
   return (
     <Pressable
       onPress={() => router.push(href)}
+      hitSlop={4}
       className="min-h-[40px] flex-row items-baseline gap-2 py-1"
     >
       <Text className="w-11 shrink-0 text-right text-xs text-neutral-500 dark:text-neutral-400">
@@ -294,7 +298,7 @@ function InboxBody({ inbox }: { inbox: InboxSection }) {
         </Text>
       ))}
       <Link href="/(tabs)/inbox" asChild>
-        <Pressable className="mt-1 min-h-[40px] flex-row items-center">
+        <Pressable className="mt-1 min-h-[44px] flex-row items-center">
           <Text className="text-sm font-medium text-blue-600 dark:text-blue-400">
             Open inbox →
           </Text>
@@ -505,6 +509,7 @@ function StepSection({
 }
 
 function DailyFlow({ review, context }: { review: Review; context: DailyReviewContext }) {
+  const placeholderColor = usePlaceholderColor();
   const [checklist, setChecklist] = useState<DailyReviewChecklist>(() => savedChecklist(review));
   const [selected, setSelected] = useState<ReviewPriorityRef[]>(() => savedPriorities(review));
   const [summaryText, setSummaryText] = useState(() => review.summary ?? "");
@@ -631,7 +636,7 @@ function DailyFlow({ review, context }: { review: Review; context: DailyReviewCo
               onBlur={commitSummary}
               multiline
               placeholder="How did today go?"
-              placeholderTextColor="#888"
+              placeholderTextColor={placeholderColor}
               className="min-h-[96px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
             />
           </StepSection>

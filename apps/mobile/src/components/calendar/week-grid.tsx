@@ -84,7 +84,9 @@ function TimedBlock({
     <Pressable
       onPress={() => onPress(placement.entry)}
       style={{ position: "absolute", top, height, left: 1, right: 1 }}
+      hitSlop={4}
       className="overflow-hidden rounded-sm bg-blue-600 px-1 py-0.5 active:bg-blue-700"
+      accessibilityRole="button"
       accessibilityLabel={placement.entry.title}
     >
       <Text numberOfLines={1} className="text-[10px] font-semibold text-white">
@@ -168,6 +170,9 @@ export function WeekGrid({ week, entries, onSlotPress, onEntryPress }: WeekGridP
                 <Pressable
                   key={placement.entry.id}
                   onPress={() => onEntryPress(placement.entry)}
+                  hitSlop={4}
+                  accessibilityRole="button"
+                  accessibilityLabel={placement.entry.title}
                   className="rounded-sm bg-emerald-600 px-1 py-0.5 active:bg-emerald-700"
                 >
                   <Text numberOfLines={1} className="text-[10px] font-semibold text-white">
@@ -187,7 +192,10 @@ export function WeekGrid({ week, entries, onSlotPress, onEntryPress }: WeekGridP
           <View style={{ width: GUTTER_WIDTH }}>
             {Array.from({ length: 24 }, (_, hour) => (
               <View key={hour} style={{ height: HOUR_ROW_HEIGHT }} className="items-end pr-1">
-                <Text className="text-[9px] text-neutral-400 dark:text-neutral-500">
+                <Text
+                  numberOfLines={1}
+                  className="text-[10px] text-neutral-500 dark:text-neutral-400"
+                >
                   {hour === 0 ? "" : format(new Date(2000, 0, 1, hour), "h a")}
                 </Text>
               </View>

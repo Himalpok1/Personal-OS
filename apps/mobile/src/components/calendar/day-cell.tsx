@@ -46,7 +46,7 @@ export function DayCell({ date, isCurrentPeriod, isToday, entries, onPress, onEn
               ? "font-semibold text-white"
               : isCurrentPeriod
                 ? "text-black dark:text-white"
-                : "text-neutral-400 dark:text-neutral-600"
+                : "text-neutral-500 dark:text-neutral-400"
           }`}
         >
           {dayNumber}
@@ -63,6 +63,9 @@ export function DayCell({ date, isCurrentPeriod, isToday, entries, onPress, onEn
               e.stopPropagation();
               onEntryPress(entry);
             }}
+            hitSlop={4}
+            accessibilityRole="button"
+            accessibilityLabel={entry.title}
             className="rounded bg-blue-100 px-1 py-0.5 dark:bg-blue-950"
           >
             <Text

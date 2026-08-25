@@ -115,6 +115,7 @@ export function AgendaTaskRow({ item }: { item: AgendaTaskItem | AgendaOccurrenc
       </Pressable>
       <Pressable
         onPress={() => router.push(`/tasks/${item.id}`)}
+        hitSlop={4}
         className="flex-1"
         accessibilityRole="button"
       >
@@ -180,6 +181,7 @@ export function AgendaEventRow({ item }: { item: AgendaEventItem }) {
   return (
     <Pressable
       onPress={onPress}
+      hitSlop={4}
       className="min-h-[40px] flex-row items-baseline gap-3 px-4 py-3"
       accessibilityRole="button"
     >
