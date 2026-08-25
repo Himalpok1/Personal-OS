@@ -286,3 +286,401 @@ export type HealthSessionsQuery = z.infer<typeof HealthSessionsQuerySchema>;
 
 export const HealthSummaryQuerySchema = z.object({ tz: TimezoneSchema }).strict();
 export type HealthSummaryQuery = z.infer<typeof HealthSummaryQuerySchema>;
+
+// ===========================================================================
+// Checkpoint 6.4 -- the user-facing Health read surface
+// ===========================================================================
+//
+// Four routes, all `/health-*` siblings because `/health` is already the
+// liveness probe (recorded at Checkpoint 6.0):
+//
+//   GET /health-summary?tz=            dashboard for one requested-tz local day
+//   GET /health-metrics?metric=&from=&to=&include_empty=   bounded daily series
+//   GET /health-sleep?from=&to=&limit=&offset=             sleep, by WAKE date
+//   GET /health-workouts?from=&to=&limit=&offset=          exercise sessions
+//
+// Two invariants run through every shape here and are the reason it is not
+// simply the database tables projected outward:
+//
+// 1. MISSING IS NOT ZERO. `HealthMetricPointSchema` carries an explicit
+//    three-state `state` and a `value` that is non-null if and only if
+//    `state === "value"` -- enforced by a refine, so a zero-filled gap is
+//    unrepresentable rather than merely discouraged. `value === "0"` with
+//    `state === "value"` is a genuine recorded zero; that distinction is the
+//    whole point of the has_data CHECK in migration 0013 (ADR-047) and it
+//    must survive to the client. No read model may COALESCE it away.
+//
+// 2. NO ERROR STRINGS AND NO CREDENTIALS. Nothing here can express an access
+//    token, a refresh token, ciphertext, an IV, an auth tag, an OAuth state,
+//    or a provider error message. `health_connections.last_sync_error` is
+//    deliberately NOT projected -- only the timestamp and a boolean -- so a
+//    raw Google or Postgres message cannot reach a screen through this
+//    surface. Same structural-exclusion reasoning as BriefInput (ADR-043).
+//
+// Raw intraday heart rate is excluded from all four routes by construction:
+// `heart-rate-intraday` stays sync_enabled=false (6.2P F5 deferral) and
+// `health_observations` is empty by design, so no shape below references it.
+
+// ---------------------------------------------------------------------------
+// Value state -- the missing/zero contract
+// ---------------------------------------------------------------------------
+
+/**
+ * What we actually know about one metric on one civil date.
+ *
+ * `value`           a row exists with has_data = true. `value` is the exact
+ *                   numeric as a string and MAY be "0" -- a genuine recorded
+ *                   zero, which is data, not absence.
+ * `verified_absent` a row exists with has_data = false. We fetched an
+ *                   authoritative window covering this date and the provider
+ *                   returned nothing for it.
+ * `unknown`         no row at all. Either we have never verified this date, or
+ *                   the pass that covered it was non-authoritative (hot never
+ *                   densifies -- ADR-046a). The accompanying capability record
+ *                   is what lets a client explain WHICH.
+ *
+ * The API states the fact; the client explains it. There is deliberately no
+ * "no wearable paired" member -- that would be an inference, and asserting it
+ * would need the `settings.readonly` scope this project never requested.
+ */
+export const HealthValueStateSchema = z.enum(["value", "verified_absent", "unknown"]);
+export type HealthValueState = z.infer<typeof HealthValueStateSchema>;
+
+export const HealthMetricPointSchema = z
+  .object({
+    local_date: LocalDateSchema,
+    state: HealthValueStateSchema,
+    // Crosses the wire as a string for the same reason HealthDailyMetric's
+    // does: the column is numeric, exact for int64 counts and decimal kcal
+    // alike, and coercing at the DB boundary reintroduces the float
+    // imprecision numeric exists to avoid.
+    value: z.string().nullable(),
+    source_count: z.number().int().nullable(),
+  })
+  .refine((v) => (v.state === "value") === (v.value !== null), {
+    message: "value must be non-null exactly when state is 'value'",
+    path: ["value"],
+  });
+export type HealthMetricPoint = z.infer<typeof HealthMetricPointSchema>;
+
+/**
+ * How a day series is meaningfully aggregated. Declared by the catalog, not
+ * guessed per screen: averaging steps or summing resting heart rate are both
+ * nonsense, and deciding it in the client would put the same fact in as many
+ * places as there are views.
+ */
+export const HealthAggregationSchema = z.enum(["sum", "average"]);
+export type HealthAggregation = z.infer<typeof HealthAggregationSchema>;
+
+// ---------------------------------------------------------------------------
+// Capability -- why a value is missing
+// ---------------------------------------------------------------------------
+
+/**
+ * Everything a client needs to explain an `unknown` or `verified_absent`
+ * point without inventing a reason.
+ *
+ * `first_data_date === null` together with `capability_status ===
+ * "supported_empty_in_window"` is the honest shape of "this account has never
+ * produced this metric" -- which is the real state of twelve of the eighteen
+ * streams on the development account. It is NOT "unsupported", and no client
+ * may render it that way.
+ */
+export const HealthMetricCapabilitySchema = z.object({
+  metric: z.string(),
+  /** Catalog unit, so a client never has to hardcode one. */
+  unit: z.string(),
+  aggregation: HealthAggregationSchema,
+  sync_enabled: z.boolean(),
+  capability_status: HealthCapabilityStatusSchema.nullable(),
+  capability_checked_at: z.string().datetime({ offset: true }).nullable(),
+  verified_through_date: LocalDateSchema.nullable(),
+  earliest_verified_date: LocalDateSchema.nullable(),
+  /** Oldest civil date that has EVER returned real data for this stream. */
+  first_data_date: LocalDateSchema.nullable(),
+  last_successful_sync_at: z.string().datetime({ offset: true }).nullable(),
+  backfill_status: HealthBackfillStatusSchema,
+});
+export type HealthMetricCapability = z.infer<typeof HealthMetricCapabilitySchema>;
+
+export const HealthMetricTileSchema = z.object({
+  metric: z.string(),
+  unit: z.string(),
+  aggregation: HealthAggregationSchema,
+  point: HealthMetricPointSchema,
+});
+export type HealthMetricTile = z.infer<typeof HealthMetricTileSchema>;
+
+// ---------------------------------------------------------------------------
+// Sessions
+// ---------------------------------------------------------------------------
+
+/**
+ * The record's own provenance, exactly the three descriptive fields the API
+ * returns on a DataSource. This is data ABOUT the record, not a device
+ * inventory: `pairedDevices.list` needs `googlehealth.settings.readonly`,
+ * a fourth scope this project deliberately never requested (ADR-046). A
+ * client may say "recorded by a phone"; it may never claim to know which
+ * devices are paired or when a wearable last synced.
+ */
+export const HealthSourceIdentitySchema = z.object({
+  recording_method: z.string().nullable(),
+  device_form_factor: z.string().nullable(),
+  application_platform: z.string().nullable(),
+});
+export type HealthSourceIdentity = z.infer<typeof HealthSourceIdentitySchema>;
+
+export const HealthSleepStageSchema = z.object({
+  stage: z.string(),
+  seconds: z.number().int().min(0),
+});
+export type HealthSleepStage = z.infer<typeof HealthSleepStageSchema>;
+
+/**
+ * One sleep session, keyed on its civil END (wake) date per ADR-049 -- which
+ * is also the axis the provider filter and the tombstone sweep use, so the
+ * field is named for what it means rather than for the column it comes from.
+ *
+ * `stages`, `asleep_seconds` and `awake_seconds` are ALWAYS null today, and
+ * that is a deliberate, documented gap rather than an oversight. The
+ * Checkpoint 6.3 sync engine stores an allowlisted `SessionDetail` of
+ * {source, sessionType, sessionSubtype} only -- no stage breakdown is
+ * captured, and capturing one would mean changing the sync engine and
+ * re-fetching from Google, which 6.4 is not authorised to do. They are
+ * modelled here so a client renders an honest "stage detail isn't available"
+ * from the contract instead of hardcoding the absence, and so a future sync
+ * change fills them without a shape change.
+ */
+export const HealthSleepSessionSchema = z.object({
+  id: z.string().uuid(),
+  wake_local_date: LocalDateSchema,
+  start_at: z.string().datetime({ offset: true }),
+  end_at: z.string().datetime({ offset: true }),
+  start_utc_offset_seconds: z.number().int(),
+  end_utc_offset_seconds: z.number().int(),
+  /** Always derived from the physical instants, never civil subtraction. */
+  duration_seconds: z.number().int().min(0),
+  session_type: z.string().nullable(),
+  session_subtype: z.string().nullable(),
+  source: HealthSourceIdentitySchema,
+  stages: z.array(HealthSleepStageSchema).nullable(),
+  asleep_seconds: z.number().int().min(0).nullable(),
+  awake_seconds: z.number().int().min(0).nullable(),
+});
+export type HealthSleepSession = z.infer<typeof HealthSleepSessionSchema>;
+
+/**
+ * One exercise session, keyed on its civil START date (ADR-049).
+ *
+ * `distance_meters`, `calories_kcal` and `heart_rate_zones` share the same
+ * standing gap as sleep stages above: the stored SessionDetail carries none
+ * of them, so they are always null today. No exercise session has ever been
+ * observed on the development account either, so `session_type` values are
+ * provider strings passed through verbatim and are never interpreted.
+ */
+export const HealthWorkoutSessionSchema = z.object({
+  id: z.string().uuid(),
+  start_local_date: LocalDateSchema,
+  start_at: z.string().datetime({ offset: true }),
+  end_at: z.string().datetime({ offset: true }),
+  start_utc_offset_seconds: z.number().int(),
+  end_utc_offset_seconds: z.number().int(),
+  duration_seconds: z.number().int().min(0),
+  session_type: z.string().nullable(),
+  session_subtype: z.string().nullable(),
+  source: HealthSourceIdentitySchema,
+  distance_meters: z.string().nullable(),
+  calories_kcal: z.string().nullable(),
+  heart_rate_zones: z
+    .array(z.object({ zone: z.string(), seconds: z.number().int().min(0) }))
+    .nullable(),
+});
+export type HealthWorkoutSession = z.infer<typeof HealthWorkoutSessionSchema>;
+
+export const HealthSleepListResponseSchema = paginatedResponseSchema(HealthSleepSessionSchema);
+export type HealthSleepListResponse = z.infer<typeof HealthSleepListResponseSchema>;
+
+export const HealthWorkoutListResponseSchema = paginatedResponseSchema(HealthWorkoutSessionSchema);
+export type HealthWorkoutListResponse = z.infer<typeof HealthWorkoutListResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Connection + freshness
+// ---------------------------------------------------------------------------
+
+/**
+ * Connection state for the dashboard.
+ *
+ * Note what is NOT here: `last_sync_error`. The column holds a message the
+ * worker wrote, which has at times carried a Postgres `detail` (fixed in
+ * 6.3's audit) and could carry a provider phrase. Only the timestamp and a
+ * boolean cross this boundary, so "do not display raw provider errors" is a
+ * property of the contract rather than a rule a screen has to remember.
+ */
+export const HealthConnectionSummarySchema = z.object({
+  id: z.string().uuid(),
+  provider: z.string(),
+  status: HealthConnectionStatusSchema,
+  identity_verified_at: z.string().datetime({ offset: true }).nullable(),
+  granted_scopes: z.array(z.string()),
+  /** Approved Phase 6A scopes the user did not grant. */
+  missing_scopes: z.array(z.string()),
+  has_partial_scope: z.boolean(),
+  /** status is needs_reauth or revoked -- the user must reconnect. */
+  needs_reconnect: z.boolean(),
+  has_sync_error: z.boolean(),
+  last_sync_error_at: z.string().datetime({ offset: true }).nullable(),
+});
+export type HealthConnectionSummary = z.infer<typeof HealthConnectionSummarySchema>;
+
+/**
+ * Freshness, derived only from durable rows -- health_metric_streams and
+ * health_sync_runs -- never from an optimistic client claim.
+ *
+ * `sync_in_progress` is EXISTS(a run with finished_at IS NULL that started
+ * within HEALTH_SYNC_RUN_STALE_MINUTES). The bound matches the queue's own
+ * 900-second expiry, so a job killed mid-flight stops being reported as
+ * running at exactly the moment pg-boss stops considering it active, rather
+ * than pinning a spinner on the screen forever.
+ */
+export const HealthFreshnessDetailSchema = z.object({
+  last_successful_sync_at: z.string().datetime({ offset: true }).nullable(),
+  last_attempted_sync_at: z.string().datetime({ offset: true }).nullable(),
+  last_attempt_status: HealthSyncRunStatusSchema.nullable(),
+  verified_through_date: LocalDateSchema.nullable(),
+  /** Whole civil days between verified_through_date and local_date. */
+  days_behind: z.number().int().nullable(),
+  is_stale: z.boolean(),
+  staleness_threshold_days: z.number().int().min(1),
+  sync_in_progress: z.boolean(),
+});
+export type HealthFreshnessDetail = z.infer<typeof HealthFreshnessDetailSchema>;
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+
+/**
+ * `configured: false` means the server has no Google Health OAuth client at
+ * all, which is production's state today -- distinct from "configured but
+ * nobody has connected", which is `configured: true, connection: null`. The
+ * two need different words on screen, so they are different fields.
+ *
+ * `today` holds one tile per non-session, non-intraday catalog metric for the
+ * requested timezone's local date -- ALWAYS all of them, including `unknown`
+ * ones, because a metric silently vanishing from an array is exactly the kind
+ * of absence a user reads as zero.
+ *
+ * `latest` holds, for each metric that has ever recorded a value, that most
+ * recent value with its own date. It is what lets a screen say "last recorded
+ * Aug 23" instead of implying today's blank is a real zero. A metric with no
+ * recorded value anywhere is simply absent from `latest`.
+ */
+export const HealthSummaryResponseSchema = z.object({
+  configured: z.boolean(),
+  connection: HealthConnectionSummarySchema.nullable(),
+  timezone: z.string(),
+  local_date: LocalDateSchema,
+  freshness: HealthFreshnessDetailSchema,
+  today: z.array(HealthMetricTileSchema),
+  latest: z.array(HealthMetricTileSchema),
+  latest_sleep: HealthSleepSessionSchema.nullable(),
+  /** Mean nightly duration over the trailing 7 wake-dates, null if none. */
+  sleep_7d_average_seconds: z.number().int().min(0).nullable(),
+  latest_workout: HealthWorkoutSessionSchema.nullable(),
+  capabilities: z.array(HealthMetricCapabilitySchema),
+});
+export type HealthSummaryResponse = z.infer<typeof HealthSummaryResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Series
+// ---------------------------------------------------------------------------
+
+/**
+ * Aggregates are null unless at least one real value exists in the range.
+ * There is no zero-filled mean anywhere: a week with two recorded days
+ * averages those two days, and a week with none averages nothing.
+ */
+export const HealthSeriesSummarySchema = z.object({
+  days_in_range: z.number().int().min(0),
+  days_with_value: z.number().int().min(0),
+  days_verified_absent: z.number().int().min(0),
+  days_unknown: z.number().int().min(0),
+  min: z.string().nullable(),
+  max: z.string().nullable(),
+  average: z.string().nullable(),
+  total: z.string().nullable(),
+});
+export type HealthSeriesSummary = z.infer<typeof HealthSeriesSummarySchema>;
+
+export const HealthMetricSeriesResponseSchema = z.object({
+  metric: z.string(),
+  unit: z.string(),
+  aggregation: HealthAggregationSchema,
+  from: LocalDateSchema,
+  /** Inclusive. */
+  to: LocalDateSchema,
+  capability: HealthMetricCapabilitySchema,
+  /** Ascending by local_date, one entry per civil day in [from, to]. */
+  points: z.array(HealthMetricPointSchema),
+  summary: HealthSeriesSummarySchema,
+});
+export type HealthMetricSeriesResponse = z.infer<typeof HealthMetricSeriesResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// 6.4 request schemas
+// ---------------------------------------------------------------------------
+
+/**
+ * The read surface's hard range bound, mirroring `/events/range`'s existing
+ * 366-day cap rather than inventing a second number.
+ */
+export const HEALTH_MAX_RANGE_DAYS = 366;
+
+/** Inclusive whole-day span between two YYYY-MM-DD strings. */
+function inclusiveDaySpan(from: string, to: string): number {
+  const a = Date.parse(`${from}T00:00:00Z`);
+  const b = Date.parse(`${to}T00:00:00Z`);
+  return Math.round((b - a) / 86_400_000) + 1;
+}
+
+const boundedRange = <T extends { from: string; to: string }>(value: T, ctx: z.RefinementCtx) => {
+  if (value.from > value.to) {
+    ctx.addIssue({ code: "custom", message: "from must not be after to", path: ["from"] });
+    return;
+  }
+  if (inclusiveDaySpan(value.from, value.to) > HEALTH_MAX_RANGE_DAYS) {
+    ctx.addIssue({
+      code: "custom",
+      message: `range must not exceed ${HEALTH_MAX_RANGE_DAYS} days`,
+      path: ["to"],
+    });
+  }
+};
+
+/**
+ * `to` is INCLUSIVE here, unlike the half-open windows the sync engine uses
+ * internally -- a user asking for "the last 7 days" means seven dates they
+ * can name, and a half-open bound in a user-facing query is a permanent
+ * off-by-one trap.
+ */
+export const HealthSeriesQuerySchema = z
+  .object({
+    metric: z.string().min(1),
+    from: LocalDateSchema,
+    to: LocalDateSchema,
+    include_empty: booleanQueryParam(true),
+  })
+  .strict()
+  .superRefine(boundedRange);
+export type HealthSeriesQuery = z.infer<typeof HealthSeriesQuerySchema>;
+
+export const HealthSessionRangeQuerySchema = z
+  .object({
+    from: LocalDateSchema,
+    to: LocalDateSchema,
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    offset: z.coerce.number().int().min(0).default(0),
+  })
+  .strict()
+  .superRefine(boundedRange);
+export type HealthSessionRangeQuery = z.infer<typeof HealthSessionRangeQuerySchema>;

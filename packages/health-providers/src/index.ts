@@ -12,6 +12,7 @@ export {
   SLEEP_SCOPE,
   type HealthAcquisitionMode,
   type HealthApiMethod,
+  type HealthDailyAggregation,
   type HealthMetricDefinition,
   type HealthScope,
   type RangeCapSource,

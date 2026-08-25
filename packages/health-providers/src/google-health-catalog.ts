@@ -62,6 +62,18 @@ export type RangeCapSource = "documented_rollup_cap" | "self_imposed";
  */
 export type SessionAttributionAxis = "civil_start" | "civil_end";
 
+/**
+ * How a day series is meaningfully aggregated over a range.
+ *
+ * Declared here rather than in a read model or a screen for the same reason
+ * every other capability fact lives here: averaging steps and summing resting
+ * heart rate are both nonsense, and the correct answer is a property of the
+ * metric, not of the view. `heart-rate` is the one that catches people out --
+ * its dailyRollUp leaf is an AVERAGE (beatsPerMinuteAvg, observed live at
+ * Checkpoint 6.3L), so summing a week of it produces a number with no meaning.
+ */
+export type HealthDailyAggregation = "sum" | "average";
+
 /** Where a data source family may be sent. `list` does NOT accept it. */
 export const DATA_SOURCE_FAMILY_ALL = "users/me/dataSourceFamilies/all-sources";
 export const DATA_SOURCE_FAMILY_WEARABLES = "users/me/dataSourceFamilies/google-wearables";
@@ -98,13 +110,15 @@ export interface HealthMetricDefinition {
   readonly unit: string;
   /** Session metrics only (ADR-049). Null elsewhere. */
   readonly attributionAxis: SessionAttributionAxis | null;
+  /** How a range of daily values is meaningfully reduced. */
+  readonly dailyAggregation: HealthDailyAggregation;
 }
 
 function daily(
   metric: string,
   scope: HealthScope,
   unit: string,
-  opts: { maxRangeDays?: number; trueZero?: boolean } = {},
+  opts: { maxRangeDays?: number; trueZero?: boolean; aggregation?: HealthDailyAggregation } = {},
 ): HealthMetricDefinition {
   return {
     metric,
@@ -121,6 +135,7 @@ function daily(
     scope,
     unit,
     attributionAxis: null,
+    dailyAggregation: opts.aggregation ?? "sum",
   };
 }
 
@@ -146,6 +161,8 @@ function precomputedDaily(
     scope,
     unit,
     attributionAxis: null,
+    // Every precomputed daily vital is a rate or a level, never a count.
+    dailyAggregation: "average",
   };
 }
 
@@ -166,6 +183,8 @@ function sample(metric: string, scope: HealthScope, unit: string): HealthMetricD
     scope,
     unit,
     attributionAxis: null,
+    // A body measurement is a level: two weigh-ins in a day average, never add.
+    dailyAggregation: "average",
   };
 }
 
@@ -193,6 +212,8 @@ function session(
     scope,
     unit,
     attributionAxis,
+    // Session duration accumulates across a day.
+    dailyAggregation: "sum",
   };
 }
 
@@ -215,7 +236,11 @@ export const HEALTH_METRIC_CATALOG: Readonly<Record<string, HealthMetricDefiniti
   // intraday sample stream. Both carry the documented 14-day rollup cap for
   // heart-rate; for the intraday stream that number is OUR conservative window,
   // since reconcile documents no range cap.
-  "heart-rate": daily("heart-rate", METRICS_SCOPE, "beatsPerMinute", { maxRangeDays: 14 }),
+  "heart-rate": daily("heart-rate", METRICS_SCOPE, "beatsPerMinute", {
+    maxRangeDays: 14,
+    // beatsPerMinuteAvg, observed live at 6.3L -- a mean, not a total.
+    aggregation: "average",
+  }),
   "heart-rate-intraday": {
     metric: "heart-rate-intraday",
     googleDataType: "heart-rate",
@@ -235,6 +260,7 @@ export const HEALTH_METRIC_CATALOG: Readonly<Record<string, HealthMetricDefiniti
     scope: METRICS_SCOPE,
     unit: "beatsPerMinute",
     attributionAxis: null,
+    dailyAggregation: "average",
   },
 
   // --- Precomputed daily vitals -------------------------------------------
