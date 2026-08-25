@@ -30,7 +30,8 @@ function NoteRow({ note }: { note: Note }) {
           archive.mutate(note.id);
         }}
         hitSlop={8}
-        className="min-h-[44px] min-w-[44px] items-center justify-center rounded bg-neutral-100 px-2 dark:bg-neutral-800"
+        disabled={archive.isPending}
+        className="min-h-[44px] min-w-[44px] items-center justify-center rounded bg-neutral-100 px-2 disabled:opacity-50 dark:bg-neutral-800"
       >
         <Text className="text-xs text-neutral-600 dark:text-neutral-300">Archive</Text>
       </Pressable>
@@ -39,14 +40,24 @@ function NoteRow({ note }: { note: Note }) {
 }
 
 export default function NotesScreen() {
-  const { data, isLoading, isError } = useNotes();
+  const { data, isLoading, isError, refetch } = useNotes();
 
   return (
     <SafeAreaView className="flex-1 bg-white dark:bg-black">
       {isLoading ? (
         <Text className="p-4 text-neutral-500">Loading...</Text>
       ) : isError ? (
-        <Text className="p-4 text-red-600">Couldn&apos;t load notes.</Text>
+        <View className="flex-1 items-center justify-center gap-3 p-4">
+          <Text className="text-red-600">Couldn&apos;t load notes.</Text>
+          <Pressable
+            onPress={() => void refetch()}
+            hitSlop={8}
+            accessibilityRole="button"
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          >
+            <Text className="font-semibold text-white">Retry</Text>
+          </Pressable>
+        </View>
       ) : (
         <FlatList
           data={data?.items ?? []}

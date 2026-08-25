@@ -55,7 +55,9 @@ function TaskRow({ task }: { task: Task }) {
             Due {new Date(task.due_at).toLocaleString()}
           </Text>
         ) : null}
-        {task.rrule ? <Text className="text-xs text-neutral-400">Recurring</Text> : null}
+        {task.rrule ? (
+          <Text className="text-xs text-neutral-500 dark:text-neutral-400">Recurring</Text>
+        ) : null}
       </View>
       {/* Each action Pressable stops propagation so it does not ALSO trigger
           the row's navigate-to-detail onPress. Same precedent as
@@ -70,7 +72,8 @@ function TaskRow({ task }: { task: Task }) {
               activate.mutate(task.id);
             }}
             hitSlop={8}
-            className="min-h-[44px] items-center justify-center rounded bg-blue-100 px-2 dark:bg-blue-950"
+            disabled={activate.isPending}
+            className="min-h-[44px] items-center justify-center rounded bg-blue-100 px-2 disabled:opacity-50 dark:bg-blue-950"
           >
             <Text className="text-xs text-blue-700 dark:text-blue-300">Start</Text>
           </Pressable>
@@ -83,7 +86,8 @@ function TaskRow({ task }: { task: Task }) {
                 onComplete();
               }}
               hitSlop={8}
-              className="min-h-[44px] items-center justify-center rounded bg-green-100 px-2 dark:bg-green-950"
+              disabled={complete.isPending || completeOccurrence.isPending}
+              className="min-h-[44px] items-center justify-center rounded bg-green-100 px-2 disabled:opacity-50 dark:bg-green-950"
             >
               <Text className="text-xs text-green-700 dark:text-green-300">Done</Text>
             </Pressable>
@@ -93,7 +97,8 @@ function TaskRow({ task }: { task: Task }) {
                 drop.mutate(task.id);
               }}
               hitSlop={8}
-              className="min-h-[44px] items-center justify-center rounded bg-neutral-100 px-2 dark:bg-neutral-800"
+              disabled={drop.isPending}
+              className="min-h-[44px] items-center justify-center rounded bg-neutral-100 px-2 disabled:opacity-50 dark:bg-neutral-800"
             >
               <Text className="text-xs text-neutral-600 dark:text-neutral-300">Drop</Text>
             </Pressable>
@@ -105,7 +110,8 @@ function TaskRow({ task }: { task: Task }) {
             archive.mutate(task.id);
           }}
           hitSlop={8}
-          className="min-h-[44px] items-center justify-center rounded bg-neutral-100 px-2 dark:bg-neutral-800"
+          disabled={archive.isPending}
+          className="min-h-[44px] items-center justify-center rounded bg-neutral-100 px-2 disabled:opacity-50 dark:bg-neutral-800"
         >
           <Text className="text-xs text-neutral-600 dark:text-neutral-300">Archive</Text>
         </Pressable>
@@ -116,35 +122,50 @@ function TaskRow({ task }: { task: Task }) {
 
 export default function TasksScreen() {
   const [filter, setFilter] = useState<Filter>("active");
-  const { data, isLoading, isError } = useTasks({ status: FILTER_STATUS[filter] });
+  const { data, isLoading, isError, refetch } = useTasks({ status: FILTER_STATUS[filter] });
 
   return (
     <SafeAreaView className="flex-1 bg-white dark:bg-black">
       <View className="flex-row justify-around border-b border-neutral-200 dark:border-neutral-800">
-        {(["new", "active", "done", "dropped"] as Filter[]).map((f) => (
-          <Pressable
-            key={f}
-            onPress={() => setFilter(f)}
-            hitSlop={8}
-            className="min-h-[44px] min-w-[44px] items-center justify-center"
-          >
-            <Text
-              className={
-                filter === f
-                  ? "font-semibold text-blue-600"
-                  : "text-neutral-500 dark:text-neutral-400"
-              }
+        {(["new", "active", "done", "dropped"] as Filter[]).map((f) => {
+          const isActive = filter === f;
+          const label = f[0]!.toUpperCase() + f.slice(1);
+          return (
+            <Pressable
+              key={f}
+              onPress={() => setFilter(f)}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityState={{ selected: isActive }}
+              accessibilityLabel={label}
+              className="min-h-[44px] min-w-[44px] items-center justify-center"
             >
-              {f[0]!.toUpperCase() + f.slice(1)}
-            </Text>
-          </Pressable>
-        ))}
+              <Text
+                className={
+                  isActive ? "font-semibold text-blue-600" : "text-neutral-500 dark:text-neutral-400"
+                }
+              >
+                {label}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
 
       {isLoading ? (
         <Text className="p-4 text-neutral-500">Loading...</Text>
       ) : isError ? (
-        <Text className="p-4 text-red-600">Couldn&apos;t load tasks.</Text>
+        <View className="flex-1 items-center justify-center gap-3 p-4">
+          <Text className="text-red-600">Couldn&apos;t load tasks.</Text>
+          <Pressable
+            onPress={() => void refetch()}
+            hitSlop={8}
+            accessibilityRole="button"
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          >
+            <Text className="font-semibold text-white">Retry</Text>
+          </Pressable>
+        </View>
       ) : (
         <FlatList
           data={data?.items ?? []}

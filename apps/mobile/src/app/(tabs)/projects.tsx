@@ -85,7 +85,7 @@ function ProjectRow({ project }: { project: ProjectSummaryItem }) {
 }
 
 export default function ProjectsScreen() {
-  const { data, isLoading, isError } = useProjectSummaries(true);
+  const { data, isLoading, isError, refetch } = useProjectSummaries(true);
 
   const sections: { title: string; projects: ProjectSummaryItem[] }[] = [
     { title: "Active", projects: [] },
@@ -124,7 +124,17 @@ export default function ProjectsScreen() {
       {isLoading ? (
         <Text className="p-4 text-neutral-500">Loading...</Text>
       ) : isError ? (
-        <Text className="p-4 text-red-600">Couldn&apos;t load projects.</Text>
+        <View className="flex-1 items-center justify-center gap-3 p-4">
+          <Text className="text-red-600">Couldn&apos;t load projects.</Text>
+          <Pressable
+            onPress={() => void refetch()}
+            hitSlop={8}
+            accessibilityRole="button"
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          >
+            <Text className="font-semibold text-white">Retry</Text>
+          </Pressable>
+        </View>
       ) : (
         <FlatList
           data={rows}
@@ -140,7 +150,9 @@ export default function ProjectsScreen() {
             }
             if (item.kind === "empty") {
               return (
-                <Text className="px-4 py-3 text-neutral-400">No projects here yet.</Text>
+                <Text className="px-4 py-3 text-neutral-500 dark:text-neutral-400">
+                  No projects here yet.
+                </Text>
               );
             }
             return <ProjectRow project={item.project} />;

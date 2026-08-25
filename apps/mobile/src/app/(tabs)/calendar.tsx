@@ -60,9 +60,15 @@ export default function CalendarScreen() {
     data: entries,
     isLoading,
     isError,
+    refetch,
   } = useEventsInRange(
     rangeBounds ? { from: rangeBounds.from, to: rangeBounds.to, include_archived: false } : undefined,
   );
+
+  // Retry must refetch whichever query actually failed. Agenda mode is a
+  // self-fetching component (AgendaView) that owns and retries its own
+  // query -- this screen's error branch only ever renders for the Month/Week
+  // grid, so refetching useEventsInRange here is always the right target.
 
   const goToEvent = (entry: EventRangeItem) => {
     if (entry.is_recurring_instance && entry.occurs_at) {
@@ -90,10 +96,15 @@ export default function CalendarScreen() {
     <View className="flex-1 bg-white dark:bg-black">
       {viewMode === "agenda" ? null : (
         <View className="flex-row items-center justify-between border-b border-neutral-200 p-3 dark:border-neutral-800">
+          {/* "Previous month"/"Next month" is wrong when the user is on Week
+              -- the label must track the current view mode, matching the
+              precedent already set by "Jump to today" below. */}
           <Pressable
             onPress={() => setAnchor((current) => shiftAnchor(viewMode, current, -1))}
             hitSlop={12}
-            className="px-2"
+            accessibilityRole="button"
+            accessibilityLabel={viewMode === "month" ? "Previous month" : "Previous week"}
+            className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
           >
             <Text className="text-lg text-black dark:text-white">‹</Text>
           </Pressable>
@@ -111,7 +122,9 @@ export default function CalendarScreen() {
           <Pressable
             onPress={() => setAnchor((current) => shiftAnchor(viewMode, current, 1))}
             hitSlop={12}
-            className="px-2"
+            accessibilityRole="button"
+            accessibilityLabel={viewMode === "month" ? "Next month" : "Next week"}
+            className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
           >
             <Text className="text-lg text-black dark:text-white">›</Text>
           </Pressable>
@@ -121,7 +134,13 @@ export default function CalendarScreen() {
       <View className="flex-row items-center justify-between border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
         <ViewModeToggle value={viewMode} onChange={setViewMode} />
 
-        <Pressable onPress={() => router.push("/events/new")} hitSlop={12} className="px-2">
+        <Pressable
+          onPress={() => router.push("/events/new")}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="New event"
+          className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
+        >
           <Text className="text-xl text-blue-600">+</Text>
         </Pressable>
       </View>
@@ -133,8 +152,16 @@ export default function CalendarScreen() {
           <ActivityIndicator />
         </View>
       ) : isError && !UI_TEST_MODE ? (
-        <View className="flex-1 items-center justify-center p-4">
+        <View className="flex-1 items-center justify-center gap-3 p-4">
           <Text className="text-red-600">Couldn&apos;t load the calendar.</Text>
+          <Pressable
+            onPress={() => void refetch()}
+            hitSlop={8}
+            accessibilityRole="button"
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          >
+            <Text className="font-semibold text-white">Retry</Text>
+          </Pressable>
         </View>
       ) : viewMode === "month" ? (
         <MonthGrid

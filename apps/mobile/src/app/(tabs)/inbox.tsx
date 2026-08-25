@@ -42,7 +42,7 @@ function InboxRow({ item }: { item: InboxItem }) {
         ) : null}
       </View>
       {item.parse_result != null ? (
-        <Text className="mt-1 text-xs text-neutral-400" numberOfLines={2}>
+        <Text className="mt-1 text-xs text-neutral-500 dark:text-neutral-400" numberOfLines={2}>
           {JSON.stringify(item.parse_result)}
         </Text>
       ) : null}
@@ -51,14 +51,24 @@ function InboxRow({ item }: { item: InboxItem }) {
 }
 
 export default function InboxScreen() {
-  const { data, isLoading, isError } = useInbox();
+  const { data, isLoading, isError, refetch } = useInbox();
 
   return (
     <SafeAreaView className="flex-1 bg-white dark:bg-black">
       {isLoading ? (
         <Text className="p-4 text-neutral-500">Loading...</Text>
       ) : isError ? (
-        <Text className="p-4 text-red-600">Couldn&apos;t load the inbox.</Text>
+        <View className="flex-1 items-center justify-center gap-3 p-4">
+          <Text className="text-red-600">Couldn&apos;t load the inbox.</Text>
+          <Pressable
+            onPress={() => void refetch()}
+            hitSlop={8}
+            accessibilityRole="button"
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          >
+            <Text className="font-semibold text-white">Retry</Text>
+          </Pressable>
+        </View>
       ) : (
         <FlatList
           data={data?.items ?? []}
