@@ -343,7 +343,10 @@ async function runCaldavSync(
             if (decision === "conflict") {
               await tx
                 .update(eventExternalLinks)
-                .set({ syncStatus: "conflict", lastSyncError: "Conflict detected on CalDAV sync" })
+                .set({
+                  syncStatus: "conflict",
+                  lastSyncError: "conflict" satisfies CalendarSyncErrorCode,
+                })
                 .where(eq(eventExternalLinks.id, existingLink.id));
               continue;
             }

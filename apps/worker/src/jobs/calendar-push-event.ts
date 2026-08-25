@@ -12,6 +12,7 @@ import {
   classifyCalendarProviderError,
   type GoogleEventWriteBody,
 } from "@personal-os/calendar-providers";
+import type { CalendarSyncErrorCode } from "@personal-os/schema";
 import { CALENDAR_PUSH_EVENT_QUEUE } from "../queue-names.js";
 import { withCalendarJobErrorContainment } from "./calendar-job-error.js";
 import {
@@ -186,7 +187,10 @@ function createCalendarPushEventHandlerUncontained(
           .update(eventExternalLinks)
           .set({
             syncStatus: "error",
-            lastSyncError: `calendar connection is ${connection.status}`,
+            // Same closed vocabulary as the connection-level column: this
+            // sibling is not projected today, but a future change that starts
+            // returning it must not have to re-learn the lesson.
+            lastSyncError: "connection_inactive" satisfies CalendarSyncErrorCode,
           })
           .where(eq(eventExternalLinks.id, link.id));
         continue;
@@ -368,7 +372,7 @@ function createCalendarPushEventHandlerUncontained(
               .update(eventExternalLinks)
               .set({
                 syncStatus: "conflict",
-                lastSyncError: "CalDAV PUT 412 Precondition Failed (ETag conflict)",
+                lastSyncError: "conflict" satisfies CalendarSyncErrorCode,
               })
               .where(eq(eventExternalLinks.id, link.id));
             continue;
@@ -500,7 +504,7 @@ export function createCalendarPushEventDeadLetterHandler(
         .update(eventExternalLinks)
         .set({
           syncStatus: "error",
-          lastSyncError: "calendar.push-event: retries exhausted",
+          lastSyncError: "retries_exhausted" satisfies CalendarSyncErrorCode,
         })
         .where(eq(eventExternalLinks.eventId, job.data.eventId));
     }
