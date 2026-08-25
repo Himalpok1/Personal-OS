@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0, 6.1 and 6.2 COMPLETE (local/mocked); HARD STOP before 6.2P**, which requires a live Google consent flow against the real account and a separate explicit approval. Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0, 6.1, 6.2 and 6.2P COMPLETE.** 6.2P closed 2026-08-25 as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 is the next checkpoint and requires separate approval.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
 **Implementation status:** Phases 0–5 are implemented and production-deployed. **Production migration level is unchanged at 0000–0012 = 13 migrations**; Phase 6's additive `0013` exists in local dev/test only and is not deployed. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
-**Next phase allowed:** **Phase 6 Checkpoints 6.0 and 6.1 ONLY** — approved 2026-08-24. Work stops completely after 6.1; Checkpoint 6.2 requires manual Google Cloud actions M2–M8 plus a separate explicit approval, and 6.3 onward requires the 6.2P probe to pass and be approved. Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
+**Next phase allowed:** **Checkpoint 6.3 (sync engine), on separate explicit approval only.** 6.0–6.2P are closed. 6.3 **excludes raw intraday heart-rate ingestion** (see the F5 deferral below) and **must begin with the HTTP-400 probe-classification hardening**. The OAuth app remains in **Testing**, so the development refresh token expires **2026-08-31T23:57:45Z**. Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 6 — Google Health Integration (plan approved 2026-08-24)
@@ -103,6 +103,151 @@ liveness probe, so Phase 6 uses `health-*` siblings throughout (C7).
 **Deliberately not yet changed (C6):** the three lines asserting "13 `.sql` files, 13
 journal entries, **no 0013**" remain **accurate** until migration `0013` actually lands in
 Checkpoint 6.1, and are updated then — not pre-emptively.
+
+### Checkpoint 6.2P — Live development-account probe (CLOSED, 2026-08-25)
+
+> **Status: core OAuth and capability proof PASSED. Raw-heart-rate reconciliation
+> stability (F5) is DEFERRED ACCEPTANCE DEBT** — explicitly deferred by the user so the
+> project can continue. **F5 is neither passed nor failed.**
+
+Development account only. **Production untouched, the OAuth app remains in Testing, and
+nothing was merged to `main`.** The local `.env` keeps the development loopback callback.
+
+**Google Cloud state at closure:** project `personal-os-196cf`; publishing status
+**Testing** (deliberately — M8 remains superseded); Audience External; exactly three read
+scopes; separate Web Application client `Personal OS Google Health Web`; both the
+production Tailscale callback and the development loopback callback
+`http://127.0.0.1:3000/health-connections/google/callback` registered.
+
+**A registration lesson worth recording:** the first two live attempts failed with
+`Error 400: redirect_uri_mismatch`. The loopback URI had been entered in the Console but
+not persisted — the Console keeps edits in the form until **Save** is pressed. A related
+trap cost a third attempt: the local API was already running, and `--env-file` is read at
+**process start**, not on `tsx watch` reload, so a hot-reloaded server was serving the new
+routes while still holding the *old* redirect. It accepted the Tailscale callback and
+rejected the loopback one. Always re-verify which redirect the running process actually
+allows after changing `.env`.
+
+#### OAuth proof — PASSED
+
+| Property | Evidence |
+|---|---|
+| State single-use | Consumed exactly once at 23:57:44.567Z, bound to the loopback redirect |
+| Replay rejected | Same state + dummy code → `400 invalid_state`; still exactly one connection |
+| Code never spent on a bad state | The token endpoint was **not called** on the replay — validation precedes exchange |
+| Identity binding | `getIdentity` returned a `healthUserId` (18 chars) plus a legacy Fitbit id; both stored |
+| Encryption | access 253B / refresh 103B ciphertext, 12B IV, 16B auth tag; both decrypt; plaintext absent from ciphertext |
+| No credential in responses | list / detail / streams contain no `access_token`, `refresh_token`, `ciphertext`, `auth_tag` or `client_secret` |
+| **Log suppression, on a real code** | The genuine callback logged as `?state=[redacted]&iss=…&code=[redacted]`. Zero code-shaped strings, zero `ya29.`/`1//`, no client secret, and the `req` object carries no query/body/headers |
+| Partial consent | All three scopes granted; 19 streams seeded, 18 enabled |
+| Refresh token issued | `2026-08-24T23:57:45.015Z` → Testing-mode 7-day expiry **2026-08-31T23:57:45Z** |
+
+#### Capability probe — PASSED (7-day bounded window, 19 metrics, read-only)
+
+**Available with data (4):** `steps` 7 buckets · `distance` 7 · `total-calories` 7 ·
+`floors` 6 — all 2026-08-18→24, single page, no `nextPageToken`.
+
+**Supported but empty (15):** `active-energy-burned`, `active-zone-minutes`, `heart-rate`,
+`sedentary-period`, `sleep`, `exercise`, `weight`, `body-fat`,
+`daily-resting-heart-rate`, `daily-heart-rate-variability`, `daily-oxygen-saturation`,
+`daily-respiratory-rate`, `daily-sleep-temperature-derivations`, `daily-vo2-max`,
+`heart-rate-intraday`.
+
+**Missing scope: 0 · Not supported: 0 · Provider error: 0.**
+
+**Why 15 are empty — this is the account, not the integration.** The only source feeding
+this Google Health account is `HEALTH_KIT / PHONE / Apple Inc. / PASSIVELY_MEASURED`. No
+wearable is connected, so phone-derivable metrics carry data and wearable-derived ones do
+not. Heart rate and sleep **do** exist historically: 6 distinct days with heart rate, all
+**more than 30 days old**, and one sleep record in 120 days. **The Phase 6A metric set is
+therefore NOT invalidated** — those streams are correct and will populate whenever a
+wearable is paired.
+
+**Behaviours verified live:**
+
+- **Civil-window (ADR-048 confirmed against real data):** rollup buckets carry only
+  `civilStartTime`/`civilEndTime` plus the value field — **no physical instants and no UTC
+  offsets**, exactly as ADR-048 assumed. Buckets are returned newest-first.
+- **Empty days are OMITTED:** `floors` returned 6 buckets for a 7-day range, day 24 absent.
+  This confirms densification is required — and it is precisely the case that the
+  originally-planned "bucket count must equal civil-day count" check would have
+  hard-failed. The truncation-only check adopted in Revision 3 is correct.
+- **True zero vs missing:** zero explicit zeros observed; in this account absence is
+  represented purely by omission. True-zero remains structurally supported but unobserved.
+- **Sleep wake-date axis (ADR-049 confirmed):** `sleep.interval.civil_end_time` → HTTP 200;
+  `sleep.interval.start_time` → **HTTP 400 INVALID_ARGUMENT**. Live proof that sleep is
+  genuinely excluded from the generic session-start filter, and that the attribution axis
+  and the query axis are one and the same.
+- **Pagination:** no `nextPageToken` on any rollup; all `list`/`reconcile` calls single-page
+  at this data volume.
+
+#### Two Google API deviations found live — both fixed and pinned (commit `244ec58`)
+
+Both made **every** `dailyRollUp` call fail with HTTP 400, and the first probe run wrongly
+reported all eight rollup metrics as `not_supported`. The probe was re-run after fixing.
+
+1. **`CivilTimeInterval` uses `start`/`end`, not `startTime`/`endTime`.** A genuine
+   asymmetry: the interval carried *on a record* (`ObservationTimeInterval` /
+   `SessionTimeInterval`) does use `startTime`/`endTime`/`civilStartTime`/`civilEndTime`,
+   but the `CivilTimeInterval` used as a rollup **request range** uses bare `start`/`end`.
+   Google's error was precise: `Unknown name "startTime" at 'range': Cannot find field`.
+2. **Sending `pageSize` on `dailyRollUp` fails outright.** The REST reference documents
+   `pageSize` and `pageToken` as request fields, but including `pageSize` — at 100 or
+   10000, over a 7-day range, well inside the documented 90-day cap — makes Google reject
+   the call. Removing that one field turned the identical request into a 200 with data.
+   The error is **actively misleading**: reason `INVALID_ROLLUP_QUERY_DURATION` with
+   metadata `maxDurationDays: 90`, pointing at the range rather than at `pageSize`.
+   `pageSize` is therefore removed from `DailyRollUpRequest` entirely, so it is
+   unrepresentable rather than a trap.
+
+Also confirmed: **`dataSourceFamily` must be the full resource name**
+(`users/me/dataSourceFamilies/all-sources`); a bare `all-sources` is rejected with
+`INVALID_DATA_POINT_DATA_SOURCE_FAMILY`. The catalog constants were already correct.
+
+#### F5 — DEFERRED ACCEPTANCE DEBT
+
+**Capture 1 is complete and preserved** at `~/.personal-os-phase6/f5/capture-1.json`
+(outside the repository; hashes and counts only — no token, no BPM value, no raw payload).
+
+| Field | Value |
+|---|---|
+| Window | **2026-04-29**, fully fetched, 1 page (chosen because recent days have no heart rate) |
+| Records | 307 |
+| Distinct external keys | **307 — zero collisions** |
+| `dataPointName` non-empty | **0 of 307** |
+| `externalKeySetHash` | `3a8401c9fca8b2b3cd597b51aea44921a9302cb4dfc452eb8ef3ba97d10cf5a6` |
+| `contentSetHash` | `a11fdf311e0aeae6a3c1ff86f3207f5a12f6f31fc56bcfd84e323478a115fa7d` |
+
+**One question is already answered:** `ReconciledDataPoint.dataPointName` is **empty on
+every record**, so raw-heart-rate identity **must** be derived — the resource-name strategy
+is unavailable in practice. The derived key produced 307 distinct keys with no collisions,
+which is a good early signal for the collision strategy but says nothing about stability.
+
+**What remains unproven:** whether `reconcile` returns the *same* identities across calls
+separated by time. `reconcile` recomputes off-wrist filtering server-side per request, so
+an omission is evidence of upstream recomputation rather than deletion. Two back-to-back
+calls would prove nothing; only a capture ~24h later can. **That capture was explicitly
+deferred by the user and has NOT been run.**
+
+**Consequences, binding on 6.3:**
+
+- **`heart-rate-intraday` stays `sync_enabled = false` by policy.** It is already seeded
+  that way and must not be enabled.
+- **Raw intraday heart-rate ingestion is EXCLUDED from Checkpoint 6.3.**
+- All other approved streams may proceed.
+- **ADR-047 is unchanged** — intraday storage remains heart-rate-only by design. This is a
+  scheduling deferral, not a design change.
+
+**Raw heart rate can be reconsidered later through either route:**
+
+1. **Completing the delayed reconcile-stability proof.** Re-run the second capture and
+   compare — the script has `first` / `second` / `compare` modes and capture 1 is
+   preserved:
+   `pnpm exec tsx --env-file=../../.env src/scripts/f5-capture.ts second 2026-04-29`
+   then `… f5-capture.ts compare`. Any window with data works; 2026-04-29 has the most.
+2. **The `list` + local multi-source de-duplication fallback**, keyed on
+   `DataPoint.dataSource` (which `list` returns and `reconcile` does not), accepting that
+   off-wrist filtering would then be ours to do or to omit.
 
 ### Checkpoint 6.2 — Google Health OAuth connection (COMPLETE, mocked, 2026-08-24)
 
@@ -2432,29 +2577,36 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-**Phase 6 Checkpoints 6.0, 6.1 and 6.2 are complete. Work has stopped, as planned.**
+**Phase 6 Checkpoints 6.0, 6.1, 6.2 and 6.2P are complete. Work has stopped, as planned.**
 
 6.0 delivered ADR-046..050 and reconciled seven documented conflicts. 6.1 delivered the
 shared contracts, additive migration `0013` (local dev/test only — **production is still at
 0000–0012**), the `packages/core/src/health/` helpers and the new
 `packages/health-providers` package with its in-memory fake. 6.2 delivered the Google
-Health OAuth connection flow, entirely against mocks — **no live consent flow has been
-run**. 1382 tests pass across 17 turbo tasks; both zero-drift canaries held exactly.
+Health OAuth connection flow. **6.2P proved it against the real development account:**
+live consent completed, state consumed once and replay rejected, `healthUserId` bound,
+refresh token encrypted, and the capability probe run across all 19 catalog metrics.
 
-Phase 5 remains complete and deployed; the 5.7.1 hotfix closed the one production defect
-5.7 found.
+**6.2P closed with one item explicitly deferred by the user:**
 
-Production runs migration level 0000–0012, api/web from `b7f7bf1`, worker from `656c1fc`
-(deliberately not rebuilt — unchanged dependency closure), and the Rabbit runs
-versionCode 6. The Daily Brief is live on the existing gpt-4.1 route.
+```text
+Core OAuth and capability proof:                    PASSED
+Raw-heart-rate reconciliation stability (F5):       DEFERRED ACCEPTANCE DEBT
+```
 
-One acceptance item remains genuinely unverified and is **not** a code defect: the
-real-browser CORS proof (see the 5.7.1 entry — both browser surfaces failed for
-environmental reasons). It needs a human with a browser, roughly fifteen seconds.
+F5 is **neither passed nor failed**. Capture 1 is preserved; capture 2 was deliberately not
+run. `heart-rate-intraday` remains disabled by policy and raw intraday heart-rate ingestion
+is excluded from 6.3.
 
-**Do not begin Checkpoint 6.2P — the live-account probe — without a separate explicit
-user approval.** 6.2P is the first step that performs a real Google consent flow. Nothing
-further is authorized.
+1382 tests pass across 17 turbo tasks; both zero-drift canaries held exactly
+(`calendar-providers` 57, `worker` 80). Migration count unchanged at 14 locally,
+**0000–0012 in production**.
+
+**State at closure:** branch `phase-6-google-health`, **not merged to `main`**. Production
+untouched. OAuth app in **Testing**. The local `.env` keeps the development loopback
+callback. The development refresh token expires **2026-08-31T23:57:45Z**.
+
+**Do not begin Checkpoint 6.3 without a separate explicit user approval.**
 
 ## Remaining warnings / technical debt
 
@@ -2513,6 +2665,19 @@ further is authorized.
 - **`tailscaled` runs as a snap** on the production host — the monitoring unit is `snap.tailscale.tailscaled.service`, not `tailscaled.service`.
 - **Rabbit Tailscale auto-start depends on Android's Always-on VPN setting** (enabled 2026-08-21; lockdown off). It is a device-side OS setting, not app-managed — a factory reset or Tailscale reinstall would require re-enabling it.
 - **One archived Gate H smoke note row (`132020f6…`) remains as lineage** — invisible in UI, referenced by nothing, deliberately outside the approved purge scope.
+- **Raw-heart-rate reconcile stability (F5) is DEFERRED ACCEPTANCE DEBT (2026-08-25).** F5
+  capture 1 is preserved at `~/.personal-os-phase6/f5/capture-1.json`; capture 2 was
+  explicitly deferred by the user. F5 is **neither passed nor failed**. Consequence:
+  `heart-rate-intraday` stays disabled and raw intraday ingestion is excluded from 6.3.
+  Reconsider via either the delayed reconcile-stability proof or the `list` + local
+  multi-source de-duplication fallback keyed on `DataPoint.dataSource`.
+- **The 6.2P probe classifies any HTTP 400 as `not_supported`.** That masked two of our own
+  request-shape bugs during 6.2P and must be hardened to surface Google's
+  `error.details[].reason` — recorded as the **first mandatory task of Checkpoint 6.3**.
+- **The development Google Health refresh token expires 2026-08-31T23:57:45Z** (OAuth app
+  deliberately left in Testing). Reconnect before any further live work.
+- **The local `.env` holds the development loopback callback**, not the Tailscale one.
+  Restore before anything production-facing.
 
 ## Last verification
 
@@ -2577,26 +2742,48 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Stopped. Checkpoints 6.0, 6.1 and 6.2 are complete — all local and fully mocked.**
+**Stopped. Checkpoints 6.0 through 6.2P are complete.** The next checkpoint is **6.3, the
+sync engine**, and it needs a separate explicit approval.
 
-The next step, **Checkpoint 6.2P**, is the first that touches the real Google account, and
-it needs a separate explicit approval. What it requires:
+**Exact 6.3 handoff — binding constraints:**
 
-1. **A live consent flow.** Open the authorize URL from
-   `GET /health-connections/google/authorize-url`, grant the three scopes, and let Google
-   redirect to the registered `.ts.net` callback. This is the first real authorization.
-2. **The capability probe** across all 19 catalog metrics, recording available / empty /
-   forbidden / unsupported per metric — the input 6.3's scope depends on.
-3. **The `reconcile` identity-stability gate (F5).** Reconcile an identical 24-hour window
-   twice, a day apart, and diff key stability and row count. **This gates the raw
-   heart-rate path in 6.3**, and nothing else.
-4. **Measure actual raw-HR sample density**, which determines volume and backfill cost.
-5. **Start the refresh-token clock.** The app is in **Testing**, so refresh tokens expire
-   after **7 days** — reconnection will be needed roughly weekly until publishing is
-   reconsidered, which is deliberately deferred until 6.2P proves the lifecycle.
+1. **FIRST MANDATORY TASK: harden the probe's HTTP-400 classification.**
+   `apps/api/src/scripts/probe-google-health.ts` currently maps any HTTP 400 to
+   `not_supported`. During 6.2P that misreported all eight rollup metrics as unsupported
+   when the real cause was two request-shape bugs of ours. A 400 must be surfaced with
+   Google's `error.details[].reason` (e.g. `INVALID_ROLLUP_QUERY_DURATION`,
+   `INVALID_DATA_POINT_DATA_SOURCE_FAMILY`) and classified as a **client-side request
+   defect**, never silently as a provider capability verdict. This is a closure carry-over,
+   not a blocker — 6.2P closed without it.
+2. **Raw intraday heart rate is OUT OF SCOPE for 6.3.** `heart-rate-intraday` stays
+   `sync_enabled = false`. Do not write to `health_observations` in 6.3.
+3. **All other approved streams may proceed** — the 18 enabled streams across daily
+   rollups, precomputed daily vitals, samples and sessions.
+4. **Build on the live-verified facts**, not the original assumptions: `CivilTimeInterval`
+   uses `start`/`end`; **never send `pageSize` on `dailyRollUp`**; `dataSourceFamily` must
+   be the full resource name; empty civil days are **omitted**, so densification is
+   required and the bucket check must detect **truncation only**; sleep is queried on
+   `civil_end_time` and `start_time` is rejected outright.
+5. **Unchanged guardrails:** no migration (6.3 uses `0013`'s tables), no production
+   contact, no publishing, no merge to `main`, OAuth app stays in Testing, no webhooks, no
+   public ingress, no new scopes.
+
+**Operational notes for whoever resumes:**
+
+- The development refresh token expires **2026-08-31T23:57:45Z** (Testing mode, 7 days).
+  After that, reconnect via `GET /health-connections/google/authorize-url` and the loopback
+  callback before any live work.
+- The local `.env` still points at the **development loopback** callback. Restore it to the
+  Tailscale value before anything production-facing.
+- **The account has no wearable paired**, so sleep, heart rate, HRV, SpO₂, resting HR,
+  respiratory rate, temperature, VO₂ max, exercise, weight and body fat are all empty in
+  recent windows. This is an account-data fact, not an integration defect — the streams are
+  correct and will populate when a wearable is paired. Historical heart rate exists on
+  6 days, all more than 30 days old.
 
 **Publishing (the former M8) is superseded and deliberately not done.** It receives separate
-approval only after 6.2P proves authorization, encrypted refresh-token persistence, access
+approval only after the deferred F5 proof is completed or the `list` fallback is adopted,
+and after whatever production-readiness bar you set at that point.
 token refresh, partial consent and reconnection.
 
 One acceptance item is outstanding and needs a human with a browser (~15 seconds):
