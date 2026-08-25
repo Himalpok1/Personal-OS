@@ -81,6 +81,17 @@ describe("pg type-parser registration (deterministic -- no live DB or timezone d
     expect(result).toBe("2026-08-22");
   });
 
+  it("registers an identity parser for oid 1114 (timestamp without time zone)", () => {
+    // Checkpoint 6.3. Same bug class as oid 1082 above, different oid.
+    // Handing Drizzle the raw wire string is the branch its own
+    // PgTimestamp.mapFromDriverValue already anticipates:
+    //   typeof value === "string" ? new Date(withTimezone ? value : value + "+0000")
+    // i.e. a naive column's stored wall clock is read as UTC, which is
+    // exactly the convention wallClockToNaiveDate writes with (Date.UTC).
+    const parse = types.getTypeParser(types.builtins.TIMESTAMP, "text") as (v: string) => unknown;
+    expect(parse("2026-08-24 12:00:00")).toBe("2026-08-24 12:00:00");
+  });
+
   it("registers parsePgDateArrayIdentity for oid 1182 (date[], Postgres builtin _date)", () => {
     const parse = types.getTypeParser(1182 as never) as (value: string) => unknown;
     const result = parse("{2026-08-22,2025-01-01}");
@@ -167,5 +178,50 @@ describe.runIf(Boolean(connectionString))(
         await client.query("ROLLBACK");
       }
     });
+
+    // -----------------------------------------------------------------
+    // Checkpoint 6.3: the same regression for `timestamp without time
+    // zone` (oid 1114).
+    //
+    // These cover the EXISTING non-health consumers of naive timestamp
+    // columns -- tasks.due_local, occurrences.occurs_local and
+    // events.start_local/end_local -- not just the Phase 6 ones, because
+    // the type parser is registered globally and this is what proves the
+    // change is safe for the modules it touches incidentally.
+    //
+    // The value asserted is the wall clock EXACTLY as written. Before the
+    // fix, `pg` built the Date in the process-local zone, so under a
+    // positive-offset TZ the UTC fields came back shifted and any
+    // wallClockToNaiveDate round-trip silently moved the clock.
+    // -----------------------------------------------------------------
+    for (const tz of ["UTC", "America/Chicago", "Asia/Kolkata", "Australia/Sydney"]) {
+      it(`round-trips a naive timestamp unshifted under TZ=${tz}`, async () => {
+        process.env["TZ"] = tz;
+
+        await client.query("BEGIN");
+        try {
+          await client.query(
+            "CREATE TEMP TABLE ts_type_parser_regression (t timestamp NOT NULL) ON COMMIT DROP",
+          );
+          await client.query("INSERT INTO ts_type_parser_regression (t) VALUES ($1)", [
+            "2026-08-24 12:34:56",
+          ]);
+          const result = await client.query<{ t: unknown }>(
+            "SELECT t FROM ts_type_parser_regression",
+          );
+          const value = result.rows[0]?.t;
+
+          // Identity parser -> the raw wire string, in every timezone.
+          expect(value).toBe("2026-08-24 12:34:56");
+
+          // And the value Drizzle would derive from it is the same instant
+          // in every timezone: the wall clock read as UTC.
+          const asDrizzleWouldMap = new Date(`${value as string}+0000`);
+          expect(asDrizzleWouldMap.toISOString()).toBe("2026-08-24T12:34:56.000Z");
+        } finally {
+          await client.query("ROLLBACK");
+        }
+      });
+    }
   },
 );

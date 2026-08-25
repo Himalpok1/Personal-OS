@@ -78,6 +78,39 @@ types.setTypeParser(types.builtins.DATE, (value) => value);
 // declarations; the value is empirically confirmed above.
 types.setTypeParser(1182 as never, parsePgDateArrayIdentity);
 
+// -----------------------------------------------------------------------
+// pg `timestamp without time zone` (oid 1114) identity type-parser fix
+// -----------------------------------------------------------------------
+//
+// The same bug class as the `date` fix above, on a different oid, found by
+// the Checkpoint 6.3 adversarial review.
+//
+// `pg` parses a `timestamp without time zone` into a JS `Date` built in the
+// *process-local* timezone. Every naive column in this schema stores a wall
+// clock that is meant to be read back unshifted -- `tasks.due_local`,
+// `occurrences.occurs_local`, `events.start_local`/`end_local`, and Phase
+// 6's `health_sessions.civil_start_local`/`civil_end_local` and
+// `health_observations.civil_local`. Under `TZ=UTC` the default parse is
+// accidentally correct; under any other process timezone it is silently
+// shifted by that zone's offset, and the value stays a syntactically valid
+// timestamp so nothing surfaces it.
+//
+// WHY AN IDENTITY PARSER IS THE RIGHT FIX RATHER THAN A RISK:
+//
+// Drizzle's own `PgTimestamp.mapFromDriverValue` is
+//   `if (typeof value === "string") return new Date(withTimezone ? value : value + "+0000");`
+// so handing it the raw wire string is the path it already anticipates: for
+// a naive column it appends `+0000`, i.e. interprets the stored wall clock
+// as UTC. That is exactly the convention `wallClockToNaiveDate` writes with
+// (`Date.UTC`), so the round-trip becomes exact in every process timezone.
+// Consumers are unaffected -- they receive a `Date` either way.
+//
+// Compatibility was verified before registering this globally: every naive
+// timestamp column in the schema is declared through Drizzle's date-mode
+// `timestamp()`, and no raw SQL anywhere in `apps/` or `packages/` selects
+// one directly, so there is no consumer that bypasses the mapping above.
+types.setTypeParser(types.builtins.TIMESTAMP, (value) => value);
+
 /**
  * Parses a Postgres `date[]` (oid 1182) wire-format string into an array of
  * raw 'YYYY-MM-DD' strings (or `null` for SQL NULL entries), with no
