@@ -275,8 +275,8 @@ exercised on-device. They are covered by unit tests and by the browser-equivalen
 | # | Check | Result |
 |---|---|---|
 | 1 | Full gate | build 9/9, typecheck 17/17, lint **0 warnings**, `format:check` clean, `git diff --check` clean |
-| 2 | Full suite, uncached and serial | **2023 tests / 17 turbo tasks** (1965 → **+58**) |
-| 3 | No baseline decreased | worker 145→**152**, schema 162→**174**, api 466→**484**, mobile 359→**363**, api-client **93**, core **326**, db **21**, ai-providers **25**, health-providers **311** |
+| 2 | Full suite, uncached and serial | **2035 tests / 17 turbo tasks** (1965 → **+70**) |
+| 3 | No baseline decreased | worker 145→**152**, schema 162→**174**, api 466→**492**, mobile 359→**367**, api-client **93**, core **326**, db **21**, ai-providers **25**, health-providers **311** |
 | 4 | `calendar-providers` canary | 57→**74** — moved **deliberately**: this checkpoint's whole subject is the calendar error path. No test was removed |
 | 5 | Migration invariant | 14 `.sql` / 14 journal entries; `packages/db/` diff **empty**; no `0014` |
 | 6 | Forbidden-area drift | **zero** across `apps/mobile/app.config.ts`, `eas.json`, every compose file, every Dockerfile, `.github/`, `packages/db` |
@@ -287,6 +287,28 @@ exercised on-device. They are covered by unit tests and by the browser-equivalen
 | 11 | Android | Release UI-test APK built successfully via Gradle (JDK 17) |
 | 12 | Secret scans | `gitleaks git` **130 commits, no leaks**. Working tree 76 findings, **0 in any file git would commit**, classified programmatically with `git check-ignore` |
 | 13 | Process/port cleanup | No repository api, worker, Metro, Expo, watch or test process left running; ports 3000/8081/8082/5173/19000 free; `adb reverse` cleared |
+
+#### A defect in this branch's HISTORY, recorded rather than rewritten
+
+The final independent audit found that commit `7c6ba30` **does not build in isolation**: it adds
+`withCalendarJobErrorContainment` imports to the three calendar jobs, but the module they import is
+not created until the next commit, `180b5b2`. The two commits are entangled — the wrapper CALLS live
+in the earlier one — so the honest fix is a squash, not a reorder.
+
+It was left as-is. `AGENTS.md` forbids rewriting history, HEAD is correct and typechecks clean, and
+replaying fourteen commits at the close of the checkpoint carries more risk than the defect does. The
+consequence is real and bounded: `git bisect`, a cherry-pick, or a partial revert landing on
+`7c6ba30` hits a module-resolution failure. **Squash that pair before this branch is rebased,
+cherry-picked, or merged.**
+
+Two narrower windows of the same kind, also recorded rather than rewritten: `events-screen.test.tsx`
+and `recurrence-editor.test.tsx` report zero tests between `c2dbb81` and `6fa07e0` (the nativewind
+alias lands in `1e91c1b`), and the three detail screens offer a Retry on a terminal 404 between
+`802a931` and `76d8073`. Neither survives to HEAD.
+
+One commit message also overstates its scope: `76d8073` says it covers
+`calendar_event_instances.last_sync_error`, but that column has no write site anywhere in the worker
+and the diff only touches `event_external_links`.
 
 #### Deliberately NOT done
 
@@ -3327,9 +3349,9 @@ Full gate: build 9/9, typecheck 17/17, lint **0 warnings**, `format:check` clean
 release Android APK built successfully via Gradle under JDK 17.
 
 Full suite, **uncached and serial** (`turbo run test --force`, root script pins
-`--concurrency=1`): **2023 tests across 17 turbo tasks** (1965 → **+58**). Per package — core 326 ·
+`--concurrency=1`): **2035 tests across 17 turbo tasks** (1965 → **+70**). Per package — core 326 ·
 db 21 · schema **174** · **calendar-providers 74** · health-providers 311 · ai-providers 25 ·
-api-client 93 · api **484** · worker **152** · mobile **363**. **No package decreased.**
+api-client 93 · api **492** · worker **152** · mobile **367**. **No package decreased.**
 
 The `calendar-providers` zero-drift canary moved from 57 to 74 for the first time since Phase 4.
 That is deliberate and is the point of the checkpoint: 6.5's subject is the calendar provider-error
@@ -3425,6 +3447,10 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 proof)**, and it needs a separate explicit approval. 6.5 lives on branch `phase-6-audit-hardening`
 and is **not merged to `main`** — merging it, and the still-unmerged `phase-6-google-health-sync`
 and `phase-6-google-health-ui`, are their own decisions.
+
+**Before this branch is merged, rebased or cherry-picked:** squash commits `7c6ba30` and `180b5b2`.
+`7c6ba30` imports a module `180b5b2` creates, so it does not build in isolation. HEAD is correct; only
+the intermediate history is affected. See the 6.5 section for the full account.
 
 **Carried into 6.6:**
 
