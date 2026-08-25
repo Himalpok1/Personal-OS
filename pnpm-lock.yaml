@@ -253,6 +253,9 @@ importers:
       '@personal-os/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@personal-os/health-providers':
+        specifier: workspace:*
+        version: link:../../packages/health-providers
       '@personal-os/schema':
         specifier: workspace:*
         version: link:../../packages/schema

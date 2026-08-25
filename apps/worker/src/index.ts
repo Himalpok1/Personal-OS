@@ -17,7 +17,12 @@ import {
   enqueueCalendarSyncForAllEnabledCalendars,
 } from "./jobs/calendar-sync-calendar.js";
 import { expandDueDateWindowJob } from "./jobs/expand-due-date-window.js";
+import {
+  createHealthSyncConnectionHandler,
+  enqueueHealthSyncForAllActiveConnections,
+} from "./jobs/health-sync-connection.js";
 import { createGenerateLazyOccurrenceHandler } from "./jobs/generate-lazy-occurrence.js";
+import { createGoogleHealthClient } from "@personal-os/health-providers";
 import {
   createNotificationsDispatchDeadLetterHandler,
   createNotificationsDispatchHandler,
@@ -37,6 +42,7 @@ import {
   CALENDAR_SYNC_CALENDAR_DEAD_QUEUE,
   CALENDAR_SYNC_CALENDAR_QUEUE,
   CAPTURE_PARSE_QUEUE,
+  HEALTH_SYNC_CONNECTION_QUEUE,
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
   NOTIFICATIONS_DISPATCH_QUEUE,
   OCCURRENCES_EXPAND_WINDOW_QUEUE,
@@ -52,6 +58,8 @@ import {
 // so they don't need to live in the shared queue-names.ts file.
 const CALENDAR_SYNC_CRON_QUEUE = "calendar.google.sync-cron";
 const CALENDAR_REFRESH_CRON_QUEUE = "calendar.google.refresh-cron";
+
+const HEALTH_SYNC_CRON_QUEUE = "health.google.sync-cron";
 
 const SWEEP_ORPHAN_AUDIO_QUEUE = "audio.sweep-orphan";
 
@@ -209,8 +217,39 @@ async function main(): Promise<void> {
   });
   await boss.schedule(CALENDAR_REFRESH_CRON_QUEUE, "*/5 * * * *");
 
+  // Phase 6 Checkpoint 6.3 (Google Health sync). ONE connection-level queue.
+  //
+  // No dead-letter queue and no pg-boss retry: QUEUE_RETRY_OPTIONS sets
+  // retryLimit 0 because pg-boss's own manager.js:1293 documents that under
+  // `policy: "stately"` a retry insert can be dropped by ON CONFLICT and the
+  // job re-inserted as failed, straight to the dead-letter queue, skipping
+  // its remaining retries. Health sync is idempotent and cron-driven, so the
+  // hourly tick is the retry -- and a better one, because it re-derives the
+  // window from current state rather than replaying a stale job. Provider-level
+  // retries live in the limiter, bounded and full-jittered.
+  const googleHealthClient = createGoogleHealthClient();
+  await boss.createQueue(
+    HEALTH_SYNC_CONNECTION_QUEUE,
+    QUEUE_RETRY_OPTIONS[HEALTH_SYNC_CONNECTION_QUEUE],
+  );
+  await boss.work(
+    HEALTH_SYNC_CONNECTION_QUEUE,
+    createHealthSyncConnectionHandler(db, googleHealthClient, boss),
+  );
+
+  // Hourly, not every 30 minutes: the doc comment on hotWindow predates this
+  // decision. Each tick fans out one job per ACTIVE connection; the effective
+  // sync kind is derived from durable stream state inside the pass, never
+  // trusted from the payload, so a tick that lands when a warm pass is due
+  // performs the warm work.
+  await boss.createQueue(HEALTH_SYNC_CRON_QUEUE);
+  await boss.work(HEALTH_SYNC_CRON_QUEUE, async () => {
+    await enqueueHealthSyncForAllActiveConnections(db, boss, HEALTH_SYNC_CONNECTION_QUEUE);
+  });
+  await boss.schedule(HEALTH_SYNC_CRON_QUEUE, "0 * * * *");
+
   console.log(
-    `worker started: ${HEARTBEAT_QUEUE} scheduled every minute, ${OCCURRENCES_EXPAND_WINDOW_QUEUE} scheduled nightly, ${SWEEP_ORPHAN_AUDIO_QUEUE} scheduled hourly, ${CALENDAR_SYNC_CRON_QUEUE} scheduled every 15min, ${CALENDAR_REFRESH_CRON_QUEUE} scheduled every 5min, ${CAPTURE_PARSE_QUEUE}/${OCCURRENCES_GENERATE_LAZY_QUEUE}/${PTT_TRANSCRIBE_QUEUE}/${NOTIFICATIONS_DISPATCH_QUEUE}/${CALENDAR_REFRESH_TOKEN_QUEUE}/${CALENDAR_SYNC_CALENDAR_QUEUE}/${CALENDAR_PUSH_EVENT_QUEUE} listening`,
+    `worker started: ${HEARTBEAT_QUEUE} scheduled every minute, ${OCCURRENCES_EXPAND_WINDOW_QUEUE} scheduled nightly, ${SWEEP_ORPHAN_AUDIO_QUEUE} scheduled hourly, ${CALENDAR_SYNC_CRON_QUEUE} scheduled every 15min, ${CALENDAR_REFRESH_CRON_QUEUE} scheduled every 5min, ${HEALTH_SYNC_CRON_QUEUE} scheduled hourly, ${CAPTURE_PARSE_QUEUE}/${OCCURRENCES_GENERATE_LAZY_QUEUE}/${PTT_TRANSCRIBE_QUEUE}/${NOTIFICATIONS_DISPATCH_QUEUE}/${CALENDAR_REFRESH_TOKEN_QUEUE}/${CALENDAR_SYNC_CALENDAR_QUEUE}/${CALENDAR_PUSH_EVENT_QUEUE}/${HEALTH_SYNC_CONNECTION_QUEUE} listening`,
   );
 }
 
