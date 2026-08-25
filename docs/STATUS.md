@@ -288,31 +288,51 @@ exercised on-device. They are covered by unit tests and by the browser-equivalen
 | 12 | Secret scans | `gitleaks git` **130 commits, no leaks**. Working tree 76 findings, **0 in any file git would commit**, classified programmatically with `git check-ignore` |
 | 13 | Process/port cleanup | No repository api, worker, Metro, Expo, watch or test process left running; ports 3000/8081/8082/5173/19000 free; `adb reverse` cleared |
 
-#### A defect in this branch's HISTORY, recorded rather than rewritten
+#### A defect in this branch's HISTORY — found, then repaired without rewriting
 
 The final independent audit found that commit `7c6ba30` **does not build in isolation**: it adds
 `withCalendarJobErrorContainment` imports to the three calendar jobs, but the module they import is
 not created until the next commit, `180b5b2`. The two commits are entangled — the wrapper CALLS live
-in the earlier one — so the honest fix is a squash, not a reorder.
+in the earlier one — so ordering cannot separate them; only combining can. `git bisect`, a
+cherry-pick, or a partial revert landing on `7c6ba30` hits a module-resolution failure.
 
-It was left as-is. `AGENTS.md` forbids rewriting history, HEAD is correct and typechecks clean, and
-replaying fourteen commits at the close of the checkpoint carries more risk than the defect does. The
-consequence is real and bounded: `git bisect`, a cherry-pick, or a partial revert landing on
-`7c6ba30` hits a module-resolution failure. **Squash that pair before this branch is rebased,
-cherry-picked, or merged.**
+**Resolved by linearization, not by rewriting.** `phase-6-audit-hardening` is left exactly as
+audited at `189d954` and was never rebased, reset, force-updated or deleted. A separate branch,
+**`phase-6-audit-hardening-linear`**, was built from `main` by replaying the audited history in its
+original order, with `7c6ba30` and `180b5b2` applied together and committed once as
+**`fix(calendar): sanitize and classify provider sync errors`**. Every other commit was cherry-picked
+individually, in order, **with zero conflicts**. That repaired branch is what integrates to `main`;
+the original audited branch is never merged.
 
-Two narrower windows of the same kind, also recorded rather than rewritten: `events-screen.test.tsx`
-and `recurrence-editor.test.tsx` report zero tests between `c2dbb81` and `6fa07e0` (the nativewind
-alias lands in `1e91c1b`), and the three detail screens offer a Retry on a terminal 404 between
-`802a931` and `76d8073`. Neither survives to HEAD.
+**The application code is provably unchanged.** The replayed branch's tree object before the
+documentation correction is `f93a07dd349d18b1f5110077861c4bc66ebbde28` — **identical to
+`189d954`'s**, with an empty `git diff` between the two commits. Application, package, Android,
+configuration and lockfile content are therefore byte-for-byte the audited tree, and the only
+deliberate difference on the repaired branch is this documentation correction.
 
-One commit message also overstates its scope: `76d8073` says it covers
+**Test counts and audit evidence below are unchanged and were NOT re-run.** The full 2035-test gate
+recorded here was run against the audited tree, and the repaired tree is proven identical to it, so
+re-running it would re-measure the same bytes. What WAS run, on the combined commit specifically and
+before any further replay, is the focused proof that it now builds where `7c6ba30` did not: build
+9/9, typecheck 17/17, `calendar-providers` **74**, `schema` **170** (the health token suite arrives
+two commits later, at `5bec9bc`), and the four DB-backed worker calendar suites **41**.
+
+Two narrower windows of the same kind existed on the original branch and are dissolved by the
+replay only insofar as the combined commit removes the build break; they remain historical facts
+about `phase-6-audit-hardening`: `events-screen.test.tsx` and `recurrence-editor.test.tsx` report
+zero tests between `c2dbb81` and `6fa07e0` (the nativewind alias lands in `1e91c1b`), and the three
+detail screens offer a Retry on a terminal 404 between `802a931` and `76d8073`. Neither survives to
+HEAD on either branch.
+
+One commit message still overstates its scope, on both branches: `76d8073` says it covers
 `calendar_event_instances.last_sync_error`, but that column has no write site anywhere in the worker
 and the diff only touches `event_external_links`.
 
 #### Deliberately NOT done
 
-No merge to `main`, no push (the repository has **no remote**), no branch deleted. No production
+The original `phase-6-audit-hardening` branch is never merged; integration to `main` is a
+fast-forward from `phase-6-audit-hardening-linear`. No push (the repository has **no remote**),
+no branch deleted, no history rewritten. No production
 Docker or SSH command. No migration. No `versionCode` change and no EAS build. No OAuth publishing
 and no callback change. F5 capture 2 not run; raw intraday heart rate not enabled.
 
@@ -3445,12 +3465,13 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 **Stopped. Checkpoints 6.0 through 6.5 are complete.** The next checkpoint is **6.6 (full live
 proof)**, and it needs a separate explicit approval. 6.5 lives on branch `phase-6-audit-hardening`
-and is **not merged to `main`** — merging it, and the still-unmerged `phase-6-google-health-sync`
-and `phase-6-google-health-ui`, are their own decisions.
+and is **not merged to `main`** — `phase-6-audit-hardening-linear` is what integrates instead. The
+still-unmerged `phase-6-google-health-sync` and `phase-6-google-health-ui` remain their own decisions.
 
-**Before this branch is merged, rebased or cherry-picked:** squash commits `7c6ba30` and `180b5b2`.
-`7c6ba30` imports a module `180b5b2` creates, so it does not build in isolation. HEAD is correct; only
-the intermediate history is affected. See the 6.5 section for the full account.
+**The `7c6ba30`/`180b5b2` build break is repaired.** `phase-6-audit-hardening-linear` replays the
+audited history with that pair combined into one atomic commit, carries a tree byte-identical to
+`189d954`, and is what fast-forwards `main`. The original audited branch is preserved unchanged and
+is never merged. See the 6.5 section for the full account.
 
 **Carried into 6.6:**
 
