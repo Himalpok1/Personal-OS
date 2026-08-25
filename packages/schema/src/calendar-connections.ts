@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CalendarSyncErrorCodeSchema } from "./calendar-sync-errors.js";
 
 export const CalendarConnectionProviderSchema = z.enum(["google", "caldav"]);
 export type CalendarConnectionProvider = z.infer<typeof CalendarConnectionProviderSchema>;
@@ -28,7 +29,12 @@ export const CalendarConnectionSchema = z.object({
   auth_type: z.string().nullable().optional(),
   // Common fields
   status: CalendarConnectionStatusSchema,
-  last_sync_error: z.string().nullable(),
+  // A CODE, never a message. Typing this as the closed vocabulary rather than
+  // `z.string()` makes an accidental provider-prose leak a parse failure at the
+  // API boundary instead of a silently-passing free-text field -- the same
+  // structural trick `HealthMetricPointSchema`'s state refine uses to make a
+  // fabricated zero inexpressible. See ./calendar-sync-errors.ts.
+  last_sync_error: CalendarSyncErrorCodeSchema.nullable(),
   created_at: z.string().datetime({ offset: true }),
   updated_at: z.string().datetime({ offset: true }),
 });
