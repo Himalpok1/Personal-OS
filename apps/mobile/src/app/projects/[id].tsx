@@ -74,6 +74,26 @@ function ActionButton({
   );
 }
 
+/**
+ * Safe copy for a failed project lifecycle or archive action.
+ *
+ * These two sites rendered `ApiClientError.message` straight to the screen,
+ * which reads `API error 409: invalid_status_transition` -- a developer string,
+ * and the same class of defect Checkpoint 6.5 removed from Settings and the
+ * calendar link picker. Switching on `.code` keeps the one distinction that is
+ * actually actionable here (the state moved underneath you) and says nothing
+ * else.
+ */
+function describeProjectActionFailure(err: unknown): string {
+  if (err instanceof ApiClientError) {
+    if (err.code === "invalid_status_transition") {
+      return "That project's status changed. Pull to refresh and try again.";
+    }
+    if (err.status === 404) return "That project no longer exists.";
+  }
+  return "That didn't go through. Please try again.";
+}
+
 export default function ProjectDetailScreen() {
   const keyboardHeight = useKeyboardHeight();
   const placeholderColor = usePlaceholderColor();
@@ -298,8 +318,12 @@ export default function ProjectDetailScreen() {
           />
         )}
       </View>
-      {lifecycleError ? <Text className="mt-2 text-red-600">{lifecycleError.message}</Text> : null}
-      {archiveError ? <Text className="mt-2 text-red-600">{archiveError.message}</Text> : null}
+      {lifecycleError ? (
+        <Text className="mt-2 text-red-600">{describeProjectActionFailure(lifecycleError)}</Text>
+      ) : null}
+      {archiveError ? (
+        <Text className="mt-2 text-red-600">{describeProjectActionFailure(archiveError)}</Text>
+      ) : null}
 
       <View className="mt-4 rounded-xl border border-neutral-200 p-3 dark:border-neutral-800">
         <Text className="text-xs font-semibold uppercase tracking-wide text-neutral-500">

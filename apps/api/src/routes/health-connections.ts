@@ -376,7 +376,11 @@ export default function healthConnectionsRoutes(app: FastifyInstance): void {
             status: row.status,
             range_start_date: row.rangeStartDate,
             range_end_date: row.rangeEndDate,
-            failure_class: row.failureClass,
+            // Same shape guard as the two connection/stream projections. The
+            // sync engine only ever stores its own classes here, but this is
+            // the one health error field the 6.5 sweep would otherwise have
+            // left as a review rule rather than a structural guarantee.
+            failure_class: sanitizeHealthSyncErrorToken(row.failureClass),
             rows_inserted: row.rowsInserted,
             rows_updated: row.rowsUpdated,
             rows_unchanged: row.rowsUnchanged,

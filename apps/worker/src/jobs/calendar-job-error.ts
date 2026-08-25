@@ -31,8 +31,13 @@ export class CalendarJobError extends Error {
     this.name = "CalendarJobError";
     this.queue = queue;
     this.classification = classification;
-    // `cause` is deliberately NOT retained: Error#cause is enumerable enough
-    // for serialize-error to walk, which would reinstate the whole leak.
+    // `cause` is deliberately NOT retained. An earlier comment here claimed
+    // Error#cause is enumerable enough for serialize-error to walk; that is
+    // backwards -- a `cause` set through the Error constructor is
+    // non-enumerable by spec, so a `for...in` walk would miss it anyway.
+    // Not retaining it is still right: `serialize-error` special-cases
+    // `cause` explicitly rather than relying on enumerability, and a future
+    // serializer would have every reason to follow it.
   }
 }
 

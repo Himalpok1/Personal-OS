@@ -126,9 +126,18 @@ export function QuickAddFab() {
           // so this must be structurally excluded rather than merely
           // unlabelled: `pointerEvents` governs touch dispatch, not the
           // accessibility tree, and a bare <Text> stays discoverable on its
-          // own. Without these two props a screen reader lands on a
-          // context-free "3" next to the button.
+          // own. Without these props a screen reader lands on a context-free
+          // "3" next to the button.
+          //
+          // Both platforms are needed and they are NOT interchangeable:
+          // `accessibilityElementsHidden` is the iOS prop and
+          // `importantForAccessibility` the Android one. `accessible={false}`
+          // alone only stops the CONTAINER being treated as one merged
+          // element -- on iOS the child <Text> stays individually
+          // discoverable, so the first version of this fix worked on Android
+          // and not on iOS.
           accessible={false}
+          accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
           className={`absolute h-6 min-w-[24px] items-center justify-center rounded-full px-1 ${
             outbox.failed > 0 ? "bg-red-600" : "bg-amber-500"
