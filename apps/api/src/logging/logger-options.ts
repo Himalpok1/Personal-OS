@@ -1,4 +1,5 @@
 import type { FastifyRequest } from "fastify";
+import { serializeErrorForLog } from "./serialize-error.js";
 import { scrubSensitiveQueryParams } from "./scrub-url.js";
 
 /**
@@ -27,6 +28,11 @@ export function buildLoggerOptions() {
           remotePort: request.socket.remotePort,
         };
       },
+      // Fastify MERGES custom serializers over its own defaults, so leaving
+      // `err` out silently kept pino.stdSerializers.err -- which copies every
+      // own-enumerable property of the error (CalDavError.responseBody, a pg
+      // error's `detail`) onto the log line. See ./serialize-error.ts.
+      err: serializeErrorForLog,
     },
     // Defence in depth, not the mechanism: the serializer above emits neither
     // query nor body, so a body field cannot reach a log line in the first
