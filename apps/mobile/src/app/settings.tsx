@@ -1,7 +1,14 @@
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import {
+  describeFreshness,
+  resolveHealthConnectionState,
+  type FreshnessDescription,
+  type HealthConnectionDisplayState,
+} from "@/components/health/connection-state";
 import type { CalendarConnection, Device } from "@personal-os/schema";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "expo-router";
 import ExactAlarmStatus from "../../modules/exact-alarm-status";
 import GoogleCalendarAuth from "../../modules/google-calendar-auth";
 import * as Notifications from "expo-notifications";
@@ -33,6 +40,8 @@ import {
   useUpdateDevice,
   useUpdateDevicePushToken,
 } from "@/queries/devices";
+import { useHealthSummary } from "@/queries/health";
+import { formatShortDate } from "@/utils/local-date";
 
 // The exact scope set the backend's token exchange expects -- see
 // Checkpoint 4.5 Stage A / apps/api's calendar-connections route. Kept as a
@@ -788,6 +797,148 @@ function ConnectedCalendarsCard() {
   );
 }
 
+// Google Health lives next to Connected Calendars rather than among the device
+// diagnostics because it is the same kind of thing -- an external source
+// Personal OS reads from -- not a property of this handset.
+//
+// Checkpoint 6.4 is deliberately READ-ONLY over an existing connection. There
+// is no connect, disconnect, per-stream toggle or backfill control here. The
+// alternative -- shipping a connect button now -- was rejected because the
+// consent flow, its exact-match redirect allowlist and partial-consent
+// resolution are a checkpoint of their own; a half-built connect path that
+// mints a grant the UI cannot then revoke is worse than plainly saying "not
+// connected". Connecting stays a server-side operation until that checkpoint.
+//
+// There is also deliberately NO sync control here. The full /health screen owns
+// manual sync, and two independently-mounted sync triggers is exactly the
+// duplication this checkpoint is required to avoid.
+const HEALTH_STATUS_TEXT: Record<HealthConnectionDisplayState, string> = {
+  // We could not read the connection, so we assert nothing about it. Saying
+  // "not connected" here would invite the user to mint a new grant to fix what
+  // is actually a tunnel being down.
+  unavailable: "Can't reach Personal OS, so the Google Health status is unknown.",
+  not_configured: "Google Health isn't set up on this server.",
+  not_connected: "No Google Health account is connected yet.",
+  needs_reconnect: "Google Health needs to be reconnected before syncing can continue.",
+  syncing: "Syncing with Google Health now.",
+  partial_scope: "Connected, but some data types weren't granted.",
+  stale: "Connected, but the data hasn't caught up recently.",
+  // The contract carries no error string on purpose -- last_sync_error has at
+  // times held a Postgres detail -- so this says what happens next instead.
+  error: "A recent sync didn't finish. Personal OS will try again on its own.",
+  current: "Connected to Google Health.",
+};
+
+/** Neutral for the healthy and in-flight states; amber for degraded-but-live. */
+function healthStatusToneClass(state: HealthConnectionDisplayState): string {
+  switch (state) {
+    case "unavailable":
+      return "text-red-600 dark:text-red-400";
+    case "needs_reconnect":
+    case "partial_scope":
+    case "stale":
+    case "error":
+      return "text-amber-700 dark:text-amber-300";
+    case "not_configured":
+    case "not_connected":
+    case "syncing":
+    case "current":
+      return "text-black dark:text-white";
+  }
+}
+
+/**
+ * "Data through Aug 23 · 2 days behind."
+ *
+ * Never "0 days behind": a zero count and "nothing has ever been verified" are
+ * opposite claims, and describeFreshness keeps them apart by returning null
+ * rather than 0 for the second one.
+ */
+function healthFreshnessLine(description: FreshnessDescription): string {
+  if (description.verifiedThroughDate === null) {
+    return "No health data has been verified yet.";
+  }
+  const through = `Data through ${formatShortDate(description.verifiedThroughDate)}`;
+  const days = description.daysBehind;
+  if (days === null || days === 0) return `${through}.`;
+  return `${through} · ${days} day${days === 1 ? "" : "s"} behind.`;
+}
+
+function ConnectedHealthCard() {
+  const { data, isError } = useHealthSummary();
+
+  // A null state means the first load is still in flight. Every line below
+  // reserves its height in that case so the card cannot jump once data lands.
+  const state: HealthConnectionDisplayState | null = isError
+    ? "unavailable"
+    : data
+      ? resolveHealthConnectionState({
+          configured: data.configured,
+          connection: data.connection,
+          freshness: data.freshness,
+          isLoadError: false,
+        })
+      : null;
+
+  const freshness =
+    data && state !== null && state !== "unavailable" && state !== "not_configured"
+      ? describeFreshness({ freshness: data.freshness, todayLocalDate: data.local_date })
+      : null;
+
+  return (
+    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
+      <Text className="mb-2 text-base font-bold text-black dark:text-white">Health</Text>
+
+      <Text
+        className={`min-h-[20px] text-sm ${state === null ? "text-neutral-500" : healthStatusToneClass(state)}`}
+      >
+        {state === null ? "Loading…" : HEALTH_STATUS_TEXT[state]}
+      </Text>
+
+      <Text className="min-h-[16px] text-xs text-neutral-500">
+        {freshness === null ? "" : healthFreshnessLine(freshness)}
+      </Text>
+
+      {state === "partial_scope" ? (
+        // Deliberately no scope URLs on screen -- they are implementation
+        // detail and read as noise. Which streams are affected is visible on
+        // the /health screen, per metric, where it is actionable.
+        <Text className="mt-1 text-xs text-neutral-500">
+          Some data types weren&apos;t granted permission, so those stay empty here.
+        </Text>
+      ) : null}
+
+      {/* The single most useful thing a user can know when the dashboard looks
+          empty, and Settings is where they will come looking for it. */}
+      <Text className="mt-2 text-xs text-neutral-500">
+        Personal OS reads what&apos;s already in Google Health, so a watch or app has to send its
+        data there first.
+      </Text>
+
+      {state === "not_configured" ? (
+        // Nothing to navigate to, and nothing to offer: connecting is a
+        // server-side step this screen deliberately does not perform.
+        <Text className="mt-2 min-h-[44px] py-3 text-sm text-neutral-500">
+          There&apos;s nothing to show until Google Health is set up on the server.
+        </Text>
+      ) : (
+        <Link href="/health" asChild>
+          <Pressable
+            hitSlop={8}
+            accessibilityRole="link"
+            accessibilityLabel="View health data"
+            className="mt-2 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+          >
+            <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
+              View health data
+            </Text>
+          </Pressable>
+        </Link>
+      )}
+    </View>
+  );
+}
+
 export default function SettingsScreen() {
   const keyboardHeight = useKeyboardHeight();
   const { identity, clearIdentity } = useDeviceIdentity();
@@ -807,6 +958,7 @@ export default function SettingsScreen() {
 
         <ReminderEligibilityBanner device={thisDevice} />
         <ConnectedCalendarsCard />
+        <ConnectedHealthCard />
         <NotificationDiagnostics />
         <OutboxDiagnostics />
 

@@ -110,6 +110,14 @@ function AppStack() {
           other stack route (Checkpoint 5.6). */}
       <Stack.Screen name="reviews/daily" options={{ title: "Daily review" }} />
       <Stack.Screen name="reviews/weekly" options={{ title: "Weekly review" }} />
+      {/* Phase 6 Checkpoint 6.4. Health is reached from a Settings card, not a
+          sixth tab: the Rabbit R1's 480px bar already carries five labels, and
+          Health is a read-only view of one connection rather than a daily
+          driver like Today or Inbox. */}
+      <Stack.Screen name="health/index" options={{ title: "Health" }} />
+      <Stack.Screen name="health/trends/[metric]" options={{ title: "Trend" }} />
+      <Stack.Screen name="health/sleep" options={{ title: "Sleep" }} />
+      <Stack.Screen name="health/workouts" options={{ title: "Workouts" }} />
       <Stack.Screen name="settings" options={{ title: "Settings" }} />
       <Stack.Screen name="hardware-debug" options={{ title: "Hardware spike" }} />
     </Stack>
