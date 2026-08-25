@@ -1,11 +1,14 @@
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import { calendarSyncErrorCopy } from "@/components/calendar/sync-error-copy";
+import { usePlaceholderColor } from "@/components/placeholder-color";
 import {
   describeFreshness,
   resolveHealthConnectionState,
   type FreshnessDescription,
   type HealthConnectionDisplayState,
 } from "@/components/health/connection-state";
+import { ApiClientError } from "@personal-os/api-client";
 import type { CalendarConnection, Device } from "@personal-os/schema";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "expo-router";
@@ -13,7 +16,17 @@ import ExactAlarmStatus from "../../modules/exact-alarm-status";
 import GoogleCalendarAuth from "../../modules/google-calendar-auth";
 import * as Notifications from "expo-notifications";
 import { useState } from "react";
-import { Platform, Pressable, SafeAreaView, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import {
+  Alert,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  Switch,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { mergeAvailableCalendars } from "@/calendar-connections/merge-available-calendars";
 import { useDeviceIdentity } from "@/device-identity/provider";
 import { REMINDERS_CHANNEL_ID, ensureNotificationPermission, ensureReminderChannel } from "@/notifications/channel";
@@ -68,6 +81,34 @@ async function runGoogleCalendarAuthorize(): Promise<{
   return GoogleCalendarAuth.authorize(webClientId, GOOGLE_CALENDAR_SCOPES);
 }
 
+// Several actions in this screen caught `err.message` and rendered it
+// verbatim -- for an ApiClientError that's a developer string like "API
+// error 422: google_oauth_failed", never words meant for a screen, and for
+// anything else it could be arbitrary. This is the one place an unknown
+// thrown value becomes safe copy; every call site below routes through it
+// instead of reading `.message` directly. `.body` is never echoed.
+function describeActionFailure(err: unknown): string {
+  if (err instanceof ApiClientError) {
+    switch (err.code) {
+      case "google_oauth_failed":
+        return "Google didn't complete the connection. Try again.";
+      case "caldav_discovery_failed":
+        return "Couldn't reach that CalDAV server. Check the address and try again.";
+      case "device_revoked":
+        return "This device is no longer registered.";
+      case "invalid_token":
+        return "This device's credentials are no longer valid.";
+      case "validation_failed":
+        return "Some of the details entered weren't valid.";
+      case "not_found":
+        return "That could not be found.";
+      default:
+        return "Something went wrong. Try again.";
+    }
+  }
+  return "Something went wrong. Try again.";
+}
+
 function OutboxDiagnostics() {
   const queryClient = useQueryClient();
   const { data: stats } = useQuery({
@@ -93,7 +134,7 @@ function OutboxDiagnostics() {
           void queryClient.invalidateQueries({ queryKey: ["outbox"] });
           void queryClient.invalidateQueries({ queryKey: ["inbox"] });
         }}
-        className="rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+        className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
       >
         <Text className="text-center text-sm text-black dark:text-white">Flush now</Text>
       </Pressable>
@@ -122,7 +163,7 @@ function NotificationDiagnostics() {
 
       <Pressable
         onPress={() => setExactAlarmOk(ExactAlarmStatus.canScheduleExactAlarms())}
-        className="mb-1 rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+        className="mb-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
       >
         <Text className="text-center text-sm text-black dark:text-white">
           Check exact-alarm permission
@@ -132,7 +173,7 @@ function NotificationDiagnostics() {
       {exactAlarmOk === false ? (
         <Pressable
           onPress={() => ExactAlarmStatus.openExactAlarmSettings()}
-          className="mb-2 rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+          className="mb-2 min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
         >
           <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
             Open exact-alarm settings
@@ -153,10 +194,10 @@ function NotificationDiagnostics() {
             }
             setPushResult(`Got token: ${expoPushToken.slice(0, 24)}...`);
           } catch (err) {
-            setPushResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+            setPushResult(`Failed: ${describeActionFailure(err)}`);
           }
         }}
-        className="mb-1 rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+        className="mb-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
       >
         <Text className="text-center text-sm text-black dark:text-white">
           Register for push notifications
@@ -172,12 +213,10 @@ function NotificationDiagnostics() {
             await api.sendTestNotification(identity.token, identity.deviceId);
             setRemoteTestResult("Queued for this device.");
           } catch (error) {
-            setRemoteTestResult(
-              `Failed: ${error instanceof Error ? error.message : String(error)}`,
-            );
+            setRemoteTestResult(`Failed: ${describeActionFailure(error)}`);
           }
         }}
-        className="mb-1 rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+        className="mb-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
       >
         <Text className="text-center text-sm text-black dark:text-white">
           Send remote test notification
@@ -205,7 +244,7 @@ function NotificationDiagnostics() {
           });
           setTestScheduled(`Scheduled for ${new Date(Date.now() + 10_000).toLocaleTimeString()}`);
         }}
-        className="rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+        className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
       >
         <Text className="text-center text-sm text-black dark:text-white">
           Schedule test reminder (10s)
@@ -236,7 +275,7 @@ function NotificationDiagnostics() {
             `Reboot test scheduled for ${new Date(Date.now() + 120_000).toLocaleTimeString()}`,
           );
         }}
-        className="mt-1 rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+        className="mt-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
       >
         <Text className="text-center text-sm text-black dark:text-white">
           Schedule reboot test (2m)
@@ -258,7 +297,7 @@ function NotifyToggle({
   return (
     <View className="flex-row items-center justify-between py-2">
       <Text className="text-black dark:text-white">{label}</Text>
-      <Switch value={value} onValueChange={onChange} />
+      <Switch value={value} onValueChange={onChange} accessibilityLabel={label} />
     </View>
   );
 }
@@ -292,7 +331,7 @@ function DeviceCard({
         <Pressable
           onPress={() => setPrimary.mutate(device.id)}
           disabled={setPrimary.isPending}
-          className="mb-2 rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+          className="mb-2 min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
         >
           <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
             {setPrimary.isPending ? "Setting…" : "Set as primary reminder device"}
@@ -320,14 +359,28 @@ function DeviceCard({
 
       <Pressable
         onPress={() =>
-          revokeDevice.mutate(device.id, {
-            onSuccess: () => {
-              if (isThisDevice) void onThisDeviceRevoked();
-            },
-          })
+          Alert.alert(
+            "Revoke this device?",
+            device.is_primary_reminder_device
+              ? `${device.name} is the PRIMARY reminder device -- revoking it stops local reminders from firing on any device until you choose a new primary.`
+              : `${device.name} will lose access immediately and will need to be paired again to reconnect.`,
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Revoke",
+                style: "destructive",
+                onPress: () =>
+                  revokeDevice.mutate(device.id, {
+                    onSuccess: () => {
+                      if (isThisDevice) void onThisDeviceRevoked();
+                    },
+                  }),
+              },
+            ],
+          )
         }
         disabled={revokeDevice.isPending || Boolean(device.revoked_at)}
-        className="mt-2 rounded bg-red-100 px-3 py-2 dark:bg-red-950"
+        className="mt-2 min-h-[44px] justify-center rounded bg-red-100 px-3 py-2 dark:bg-red-950"
       >
         <Text className="text-center text-sm text-red-700 dark:text-red-300">
           {device.revoked_at ? "Revoked" : revokeDevice.isPending ? "Revoking…" : "Revoke"}
@@ -353,7 +406,7 @@ function ReminderEligibilityBanner({ device }: { device: Device | undefined }) {
       {kind === "degraded" ? (
         <Pressable
           onPress={() => ExactAlarmStatus.openExactAlarmSettings()}
-          className="mt-2 rounded bg-amber-200 px-3 py-2 dark:bg-amber-900"
+          className="mt-2 min-h-[44px] justify-center rounded bg-amber-200 px-3 py-2 dark:bg-amber-900"
         >
           <Text className="text-center text-sm text-amber-900 dark:text-amber-100">
             Open exact-alarm settings
@@ -386,7 +439,12 @@ function GoogleCalendarRow({
           </Text>
         ) : null}
       </View>
-      <Switch value={calendar.sync_enabled} onValueChange={onToggle} disabled={disabled} />
+      <Switch
+        value={calendar.sync_enabled}
+        onValueChange={onToggle}
+        disabled={disabled}
+        accessibilityLabel={`Sync ${calendar.summary}${calendar.primary ? " (primary)" : ""}`}
+      />
     </View>
   );
 }
@@ -451,11 +509,11 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
             const result = await syncNow.mutateAsync(connection.id);
             setSyncResult(`Queued ${result.queued} calendar${result.queued === 1 ? "" : "s"}.`);
           } catch (err) {
-            setSyncResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+            setSyncResult(`Failed: ${describeActionFailure(err)}`);
           }
         }}
         disabled={syncNow.isPending}
-        className="mt-2 rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+        className="mt-2 min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
       >
         <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
           {syncNow.isPending ? "Syncing…" : "Sync now"}
@@ -464,9 +522,22 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
       {syncResult ? <Text className="mt-1 text-xs text-neutral-500">{syncResult}</Text> : null}
 
       <Pressable
-        onPress={() => disconnect.mutate(connection.id)}
+        onPress={() =>
+          Alert.alert(
+            "Disconnect Google Calendar?",
+            `Personal OS will stop syncing with ${connection.google_account_email}. Events already synced stay in Personal OS, but new changes on either side won't be shared until you reconnect.`,
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Disconnect",
+                style: "destructive",
+                onPress: () => disconnect.mutate(connection.id),
+              },
+            ],
+          )
+        }
         disabled={disconnect.isPending}
-        className="mt-2 rounded bg-red-100 px-3 py-2 dark:bg-red-950"
+        className="mt-2 min-h-[44px] justify-center rounded bg-red-100 px-3 py-2 dark:bg-red-950"
       >
         <Text className="text-center text-sm text-red-700 dark:text-red-300">
           {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
@@ -526,6 +597,7 @@ function CaldavCalendarConnectionCard({ connection }: { connection: CalendarConn
               }
             }}
             disabled={updateCalendars.isPending}
+            accessibilityLabel={`Sync ${cal.summary}`}
           />
         </View>
       ))}
@@ -537,11 +609,11 @@ function CaldavCalendarConnectionCard({ connection }: { connection: CalendarConn
             const result = await syncNow.mutateAsync(connection.id);
             setSyncResult(`Queued ${result.queued} calendar${result.queued === 1 ? "" : "s"}.`);
           } catch (err) {
-            setSyncResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+            setSyncResult(`Failed: ${describeActionFailure(err)}`);
           }
         }}
         disabled={syncNow.isPending}
-        className="mt-2 rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+        className="mt-2 min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
       >
         <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
           {syncNow.isPending ? "Syncing…" : "Sync now"}
@@ -550,9 +622,22 @@ function CaldavCalendarConnectionCard({ connection }: { connection: CalendarConn
       {syncResult ? <Text className="mt-1 text-xs text-neutral-500">{syncResult}</Text> : null}
 
       <Pressable
-        onPress={() => disconnect.mutate(connection.id)}
+        onPress={() =>
+          Alert.alert(
+            "Disconnect CalDAV?",
+            `Personal OS will stop syncing with ${connection.username} (${connection.server_url}). Events already synced stay in Personal OS, but new changes on either side won't be shared until you reconnect.`,
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Disconnect",
+                style: "destructive",
+                onPress: () => disconnect.mutate(connection.id),
+              },
+            ],
+          )
+        }
         disabled={disconnect.isPending}
-        className="mt-2 rounded bg-red-100 px-3 py-2 dark:bg-red-950"
+        className="mt-2 min-h-[44px] justify-center rounded bg-red-100 px-3 py-2 dark:bg-red-950"
       >
         <Text className="text-center text-sm text-red-700 dark:text-red-300">
           {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
@@ -566,6 +651,7 @@ function ConnectedCalendarsCard() {
   const { data, isLoading, isError } = useCalendarConnections();
   const connectGoogle = useConnectGoogleCalendar();
   const connectCaldav = useConnectCaldavCalendar();
+  const placeholderColor = usePlaceholderColor();
 
   const [googleError, setGoogleError] = useState<string | null>(null);
   const [isAuthorizing, setIsAuthorizing] = useState(false);
@@ -591,7 +677,7 @@ function ConnectedCalendarsCard() {
       const result = await runGoogleCalendarAuthorize();
       await connectGoogle.mutateAsync({ auth_code: result.serverAuthCode });
     } catch (err) {
-      setGoogleError(err instanceof Error ? err.message : String(err));
+      setGoogleError(describeActionFailure(err));
     } finally {
       setIsAuthorizing(false);
     }
@@ -610,7 +696,7 @@ function ConnectedCalendarsCard() {
       setCaldavUsername("");
       setCaldavPassword("");
     } catch (err) {
-      setCaldavError(err instanceof Error ? err.message : String(err));
+      setCaldavError(describeActionFailure(err));
     }
   };
 
@@ -647,12 +733,16 @@ function ConnectedCalendarsCard() {
                   <Text className="mb-2 text-xs text-amber-900 dark:text-amber-200">
                     {connection.google_account_email} needs to be reconnected before syncing can
                     continue.
-                    {connection.last_sync_error ? ` (${connection.last_sync_error})` : ""}
                   </Text>
+                  {calendarSyncErrorCopy(connection.last_sync_error) ? (
+                    <Text className="mb-2 text-xs text-amber-900 dark:text-amber-200">
+                      {calendarSyncErrorCopy(connection.last_sync_error)}
+                    </Text>
+                  ) : null}
                   <Pressable
                     onPress={runGoogleConnect}
                     disabled={connectingGoogle}
-                    className="rounded bg-amber-200 px-3 py-2 dark:bg-amber-900"
+                    className="min-h-[44px] justify-center rounded bg-amber-200 px-3 py-2 dark:bg-amber-900"
                   >
                     <Text className="text-center text-sm text-amber-900 dark:text-amber-100">
                       {connectingGoogle ? "Reconnecting…" : "Reconnect"}
@@ -673,7 +763,7 @@ function ConnectedCalendarsCard() {
                 <Pressable
                   onPress={runGoogleConnect}
                   disabled={connectingGoogle}
-                  className="rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+                  className="min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
                 >
                   <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
                     {connectingGoogle ? "Reconnecting…" : "Reconnect"}
@@ -687,7 +777,7 @@ function ConnectedCalendarsCard() {
             <Pressable
               onPress={runGoogleConnect}
               disabled={connectingGoogle}
-              className="mb-3 rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+              className="mb-3 min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
             >
               <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
                 {connectingGoogle ? "Connecting…" : "Connect Google Calendar"}
@@ -711,9 +801,14 @@ function ConnectedCalendarsCard() {
             <Text className="mb-2 text-sm text-black dark:text-white">
               CalDAV ({connection.username}) — disconnected
             </Text>
+            {calendarSyncErrorCopy(connection.last_sync_error) ? (
+              <Text className="mb-2 text-xs text-neutral-500">
+                {calendarSyncErrorCopy(connection.last_sync_error)}
+              </Text>
+            ) : null}
             <Pressable
               onPress={() => setShowCaldavForm(true)}
-              className="rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+              className="min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
             >
               <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
                 Reconnect CalDAV
@@ -736,6 +831,7 @@ function ConnectedCalendarsCard() {
               autoCapitalize="none"
               autoCorrect={false}
               placeholder="https://caldav.example.com"
+              placeholderTextColor={placeholderColor}
               className="mb-2 rounded border border-neutral-300 px-2 py-1 text-sm text-black dark:border-neutral-700 dark:text-white"
             />
 
@@ -746,6 +842,7 @@ function ConnectedCalendarsCard() {
               autoCapitalize="none"
               autoCorrect={false}
               placeholder="username"
+              placeholderTextColor={placeholderColor}
               className="mb-2 rounded border border-neutral-300 px-2 py-1 text-sm text-black dark:border-neutral-700 dark:text-white"
             />
 
@@ -756,6 +853,7 @@ function ConnectedCalendarsCard() {
               secureTextEntry
               autoCapitalize="none"
               placeholder="password"
+              placeholderTextColor={placeholderColor}
               className="mb-2 rounded border border-neutral-300 px-2 py-1 text-sm text-black dark:border-neutral-700 dark:text-white"
             />
 
@@ -765,7 +863,7 @@ function ConnectedCalendarsCard() {
               <Pressable
                 onPress={runCaldavConnect}
                 disabled={connectCaldav.isPending}
-                className="flex-1 rounded bg-blue-600 px-3 py-2"
+                className="flex-1 min-h-[44px] justify-center rounded bg-blue-600 px-3 py-2"
               >
                 <Text className="text-center text-sm font-bold text-white">
                   {connectCaldav.isPending ? "Connecting…" : "Connect"}
@@ -776,7 +874,7 @@ function ConnectedCalendarsCard() {
                   setShowCaldavForm(false);
                   setCaldavError(null);
                 }}
-                className="rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+                className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
               >
                 <Text className="text-center text-sm text-black dark:text-white">Cancel</Text>
               </Pressable>
@@ -785,7 +883,7 @@ function ConnectedCalendarsCard() {
         ) : (
           <Pressable
             onPress={() => setShowCaldavForm(true)}
-            className="rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+            className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
           >
             <Text className="text-center text-sm text-black dark:text-white">
               Connect CalDAV Calendar
@@ -942,8 +1040,34 @@ function ConnectedHealthCard() {
 export default function SettingsScreen() {
   const keyboardHeight = useKeyboardHeight();
   const { identity, clearIdentity } = useDeviceIdentity();
-  const { data, isLoading, isError } = useDevices();
+  const { data, isLoading, isError, error } = useDevices();
   const thisDevice = data?.items.find((device) => device.id === identity?.deviceId);
+
+  const forgetThisDevice = async () => {
+    await cancelOwnedReminders();
+    await clearIdentity();
+  };
+
+  const confirmForgetThisDevice = () => {
+    Alert.alert(
+      "Forget this device?",
+      thisDevice?.is_primary_reminder_device
+        ? "This wipes this device's stored credentials and stops its scheduled reminders. It is the PRIMARY reminder device, so no device will schedule reminders until you pair again and choose a new primary."
+        : "This wipes this device's stored credentials and stops its scheduled reminders. You'll need to pair again to reconnect.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Forget", style: "destructive", onPress: () => void forgetThisDevice() },
+      ],
+    );
+  };
+
+  // A 401 here almost always means this device's own bearer token was
+  // revoked server-side -- the exact case DeviceCard's onThisDeviceRevoked
+  // exists to handle, except it never runs because the list itself failed
+  // to load. Naming the cause and surfacing the escape hatch here closes
+  // that dead end.
+  const devicesErrorStatus = error instanceof ApiClientError ? error.status : null;
+  const isRevokedSession = devicesErrorStatus === 401;
 
   return (
     <SafeAreaView className="flex-1 bg-white dark:bg-black">
@@ -963,26 +1087,41 @@ export default function SettingsScreen() {
         <OutboxDiagnostics />
 
         {isLoading ? <Text className="text-neutral-500">Loading…</Text> : null}
-        {isError ? <Text className="text-red-600">Couldn&apos;t load devices.</Text> : null}
+        {isError ? (
+          isRevokedSession ? (
+            <View className="mb-4 rounded border border-amber-500 bg-amber-50 p-3 dark:bg-amber-950">
+              <Text className="mb-1 text-sm font-bold text-amber-900 dark:text-amber-200">
+                This device is no longer registered
+              </Text>
+              <Text className="mb-2 text-xs text-amber-900 dark:text-amber-200">
+                Pair it again to restore reminders and notifications.
+              </Text>
+              <Pressable
+                onPress={confirmForgetThisDevice}
+                className="min-h-[44px] justify-center rounded bg-amber-200 px-3 py-2 dark:bg-amber-900"
+              >
+                <Text className="text-center text-sm text-amber-900 dark:text-amber-100">
+                  Forget this device
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
+            <Text className="text-red-600">Couldn&apos;t load devices.</Text>
+          )
+        ) : null}
 
         {data?.items.map((device) => (
           <DeviceCard
             key={device.id}
             device={device}
             isThisDevice={device.id === identity?.deviceId}
-            onThisDeviceRevoked={async () => {
-              await cancelOwnedReminders();
-              await clearIdentity();
-            }}
+            onThisDeviceRevoked={forgetThisDevice}
           />
         ))}
 
         <Pressable
-          onPress={async () => {
-            await cancelOwnedReminders();
-            await clearIdentity();
-          }}
-          className="mt-4 rounded bg-neutral-200 px-3 py-3 dark:bg-neutral-800"
+          onPress={confirmForgetThisDevice}
+          className="mt-4 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-3 dark:bg-neutral-800"
         >
           <Text className="text-center text-black dark:text-white">Forget this device</Text>
         </Pressable>
