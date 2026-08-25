@@ -104,6 +104,7 @@ export {
   getValueSpec,
   HEALTH_VALUE_SPECS,
   IN_SCOPE_METRICS,
+  OBSERVED_LEAF_METRICS,
   type HealthValueSpec,
   type LeafType,
 } from "./sync/value-spec.js";
@@ -117,6 +118,7 @@ export {
 } from "./sync/extract.js";
 
 export {
+  civilFromInstant,
   collapseSamplesToDays,
   dailyContentInput,
   readSourceIdentity,

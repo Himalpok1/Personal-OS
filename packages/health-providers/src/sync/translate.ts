@@ -525,6 +525,29 @@ export function collapseSamplesToDays(
  *  * attributedLocalDate goes through the ADR-049 helpers and nowhere else, so
  *    the wake-date rule lives in exactly one function repo-wide.
  */
+/**
+ * Civil wall clock for an instant at a known UTC offset.
+ *
+ * Shifting the instant by the offset and then reading its UTC fields yields
+ * exactly the local clock the provider recorded. No timezone database and no
+ * guess is involved -- the offset is a fact the provider supplied.
+ */
+export function civilFromInstant(iso: string, utcOffsetSeconds: number): GoogleCivilDateTime {
+  const shifted = new Date(Date.parse(iso) + utcOffsetSeconds * 1000);
+  return {
+    date: {
+      year: shifted.getUTCFullYear(),
+      month: shifted.getUTCMonth() + 1,
+      day: shifted.getUTCDate(),
+    },
+    time: {
+      hours: shifted.getUTCHours(),
+      minutes: shifted.getUTCMinutes(),
+      seconds: shifted.getUTCSeconds(),
+    },
+  };
+}
+
 export function translateSession(
   record: Record<string, unknown>,
   def: HealthMetricDefinition,
@@ -557,23 +580,6 @@ export function translateSession(
   const endAtIso = normalizeInstant(pickString(interval, RESPONSE_FIELDS.endTime));
   if (endAtIso === null) {
     return fail("session_end_time_missing", `${def.metric}.interval.endTime`, interval["endTime"]);
-  }
-
-  const civilStart = asCivilDateTime(pickObject(interval, RESPONSE_FIELDS.civilStartTime));
-  if (civilStart === null) {
-    return fail(
-      "session_civil_start_missing",
-      `${def.metric}.interval.civilStartTime`,
-      interval["civilStartTime"],
-    );
-  }
-  const civilEnd = asCivilDateTime(pickObject(interval, RESPONSE_FIELDS.civilEndTime));
-  if (civilEnd === null) {
-    return fail(
-      "session_civil_end_missing",
-      `${def.metric}.interval.civilEndTime`,
-      interval["civilEndTime"],
-    );
   }
 
   const rawStartOffset = pickString(interval, RESPONSE_FIELDS.startUtcOffset);
@@ -617,6 +623,27 @@ export function translateSession(
 
   // Axis from the catalog, never a metric-name comparison -- the sweep in
   // apps/worker reads the same field, so the two cannot drift apart.
+  // CIVIL TIMES: taken verbatim when the provider sends them, DERIVED from the
+  // instant plus its explicit offset when it does not.
+  //
+  // Checkpoint 6.3L observed a real sleep record: SessionTimeInterval carries
+  // startTime/startUtcOffset/endTime/endUtcOffset and NO civilStartTime or
+  // civilEndTime. Requiring them rejected the only session this account has.
+  //
+  // Deriving here does NOT violate ADR-048. That decision forbids inventing a
+  // civil date by guessing a timezone -- which is why daily rows take
+  // civilStartTime.date verbatim and store no IANA zone. Here the provider
+  // supplies the instant AND its exact UTC offset as independent facts, so
+  // instant + offset is lossless arithmetic, not an inference. Both inputs are
+  // stored on the row (start_at, start_utc_offset_seconds), so the derivation
+  // is fully re-derivable and reversible.
+  const civilStart =
+    asCivilDateTime(pickObject(interval, RESPONSE_FIELDS.civilStartTime)) ??
+    civilFromInstant(startAtIso, startUtcOffsetSeconds);
+  const civilEnd =
+    asCivilDateTime(pickObject(interval, RESPONSE_FIELDS.civilEndTime)) ??
+    civilFromInstant(endAtIso, endUtcOffsetSeconds);
+
   const attributedLocalDate =
     def.attributionAxis === "civil_end"
       ? attributeSleepLocalDate(civilEnd)
@@ -654,8 +681,19 @@ export function translateSession(
       durationSeconds,
       // Allowlisted scalars only. The raw record never reaches jsonb.
       detail: { source: sourceIdentity, sessionType, sessionSubtype },
-      providerCreatedAt: normalizeInstant(pickString(record, RESPONSE_FIELDS.createTime)),
-      providerUpdatedAt: normalizeInstant(pickString(record, RESPONSE_FIELDS.updateTime)),
+      // CONTAINER FIRST, then the record root. Checkpoint 6.3L observed the
+      // live sleep shape carrying these on the container (`sleep.createTime`),
+      // not at the data-point root, so a root-only lookup silently stored
+      // nulls. They are part of the hashed content (see sessionContentInput),
+      // so losing them would also blunt change detection.
+      providerCreatedAt: normalizeInstant(
+        pickString(container, RESPONSE_FIELDS.createTime) ??
+          pickString(record, RESPONSE_FIELDS.createTime),
+      ),
+      providerUpdatedAt: normalizeInstant(
+        pickString(container, RESPONSE_FIELDS.updateTime) ??
+          pickString(record, RESPONSE_FIELDS.updateTime),
+      ),
     },
   };
 }

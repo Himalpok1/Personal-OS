@@ -132,16 +132,19 @@ async function insertAlertDevice(): Promise<string> {
 }
 
 /** A synthetic steps rollup bucket. int64 leaves arrive as STRINGS. */
+// Leaf names below are the OBSERVED live rollup shapes (Checkpoint 6.3L):
+// dailyRollUp appends an aggregation suffix, and the prefix is the bare unit
+// noun -- `total-calories` has unit `caloriesKcal` but leaf `kcalSum`.
 function steps(localDate: string, count: string) {
-  return rollupBucket(localDate, "steps", { count });
+  return rollupBucket(localDate, "steps", { countSum: count });
 }
 
 function distanceBucket(localDate: string, mm: string) {
-  return rollupBucket(localDate, "distance", { millimeters: mm });
+  return rollupBucket(localDate, "distance", { millimetersSum: mm });
 }
 
 function caloriesBucket(localDate: string, kcal: number) {
-  return rollupBucket(localDate, "totalCalories", { caloriesKcal: kcal });
+  return rollupBucket(localDate, "totalCalories", { kcalSum: kcal });
 }
 
 function civilDateTime(localDate: string, hours: number, minutes = 0): Record<string, unknown> {

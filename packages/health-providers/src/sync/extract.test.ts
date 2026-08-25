@@ -141,12 +141,12 @@ const ZONES = getValueSpec("active-zone-minutes");
 
 describe("extractValue -- validate, never guess", () => {
   it("reads an int64 leaf sent as a string", () => {
-    const out = extractValue({ steps: { count: "8123" } }, STEPS);
+    const out = extractValue({ steps: { countSum: "8123" } }, STEPS);
     expect(out).toEqual({ ok: true, value: "8123", breakdown: null });
   });
 
   it("reads an int64 leaf sent as a whole number", () => {
-    expect(extractValue({ steps: { count: 8123 } }, STEPS)).toMatchObject({
+    expect(extractValue({ steps: { countSum: 8123 } }, STEPS)).toMatchObject({
       ok: true,
       value: "8123",
     });
@@ -154,31 +154,34 @@ describe("extractValue -- validate, never guess", () => {
 
   // ADR-047's structural distinction: a genuine recorded zero is a VALUE.
   it("reads a true zero as a value, not as an absence", () => {
-    expect(extractValue({ steps: { count: 0 } }, STEPS)).toMatchObject({ ok: true, value: "0" });
-    expect(extractValue({ steps: { count: "0" } }, STEPS)).toMatchObject({ ok: true, value: "0" });
+    expect(extractValue({ steps: { countSum: 0 } }, STEPS)).toMatchObject({ ok: true, value: "0" });
+    expect(extractValue({ steps: { countSum: "0" } }, STEPS)).toMatchObject({
+      ok: true,
+      value: "0",
+    });
   });
 
   it("reads a double leaf", () => {
-    expect(extractValue({ totalCalories: { caloriesKcal: 2143.75 } }, KCAL)).toMatchObject({
+    expect(extractValue({ totalCalories: { kcalSum: 2143.75 } }, KCAL)).toMatchObject({
       ok: true,
       value: "2143.75",
     });
   });
 
   it("rejects a fractional value on a leaf declared int64", () => {
-    const out = extractValue({ steps: { count: 8123.5 } }, STEPS);
+    const out = extractValue({ steps: { countSum: 8123.5 } }, STEPS);
     expect(out).toEqual({
       ok: false,
-      rejection: { code: "leaf_type_mismatch", keyPath: "steps.count", sawType: "number" },
+      rejection: { code: "leaf_type_mismatch", keyPath: "steps.countSum", sawType: "number" },
     });
-    expect(extractValue({ steps: { count: "8123.5" } }, STEPS)).toMatchObject({
+    expect(extractValue({ steps: { countSum: "8123.5" } }, STEPS)).toMatchObject({
       ok: false,
       rejection: { code: "leaf_type_mismatch" },
     });
   });
 
   it("accepts an integral value on a leaf declared double", () => {
-    expect(extractValue({ totalCalories: { caloriesKcal: 2000 } }, KCAL)).toMatchObject({
+    expect(extractValue({ totalCalories: { kcalSum: 2000 } }, KCAL)).toMatchObject({
       ok: true,
       value: "2000",
     });
@@ -210,21 +213,21 @@ describe("extractValue -- validate, never guess", () => {
     // `total` is a perfectly good-looking number. Nothing reaches for it.
     expect(extractValue({ steps: { total: 8123 } }, STEPS)).toEqual({
       ok: false,
-      rejection: { code: "leaf_missing", keyPath: "steps.count", sawType: "undefined" },
+      rejection: { code: "leaf_missing", keyPath: "steps.countSum", sawType: "undefined" },
     });
   });
 
   it("rejects a leaf of the wrong JSON kind", () => {
     for (const bad of [{}, [], true, "eight thousand"]) {
-      expect(extractValue({ steps: { count: bad } }, STEPS)).toMatchObject({
+      expect(extractValue({ steps: { countSum: bad } }, STEPS)).toMatchObject({
         ok: false,
-        rejection: { code: "leaf_type_mismatch", keyPath: "steps.count" },
+        rejection: { code: "leaf_type_mismatch", keyPath: "steps.countSum" },
       });
     }
   });
 
   it("never puts a value into a rejection", () => {
-    const out = extractValue({ steps: { count: "SEKRET-VALUE" } }, STEPS);
+    const out = extractValue({ steps: { countSum: "SEKRET-VALUE" } }, STEPS);
     expect(out.ok).toBe(false);
     expect(JSON.stringify(out)).not.toContain("SEKRET-VALUE");
     if (!out.ok) expect(Object.keys(out.rejection).sort()).toEqual(["code", "keyPath", "sawType"]);
@@ -248,13 +251,13 @@ describe("extractValue -- validate, never guess", () => {
 describe("breakdown is an allowlist, never a pass-through", () => {
   it("assembles only allowlisted leaves", () => {
     const out = extractValue(
-      { activeZoneMinutes: { minutes: "42", fatBurnMinutes: "30", cardioMinutes: "12" } },
+      { activeZoneMinutes: { minutesSum: "42", fatBurnMinutesSum: "30", cardioMinutesSum: "12" } },
       ZONES,
     );
     expect(out).toMatchObject({
       ok: true,
       value: "42",
-      breakdown: { fatBurnMinutes: "30", cardioMinutes: "12" },
+      breakdown: { fatBurnMinutesSum: "30", cardioMinutesSum: "12" },
     });
   });
 
@@ -265,8 +268,8 @@ describe("breakdown is an allowlist, never a pass-through", () => {
     const out = extractValue(
       {
         activeZoneMinutes: {
-          minutes: "42",
-          fatBurnMinutes: "30",
+          minutesSum: "42",
+          fatBurnMinutesSum: "30",
           access_token: "ya29.SHOULD-NEVER-BE-STORED",
           refresh_token: "1//SHOULD-NEVER-BE-STORED",
           nested: { client_secret: "SHOULD-NEVER-BE-STORED" },
@@ -276,7 +279,7 @@ describe("breakdown is an allowlist, never a pass-through", () => {
     );
     expect(out.ok).toBe(true);
     if (!out.ok) return;
-    expect(Object.keys(out.breakdown as object)).toEqual(["fatBurnMinutes"]);
+    expect(Object.keys(out.breakdown as object)).toEqual(["fatBurnMinutesSum"]);
     const serialized = JSON.stringify(out);
     expect(serialized).not.toContain("access_token");
     expect(serialized).not.toContain("refresh_token");
@@ -285,32 +288,35 @@ describe("breakdown is an allowlist, never a pass-through", () => {
   });
 
   it("also drops an unexpected field on a metric with no breakdown allowlist", () => {
-    const out = extractValue({ steps: { count: "10", access_token: "ya29.NOPE" } }, STEPS);
+    const out = extractValue({ steps: { countSum: "10", access_token: "ya29.NOPE" } }, STEPS);
     expect(out).toMatchObject({ ok: true, value: "10", breakdown: null });
     expect(JSON.stringify(out)).not.toContain("ya29");
   });
 
   it("omits an absent allowlisted leaf rather than rejecting the record", () => {
-    const out = extractValue({ activeZoneMinutes: { minutes: "42" } }, ZONES);
+    const out = extractValue({ activeZoneMinutes: { minutesSum: "42" } }, ZONES);
     // A missing zone split must not cost the whole day's total.
     expect(out).toMatchObject({ ok: true, value: "42", breakdown: null });
   });
 
   it("rejects an allowlisted leaf that is present with the wrong type", () => {
     expect(
-      extractValue({ activeZoneMinutes: { minutes: "42", peakMinutes: {} } }, ZONES),
+      extractValue({ activeZoneMinutes: { minutesSum: "42", peakMinutesSum: {} } }, ZONES),
     ).toMatchObject({
       ok: false,
       rejection: {
         code: "breakdown_leaf_type_mismatch",
-        keyPath: "activeZoneMinutes.peakMinutes",
+        keyPath: "activeZoneMinutes.peakMinutesSum",
         sawType: "object",
       },
     });
   });
 
   it("canonicalizes breakdown leaves the same way as the value", () => {
-    const out = extractValue({ activeZoneMinutes: { minutes: "42", cardioMinutes: 12 } }, ZONES);
-    expect(out).toMatchObject({ ok: true, breakdown: { cardioMinutes: "12" } });
+    const out = extractValue(
+      { activeZoneMinutes: { minutesSum: "42", cardioMinutesSum: 12 } },
+      ZONES,
+    );
+    expect(out).toMatchObject({ ok: true, breakdown: { cardioMinutesSum: "12" } });
   });
 });

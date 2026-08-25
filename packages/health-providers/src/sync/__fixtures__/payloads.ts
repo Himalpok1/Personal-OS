@@ -29,11 +29,14 @@ export function civilDateTime(
 }
 
 /** A dailyRollUp bucket. int64 leaves arrive as STRINGS, per protobuf JSON. */
+// Leaf names below are the OBSERVED live rollup shapes (Checkpoint 6.3L):
+// dailyRollUp appends an aggregation suffix, and the prefix is the bare unit
+// noun -- `total-calories` has unit `caloriesKcal` but leaf `kcalSum`.
 export function stepsBucket(localDate: string, count: string): Record<string, unknown> {
   return {
     civilStartTime: civilDateTime(localDate),
     civilEndTime: civilDateTime(localDate, 24),
-    steps: { count },
+    steps: { countSum: count },
   };
 }
 
@@ -42,7 +45,7 @@ export function caloriesBucket(localDate: string, kcal: number): Record<string, 
   return {
     civilStartTime: civilDateTime(localDate),
     civilEndTime: civilDateTime(localDate, 24),
-    totalCalories: { caloriesKcal: kcal },
+    totalCalories: { kcalSum: kcal },
   };
 }
 
@@ -55,7 +58,7 @@ export function zoneMinutesBucket(
   return {
     civilStartTime: civilDateTime(localDate),
     civilEndTime: civilDateTime(localDate, 24),
-    activeZoneMinutes: { minutes: total, ...zones },
+    activeZoneMinutes: { minutesSum: total, ...zones },
   };
 }
 

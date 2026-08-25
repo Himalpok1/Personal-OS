@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { getHealthMetric, HEALTH_METRICS } from "../google-health-catalog.js";
-import { camelCase, getValueSpec, HEALTH_VALUE_SPECS, IN_SCOPE_METRICS } from "./value-spec.js";
+import { extractValue } from "./extract.js";
+import {
+  camelCase,
+  getValueSpec,
+  HEALTH_VALUE_SPECS,
+  IN_SCOPE_METRICS,
+  OBSERVED_LEAF_METRICS,
+} from "./value-spec.js";
 
 describe("coverage", () => {
   // THE LOAD-BEARING TEST. Adding a metric to the catalog without deciding its
@@ -58,11 +65,26 @@ describe("derivation", () => {
     }
   });
 
-  // ADR-047: units are baked into field names, which is why no unit column
-  // exists. Deriving the leaf from the catalog unit keeps the two in lockstep.
-  it("derives the leaf from the catalog unit for every metric", () => {
+  // This assertion previously read "derives the leaf from the catalog unit for
+  // every metric", on the ADR-047 reasoning that units are baked into field
+  // names. The Checkpoint 6.3L live proof disproved it: every record of all
+  // four metrics with real data was rejected. dailyRollUp returns a ROLLUP and
+  // appends Sum/Avg/Min/Max, and the prefix is the bare unit noun rather than
+  // the catalog's unit string (`total-calories` has unit `caloriesKcal` but
+  // leaf `kcalSum`). The leaf is declared per metric now; the CONTAINER
+  // derivation was correct and still holds.
+  it("derives the container from the dataType for every metric", () => {
     for (const metric of IN_SCOPE_METRICS) {
-      expect(getValueSpec(metric).leaf).toBe(getHealthMetric(metric).unit);
+      expect(getValueSpec(metric).container).toBe(
+        camelCase(getHealthMetric(metric).googleDataType),
+      );
+    }
+  });
+
+  it("a rollup leaf is never the bare catalog unit", () => {
+    for (const metric of IN_SCOPE_METRICS) {
+      if (getHealthMetric(metric).mode !== "daily_rollup") continue;
+      expect(getValueSpec(metric).leaf).not.toBe(getHealthMetric(metric).unit);
     }
   });
 
@@ -73,15 +95,16 @@ describe("derivation", () => {
   });
 
   it("pins the spot-checked declarations", () => {
+    // The four rollup shapes below are OBSERVED, not inferred (6.3L).
     expect(getValueSpec("steps")).toMatchObject({
       container: "steps",
-      leaf: "count",
+      leaf: "countSum",
       leafType: "int64",
     });
-    expect(getValueSpec("distance")).toMatchObject({ leaf: "millimeters", leafType: "int64" });
+    expect(getValueSpec("distance")).toMatchObject({ leaf: "millimetersSum", leafType: "int64" });
     expect(getValueSpec("total-calories")).toMatchObject({
       container: "totalCalories",
-      leaf: "caloriesKcal",
+      leaf: "kcalSum",
       leafType: "double",
     });
     expect(getValueSpec("weight")).toMatchObject({ leaf: "weightGrams", leafType: "int64" });
@@ -99,10 +122,14 @@ describe("breakdown allowlists", () => {
   });
 
   it("declares the zone split for active-zone-minutes", () => {
+    // UNVERIFIED: this account has never returned active-zone-minutes data, so
+    // the aggregation suffix follows the observed rollup pattern rather than an
+    // observation. A wrong declaration fails the run; it cannot store a wrong
+    // number.
     expect(getValueSpec("active-zone-minutes").breakdownLeaves.map((l) => l.name)).toEqual([
-      "fatBurnMinutes",
-      "cardioMinutes",
-      "peakMinutes",
+      "fatBurnMinutesSum",
+      "cardioMinutesSum",
+      "peakMinutesSum",
     ]);
   });
 
@@ -111,5 +138,92 @@ describe("breakdown allowlists", () => {
       const spec = getValueSpec(metric);
       expect(spec.breakdownLeaves.map((l) => l.name)).not.toContain(spec.leaf);
     }
+  });
+});
+
+describe("rollup leaves carry an aggregation suffix (Checkpoint 6.3L live finding)", () => {
+  // An earlier draft derived the leaf from the catalog `unit`. The live proof
+  // rejected every record of all four metrics that actually have data:
+  // dailyRollUp returns a ROLLUP, so it appends Sum/Avg/Min/Max, and the prefix
+  // is the bare unit noun rather than the catalog's unit string.
+  //
+  // These are SYNTHETIC records built from the observed SHAPE. No real payload
+  // and no real value was copied into this repository.
+  it("uses the observed leaf for each metric that has live data", () => {
+    expect(getValueSpec("steps")).toMatchObject({ container: "steps", leaf: "countSum" });
+    expect(getValueSpec("distance")).toMatchObject({
+      container: "distance",
+      leaf: "millimetersSum",
+    });
+    expect(getValueSpec("floors")).toMatchObject({ container: "floors", leaf: "countSum" });
+    expect(getValueSpec("total-calories")).toMatchObject({
+      container: "totalCalories",
+      leaf: "kcalSum",
+    });
+  });
+
+  it("total-calories proves the leaf is NOT the catalog unit", () => {
+    // unit is `caloriesKcal`; the leaf is `kcalSum`. A derivation from `unit`
+    // cannot produce this, which is why the leaf is declared.
+    expect(getHealthMetric("total-calories").unit).toBe("caloriesKcal");
+    expect(getValueSpec("total-calories").leaf).toBe("kcalSum");
+  });
+
+  it("heart-rate rolls up as an AVERAGE, keeping min and max in the breakdown", () => {
+    const spec = getValueSpec("heart-rate");
+    expect(spec).toMatchObject({ container: "heartRate", leaf: "beatsPerMinuteAvg" });
+    expect(spec.breakdownLeaves.map((l) => l.name)).toEqual([
+      "beatsPerMinuteMin",
+      "beatsPerMinuteMax",
+    ]);
+  });
+
+  it("no rollup metric declares a bare unit as its leaf", () => {
+    for (const metric of IN_SCOPE_METRICS) {
+      const def = getHealthMetric(metric);
+      if (def.mode !== "daily_rollup") continue;
+      expect(getValueSpec(metric).leaf).not.toBe(def.unit);
+      expect(getValueSpec(metric).leaf).toMatch(/(Sum|Avg|Min|Max)$/);
+    }
+  });
+
+  it("records which leaves were actually observed, and which remain declarations", () => {
+    // Honest epistemic status: five observed live, the rest documentation-derived.
+    expect([...OBSERVED_LEAF_METRICS].sort()).toEqual([
+      "distance",
+      "floors",
+      "heart-rate",
+      "steps",
+      "total-calories",
+    ]);
+  });
+});
+
+describe("extractValue against the observed rollup shapes (synthetic)", () => {
+  it("accepts an int64-as-string countSum, as steps and floors return", () => {
+    const r = extractValue({ steps: { countSum: "8421" } }, getValueSpec("steps"));
+    expect(r).toEqual({ ok: true, value: "8421", breakdown: null });
+  });
+
+  it("accepts a double kcalSum, as total-calories returns", () => {
+    const r = extractValue({ totalCalories: { kcalSum: 2130.5 } }, getValueSpec("total-calories"));
+    expect(r).toMatchObject({ ok: true, value: "2130.5" });
+  });
+
+  it("keeps heart-rate min and max in the allowlisted breakdown", () => {
+    const r = extractValue(
+      { heartRate: { beatsPerMinuteAvg: 68, beatsPerMinuteMin: 51, beatsPerMinuteMax: 142 } },
+      getValueSpec("heart-rate"),
+    );
+    expect(r).toMatchObject({
+      ok: true,
+      value: "68",
+      breakdown: { beatsPerMinuteMin: "51", beatsPerMinuteMax: "142" },
+    });
+  });
+
+  it("still REJECTS the pre-fix shape, so the regression cannot return", () => {
+    const r = extractValue({ steps: { count: "8421" } }, getValueSpec("steps"));
+    expect(r.ok).toBe(false);
   });
 });

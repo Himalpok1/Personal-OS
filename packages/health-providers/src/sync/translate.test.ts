@@ -11,6 +11,7 @@ import {
   zoneMinutesBucket,
 } from "./__fixtures__/payloads.js";
 import {
+  civilFromInstant,
   collapseSamplesToDays,
   dailyContentInput,
   sessionContentInput,
@@ -90,26 +91,26 @@ describe("translateRollupBucket", () => {
   it("carries an allowlisted breakdown", () => {
     const row = unwrap(
       translateRollupBucket(
-        zoneMinutesBucket("2026-08-18", "42", { fatBurnMinutes: "30", peakMinutes: "2" }),
+        zoneMinutesBucket("2026-08-18", "42", { fatBurnMinutesSum: "30", peakMinutesSum: "2" }),
         ZONES,
         getValueSpec("active-zone-minutes"),
       ),
     );
-    expect(row.breakdown).toEqual({ fatBurnMinutes: "30", peakMinutes: "2" });
+    expect(row.breakdown).toEqual({ fatBurnMinutesSum: "30", peakMinutesSum: "2" });
   });
 
   it("rejects a bucket with no civil start date", () => {
     const spec = getValueSpec("steps");
-    expect(translateRollupBucket({ steps: { count: "1" } }, STEPS, spec)).toMatchObject({
+    expect(translateRollupBucket({ steps: { countSum: "1" } }, STEPS, spec)).toMatchObject({
       ok: false,
       rejection: { code: "rollup_civil_start_missing", keyPath: "civilStartTime.date" },
     });
     expect(
-      translateRollupBucket({ civilStartTime: {}, steps: { count: "1" } }, STEPS, spec),
+      translateRollupBucket({ civilStartTime: {}, steps: { countSum: "1" } }, STEPS, spec),
     ).toMatchObject({ ok: false, rejection: { code: "rollup_civil_start_missing" } });
     expect(
       translateRollupBucket(
-        { civilStartTime: { date: { year: 2026, month: 13, day: 1 } }, steps: { count: "1" } },
+        { civilStartTime: { date: { year: 2026, month: 13, day: 1 } }, steps: { countSum: "1" } },
         STEPS,
         spec,
       ),
@@ -624,17 +625,32 @@ describe("translateSession", () => {
     ).toMatchObject({ ok: false, rejection: { code: "session_utc_offset_invalid" } });
   });
 
-  it("rejects a session missing its civil bounds", () => {
+  // This previously asserted that a session missing its civil bounds is
+  // REJECTED. The Checkpoint 6.3L live proof disproved the premise: the one
+  // real sleep record on this account carries startTime/startUtcOffset/
+  // endTime/endUtcOffset and no civil times at all, so rejecting would have
+  // discarded it. Instant + explicit offset is lossless arithmetic, not the
+  // timezone guess ADR-048 forbids, and both inputs are stored on the row.
+  it("derives the civil bounds when the provider omits them", () => {
     const record = sleepSession(NIGHT);
     const interval = (record["sleep"] as Record<string, unknown>)["interval"] as Record<
       string,
       unknown
     >;
+    const withCivil = translateSession(sleepSession(NIGHT), SLEEP);
     delete interval["civilEndTime"];
-    expect(translateSession(record, SLEEP)).toMatchObject({
-      ok: false,
-      rejection: { code: "session_civil_end_missing" },
-    });
+    delete interval["civilStartTime"];
+    const derived = translateSession(record, SLEEP);
+
+    expect(derived.ok).toBe(true);
+    expect(withCivil.ok).toBe(true);
+    if (!derived.ok || !withCivil.ok) return;
+    // The derivation reproduces exactly what the provider would have sent.
+    expect(derived.row.attributedLocalDate).toBe(withCivil.row.attributedLocalDate);
+    expect(derived.row.civilStartLocal.toISOString()).toBe(
+      withCivil.row.civilStartLocal.toISOString(),
+    );
+    expect(derived.row.civilEndLocal.toISOString()).toBe(withCivil.row.civilEndLocal.toISOString());
   });
 
   it("rejects a session with no container or no interval", () => {
@@ -830,11 +846,163 @@ describe("content hashing input", () => {
     );
     const b = unwrap(
       translateRollupBucket(
-        { ...caloriesBucket("2026-08-18", 0), totalCalories: { caloriesKcal: "2143.50" } },
+        { ...caloriesBucket("2026-08-18", 0), totalCalories: { kcalSum: "2143.50" } },
         CALORIES,
         getValueSpec("total-calories"),
       ),
     );
     expect(contentHash(dailyContentInput(a))).toBe(contentHash(dailyContentInput(b)));
+  });
+});
+
+describe("sessions without civil times (Checkpoint 6.3L live finding)", () => {
+  // The one real sleep record this account holds carries
+  // interval.startTime / startUtcOffset / endTime / endUtcOffset and NO
+  // civilStartTime or civilEndTime. Requiring them rejected it outright.
+  //
+  // SYNTHETIC record built from the observed SHAPE only.
+  const SLEEP = getHealthMetric("sleep");
+
+  function liveShapedSleep(): Record<string, unknown> {
+    return {
+      name: "users/me/dataTypes/sleep/dataPoints/synthetic-1",
+      dataSource: { recordingMethod: "AUTOMATICALLY_RECORDED", platform: "ANDROID" },
+      sleep: {
+        interval: {
+          startTime: "2026-04-29T04:12:00Z",
+          startUtcOffset: "-18000s",
+          endTime: "2026-04-29T12:40:00Z",
+          endUtcOffset: "-18000s",
+        },
+        type: "SLEEP",
+        createTime: "2026-04-29T13:00:00Z",
+        updateTime: "2026-04-29T13:00:00Z",
+      },
+    };
+  }
+
+  it("derives the civil clock from the instant and its explicit offset", () => {
+    const r = translateSession(liveShapedSleep(), SLEEP);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // 04:12Z at -05:00 is 23:12 on the PREVIOUS local day; 12:40Z is 07:40 local.
+    expect(r.row.attributedLocalDate).toBe("2026-04-29");
+    expect(r.row.startUtcOffsetSeconds).toBe(-18000);
+    expect(r.row.endUtcOffsetSeconds).toBe(-18000);
+  });
+
+  it("attributes the session to its WAKE date, which differs from its start date", () => {
+    const r = translateSession(liveShapedSleep(), SLEEP);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // Started 2026-04-28 local, woke 2026-04-29 local (ADR-049).
+    expect(r.row.civilStartLocal.toISOString().slice(0, 10)).toBe("2026-04-28");
+    expect(r.row.attributedLocalDate).toBe("2026-04-29");
+  });
+
+  it("uses the provider's civil times verbatim when they ARE present", () => {
+    const rec = liveShapedSleep();
+    const interval = (rec["sleep"] as Record<string, unknown>)["interval"] as Record<
+      string,
+      unknown
+    >;
+    interval["civilStartTime"] = { date: { year: 2030, month: 1, day: 1 }, time: { hours: 1 } };
+    interval["civilEndTime"] = { date: { year: 2030, month: 1, day: 2 }, time: { hours: 2 } };
+    const r = translateSession(rec, SLEEP);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // Verbatim wins over derivation.
+    expect(r.row.attributedLocalDate).toBe("2030-01-02");
+  });
+
+  it("takes the resource name as a STABLE key, so tombstoning is reachable", () => {
+    const r = translateSession(liveShapedSleep(), SLEEP);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.row.externalKeySource).toBe("data_point_name");
+  });
+
+  it("still rejects when an offset is absent -- zero is never assumed", () => {
+    const rec = liveShapedSleep();
+    const interval = (rec["sleep"] as Record<string, unknown>)["interval"] as Record<
+      string,
+      unknown
+    >;
+    delete interval["startUtcOffset"];
+    const r = translateSession(rec, SLEEP);
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("civilFromInstant", () => {
+  it("shifts an instant by its offset and reads the local wall clock", () => {
+    expect(civilFromInstant("2026-08-24T05:00:00Z", -18000)).toEqual({
+      date: { year: 2026, month: 8, day: 24 },
+      time: { hours: 0, minutes: 0, seconds: 0 },
+    });
+  });
+
+  it("handles a positive offset that rolls the date forward", () => {
+    expect(civilFromInstant("2026-08-24T23:30:00Z", 12 * 3600).date).toEqual({
+      year: 2026,
+      month: 8,
+      day: 25,
+    });
+  });
+
+  it("handles a 45-minute offset (Kathmandu +05:45)", () => {
+    expect(civilFromInstant("2026-08-24T00:00:00Z", 5 * 3600 + 45 * 60).time).toMatchObject({
+      hours: 5,
+      minutes: 45,
+    });
+  });
+});
+
+describe("provider timestamps live on the container (Checkpoint 6.3L)", () => {
+  const SLEEP2 = getHealthMetric("sleep");
+  function rec(where: "container" | "root"): Record<string, unknown> {
+    const sleep: Record<string, unknown> = {
+      interval: {
+        startTime: "2026-04-29T04:12:00Z",
+        startUtcOffset: "-18000s",
+        endTime: "2026-04-29T12:40:00Z",
+        endUtcOffset: "-18000s",
+      },
+    };
+    const base: Record<string, unknown> = { name: "users/me/x/1", sleep };
+    if (where === "container") {
+      sleep["createTime"] = "2026-04-29T13:00:00Z";
+      sleep["updateTime"] = "2026-04-30T09:00:00Z";
+    } else {
+      base["createTime"] = "2026-04-29T13:00:00Z";
+      base["updateTime"] = "2026-04-30T09:00:00Z";
+    }
+    return base;
+  }
+
+  it("reads them from the container, which is where the live payload puts them", () => {
+    const r = translateSession(rec("container"), SLEEP2);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.row.providerUpdatedAt).toBe("2026-04-30T09:00:00.000Z");
+  });
+
+  it("still reads them from the record root when they appear there", () => {
+    const r = translateSession(rec("root"), SLEEP2);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.row.providerUpdatedAt).toBe("2026-04-30T09:00:00.000Z");
+  });
+
+  it("keeps them in the hashed content, so an updateTime-only change is detected", () => {
+    const a = translateSession(rec("container"), SLEEP2);
+    const bRec = rec("container");
+    (bRec["sleep"] as Record<string, unknown>)["updateTime"] = "2026-05-01T09:00:00Z";
+    const b = translateSession(bRec, SLEEP2);
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(JSON.stringify(sessionContentInput(a.row))).not.toBe(
+      JSON.stringify(sessionContentInput(b.row)),
+    );
   });
 });

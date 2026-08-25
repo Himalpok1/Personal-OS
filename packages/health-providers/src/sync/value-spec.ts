@@ -77,67 +77,116 @@ export function camelCase(kebab: string): string {
 }
 
 /**
- * The declared JSON type of each metric's value leaf.
+ * Per-metric leaf declaration.
  *
- * Hand-maintained ON PURPOSE, and the reason adding a metric cannot silently
- * ship: HEALTH_VALUE_SPECS is built from THIS record's keys, and a test asserts
- * those keys equal the in-scope catalog metrics exactly. Add a metric to the
- * catalog without deciding its leaf type here and the suite fails.
+ * THE LEAF IS DECLARED, NOT DERIVED -- and Checkpoint 6.3L is why.
  *
- * int64 for counts, whole durations and integer metric units; double for
- * anything the documentation expresses as a real number (kcal, percentages,
- * rates per minute, milliseconds, VO2 max, temperature deltas).
+ * An earlier draft derived the leaf from the catalog `unit`, reasoning from
+ * ADR-047 that "the API bakes the unit into the field name". The live proof
+ * rejected every record of all four metrics that actually have data. The real
+ * shapes, observed against the development account:
+ *
+ *     steps          -> steps.countSum                (string / int64)
+ *     distance       -> distance.millimetersSum       (string / int64)
+ *     floors         -> floors.countSum               (string / int64)
+ *     total-calories -> totalCalories.kcalSum         (number / double)
+ *     heart-rate     -> heartRate.beatsPerMinuteAvg   (number, + Min and Max)
+ *
+ * Two things the unit-derivation could never have produced. `dailyRollUp`
+ * appends an AGGREGATION SUFFIX (`Sum`, `Avg`, `Min`, `Max`) -- it returns a
+ * rollup, not a raw reading -- and the prefix is the bare unit noun, not the
+ * catalog's unit string: `total-calories` has unit `caloriesKcal` but its leaf
+ * is `kcalSum`. The container derivation (camelCase of the dataType) WAS right
+ * and is unchanged.
+ *
+ * `observed` records epistemic status honestly, because it is the difference
+ * between a fact and a guess. A `false` entry is a documentation-derived
+ * DECLARATION for a stream this account has never returned data for; the
+ * validator still rejects loudly if it is wrong, so a bad declaration fails a
+ * run rather than storing a wrong number. No fixture is fabricated for one.
  */
-const LEAF_TYPES: Readonly<Record<string, LeafType>> = {
+interface LeafDecl {
+  readonly leaf: string;
+  readonly leafType: LeafType;
+  readonly breakdown?: readonly { readonly name: string; readonly type: LeafType }[];
+  /** True only where the shape was seen on a live response. */
+  readonly observed: boolean;
+}
+
+const LEAF_DECLS: Readonly<Record<string, LeafDecl>> = {
   // --- Activity, dailyRollUp ------------------------------------------------
-  steps: "int64",
-  distance: "int64", // millimeters
-  "active-zone-minutes": "int64",
-  "active-energy-burned": "double", // caloriesKcal
-  "total-calories": "double", // caloriesKcal
-  "sedentary-period": "int64", // seconds
-  floors: "int64",
-  "heart-rate": "double", // beatsPerMinute (daily rollup of an average)
+  // OBSERVED 2026-08-25 (Checkpoint 6.3L).
+  steps: { leaf: "countSum", leafType: "int64", observed: true },
+  distance: { leaf: "millimetersSum", leafType: "int64", observed: true },
+  floors: { leaf: "countSum", leafType: "int64", observed: true },
+  "total-calories": { leaf: "kcalSum", leafType: "double", observed: true },
+
+  // UNVERIFIED -- this account has produced no data for these, so the leaf
+  // follows the observed `<unit noun><Aggregation>` pattern but has never been
+  // seen. A wrong guess fails the run; it cannot store a wrong number.
+  "active-zone-minutes": {
+    leaf: "minutesSum",
+    leafType: "int64",
+    breakdown: [
+      { name: "fatBurnMinutesSum", type: "int64" },
+      { name: "cardioMinutesSum", type: "int64" },
+      { name: "peakMinutesSum", type: "int64" },
+    ],
+    observed: false,
+  },
+  "active-energy-burned": { leaf: "kcalSum", leafType: "double", observed: false },
+  "sedentary-period": { leaf: "secondsSum", leafType: "int64", observed: false },
+
+  // OBSERVED 2026-08-25 against the historical window (F5 recorded 2026-04-29
+  // as the day with the most heart rate). A rollup of heart rate is an
+  // AVERAGE, not a sum -- summing BPM would be meaningless -- and Min/Max ride
+  // along, so they go to the allowlisted breakdown rather than being dropped.
+  "heart-rate": {
+    leaf: "beatsPerMinuteAvg",
+    leafType: "double",
+    breakdown: [
+      { name: "beatsPerMinuteMin", type: "double" },
+      { name: "beatsPerMinuteMax", type: "double" },
+    ],
+    observed: true,
+  },
 
   // --- Precomputed daily vitals, list --------------------------------------
-  "daily-resting-heart-rate": "double",
-  "daily-heart-rate-variability": "double", // RMSSD milliseconds
-  "daily-oxygen-saturation": "double", // percentage
-  "daily-respiratory-rate": "double", // breathsPerMinute
-  "daily-sleep-temperature-derivations": "double", // celsiusDelta, signed
-  "daily-vo2-max": "double",
+  // UNVERIFIED. These are `list` records, not rollups, so they should carry the
+  // bare unit field with NO aggregation suffix -- but none has ever been seen.
+  "daily-resting-heart-rate": { leaf: "beatsPerMinute", leafType: "double", observed: false },
+  "daily-heart-rate-variability": {
+    leaf: "rootMeanSquareOfSuccessiveDifferencesMilliseconds",
+    leafType: "double",
+    observed: false,
+  },
+  "daily-oxygen-saturation": { leaf: "percentage", leafType: "double", observed: false },
+  "daily-respiratory-rate": { leaf: "breathsPerMinute", leafType: "double", observed: false },
+  "daily-sleep-temperature-derivations": {
+    leaf: "celsiusDelta",
+    leafType: "double",
+    observed: false,
+  },
+  "daily-vo2-max": { leaf: "vo2Max", leafType: "double", observed: false },
 
   // --- Body samples, list ---------------------------------------------------
-  weight: "int64", // weightGrams -- see the provenance note above
-  "body-fat": "double", // percentage
+  // UNVERIFIED.
+  weight: { leaf: "weightGrams", leafType: "int64", observed: false },
+  "body-fat": { leaf: "percentage", leafType: "double", observed: false },
 
   // --- Sessions, list -------------------------------------------------------
   // Sessions do not go through extractValue at all: their value is a duration
   // derived from the physical interval, not a numeric leaf. A spec exists so
   // the coverage test is a genuine 1:1 with the in-scope catalog rather than a
-  // list with two documented holes in it, and so a session's own `seconds` leaf
-  // has a declared type if a caller ever wants it.
-  sleep: "int64", // seconds
-  exercise: "int64", // seconds
+  // list with two documented holes in it.
+  sleep: { leaf: "seconds", leafType: "int64", observed: false },
+  exercise: { leaf: "seconds", leafType: "int64", observed: false },
 };
 
-/**
- * Extra leaves permitted into a row's `breakdown`.
- *
- * Strictly an allowlist. `breakdown` is never the raw payload, never a
- * pass-through, and never a place an unexpected provider field can arrive --
- * which is what stops a future response gaining a credential-shaped field and
- * having it land in jsonb.
- */
-const BREAKDOWN_LEAVES: Readonly<
-  Record<string, readonly { readonly name: string; readonly type: LeafType }[]>
-> = {
-  "active-zone-minutes": [
-    { name: "fatBurnMinutes", type: "int64" },
-    { name: "cardioMinutes", type: "int64" },
-    { name: "peakMinutes", type: "int64" },
-  ],
-};
+/** Metrics whose leaf shape has actually been seen on a live response. */
+export const OBSERVED_LEAF_METRICS: readonly string[] = Object.entries(LEAF_DECLS)
+  .filter(([, d]) => d.observed)
+  .map(([m]) => m);
 
 /**
  * Metrics this module covers: every catalog entry EXCEPT the one
@@ -151,25 +200,23 @@ export const IN_SCOPE_METRICS: readonly string[] = HEALTH_METRICS.filter(
   (m) => HEALTH_METRIC_CATALOG[m]!.mode !== "sample_reconcile",
 );
 
-function buildSpec(def: HealthMetricDefinition, leafType: LeafType): HealthValueSpec {
+function buildSpec(def: HealthMetricDefinition, decl: LeafDecl): HealthValueSpec {
   return {
+    // The container derivation was correct and is unchanged: camelCase of the
+    // kebab-case dataType (`total-calories` -> `totalCalories`).
     container: camelCase(def.googleDataType),
-    // ADR-047: the API bakes the unit into the field name, which is exactly why
-    // no unit column exists anywhere in the schema. Every catalog `unit` is
-    // already a valid lowerCamelCase protobuf field name, so the leaf IS the
-    // unit -- deriving it keeps the two from ever drifting apart.
-    leaf: def.unit,
-    leafType,
-    breakdownLeaves: BREAKDOWN_LEAVES[def.metric] ?? [],
+    leaf: decl.leaf,
+    leafType: decl.leafType,
+    breakdownLeaves: decl.breakdown ?? [],
   };
 }
 
 export const HEALTH_VALUE_SPECS: Readonly<Record<string, HealthValueSpec>> = Object.freeze(
   Object.fromEntries(
-    Object.entries(LEAF_TYPES).map(([metric, leafType]) => {
+    Object.entries(LEAF_DECLS).map(([metric, decl]) => {
       const def = HEALTH_METRIC_CATALOG[metric];
       if (!def) throw new Error(`value spec declared for unknown metric "${metric}"`);
-      return [metric, Object.freeze(buildSpec(def, leafType))];
+      return [metric, Object.freeze(buildSpec(def, decl))];
     }),
   ),
 );
