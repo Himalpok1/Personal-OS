@@ -82,3 +82,14 @@ export {
   type HealthCapability,
   type ProviderFault,
 } from "./sync/capability.js";
+
+export {
+  createHealthLimiter,
+  fullJitterDelayMs,
+  DEFAULT_LIMITER_OPTIONS,
+  HealthPassBudgetExhaustedError,
+  type HealthLimiter,
+  type LimiterDeps,
+  type LimiterOptions,
+  type LimiterStats,
+} from "./sync/limiter.js";
