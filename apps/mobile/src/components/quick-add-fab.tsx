@@ -175,14 +175,18 @@ export function QuickAddFab() {
               <View className="mt-3 flex-row justify-end gap-2">
                 <Pressable
                   onPress={() => setOpen(false)}
-                  className="rounded-lg px-4 py-2"
+                  className="min-h-[44px] justify-center rounded-lg px-4 py-2"
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel this capture"
                   disabled={capture.isPending}
                 >
                   <Text className="text-neutral-500">Cancel</Text>
                 </Pressable>
                 <Pressable
                   onPress={submit}
-                  className="rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+                  className="min-h-[44px] justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+                  accessibilityRole="button"
+                  accessibilityLabel="Capture this note"
                   disabled={capture.isPending || text.trim().length === 0}
                 >
                   <Text className="font-semibold text-white">
