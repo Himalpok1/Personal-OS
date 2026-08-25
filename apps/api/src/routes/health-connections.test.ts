@@ -806,6 +806,72 @@ describe("backfill routes", () => {
     expect(row.backfillStatus).toBe("running");
   });
 
+  it("409s a second start while a backfill is already running", async () => {
+    // The guard must be reachable. An earlier draft pre-cleared EVERY
+    // non-idle status to idle, which made backfill_already_running dead code
+    // -- and because an in-flight chunk commits from state snapshotted before
+    // its fetch, the "restart" would have been silently overwritten by the old
+    // target and cursor after returning 200.
+    const id = await connectedId();
+    await app.db
+      .update(healthMetricStreams)
+      .set({ earliestVerifiedDate: "2026-07-01" })
+      .where(
+        and(eq(healthMetricStreams.connectionId, id), eq(healthMetricStreams.metric, "steps")),
+      );
+    const first = await app.inject({
+      method: "POST",
+      url: `/health-connections/${id}/streams/steps/backfill`,
+      payload: { target_date: "2026-01-01" },
+    });
+    expect(first.statusCode).toBe(200);
+
+    const second = await app.inject({
+      method: "POST",
+      url: `/health-connections/${id}/streams/steps/backfill`,
+      payload: { target_date: "2025-01-01" },
+    });
+    expect(second.statusCode).toBe(409);
+    expect(second.json<{ error: string }>().error).toBe("backfill_already_running");
+
+    const [row] = await app.db
+      .select()
+      .from(healthMetricStreams)
+      .where(
+        and(eq(healthMetricStreams.connectionId, id), eq(healthMetricStreams.metric, "steps")),
+      );
+    expect(row!.backfillTargetDate).toBe("2026-01-01");
+  });
+
+  it("restarts a SETTLED backfill with a new target", async () => {
+    const id = await connectedId();
+    await app.db
+      .update(healthMetricStreams)
+      .set({
+        earliestVerifiedDate: "2026-07-01",
+        backfillStatus: "complete",
+        backfillTargetDate: "2026-06-01",
+        backfillCursorDate: "2026-06-01",
+      })
+      .where(
+        and(eq(healthMetricStreams.connectionId, id), eq(healthMetricStreams.metric, "steps")),
+      );
+    const res = await app.inject({
+      method: "POST",
+      url: `/health-connections/${id}/streams/steps/backfill`,
+      payload: { target_date: "2026-01-01" },
+    });
+    expect(res.statusCode).toBe(200);
+    const [row] = await app.db
+      .select()
+      .from(healthMetricStreams)
+      .where(
+        and(eq(healthMetricStreams.connectionId, id), eq(healthMetricStreams.metric, "steps")),
+      );
+    expect(row!.backfillStatus).toBe("running");
+    expect(row!.backfillTargetDate).toBe("2026-01-01");
+  });
+
   it("409s a cancel when nothing is running", async () => {
     const id = await connectedId();
     const res = await app.inject({

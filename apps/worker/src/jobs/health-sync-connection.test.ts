@@ -24,6 +24,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "../env.js";
+import { HealthSyncJobError } from "./health-sync-connection.js";
 import {
   isSyncableMetric,
   runHealthConnectionSync,
@@ -480,7 +481,7 @@ describe("health.google.sync-connection", () => {
       expect(stream.capabilityStatus).toBe("available_in_window");
     });
 
-    it("A2 (ADR-046a): an authoritative EMPTY window still densifies, and real data returns", async () => {
+    it("A2 (ADR-046a): an authoritative EMPTY window densifies INSERT-ONLY, never blanking real data", async () => {
       const connectionId = await insertConnection();
       await insertStream(connectionId, "steps");
 
@@ -488,19 +489,59 @@ describe("health.google.sync-connection", () => {
       fake.queueDailyRollUp("steps", { rollupDataPoints: [steps("2026-08-20", "1234")] });
       await runPass(fake, { connectionId, trigger: "manual" });
 
-      // Nothing at all this time -- a complete, authoritative fetch of an empty
-      // window. Under ADR-046a that is verified absence, including for a day
-      // that previously carried data: this is the ONLY deletion detection daily
-      // metrics have, since the API ships no tombstones.
+      // A complete, authoritative fetch that returns NOTHING. ADR-046a permits
+      // this to create verified-absence rows, but bounds them: "those writes
+      // must be insert-only [and] must never overwrite or downgrade an existing
+      // has_data = true row."
+      //
+      // The reason is that `authoritative` proves only that WE fetched the whole
+      // window -- never that Google's empty answer was correct. One HTTP 200
+      // carrying an empty array is indistinguishable from a genuinely empty
+      // account, so allowing it to overwrite would let a single bad response
+      // blank the entire warm window of real history.
       fake.queueDailyRollUp("steps", { rollupDataPoints: [] });
       await runPass(fake, { connectionId, trigger: "manual" });
 
       const afterBlank = await dailyRows(connectionId);
-      expect(afterBlank.every((r) => !r.hasData)).toBe(true);
-      expect(afterBlank.find((r) => r.localDate === "2026-08-20")?.value).toBeNull();
+      expect(afterBlank.find((r) => r.localDate === "2026-08-20")).toMatchObject({
+        hasData: true,
+        value: "1234",
+      });
+      // Days that never had data DO get absence markers -- the densification
+      // itself still happened, it simply could not downgrade anything.
+      expect(afterBlank.some((r) => !r.hasData)).toBe(true);
+    });
+
+    it("A2b: a NON-empty authoritative window still overwrites an absent day (deletion detection)", async () => {
+      const connectionId = await insertConnection();
+      await insertStream(connectionId, "steps");
+
+      const fake = createFakeGoogleHealthClient();
+      fake.queueDailyRollUp("steps", {
+        rollupDataPoints: [steps("2026-08-20", "1234"), steps("2026-08-21", "999")],
+      });
+      await runPass(fake, { connectionId, trigger: "manual" });
+
+      // 08-20 disappears while the fetch still returns real data, so the empty
+      // answer is not suspect: this IS the only deletion detection daily
+      // metrics have, because the API ships no tombstones.
+      fake.queueDailyRollUp("steps", { rollupDataPoints: [steps("2026-08-21", "999")] });
+      await runPass(fake, { connectionId, trigger: "manual" });
+
+      const after = await dailyRows(connectionId);
+      expect(after.find((r) => r.localDate === "2026-08-20")).toMatchObject({
+        hasData: false,
+        value: null,
+      });
+      expect(after.find((r) => r.localDate === "2026-08-21")).toMatchObject({
+        hasData: true,
+        value: "999",
+      });
 
       // ...and it is not a one-way door.
-      fake.queueDailyRollUp("steps", { rollupDataPoints: [steps("2026-08-20", "1234")] });
+      fake.queueDailyRollUp("steps", {
+        rollupDataPoints: [steps("2026-08-20", "1234"), steps("2026-08-21", "999")],
+      });
       await runPass(fake, { connectionId, trigger: "manual" });
       const restored = await dailyRows(connectionId);
       expect(restored.find((r) => r.localDate === "2026-08-20")).toMatchObject({
@@ -1154,7 +1195,6 @@ describe("health.google.sync-connection", () => {
           backfillStatus: stream.backfillStatus as "running",
           backfillTargetDate: stream.backfillTargetDate,
           backfillCursorDate: stream.backfillCursorDate,
-          backfillCancelRequested: stream.backfillCancelRequested,
         }),
       ).toBe(true);
 
@@ -1492,5 +1532,55 @@ describe("health.google.sync-connection", () => {
       expect(run!.errorMessage).not.toContain("startTime");
       expect(run!.errorMessage).not.toContain("Cannot find field");
     });
+  });
+});
+
+describe("nothing raw crosses the pg-boss boundary", () => {
+  // pg-boss serializes a thrown handler error into pgboss.job.output, a
+  // durable table, via serialize-error -- which emits every enumerable own
+  // property. A `pg` DatabaseError carries `detail`, and for a CHECK or unique
+  // violation that is "Failing row contains (...)": the entire row, health
+  // value included.
+  it("reduces a Postgres error to a SQLSTATE, dropping detail/where/query", () => {
+    const pgErr = Object.assign(new Error("duplicate key value violates unique constraint"), {
+      name: "error",
+      code: "23505",
+      detail: "Failing row contains (abc, steps, 2026-08-20, t, 13337, null).",
+      where: "SQL statement",
+      internalQuery: "insert into health_daily_metrics ...",
+      table: "health_daily_metrics",
+      constraint: "health_daily_metrics_connection_metric_local_date_unique",
+    });
+
+    const wrapped = new HealthSyncJobError(pgErr);
+    const serialized = JSON.stringify(wrapped, Object.getOwnPropertyNames(wrapped));
+
+    expect(wrapped.message).toBe("health sync failed (23505)");
+    expect(wrapped.sqlState).toBe("23505");
+    for (const leak of [
+      "Failing row",
+      "13337",
+      "internalQuery",
+      "duplicate key",
+      "SQL statement",
+    ]) {
+      expect(serialized).not.toContain(leak);
+    }
+  });
+
+  it("does not echo a non-SQLSTATE-shaped code", () => {
+    const wrapped = new HealthSyncJobError(
+      Object.assign(new Error("boom"), { name: "WeirdError", code: "ya29.SECRET-LOOKING" }),
+    );
+    expect(wrapped.message).toBe("health sync failed (WeirdError)");
+    expect(wrapped.message).not.toContain("ya29");
+    expect(wrapped.sqlState).toBeNull();
+  });
+
+  it("handles a non-Error throw without leaking its contents", () => {
+    const wrapped = new HealthSyncJobError({ token: "ya29.fake", bpm: 137 });
+    expect(wrapped.message).toBe("health sync failed (unknown)");
+    expect(wrapped.message).not.toContain("ya29");
+    expect(wrapped.message).not.toContain("137");
   });
 });

@@ -109,6 +109,18 @@ types.setTypeParser(1182 as never, parsePgDateArrayIdentity);
 // timestamp column in the schema is declared through Drizzle's date-mode
 // `timestamp()`, and no raw SQL anywhere in `apps/` or `packages/` selects
 // one directly, so there is no consumer that bypasses the mapping above.
+// SCOPE, recorded because it is wider than this schema: setTypeParser mutates
+// the PROCESS-WIDE pg-types registry, and pg-boss resolves the same pg-types
+// instance. pg-boss's `job.singleton_on` is a `timestamp without time zone`
+// which it projects as `singletonOn`, so it now receives a string there too.
+// This project DOES use singletonSeconds (apps/api/src/routes/events.ts:84),
+// so that column is populated and the parser genuinely reaches it. pg-boss
+// only ever reads the value and passes it straight back as a parameter on its
+// retry/failure re-insert (dist/manager.js:1288,1302), and a naive timestamp
+// string re-inserted into a `timestamp` column is byte-for-byte identical --
+// strictly safer than the old Date form, which round-tripped through a
+// timezone-dependent serialization. Proven by a regression test in
+// packages/db/test/date-type-parser.test.ts rather than argued.
 types.setTypeParser(types.builtins.TIMESTAMP, (value) => value);
 
 /**

@@ -31,6 +31,28 @@ export type { HealthSyncConnectionJobData };
  * current state rather than replaying a stale job payload. Provider-level
  * retries live in the limiter, bounded and full-jittered.
  */
+/**
+ * A deliberately information-poor wrapper for anything that escapes the pass.
+ *
+ * Carries a SQLSTATE (or an error name) and nothing else -- no message, no
+ * stack, no `detail`, no query text. pg-boss persists whatever it is handed.
+ */
+export class HealthSyncJobError extends Error {
+  readonly sqlState: string | null;
+
+  constructor(cause: unknown) {
+    const code =
+      typeof cause === "object" && cause !== null && "code" in cause ? String(cause.code) : null;
+    const name = cause instanceof Error ? cause.name : "unknown";
+    // Only an all-caps/digit SQLSTATE-shaped token is echoed; anything else is
+    // dropped rather than trusted.
+    const safeCode = code !== null && /^[A-Z0-9]{5}$/.test(code) ? code : null;
+    super(`health sync failed (${safeCode ?? name})`);
+    this.name = "HealthSyncJobError";
+    this.sqlState = safeCode;
+  }
+}
+
 export function createHealthSyncConnectionHandler(
   db: Db,
   client: GoogleHealthClient,
@@ -44,15 +66,32 @@ export function createHealthSyncConnectionHandler(
       // two jobs for two different connections running concurrently would share
       // neither a limiter nor a QPS ceiling, which is exactly the fan-out the
       // limiter exists to prevent.
-      await runHealthConnectionSync(
-        {
-          db,
-          client,
-          boss: boss ?? null,
-          ...(limiterFactory ? { limiterFactory } : {}),
-        },
-        job.data,
-      );
+      try {
+        await runHealthConnectionSync(
+          {
+            db,
+            client,
+            boss: boss ?? null,
+            ...(limiterFactory ? { limiterFactory } : {}),
+          },
+          job.data,
+        );
+      } catch (err) {
+        // NOTHING raw crosses this boundary.
+        //
+        // pg-boss serializes a thrown handler error into pgboss.job.output --
+        // a durable table -- using serialize-error, which emits every
+        // enumerable own property. The Google client's message was already
+        // reduced to a constructed token, but a `pg` DatabaseError carries
+        // `detail`, `where`, `internalQuery`, `table` and `constraint`, and for
+        // a CHECK or unique violation `detail` is literally
+        // "Failing row contains (...)" -- the whole row, health value included.
+        //
+        // Rethrow a static message carrying only the SQLSTATE, which is the
+        // same discipline health/run.ts already applies to
+        // health_sync_runs.error_message.
+        throw new HealthSyncJobError(err);
+      }
     }
   };
 }

@@ -177,7 +177,11 @@ export interface DensifyParams {
   dates: readonly string[];
   sourceFamily: string | null;
   /**
-   * Backfill: add absence markers, never remove data.
+   * Add absence markers, never remove data.
+   *
+   * Set by the caller for a backfill chunk AND for any chunk that returned
+   * zero buckets (ADR-046a). See the call site in orchestrate.ts for why the
+   * zero-bucket case cannot be allowed to overwrite.
    *
    * A warm or manual pass over the trailing window IS authoritative about
    * deletion -- a day that had steps yesterday and returns nothing today, in a
@@ -281,7 +285,7 @@ export async function upsertSessions(db: Db, params: UpsertSessionsParams): Prom
   const byKey = new Map<string, SessionRow>();
   let collapsed = 0;
   for (const row of params.rows) {
-    const key = `${row.metric} ${row.externalKey}`;
+    const key = `${row.metric}\u0000${row.externalKey}`;
     if (byKey.has(key)) collapsed += 1;
     byKey.set(key, row);
   }

@@ -178,3 +178,41 @@ describe("catalog integrity", () => {
     }
   });
 });
+
+describe("session attribution axis is declared once, as data (ADR-049)", () => {
+  // Before this was a catalog field, the axis was re-decided by
+  // `metric === "sleep"` in the translator AND again in the worker's tombstone
+  // sweep. Adding a second end-attributed session metric could have updated one
+  // and missed the other, leaving the sweep bounding on a column the fetch
+  // never filtered on -- silently tombstoning sessions the query had no chance
+  // to return.
+  it("sleep is attributed on its civil END, matching its sleep-exclusive filter", () => {
+    const def = getHealthMetric("sleep");
+    expect(def.attributionAxis).toBe("civil_end");
+    expect(def.filterPath).toBe("sleep.interval.civil_end_time");
+  });
+
+  it("exercise is attributed on its civil START", () => {
+    const def = getHealthMetric("exercise");
+    expect(def.attributionAxis).toBe("civil_start");
+    expect(def.filterPath).toBe("exercise.interval.civil_start_time");
+  });
+
+  it("every session metric's axis agrees with the axis its filter uses", () => {
+    for (const metric of HEALTH_METRICS) {
+      const def = getHealthMetric(metric);
+      if (def.mode !== "session_list") continue;
+      expect(def.attributionAxis).not.toBeNull();
+      const expected = def.attributionAxis === "civil_end" ? "civil_end_time" : "civil_start_time";
+      expect(def.filterPath).toContain(expected);
+    }
+  });
+
+  it("no non-session metric declares an axis", () => {
+    for (const metric of HEALTH_METRICS) {
+      const def = getHealthMetric(metric);
+      if (def.mode === "session_list") continue;
+      expect(def.attributionAxis).toBeNull();
+    }
+  });
+});

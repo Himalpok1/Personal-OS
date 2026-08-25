@@ -1,5 +1,17 @@
 import { z } from "zod";
 
+/**
+ * An optional string that treats "" exactly like an absent variable.
+ *
+ * docker-compose's `${VAR:-}` renders an empty string, not an omitted key, so a
+ * plain `z.string().min(1).optional()` rejects an unconfigured optional var and
+ * the process dies at import. Anything genuinely present must still be
+ * non-empty.
+ */
+function optionalNonEmpty() {
+  return z.preprocess((v) => (v === "" ? undefined : v), z.string().min(1).optional());
+}
+
 const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1),
   // Master key for AES-256-GCM decryption of AI provider API keys at rest
@@ -29,8 +41,15 @@ const EnvSchema = z.object({
   //
   // The redirect-URI allowlist is deliberately absent: only apps/api mints
   // authorization URLs and handles the callback. The worker never needs it.
-  GOOGLE_HEALTH_OAUTH_CLIENT_ID: z.string().min(1).optional(),
-  GOOGLE_HEALTH_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
+  // `optionalNonEmpty`, not a bare `.optional()`: docker-compose passes these
+  // as `${VAR:-}`, which renders an EMPTY STRING rather than omitting the
+  // variable, and `z.string().min(1).optional()` throws on "" (it only tolerates
+  // `undefined`). On a host with no Health credentials -- which is production
+  // today -- that killed BOTH api and worker at import, taking capture,
+  // calendar, notifications and reminders down with them. Found by the
+  // Checkpoint 6.3 audit; the api half predates 6.3.
+  GOOGLE_HEALTH_OAUTH_CLIENT_ID: optionalNonEmpty(),
+  GOOGLE_HEALTH_OAUTH_CLIENT_SECRET: optionalNonEmpty(),
 });
 
 export const env = EnvSchema.parse(process.env);

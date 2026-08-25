@@ -112,24 +112,36 @@ export function requestBackfillCancel(state: BackfillState): BackfillColumns {
   };
 }
 
+/**
+ * Columns a progress transition may write.
+ *
+ * `backfill_cancel_requested` is deliberately ABSENT. A chunk's state is
+ * snapshotted BEFORE its network fetch, so writing the flag back after the
+ * fetch would overwrite a cancel that arrived during it -- the API would have
+ * returned 200 and the user's cancel would be lost, silently and permanently.
+ * The flag is only ever written by the two transitions that legitimately own
+ * it: requestBackfillCancel (sets it) and settleBackfill/startBackfill
+ * (consume it). It is not part of the CHECK, so omitting it is safe.
+ */
+export type BackfillProgressColumns = Omit<BackfillColumns, "backfillCancelRequested">;
+
 /** Advances the cursor after a chunk commits. Written in the SAME transaction
  *  as that chunk's rows, so the database never claims a range is verified
  *  while its rows are missing. */
 export function advanceBackfillCursor(
   state: BackfillState,
   chunkStartDate: string,
-): BackfillColumns {
+): BackfillProgressColumns {
   return {
     backfillStatus: "running",
     backfillTargetDate: state.backfillTargetDate,
     backfillCursorDate: chunkStartDate,
-    backfillCancelRequested: state.backfillCancelRequested,
   };
 }
 
 /** The cursor reached the target. Target is KEPT non-null -- 'complete' is a
  *  non-idle status and nulling it would raise 23514. */
-export function completeBackfill(state: BackfillState): BackfillColumns {
+export function completeBackfill(state: BackfillState): BackfillProgressColumns {
   if (state.backfillTargetDate === null) {
     throw new BackfillTransitionError(
       "backfill_missing_target",
@@ -140,7 +152,6 @@ export function completeBackfill(state: BackfillState): BackfillColumns {
     backfillStatus: "complete",
     backfillTargetDate: state.backfillTargetDate,
     backfillCursorDate: state.backfillTargetDate,
-    backfillCancelRequested: false,
   };
 }
 
@@ -177,7 +188,7 @@ export function clearBackfill(): BackfillColumns {
 
 /** Cheap local restatement of the database CHECK, so a unit test can prove a
  *  transition is legal without a live connection. */
-export function satisfiesBackfillInvariant(c: BackfillColumns): boolean {
+export function satisfiesBackfillInvariant(c: BackfillProgressColumns): boolean {
   return c.backfillStatus === "idle"
     ? c.backfillTargetDate === null && c.backfillCursorDate === null
     : c.backfillTargetDate !== null;

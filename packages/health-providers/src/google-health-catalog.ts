@@ -49,6 +49,19 @@ export const PHASE_6A_SCOPES: readonly HealthScope[] = [
  */
 export type RangeCapSource = "documented_rollup_cap" | "self_imposed";
 
+/**
+ * Which civil endpoint of a session it is attributed to, filtered on, and
+ * swept on (ADR-049).
+ *
+ * Declared as DATA rather than re-decided by `metric === "sleep"` at each use
+ * site. The fetch filter, the attribution rule and the tombstone sweep must
+ * agree on one axis; when they were three separate string comparisons, adding
+ * a second end-attributed session metric could update two of them and leave
+ * the sweep bounding on the wrong column -- which would tombstone sessions the
+ * query never had a chance to return. Null for non-session metrics.
+ */
+export type SessionAttributionAxis = "civil_start" | "civil_end";
+
 /** Where a data source family may be sent. `list` does NOT accept it. */
 export const DATA_SOURCE_FAMILY_ALL = "users/me/dataSourceFamilies/all-sources";
 export const DATA_SOURCE_FAMILY_WEARABLES = "users/me/dataSourceFamilies/google-wearables";
@@ -83,6 +96,8 @@ export interface HealthMetricDefinition {
   readonly scope: HealthScope;
   /** Documented unit, for display and for asserting we never silently convert. */
   readonly unit: string;
+  /** Session metrics only (ADR-049). Null elsewhere. */
+  readonly attributionAxis: SessionAttributionAxis | null;
 }
 
 function daily(
@@ -105,6 +120,7 @@ function daily(
     trueZeroCapable: opts.trueZero ?? false,
     scope,
     unit,
+    attributionAxis: null,
   };
 }
 
@@ -129,6 +145,7 @@ function precomputedDaily(
     trueZeroCapable: false,
     scope,
     unit,
+    attributionAxis: null,
   };
 }
 
@@ -148,6 +165,7 @@ function sample(metric: string, scope: HealthScope, unit: string): HealthMetricD
     trueZeroCapable: false,
     scope,
     unit,
+    attributionAxis: null,
   };
 }
 
@@ -156,6 +174,7 @@ function session(
   scope: HealthScope,
   unit: string,
   filterPath: string,
+  attributionAxis: SessionAttributionAxis,
 ): HealthMetricDefinition {
   return {
     metric,
@@ -173,6 +192,7 @@ function session(
     trueZeroCapable: false,
     scope,
     unit,
+    attributionAxis,
   };
 }
 
@@ -214,6 +234,7 @@ export const HEALTH_METRIC_CATALOG: Readonly<Record<string, HealthMetricDefiniti
     trueZeroCapable: false,
     scope: METRICS_SCOPE,
     unit: "beatsPerMinute",
+    attributionAxis: null,
   },
 
   // --- Precomputed daily vitals -------------------------------------------
@@ -251,8 +272,18 @@ export const HEALTH_METRIC_CATALOG: Readonly<Record<string, HealthMetricDefiniti
   "body-fat": sample("body-fat", METRICS_SCOPE, "percentage"),
 
   // --- Sessions ------------------------------------------------------------
-  sleep: session("sleep", SLEEP_SCOPE, "seconds", "sleep.interval.civil_end_time"),
-  exercise: session("exercise", ACTIVITY_SCOPE, "seconds", "exercise.interval.civil_start_time"),
+  // The filter path and the attribution axis are the SAME axis, deliberately:
+  // `list` documents sleep.interval.civil_end_time as a sleep-exclusive filter
+  // and excludes sleep from the generic session-start filter, so query,
+  // attribution and deletion scope all coincide (ADR-049).
+  sleep: session("sleep", SLEEP_SCOPE, "seconds", "sleep.interval.civil_end_time", "civil_end"),
+  exercise: session(
+    "exercise",
+    ACTIVITY_SCOPE,
+    "seconds",
+    "exercise.interval.civil_start_time",
+    "civil_start",
+  ),
 };
 
 export const HEALTH_METRICS: readonly string[] = Object.keys(HEALTH_METRIC_CATALOG);

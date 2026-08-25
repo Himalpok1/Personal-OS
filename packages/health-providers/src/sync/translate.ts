@@ -615,8 +615,10 @@ export function translateSession(
   // endpoints are stored exactly, so the span is always re-derivable.
   const durationSeconds = Math.round(elapsedMs / 1000);
 
+  // Axis from the catalog, never a metric-name comparison -- the sweep in
+  // apps/worker reads the same field, so the two cannot drift apart.
   const attributedLocalDate =
-    def.metric === "sleep"
+    def.attributionAxis === "civil_end"
       ? attributeSleepLocalDate(civilEnd)
       : attributeExerciseLocalDate(civilStart);
 

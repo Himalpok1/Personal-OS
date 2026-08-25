@@ -115,9 +115,12 @@ describe("cancel / advance / complete / settle / clear", () => {
       backfillStatus: "complete",
       backfillTargetDate: "2026-01-01",
       backfillCursorDate: "2026-01-01",
-      backfillCancelRequested: false,
     });
     expect(c.backfillTargetDate).not.toBeNull();
+    // The cancel flag is deliberately NOT written by a progress transition --
+    // see BackfillProgressColumns. Writing it back from a pre-fetch snapshot
+    // would silently discard a cancel that arrived during the fetch.
+    expect(c).not.toHaveProperty("backfillCancelRequested");
   });
 
   it("settleBackfill retains both dates so the run can be resumed or inspected", () => {
@@ -136,6 +139,41 @@ describe("cancel / advance / complete / settle / clear", () => {
       backfillCursorDate: null,
       backfillCancelRequested: false,
     });
+  });
+});
+
+describe("a progress transition never writes the cancel flag (stale-snapshot hazard)", () => {
+  // Checkpoint 6.3 audit finding. A chunk snapshots stream state BEFORE its
+  // network fetch. If advanceBackfillCursor/completeBackfill wrote the cancel
+  // flag from that snapshot, a cancel arriving DURING the fetch would be
+  // overwritten when the chunk committed -- the API having already returned
+  // 200 -- and the backfill would run on forever.
+  const running = state({
+    backfillStatus: "running",
+    backfillTargetDate: "2026-01-01",
+    backfillCursorDate: "2026-07-01",
+  });
+
+  it("advanceBackfillCursor omits it even when the snapshot says false", () => {
+    expect(
+      advanceBackfillCursor({ ...running, backfillCancelRequested: false }, "2026-06-01"),
+    ).not.toHaveProperty("backfillCancelRequested");
+  });
+
+  it("completeBackfill omits it even when the snapshot says true", () => {
+    expect(completeBackfill({ ...running, backfillCancelRequested: true })).not.toHaveProperty(
+      "backfillCancelRequested",
+    );
+  });
+
+  it("only the transitions that own the flag write it", () => {
+    expect(requestBackfillCancel(running).backfillCancelRequested).toBe(true);
+    expect(settleBackfill(running, "cancelled").backfillCancelRequested).toBe(false);
+    expect(
+      startBackfill(state({ earliestVerifiedDate: "2026-07-01" }), "2026-01-01", NOW)
+        .backfillCancelRequested,
+    ).toBe(false);
+    expect(clearBackfill().backfillCancelRequested).toBe(false);
   });
 });
 
@@ -167,7 +205,6 @@ describe("every transition satisfies the database CHECK", () => {
         backfillStatus: "idle",
         backfillTargetDate: "2026-01-01",
         backfillCursorDate: "2026-07-01",
-        backfillCancelRequested: false,
       }),
     ).toBe(false);
   });
@@ -178,7 +215,6 @@ describe("every transition satisfies the database CHECK", () => {
         backfillStatus: "complete",
         backfillTargetDate: null,
         backfillCursorDate: null,
-        backfillCancelRequested: false,
       }),
     ).toBe(false);
   });

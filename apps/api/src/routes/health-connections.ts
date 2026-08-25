@@ -462,11 +462,21 @@ export default function healthConnectionsRoutes(app: FastifyInstance): void {
       };
 
       try {
-        // A request against a settled stream clears to idle first, in the
-        // same call: that is the only caller clearBackfill needs, and it is
-        // how a complete/cancelled/failed backfill is restarted with a new
+        // A request against a SETTLED stream clears to idle first, in the same
+        // call: that is the only caller clearBackfill needs, and it is how a
+        // complete/cancelled/failed/paused backfill is restarted with a new
         // target without a separate reset route.
-        const base = state.backfillStatus === "idle" ? state : { ...state, ...clearBackfill() };
+        //
+        // A RUNNING stream is deliberately NOT cleared. Clearing it would reset
+        // the status to idle, so startBackfill's own guard could never fire --
+        // and worse, an in-flight chunk composes its commit from state
+        // snapshotted before its fetch, so it would write the OLD target and
+        // cursor back over the new ones. The restart would return 200 and then
+        // silently un-happen.
+        const SETTLED: readonly string[] = ["complete", "cancelled", "failed", "paused"];
+        const base = SETTLED.includes(state.backfillStatus)
+          ? { ...state, ...clearBackfill() }
+          : state;
         const columns = startBackfill(base, body.target_date, new Date());
         const updated = await applyBackfillColumns(stream.id, columns);
 

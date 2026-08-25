@@ -2,6 +2,7 @@ import { civilDateRange } from "@personal-os/core/health/civil-time";
 import {
   advanceBackfillCursor,
   completeBackfill,
+  type BackfillProgressColumns,
   settleBackfill,
   type BackfillColumns,
   type BackfillState,
@@ -96,7 +97,7 @@ import { env } from "../env.js";
 //
 // Real observed rows are NOT gated that way and are persisted on every pass,
 // including `hot`. That is deliberate and is the whole point of the hot
-// cadence: a 30-minute pass exists to keep today's steps current between
+// cadence: the hourly pass exists to keep today's steps current between
 // nightly warm passes, and a hot pass that wrote nothing would make the fast
 // cadence dead code. Writing a real observation can never destroy information;
 // writing an absence can, which is why exactly the absence-writing paths carry
@@ -646,7 +647,27 @@ async function syncChunk(ctx: PassContext, params: ChunkParams): Promise<ChunkOu
             metric: stream.metric,
             dates: missing,
             sourceFamily,
-            insertOnly: kind === "backfill",
+            // Insert-only in TWO cases, and the second is load-bearing.
+            //
+            // A backfill reaches into history to fill holes, so it may add
+            // absence markers but must never erase years of real data if the
+            // provider has quietly aged out old detail.
+            //
+            // A chunk that returned ZERO buckets is the case ADR-046a
+            // explicitly bounds: "those writes must be insert-only [and] must
+            // never overwrite or downgrade an existing has_data = true row."
+            // `authoritative` proves only that WE fetched completely -- never
+            // that Google's empty answer was right. One HTTP 200 carrying
+            // `rollupDataPoints: []` is indistinguishable from a genuinely
+            // empty account, and without this guard a single such response
+            // would blank the whole warm window of real history in one
+            // transaction.
+            //
+            // A chunk that DID return buckets keeps overwrite semantics: a day
+            // that had steps yesterday and is absent from a complete
+            // authoritative fetch today was deleted upstream, and that is the
+            // only deletion detection daily metrics have.
+            insertOnly: kind === "backfill" || translated.observedDates.size === 0,
           }),
         );
       }
@@ -666,7 +687,10 @@ async function syncChunk(ctx: PassContext, params: ChunkParams): Promise<ChunkOu
         metric: stream.metric,
         // The SAME axis the filter used (ADR-049). Sleep is filtered,
         // attributed and swept on civil END; exercise on civil START.
-        axis: def.metric === "sleep" ? "civil_end" : "civil_start",
+        // The catalog owns this. The sweep MUST bound on the same column the
+        // fetch filtered on, or it tombstones sessions the query could never
+        // have returned.
+        axis: def.attributionAxis ?? "civil_start",
         windowStartDate: window.startDate,
         windowEndDateExclusive: window.endDate,
         seenKeys,
@@ -1109,7 +1133,9 @@ async function runBackfillSlice(ctx: PassContext, running: readonly StreamRow[])
             backfillStatus: columns.backfillStatus,
             backfillTargetDate: columns.backfillTargetDate,
             backfillCursorDate: columns.backfillCursorDate,
-            backfillCancelRequested: columns.backfillCancelRequested,
+            // Deliberately NOT backfillCancelRequested -- `state` was
+            // snapshotted before this chunk's fetch, so writing it back would
+            // overwrite a cancel that arrived while the fetch was in flight.
             updatedAt: ctx.now,
           })
           .where(eq(healthMetricStreams.id, fresh.id));
@@ -1131,10 +1157,19 @@ async function runBackfillSlice(ctx: PassContext, running: readonly StreamRow[])
   return done;
 }
 
+/**
+ * Writes a backfill transition.
+ *
+ * Accepts either the full column set or the narrower progress set. The cancel
+ * flag is written ONLY when the transition actually owns it: a progress
+ * transition composes its columns from state snapshotted BEFORE the chunk's
+ * network fetch, so writing the flag back would silently discard a cancel that
+ * arrived during that fetch -- after the API had already returned 200.
+ */
 async function applyBackfill(
   ctx: PassContext,
   streamId: string,
-  columns: BackfillColumns,
+  columns: BackfillColumns | BackfillProgressColumns,
 ): Promise<void> {
   await ctx.db
     .update(healthMetricStreams)
@@ -1142,7 +1177,9 @@ async function applyBackfill(
       backfillStatus: columns.backfillStatus,
       backfillTargetDate: columns.backfillTargetDate,
       backfillCursorDate: columns.backfillCursorDate,
-      backfillCancelRequested: columns.backfillCancelRequested,
+      ...("backfillCancelRequested" in columns
+        ? { backfillCancelRequested: columns.backfillCancelRequested }
+        : {}),
       updatedAt: ctx.now,
     })
     .where(eq(healthMetricStreams.id, streamId));

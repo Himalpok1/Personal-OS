@@ -194,6 +194,40 @@ describe.runIf(Boolean(connectionString))(
     // positive-offset TZ the UTC fields came back shifted and any
     // wallClockToNaiveDate round-trip silently moved the clock.
     // -----------------------------------------------------------------
+    // pg-boss reads `job.singleton_on` (a `timestamp without time zone`) and
+    // passes the SAME VALUE straight back as a query parameter on its retry /
+    // failure re-insert (dist/manager.js:1288,1302). This project does use
+    // singletonSeconds -- apps/api/src/routes/events.ts:84 -- so that column is
+    // populated and the identity parser DOES reach it. This proves the string
+    // form survives a read-then-write round-trip byte-for-byte, in every
+    // process timezone; the previous Date form only happened to survive.
+    for (const tz of ["UTC", "Asia/Kolkata"]) {
+      it(`a naive timestamp read as a string re-inserts unchanged under TZ=${tz}`, async () => {
+        process.env["TZ"] = tz;
+        await client.query("BEGIN");
+        try {
+          await client.query(
+            "CREATE TEMP TABLE ts_roundtrip_regression (id int, t timestamp) ON COMMIT DROP",
+          );
+          await client.query("INSERT INTO ts_roundtrip_regression VALUES (1, $1)", [
+            "2026-08-24 12:34:56",
+          ]);
+          const read = await client.query<{ t: unknown }>(
+            "SELECT t FROM ts_roundtrip_regression WHERE id = 1",
+          );
+          const value = read.rows[0]?.t;
+          // Feed the value pg handed us straight back, exactly as pg-boss does.
+          await client.query("INSERT INTO ts_roundtrip_regression VALUES (2, $1)", [value]);
+          const back = await client.query<{ t: unknown }>(
+            "SELECT t FROM ts_roundtrip_regression WHERE id = 2",
+          );
+          expect(back.rows[0]?.t).toBe("2026-08-24 12:34:56");
+        } finally {
+          await client.query("ROLLBACK");
+        }
+      });
+    }
+
     for (const tz of ["UTC", "America/Chicago", "Asia/Kolkata", "Australia/Sydney"]) {
       it(`round-trips a naive timestamp unshifted under TZ=${tz}`, async () => {
         process.env["TZ"] = tz;

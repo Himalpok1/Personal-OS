@@ -56,7 +56,7 @@ export function trailingWindow(days: number, now: Date): CivilWindow {
   };
 }
 
-/** The 30-minute cadence window. Never densifies, never tombstones. */
+/** The fast-cadence window (hourly, per the 6.3 cron). Never densifies, never tombstones. */
 export function hotWindow(now: Date): CivilWindow {
   return trailingWindow(HOT_WINDOW_DAYS, now);
 }
