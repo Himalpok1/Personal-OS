@@ -2,15 +2,24 @@ import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { useProjects } from "@/queries/projects";
 import { useArchiveNote, useNote, useUpdateNote } from "@/queries/notes";
+import { ApiClientError } from "@personal-os/api-client";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
 export default function EditNoteScreen() {
   const keyboardHeight = useKeyboardHeight();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { data: note, isLoading } = useNote(id);
+  const { data: note, isLoading, isError, error, refetch } = useNote(id);
   const { data: projects } = useProjects();
   const updateNote = useUpdateNote();
   const archiveNote = useArchiveNote();
@@ -26,7 +35,33 @@ export default function EditNoteScreen() {
     setProjectId(note.project_id ?? undefined);
   }, [note]);
 
-  if (isLoading || !note) {
+  if (isLoading) {
+    return (
+      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
+        <ActivityIndicator />
+      </View>
+    );
+  }
+
+  if (isError) {
+    const status = error instanceof ApiClientError ? error.status : null;
+    return (
+      <View className="flex-1 items-center justify-center gap-3 bg-white px-4 dark:bg-black">
+        <Text className="text-red-600">
+          {status === 404 ? "This note couldn't be found." : "Couldn't load this note."}
+        </Text>
+        <Pressable
+          onPress={() => void refetch()}
+          hitSlop={8}
+          className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+        >
+          <Text className="font-semibold text-white">Retry</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (!note) {
     return (
       <View className="flex-1 items-center justify-center bg-white dark:bg-black">
         <ActivityIndicator />
@@ -77,10 +112,13 @@ export default function EditNoteScreen() {
           <Pressable
             key={project.id}
             onPress={() => setProjectId(projectId === project.id ? undefined : project.id)}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityState={{ selected: projectId === project.id }}
             className={
               projectId === project.id
-                ? "rounded-full bg-blue-600 px-3 py-1"
-                : "rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
+                ? "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
+                : "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
             }
           >
             <Text className={projectId === project.id ? "text-white" : "text-black dark:text-white"}>
@@ -101,11 +139,25 @@ export default function EditNoteScreen() {
       </Pressable>
 
       <Pressable
-        onPress={() => archiveNote.mutate(note.id, { onSuccess: () => router.back() })}
+        onPress={() =>
+          Alert.alert(
+            "Archive this note?",
+            "This hides it from your lists. There's currently no way to view or restore it from the app.",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Archive",
+                style: "destructive",
+                onPress: () => archiveNote.mutate(note.id, { onSuccess: () => router.back() }),
+              },
+            ],
+          )
+        }
+        disabled={archiveNote.isPending}
         className="items-center rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"
       >
         <Text className="font-semibold text-neutral-600 dark:text-neutral-300">
-          Archive note
+          {archiveNote.isPending ? "Archiving..." : "Archive note"}
         </Text>
       </Pressable>
     </ScrollView>

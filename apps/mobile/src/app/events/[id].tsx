@@ -1,5 +1,6 @@
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import { PLACEHOLDER_LIGHT, usePlaceholderColor } from "@/components/placeholder-color";
 import { ApiClientError } from "@personal-os/api-client";
 import { GoogleCalendarLinkPicker } from "@/components/calendar/google-calendar-link-picker";
 import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
@@ -22,6 +23,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -108,6 +110,14 @@ export function computeOccurrenceTiming(
 export interface EditEventViewProps {
   /** Measured IME height; optional so hook-free callers (tests) can omit it. */
   keyboardHeight?: number;
+  /**
+   * WCAG-compliant placeholder colour, computed by the screen via
+   * usePlaceholderColor() (a hook, so it can't be read in this hook-free
+   * component). Optional so hook-free callers (tests) can omit it; falls
+   * back to the light-mode value rather than the old "#888" (~3.6:1, below
+   * AA) so an un-styled test render is still accessible.
+   */
+  placeholderColor?: string;
   modalVisible: boolean;
   onDismissModal: () => void;
   onSelectEditOccurrence: () => void;
@@ -141,6 +151,7 @@ export interface EditEventViewProps {
   onSubmit: () => void;
   isSubmitting?: boolean;
   onArchive?: () => void;
+  isArchiving?: boolean;
   isError?: boolean;
   selectedGoogleCalendarId?: string;
   onGoogleCalendarChange: (googleCalendarId: string | undefined) => void;
@@ -155,6 +166,7 @@ export function EditEventView(props: EditEventViewProps) {
   // here throws "Cannot read properties of null (reading 'useState')".
   // keyboardHeight is therefore passed in by the screen below.
   const keyboardHeight = props.keyboardHeight ?? 0;
+  const placeholderColor = props.placeholderColor ?? PLACEHOLDER_LIGHT;
   const showRecurrenceEditor = !props.isDetached && props.editMode !== "occurrence";
 
   return (
@@ -282,7 +294,7 @@ export function EditEventView(props: EditEventViewProps) {
             value={props.startDate}
             onChangeText={props.onStartDateChange}
             placeholder="2026-09-15"
-            placeholderTextColor="#888"
+            placeholderTextColor={placeholderColor}
             className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
           />
 
@@ -291,7 +303,7 @@ export function EditEventView(props: EditEventViewProps) {
             value={props.endDate}
             onChangeText={props.onEndDateChange}
             placeholder="2026-09-15"
-            placeholderTextColor="#888"
+            placeholderTextColor={placeholderColor}
             className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
           />
         </>
@@ -302,7 +314,7 @@ export function EditEventView(props: EditEventViewProps) {
             value={props.startsAt}
             onChangeText={props.onStartsAtChange}
             placeholder="2026-09-15T14:00:00"
-            placeholderTextColor="#888"
+            placeholderTextColor={placeholderColor}
             className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
           />
 
@@ -311,7 +323,7 @@ export function EditEventView(props: EditEventViewProps) {
             value={props.endsAt}
             onChangeText={props.onEndsAtChange}
             placeholder="2026-09-15T14:30:00"
-            placeholderTextColor="#888"
+            placeholderTextColor={placeholderColor}
             className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
           />
         </>
@@ -328,10 +340,13 @@ export function EditEventView(props: EditEventViewProps) {
             onPress={() =>
               props.onProjectIdChange(props.projectId === project.id ? undefined : project.id)
             }
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityState={{ selected: props.projectId === project.id }}
             className={
               props.projectId === project.id
-                ? "rounded-full bg-blue-600 px-3 py-1"
-                : "rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
+                ? "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
+                : "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
             }
           >
             <Text
@@ -382,10 +397,11 @@ export function EditEventView(props: EditEventViewProps) {
         <Pressable
           testID="archive-event-button"
           onPress={props.onArchive}
+          disabled={props.isArchiving}
           className="items-center rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"
         >
           <Text className="font-semibold text-neutral-600 dark:text-neutral-300">
-            Archive event
+            {props.isArchiving ? "Archiving..." : "Archive event"}
           </Text>
         </Pressable>
       ) : null}
@@ -395,9 +411,10 @@ export function EditEventView(props: EditEventViewProps) {
 
 export default function EditEventScreen() {
   const keyboardHeight = useKeyboardHeight();
+  const placeholderColor = usePlaceholderColor();
   const { id, occursAt } = useLocalSearchParams<{ id: string; occursAt?: string }>();
   const router = useRouter();
-  const { data: event, isLoading } = useEvent(id);
+  const { data: event, isLoading, isError, error, refetch } = useEvent(id);
   const { data: projects } = useProjects();
   const updateEvent = useUpdateEvent();
   const archiveEvent = useArchiveEvent();
@@ -461,7 +478,33 @@ export default function EditEventScreen() {
     );
   }, [event]);
 
-  if (isLoading || !event) {
+  if (isLoading) {
+    return (
+      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
+        <ActivityIndicator />
+      </View>
+    );
+  }
+
+  if (isError) {
+    const status = error instanceof ApiClientError ? error.status : null;
+    return (
+      <View className="flex-1 items-center justify-center gap-3 bg-white px-4 dark:bg-black">
+        <Text className="text-red-600">
+          {status === 404 ? "This event couldn't be found." : "Couldn't load this event."}
+        </Text>
+        <Pressable
+          onPress={() => void refetch()}
+          hitSlop={8}
+          className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+        >
+          <Text className="font-semibold text-white">Retry</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (!event) {
     return (
       <View className="flex-1 items-center justify-center bg-white dark:bg-black">
         <ActivityIndicator />
@@ -613,9 +656,24 @@ export default function EditEventScreen() {
     );
   };
 
+  const confirmArchive = () =>
+    Alert.alert(
+      "Archive this event?",
+      "This hides it from your lists. There's currently no way to view or restore it from the app.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Archive",
+          style: "destructive",
+          onPress: () => archiveEvent.mutate(event.id, { onSuccess: () => router.back() }),
+        },
+      ],
+    );
+
   return (
     <EditEventView
       keyboardHeight={keyboardHeight}
+      placeholderColor={placeholderColor}
       modalVisible={modalVisible}
       onDismissModal={() => setModalVisible(false)}
       onSelectEditOccurrence={handleSelectEditOccurrence}
@@ -648,7 +706,8 @@ export default function EditEventScreen() {
       onProjectIdChange={setProjectId}
       onSubmit={submit}
       isSubmitting={isSubmitting}
-      onArchive={() => archiveEvent.mutate(event.id, { onSuccess: () => router.back() })}
+      onArchive={confirmArchive}
+      isArchiving={archiveEvent.isPending}
       isError={updateEvent.isError || detachEvent.isError || cancelEventOccurrence.isError}
       selectedGoogleCalendarId={selectedGoogleCalendarId}
       onGoogleCalendarChange={setSelectedGoogleCalendarId}

@@ -1,8 +1,10 @@
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import { usePlaceholderColor } from "@/components/placeholder-color";
 import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
 import { useProjects } from "@/queries/projects";
 import { useArchiveTask, useTask, useUpdateTask } from "@/queries/tasks";
+import { ApiClientError } from "@personal-os/api-client";
 import {
   parseRRuleStringToEditorState,
   serializeEditorStateToRRule,
@@ -10,13 +12,22 @@ import {
 } from "@personal-os/core/recurrence/editor";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
 export default function EditTaskScreen() {
   const keyboardHeight = useKeyboardHeight();
+  const placeholderColor = usePlaceholderColor();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { data: task, isLoading } = useTask(id);
+  const { data: task, isLoading, isError, error, refetch } = useTask(id);
   const { data: projects } = useProjects();
   const updateTask = useUpdateTask();
   const archiveTask = useArchiveTask();
@@ -54,7 +65,33 @@ export default function EditTaskScreen() {
     );
   }, [task]);
 
-  if (isLoading || !task) {
+  if (isLoading) {
+    return (
+      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
+        <ActivityIndicator />
+      </View>
+    );
+  }
+
+  if (isError) {
+    const status = error instanceof ApiClientError ? error.status : null;
+    return (
+      <View className="flex-1 items-center justify-center gap-3 bg-white px-4 dark:bg-black">
+        <Text className="text-red-600">
+          {status === 404 ? "This task couldn't be found." : "Couldn't load this task."}
+        </Text>
+        <Pressable
+          onPress={() => void refetch()}
+          hitSlop={8}
+          className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+        >
+          <Text className="font-semibold text-white">Retry</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (!task) {
     return (
       <View className="flex-1 items-center justify-center bg-white dark:bg-black">
         <ActivityIndicator />
@@ -123,7 +160,7 @@ export default function EditTaskScreen() {
         value={dueAt}
         onChangeText={setDueAt}
         placeholder="2026-08-20T15:00:00"
-        placeholderTextColor="#888"
+        placeholderTextColor={placeholderColor}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
 
@@ -132,7 +169,7 @@ export default function EditTaskScreen() {
         value={remindAt}
         onChangeText={setRemindAt}
         placeholder="2026-08-20T15:00:00"
-        placeholderTextColor="#888"
+        placeholderTextColor={placeholderColor}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
 
@@ -142,10 +179,13 @@ export default function EditTaskScreen() {
           <Pressable
             key={project.id}
             onPress={() => setProjectId(projectId === project.id ? undefined : project.id)}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityState={{ selected: projectId === project.id }}
             className={
               projectId === project.id
-                ? "rounded-full bg-blue-600 px-3 py-1"
-                : "rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
+                ? "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
+                : "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
             }
           >
             <Text className={projectId === project.id ? "text-white" : "text-black dark:text-white"}>
@@ -166,11 +206,25 @@ export default function EditTaskScreen() {
       </Pressable>
 
       <Pressable
-        onPress={() => archiveTask.mutate(task.id, { onSuccess: () => router.back() })}
+        onPress={() =>
+          Alert.alert(
+            "Archive this task?",
+            "This hides it from your lists. There's currently no way to view or restore it from the app.",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Archive",
+                style: "destructive",
+                onPress: () => archiveTask.mutate(task.id, { onSuccess: () => router.back() }),
+              },
+            ],
+          )
+        }
+        disabled={archiveTask.isPending}
         className="items-center rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"
       >
         <Text className="font-semibold text-neutral-600 dark:text-neutral-300">
-          Archive task
+          {archiveTask.isPending ? "Archiving..." : "Archive task"}
         </Text>
       </Pressable>
     </ScrollView>

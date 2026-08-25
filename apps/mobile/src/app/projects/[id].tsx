@@ -3,9 +3,18 @@ import type { ProjectDetailEvent, ProjectUpdate } from "@personal-os/schema";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import { usePlaceholderColor } from "@/components/placeholder-color";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import {
   useArchiveProject,
@@ -67,10 +76,11 @@ function ActionButton({
 
 export default function ProjectDetailScreen() {
   const keyboardHeight = useKeyboardHeight();
+  const placeholderColor = usePlaceholderColor();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { data, isLoading, isError, error } = useProjectDetail(id);
+  const { data, isLoading, isError, error, refetch } = useProjectDetail(id);
   const updateProject = useUpdateProject();
   const pauseProject = usePauseProject();
   const resumeProject = useResumeProject();
@@ -96,10 +106,23 @@ export default function ProjectDetailScreen() {
   if (isError) {
     const status = error instanceof ApiClientError ? error.status : null;
     return (
-      <View className="flex-1 items-center justify-center bg-white px-4 dark:bg-black">
+      <View className="flex-1 items-center justify-center gap-3 bg-white px-4 dark:bg-black">
         <Text className="text-red-600">
           {status === 404 ? "Project not found." : "Couldn't load project."}
         </Text>
+        {/* A 404 is terminal -- retrying it just repeats the same answer -- so
+            the affordance appears only for a load failure that could clear. */}
+        {status === 404 ? null : (
+          <Pressable
+            onPress={() => void refetch()}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading this project"
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          >
+            <Text className="font-semibold text-white">Retry</Text>
+          </Pressable>
+        )}
       </View>
     );
   }
@@ -185,7 +208,7 @@ export default function ProjectDetailScreen() {
         onChangeText={setGoal}
         multiline
         placeholder="What does done look like?"
-        placeholderTextColor="#888"
+        placeholderTextColor={placeholderColor}
         onBlur={() => {
           const trimmed = goal.trim();
           if (trimmed !== (project.goal ?? "")) commitMetadata({ goal: trimmed || null });
@@ -198,7 +221,7 @@ export default function ProjectDetailScreen() {
         value={targetDate}
         onChangeText={setTargetDate}
         placeholder="2026-12-31"
-        placeholderTextColor="#888"
+        placeholderTextColor={placeholderColor}
         onBlur={() => {
           const value = targetDate.trim();
           if (value === project.target_date) return;
@@ -258,7 +281,20 @@ export default function ProjectDetailScreen() {
           <ActionButton
             label="Archive"
             disabled={archiveProject.isPending}
-            onPress={() => archiveProject.mutate(project.id)}
+            onPress={() =>
+              Alert.alert(
+                "Archive this project?",
+                "This hides it from your lists. You can restore it later from the Archived section on the Projects tab.",
+                [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Archive",
+                    style: "destructive",
+                    onPress: () => archiveProject.mutate(project.id),
+                  },
+                ],
+              )
+            }
           />
         )}
       </View>
@@ -292,7 +328,7 @@ export default function ProjectDetailScreen() {
             </Text>
           </>
         ) : (
-          <Text className="mt-1 text-sm text-neutral-400">No next action</Text>
+          <Text className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">No next action</Text>
         )}
         <View className="mt-2 flex-row items-center gap-2">
           {computed.stalled ? (
@@ -324,7 +360,7 @@ export default function ProjectDetailScreen() {
         </Pressable>
       </View>
       {tasks.items.length === 0 ? (
-        <Text className="text-neutral-400">No tasks in this project.</Text>
+        <Text className="text-neutral-500 dark:text-neutral-400">No tasks in this project.</Text>
       ) : (
         <>
           {openTasks.map((task) => (
@@ -348,7 +384,9 @@ export default function ProjectDetailScreen() {
                     Due {formatShortDateTime(task.due_at)}
                   </Text>
                 ) : null}
-                {task.rrule ? <Text className="text-xs text-neutral-400">↻ Recurring</Text> : null}
+                {task.rrule ? (
+                  <Text className="text-xs text-neutral-500 dark:text-neutral-400">↻ Recurring</Text>
+                ) : null}
               </Pressable>
             </View>
           ))}
@@ -399,7 +437,7 @@ export default function ProjectDetailScreen() {
         </Pressable>
       ))}
       {notes.items.length === 0 ? (
-        <Text className="text-neutral-400">No notes in this project.</Text>
+        <Text className="text-neutral-500 dark:text-neutral-400">No notes in this project.</Text>
       ) : notes.total > notes.items.length ? (
         <Text className="py-2 text-xs text-neutral-500">
           &gt;{notes.total - notes.items.length} more
@@ -434,7 +472,7 @@ export default function ProjectDetailScreen() {
         );
       })}
       {events.items.length === 0 ? (
-        <Text className="text-neutral-400">No events in this project.</Text>
+        <Text className="text-neutral-500 dark:text-neutral-400">No events in this project.</Text>
       ) : events.total > events.items.length ? (
         <Text className="py-2 text-xs text-neutral-500">
           &gt;{events.total - events.items.length} more
