@@ -119,20 +119,22 @@ describe("GoogleHealthApiError classification", () => {
       const err = e as GoogleHealthApiError;
       expect(err.isRateLimited).toBe(true);
       expect(err.isTransient).toBe(true);
-      expect(err.isScopeDenied).toBe(false);
+      expect(err.isForbidden).toBe(false);
     }
   });
 
-  // A denied scope is permanent for ONE stream, not for the connection -- it
-  // must not mark the whole connection needs_reauth.
-  it("classifies 403 as a scope denial, not an auth failure", async () => {
+  // 403 is reported as exactly what it is: forbidden. Whether that means a
+  // denied scope is decided in sync/capability.ts from an evidenced reason
+  // token -- never from the status, which is equally consistent with a
+  // malformed resource name.
+  it("classifies 403 as forbidden, not as an auth failure", async () => {
     const f = fail(403, { error: { message: "Insufficient scope", status: "PERMISSION_DENIED" } });
     try {
       await createGoogleHealthClient(f).getIdentity("t");
       expect.unreachable();
     } catch (e) {
       const err = e as GoogleHealthApiError;
-      expect(err.isScopeDenied).toBe(true);
+      expect(err.isForbidden).toBe(true);
       expect(err.isAuthFailure).toBe(false);
       expect(err.isTransient).toBe(false);
     }
@@ -153,8 +155,136 @@ describe("GoogleHealthApiError classification", () => {
   });
 
   it("tolerates a non-JSON error body", async () => {
+    // An HTML error page from a proxy carries no status token, so the message
+    // degrades to the bare status rather than quoting the page.
     const f = vi.fn().mockResolvedValue(new Response("<html>", { status: 500 }));
-    await expect(createGoogleHealthClient(f).getIdentity("t")).rejects.toThrow(/HTTP 500/);
+    await expect(createGoogleHealthClient(f).getIdentity("t")).rejects.toThrow(
+      "Google Health API 500",
+    );
+  });
+});
+
+describe("GoogleHealthApiError error surface", () => {
+  // Google's error.message is prose; error.details[].reason is the only
+  // machine-readable part. Discarding the reason and keeping only the status is
+  // what made 6.2P misread two request-shape bugs of ours as eight unsupported
+  // metrics.
+  it("surfaces error.details reasons and domains, deduped and order-preserved", async () => {
+    const f = fail(400, {
+      error: {
+        message: "Invalid argument",
+        status: "INVALID_ARGUMENT",
+        details: [
+          { reason: "INVALID_ROLLUP_QUERY_DURATION", domain: "googleapis.com" },
+          { reason: "INVALID_ROLLUP_QUERY_DURATION", domain: "googleapis.com" },
+          { reason: "SECOND_REASON", domain: "health.googleapis.com" },
+        ],
+      },
+    });
+    try {
+      await createGoogleHealthClient(f).getIdentity("t");
+      expect.unreachable();
+    } catch (e) {
+      const err = e as GoogleHealthApiError;
+      expect(err.errorReasons).toEqual(["INVALID_ROLLUP_QUERY_DURATION", "SECOND_REASON"]);
+      expect(err.errorDomains).toEqual(["googleapis.com", "health.googleapis.com"]);
+      expect(err.googleStatus).toBe("INVALID_ARGUMENT");
+    }
+  });
+
+  it("reports empty reason and domain lists when details are absent", async () => {
+    const f = fail(403, { error: { status: "PERMISSION_DENIED" } });
+    try {
+      await createGoogleHealthClient(f).getIdentity("t");
+      expect.unreachable();
+    } catch (e) {
+      const err = e as GoogleHealthApiError;
+      expect(err.errorReasons).toEqual([]);
+      expect(err.errorDomains).toEqual([]);
+    }
+  });
+
+  it("builds the message from status tokens rather than Google's prose", async () => {
+    const f = fail(400, { error: { message: "Unknown name", status: "INVALID_ARGUMENT" } });
+    await expect(createGoogleHealthClient(f).getIdentity("t")).rejects.toThrow(
+      "Google Health API 400 INVALID_ARGUMENT",
+    );
+  });
+
+  it("omits the status token entirely when Google sends none", async () => {
+    const f = fail(418, { error: { message: "teapot" } });
+    await expect(createGoogleHealthClient(f).getIdentity("t")).rejects.toThrow(
+      "Google Health API 418",
+    );
+  });
+
+  // THE reason the message is constructed rather than passed through. Google's
+  // INVALID_ARGUMENT prose echoes the offending request, the worker has no log
+  // redaction, and pg-boss serializes a thrown error into pgboss.job.output --
+  // a durable Postgres table. Anything in this message is stored forever.
+  it("lets no part of Google's message survive onto the error, in any field", async () => {
+    const f = fail(400, {
+      error: {
+        message: 'Unknown name "startTime": secret-value-12345 at heart_rate.beats_per_minute',
+        status: "INVALID_ARGUMENT",
+      },
+    });
+    try {
+      await createGoogleHealthClient(f).getIdentity("t");
+      expect.unreachable();
+    } catch (e) {
+      const err = e as GoogleHealthApiError;
+      expect(err.message).toBe("Google Health API 400 INVALID_ARGUMENT");
+      // Not merely absent from the message -- absent from every enumerable and
+      // non-enumerable own property, so no future field can quietly retain it.
+      const everything =
+        JSON.stringify(err, Object.getOwnPropertyNames(err)) + String(err.stack ?? "");
+      expect(everything).not.toContain("secret-value-12345");
+      expect(everything).not.toContain("beats_per_minute");
+      expect(everything).not.toContain("startTime");
+    }
+  });
+});
+
+describe("request cancellation", () => {
+  // The limiter owns the concurrency budget and therefore owns the deadline.
+  // The client adds no default timeout of its own, so a caller that forgets to
+  // pass a signal gets an obviously unbounded call rather than a silent one.
+  it("passes an AbortSignal through on every method", async () => {
+    const controller = new AbortController();
+
+    const rollup = ok({ rollupDataPoints: [] });
+    await createGoogleHealthClient(rollup).dailyRollUp({
+      accessToken: "t",
+      dataType: "steps",
+      range: { start: civil("2026-08-20"), end: civil("2026-08-24") },
+      signal: controller.signal,
+    });
+    expect(rollup.mock.calls[0]![1]?.signal).toBe(controller.signal);
+
+    const list = ok({ dataPoints: [] });
+    await createGoogleHealthClient(list).list({
+      accessToken: "t",
+      dataType: "sleep",
+      filter: "x",
+      signal: controller.signal,
+    });
+    expect(list.mock.calls[0]![1]?.signal).toBe(controller.signal);
+
+    const reconcile = ok({ dataPoints: [] });
+    await createGoogleHealthClient(reconcile).reconcile({
+      accessToken: "t",
+      dataType: "heart-rate",
+      filter: "x",
+      signal: controller.signal,
+    });
+    expect(reconcile.mock.calls[0]![1]?.signal).toBe(controller.signal);
+  });
+
+  it("sends no signal key at all when none is supplied", async () => {
+    const f = ok({ dataPoints: [] });
+    await createGoogleHealthClient(f).list({ accessToken: "t", dataType: "sleep", filter: "x" });
+    expect(f.mock.calls[0]![1]).not.toHaveProperty("signal");
   });
 });
 

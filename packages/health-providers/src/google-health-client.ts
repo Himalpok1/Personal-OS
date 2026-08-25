@@ -57,7 +57,20 @@ export interface ApiDataPoint {
   [valueField: string]: unknown;
 }
 
-export interface DailyRollUpRequest {
+/**
+ * Cancellation for one request.
+ *
+ * The client deliberately imposes NO default timeout of its own. Whether a call
+ * may run for 5s or 60s is a scheduling decision belonging to the caller that
+ * owns the concurrency budget (the sync limiter), not to the transport. Baking a
+ * default in here would silently override that budget and make the real timeout
+ * invisible at the call site.
+ */
+interface AbortableRequest {
+  signal?: AbortSignal;
+}
+
+export interface DailyRollUpRequest extends AbortableRequest {
   accessToken: string;
   dataType: string;
   range: ApiCivilTimeInterval;
@@ -93,7 +106,7 @@ export interface DailyRollUpResponse {
   nextPageToken?: string;
 }
 
-export interface ListRequest {
+export interface ListRequest extends AbortableRequest {
   accessToken: string;
   dataType: string;
   filter: string;
@@ -118,15 +131,54 @@ export interface GoogleHealthClient {
   reconcile(request: ReconcileRequest): Promise<DataPointPage>;
 }
 
+/**
+ * One entry of Google's structured `error.details[]`.
+ *
+ * This is the ONLY machine-readable part of a Google error. `error.message` is
+ * prose written for a human and is not a stable contract; `reason` is. 6.2P
+ * spent three live attempts misreading a `pageSize` defect as an unsupported
+ * metric precisely because the reason was thrown away and only the HTTP status
+ * survived.
+ *
+ * `metadata` is deliberately NOT surfaced on the error: it is a free-form
+ * string map whose values are Google's to choose, and a value there could carry
+ * a field path, an id or an echoed argument. Reason and domain are the two
+ * fields that are enumerable tokens.
+ */
+export interface ApiErrorDetail {
+  reason?: string;
+  domain?: string;
+  metadata?: Record<string, string>;
+}
+
+function dedupe(values: readonly (string | undefined)[]): readonly string[] {
+  const out: string[] = [];
+  for (const v of values) {
+    if (typeof v === "string" && v !== "" && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
 export class GoogleHealthApiError extends Error {
   readonly httpStatus: number;
   readonly googleStatus: string | undefined;
+  /** Deduped `error.details[].reason`, in the order Google returned them. */
+  readonly errorReasons: readonly string[];
+  /** Deduped `error.details[].domain`, in the order Google returned them. */
+  readonly errorDomains: readonly string[];
 
-  constructor(message: string, httpStatus: number, googleStatus: string | undefined) {
+  constructor(
+    message: string,
+    httpStatus: number,
+    googleStatus: string | undefined,
+    details: readonly ApiErrorDetail[] = [],
+  ) {
     super(message);
     this.name = "GoogleHealthApiError";
     this.httpStatus = httpStatus;
     this.googleStatus = googleStatus;
+    this.errorReasons = dedupe(details.map((d) => d.reason));
+    this.errorDomains = dedupe(details.map((d) => d.domain));
   }
 
   /**
@@ -137,8 +189,11 @@ export class GoogleHealthApiError extends Error {
     return this.httpStatus === 429;
   }
 
-  /** A scope the user did not grant. Permanent for this stream, not the connection. */
-  get isScopeDenied(): boolean {
+  /**
+   * HTTP 403. NOT by itself evidence of a missing scope -- see
+   * sync/capability.ts.
+   */
+  get isForbidden(): boolean {
     return this.httpStatus === 403;
   }
 
@@ -154,7 +209,7 @@ export class GoogleHealthApiError extends Error {
 }
 
 interface ApiErrorBody {
-  error?: { message?: string; status?: string };
+  error?: { message?: string; status?: string; details?: ApiErrorDetail[] };
 }
 
 async function request<T>(
@@ -162,9 +217,11 @@ async function request<T>(
   accessToken: string,
   fetchFn: FetchLike,
   init?: RequestInit,
+  signal?: AbortSignal,
 ): Promise<T> {
   const response = await fetchFn(url, {
     ...init,
+    ...(signal !== undefined ? { signal } : {}),
     headers: {
       ...(init?.headers ?? {}),
       Authorization: `Bearer ${accessToken}`,
@@ -179,12 +236,29 @@ async function request<T>(
     } catch {
       // Non-JSON error body.
     }
-    // The message is Google's, never ours plus a value: health values and
-    // credentials must never reach a log through an error string.
+
+    // The message is CONSTRUCTED from two enumerable tokens. Google's own
+    // error.message is deliberately dropped on the floor and is not retained in
+    // any field of the error.
+    //
+    // This is not caution for its own sake. Google's INVALID_ARGUMENT prose
+    // echoes the offending request -- 6.2P saw `Unknown name "startTime" at
+    // 'range': Cannot find field` verbatim -- so the message is an
+    // attacker-free but caller-controlled channel out of the request body. The
+    // worker process has NO log redaction whatsoever, and pg-boss serializes a
+    // thrown error into pgboss.job.output, which is a durable table. An echoed
+    // filter expression carrying a civil timestamp, or any future request field
+    // holding a value, would therefore be written to Postgres in plaintext and
+    // to stdout, forever, with nothing in the path to catch it.
+    //
+    // The machine-readable half of the error is not lost: it moves to
+    // errorReasons/errorDomains, which are enumerable tokens, not prose.
+    const googleStatus = parsed.error?.status;
     throw new GoogleHealthApiError(
-      parsed.error?.message ?? `Google Health API returned HTTP ${response.status}`,
+      `Google Health API ${response.status}${googleStatus ? ` ${googleStatus}` : ""}`,
       response.status,
-      parsed.error?.status,
+      googleStatus,
+      parsed.error?.details ?? [],
     );
   }
 
@@ -228,6 +302,7 @@ export function createGoogleHealthClient(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         },
+        req.signal,
       );
       return {
         rollupDataPoints: body.rollupDataPoints ?? [],
@@ -245,6 +320,8 @@ export function createGoogleHealthClient(
         `${HEALTH_API_BASE}/users/me/dataTypes/${req.dataType}/dataPoints?${query.toString()}`,
         req.accessToken,
         fetchFn,
+        undefined,
+        req.signal,
       );
       return {
         dataPoints: body.dataPoints ?? [],
@@ -263,6 +340,8 @@ export function createGoogleHealthClient(
         `${HEALTH_API_BASE}/users/me/dataTypes/${req.dataType}/dataPoints:reconcile?${query.toString()}`,
         req.accessToken,
         fetchFn,
+        undefined,
+        req.signal,
       );
       return {
         dataPoints: body.dataPoints ?? [],

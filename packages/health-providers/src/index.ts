@@ -69,3 +69,16 @@ export {
   type HeartRateIdentityInput,
   type SessionIdentityInput,
 } from "./identity.js";
+
+// ---------------------------------------------------------------------------
+// Sync core (Phase 6 Checkpoint 6.3)
+// ---------------------------------------------------------------------------
+
+export {
+  classifyCapability,
+  sanitizeApiError,
+  type CapabilityInput,
+  type CapabilityVerdict,
+  type HealthCapability,
+  type ProviderFault,
+} from "./sync/capability.js";

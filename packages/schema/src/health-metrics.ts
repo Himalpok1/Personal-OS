@@ -43,13 +43,34 @@ export const HealthBackfillStatusSchema = z.enum([
 ]);
 export type HealthBackfillStatus = z.infer<typeof HealthBackfillStatusSchema>;
 
-/** Outcome of the capability probe for one metric on one account. */
+/**
+ * Outcome of the capability assessment for one metric on one account.
+ *
+ * Six members, not five: Checkpoint 6.3 replaced the original vocabulary
+ * because it could not distinguish "this account has never produced this
+ * metric" from "this metric has history, just not inside the window we
+ * fetched". That distinction is the whole reason the 6.2P probe misreported
+ * heart rate and sleep as simply absent.
+ *
+ * The names are deliberately window-qualified. A verdict is always relative
+ * to the range that was actually queried, and a caller that forgets this
+ * draws exactly the wrong conclusion from an empty result.
+ *
+ * `not_supported` is reserved for an explicitly evidenced provider reason.
+ * An ambiguous 400/403/404 is `provider_error` -- never a capability verdict
+ * (see sync/capability.ts in @personal-os/health-providers).
+ *
+ * The `health_metric_streams.capability_status` column is unconstrained
+ * `text` (ADR-050), so this enum is the only gate. It is enforced in both
+ * directions: the worker parses through it on write, not just on read.
+ */
 export const HealthCapabilityStatusSchema = z.enum([
-  "available",
-  "empty",
-  "forbidden",
-  "unsupported",
-  "error",
+  "available_in_window",
+  "supported_empty_in_window",
+  "historical_data_outside_window",
+  "missing_scope",
+  "not_supported",
+  "provider_error",
 ]);
 export type HealthCapabilityStatus = z.infer<typeof HealthCapabilityStatusSchema>;
 
@@ -169,6 +190,9 @@ export const HealthSyncRunSchema = z.object({
   finished_at: z.string().datetime({ offset: true }).nullable(),
 });
 export type HealthSyncRun = z.infer<typeof HealthSyncRunSchema>;
+
+export const HealthSyncRunListResponseSchema = z.object({ items: z.array(HealthSyncRunSchema) });
+export type HealthSyncRunListResponse = z.infer<typeof HealthSyncRunListResponseSchema>;
 
 export const HealthDailyMetricListResponseSchema = paginatedResponseSchema(HealthDailyMetricSchema);
 export const HealthSessionListResponseSchema = paginatedResponseSchema(HealthSessionSchema);
