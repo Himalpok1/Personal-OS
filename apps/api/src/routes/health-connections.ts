@@ -1,12 +1,25 @@
-import { healthConnections, healthMetricStreams } from "@personal-os/db";
+import {
+  clearBackfill,
+  requestBackfillCancel,
+  startBackfill,
+  BackfillTransitionError,
+  type BackfillColumns,
+} from "@personal-os/core/health/backfill";
+import { healthConnections, healthMetricStreams, healthSyncRuns } from "@personal-os/db";
 import {
   buildAuthorizeUrl,
+  getHealthMetric,
   GoogleHealthApiError,
   GoogleHealthOAuthError,
   PHASE_6A_SCOPES,
 } from "@personal-os/health-providers";
 import {
   ConnectGoogleHealthRequestSchema,
+  HealthBackfillRequestSchema,
+  HealthSyncQueuedResponseSchema,
+  HealthSyncRequestSchema,
+  HealthSyncRunListResponseSchema,
+  HealthMetricStreamSchema,
   HealthAuthorizeUrlQuerySchema,
   HealthAuthorizeUrlResponseSchema,
   HealthConnectionListResponseSchema,
@@ -14,8 +27,9 @@ import {
   HealthMetricStreamListResponseSchema,
   HealthStreamUpdateSchema,
 } from "@personal-os/schema";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { HEALTH_SYNC_CONNECTION_QUEUE } from "../queue-names.js";
 import {
   AccountMismatchError,
   assertAllowedRedirectUri,
@@ -284,6 +298,227 @@ export default function healthConnectionsRoutes(app: FastifyInstance): void {
       return reply.send(
         HealthMetricStreamListResponseSchema.parse({ items: rows.map(toStreamResponse) }),
       );
+    },
+  );
+
+  // ---- sync --------------------------------------------------------------
+  // Enqueues ONE connection-level job. There is deliberately no per-metric
+  // sync route: a per-stream job would let all 18 streams of one connection
+  // run concurrently, and "do not overlap syncs for the same connection" is
+  // the whole reason the worker orchestrates a connection at a time.
+  app.post<{ Params: { id: string } }>("/health-connections/:id/sync", async (request, reply) => {
+    const body = HealthSyncRequestSchema.parse(request.body ?? {});
+    const [connection] = await app.db
+      .select()
+      .from(healthConnections)
+      .where(eq(healthConnections.id, request.params.id));
+    if (!connection) return reply.code(404).send({ error: "not_found" });
+    if (connection.status !== "active") {
+      return reply.code(409).send({ error: "connection_not_active", status: connection.status });
+    }
+    if (!app.bossReady) return reply.code(503).send({ error: "queue_unavailable" });
+
+    const payload = {
+      connectionId: connection.id,
+      trigger: "manual" as const,
+      // The requested kind is HONOURED, not discarded. `hot` must keep hot's
+      // non-authoritative rules -- it is the one mode ADR-046 says may never
+      // densify or tombstone -- so silently promoting it to an authoritative
+      // manual pass would inverse exactly the caller's intent.
+      requestedKind: body.kind,
+    };
+    const options = { singletonKey: connection.id, startAfter: 0 };
+
+    // upsert, not send: under `policy: "stately"` a plain send is suppressed
+    // to null when a job is already queued, which would silently drop the
+    // user's request behind a queued scheduled pass. upsert edits that
+    // queued job's payload in place instead, so a manual request always wins
+    // and can never be downgraded. startAfter: 0 is explicit because
+    // updateJob otherwise inherits the existing row's start_after.
+    const result = await app.boss.upsert(HEALTH_SYNC_CONNECTION_QUEUE, payload, options);
+    let queued = result.updated + result.inserted;
+    if (queued === 0) {
+      // Possible when the conflicting row is activated between the match and
+      // the update. A plain send then creates a fresh `created` row, which
+      // `stately` permits alongside the now-active one.
+      const id = await app.boss.send(HEALTH_SYNC_CONNECTION_QUEUE, payload, options);
+      queued = id === null ? 0 : 1;
+    }
+    return reply.code(202).send(HealthSyncQueuedResponseSchema.parse({ queued }));
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
+    "/health-connections/:id/sync-runs",
+    async (request, reply) => {
+      const [connection] = await app.db
+        .select()
+        .from(healthConnections)
+        .where(eq(healthConnections.id, request.params.id));
+      if (!connection) return reply.code(404).send({ error: "not_found" });
+
+      const parsed = Number.parseInt(request.query.limit ?? "50", 10);
+      const limit = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 200) : 50;
+
+      const rows = await app.db
+        .select()
+        .from(healthSyncRuns)
+        .where(eq(healthSyncRuns.connectionId, connection.id))
+        .orderBy(desc(healthSyncRuns.startedAt))
+        .limit(limit);
+
+      return reply.send(
+        HealthSyncRunListResponseSchema.parse({
+          items: rows.map((row) => ({
+            id: row.id,
+            metric: row.metric,
+            kind: row.kind,
+            status: row.status,
+            range_start_date: row.rangeStartDate,
+            range_end_date: row.rangeEndDate,
+            failure_class: row.failureClass,
+            rows_inserted: row.rowsInserted,
+            rows_updated: row.rowsUpdated,
+            rows_unchanged: row.rowsUnchanged,
+            rows_tombstoned: row.rowsTombstoned,
+            rows_rejected: row.rowsRejected,
+            rows_collapsed: row.rowsCollapsed,
+            started_at: row.startedAt.toISOString(),
+            finished_at: row.finishedAt?.toISOString() ?? null,
+          })),
+        }),
+      );
+    },
+  );
+
+  // ---- backfill ----------------------------------------------------------
+  async function loadStream(connectionId: string, metric: string) {
+    const [row] = await app.db
+      .select()
+      .from(healthMetricStreams)
+      .where(
+        and(
+          eq(healthMetricStreams.connectionId, connectionId),
+          eq(healthMetricStreams.metric, metric),
+        ),
+      );
+    return row;
+  }
+
+  async function applyBackfillColumns(streamId: string, columns: BackfillColumns) {
+    // Every transition writes all four columns together. A partial update is
+    // how migration 0013's backfill_invariants CHECK gets violated (23514).
+    const [row] = await app.db
+      .update(healthMetricStreams)
+      .set({
+        backfillStatus: columns.backfillStatus,
+        backfillTargetDate: columns.backfillTargetDate,
+        backfillCursorDate: columns.backfillCursorDate,
+        backfillCancelRequested: columns.backfillCancelRequested,
+        updatedAt: new Date(),
+      })
+      .where(eq(healthMetricStreams.id, streamId))
+      .returning();
+    return row!;
+  }
+
+  app.post<{ Params: { id: string; metric: string } }>(
+    "/health-connections/:id/streams/:metric/backfill",
+    async (request, reply) => {
+      const body = HealthBackfillRequestSchema.parse(request.body);
+      const [connection] = await app.db
+        .select()
+        .from(healthConnections)
+        .where(eq(healthConnections.id, request.params.id));
+      if (!connection) return reply.code(404).send({ error: "not_found" });
+
+      let mode: string;
+      try {
+        mode = getHealthMetric(request.params.metric).mode;
+      } catch {
+        return reply.code(404).send({ error: "unknown_metric", metric: request.params.metric });
+      }
+      // Structural exclusion of heart-rate-intraday, and of any future
+      // reconcile metric, rather than a string blocklist.
+      if (mode === "sample_reconcile") {
+        return reply.code(409).send({ error: "metric_out_of_scope", metric: request.params.metric });
+      }
+
+      const stream = await loadStream(connection.id, request.params.metric);
+      if (!stream) {
+        return reply.code(404).send({ error: "unknown_metric", metric: request.params.metric });
+      }
+      if (!stream.syncEnabled) {
+        return reply.code(409).send({ error: "stream_disabled", metric: request.params.metric });
+      }
+
+      const state = {
+        backfillStatus: stream.backfillStatus as BackfillColumns["backfillStatus"],
+        backfillTargetDate: stream.backfillTargetDate,
+        backfillCursorDate: stream.backfillCursorDate,
+        backfillCancelRequested: stream.backfillCancelRequested,
+        earliestVerifiedDate: stream.earliestVerifiedDate,
+      };
+
+      try {
+        // A request against a settled stream clears to idle first, in the
+        // same call: that is the only caller clearBackfill needs, and it is
+        // how a complete/cancelled/failed backfill is restarted with a new
+        // target without a separate reset route.
+        const base =
+          state.backfillStatus === "idle" ? state : { ...state, ...clearBackfill() };
+        const columns = startBackfill(base, body.target_date, new Date());
+        const updated = await applyBackfillColumns(stream.id, columns);
+
+        if (app.bossReady) {
+          await app.boss.send(
+            HEALTH_SYNC_CONNECTION_QUEUE,
+            { connectionId: connection.id, trigger: "scheduled" as const },
+            { singletonKey: connection.id },
+          );
+        }
+        return reply.send(HealthMetricStreamSchema.parse(toStreamResponse(updated)));
+      } catch (err) {
+        if (err instanceof BackfillTransitionError) {
+          return reply.code(409).send({ error: err.code });
+        }
+        throw err;
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string; metric: string } }>(
+    "/health-connections/:id/streams/:metric/backfill/cancel",
+    async (request, reply) => {
+      const [connection] = await app.db
+        .select()
+        .from(healthConnections)
+        .where(eq(healthConnections.id, request.params.id));
+      if (!connection) return reply.code(404).send({ error: "not_found" });
+
+      const stream = await loadStream(connection.id, request.params.metric);
+      if (!stream) {
+        return reply.code(404).send({ error: "unknown_metric", metric: request.params.metric });
+      }
+
+      try {
+        // Only the flag is set. The worker consumes it at its next chunk
+        // boundary, so a run that is mid-chunk still commits that chunk's
+        // transaction cleanly rather than being torn in half.
+        const columns = requestBackfillCancel({
+          backfillStatus: stream.backfillStatus as BackfillColumns["backfillStatus"],
+          backfillTargetDate: stream.backfillTargetDate,
+          backfillCursorDate: stream.backfillCursorDate,
+          backfillCancelRequested: stream.backfillCancelRequested,
+          earliestVerifiedDate: stream.earliestVerifiedDate,
+        });
+        const updated = await applyBackfillColumns(stream.id, columns);
+        return reply.send(HealthMetricStreamSchema.parse(toStreamResponse(updated)));
+      } catch (err) {
+        if (err instanceof BackfillTransitionError) {
+          return reply.code(409).send({ error: err.code });
+        }
+        throw err;
+      }
     },
   );
 

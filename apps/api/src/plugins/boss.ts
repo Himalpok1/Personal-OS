@@ -9,6 +9,7 @@ import {
   CALENDAR_SYNC_CALENDAR_DEAD_QUEUE,
   CALENDAR_SYNC_CALENDAR_QUEUE,
   CAPTURE_PARSE_QUEUE,
+  HEALTH_SYNC_CONNECTION_QUEUE,
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
   NOTIFICATIONS_DISPATCH_QUEUE,
   OCCURRENCES_GENERATE_LAZY_QUEUE,
@@ -106,6 +107,20 @@ export async function registerBoss(app: FastifyInstance): Promise<void> {
       ...QUEUE_RETRY_OPTIONS[CALENDAR_PUSH_EVENT_QUEUE],
       deadLetter: CALENDAR_PUSH_EVENT_DEAD_QUEUE,
     });
+    // Phase 6 Checkpoint 6.3. apps/api sends to this queue from
+    // POST /health-connections/:id/sync and the backfill routes; the worker
+    // owns the handler. Created identically in both processes because
+    // create_queue is INSERT ... ON CONFLICT DO NOTHING and whichever
+    // process starts first wins the options -- if the API created it without
+    // `policy: "stately"`, the worker's option would be silently discarded
+    // and the per-connection depth bound would be lost.
+    //
+    // Deliberately NO dead-letter queue: retryLimit is 0, so no job can ever
+    // exhaust retries. See the long comment in queue-names.ts.
+    await boss.createQueue(
+      HEALTH_SYNC_CONNECTION_QUEUE,
+      QUEUE_RETRY_OPTIONS[HEALTH_SYNC_CONNECTION_QUEUE],
+    );
   } else {
     app.log.error(
       "pg-boss did not start after retries; capture/occurrence/transcription/notification jobs will not be enqueued",

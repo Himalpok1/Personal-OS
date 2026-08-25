@@ -34,7 +34,50 @@ export const CALENDAR_PUSH_EVENT_DEAD_QUEUE = "calendar.google.push-event.dead";
 // must match apps/api/src/queue-names.ts's QUEUE_RETRY_OPTIONS exactly for
 // the two queues apps/api also creates (capture.parse and
 // occurrences.generate-lazy). occurrences.expand-window is worker-only.
+
+// Phase 6 Checkpoint 6.3 (Google Health sync). ONE shared queue, no dead-letter.
+//
+// WHY THERE IS NO DEAD-LETTER QUEUE AND NO pg-boss RETRY:
+//
+// `policy: "stately"` is what bounds queue depth (one job per state per
+// singletonKey, enforced by pg-boss's `job_i3` unique index). But pg-boss
+// documents, at dist/manager.js:1293, that under exactly this policy "the
+// retry insert can be dropped by ON CONFLICT when the queue policy (e.g.
+// stately, singleton, key_strict_fifo) already has a non-terminal job" -- in
+// which case the job is re-inserted as `failed` and pushed straight to the
+// dead-letter queue, skipping its remaining retryLimit. With an hourly cron
+// and a persistent fault, a *first* transient failure could therefore reach a
+// handler meant for terminal cleanup.
+//
+// `retryLimit: 0` removes the interaction entirely: no `retry` rows exist, so
+// no retry can be dropped, nothing is spuriously dead-lettered, and the depth
+// bound becomes exactly one `created` + one `active` per connection. Health
+// sync is idempotent and cron-driven -- the hourly tick IS the retry, and a
+// better one, because it re-derives the window from current state instead of
+// replaying a stale job. Provider-level retries live in the limiter
+// (@personal-os/health-providers sync/limiter.ts), bounded and full-jittered.
+//
+// `expireInSeconds` must stay strictly greater than the limiter's
+// passBudgetMs (600s), or pg-boss's 15-minute default would un-`active` a job
+// whose handler is still running and still holding its connection advisory
+// lock.
+export const HEALTH_SYNC_CONNECTION_QUEUE = "health.google.sync-connection";
+
 export const QUEUE_RETRY_OPTIONS = {
+  // Per-connection serialization AND duplicate suppression. singletonKey is
+  // `${connectionId}`, so every trigger -- hourly cron, app-open, manual
+  // "sync now" -- collapses onto one slot per connection, and at most one
+  // job per connection is ever active. See the block above for retryLimit 0.
+  [HEALTH_SYNC_CONNECTION_QUEUE]: {
+    // "stately", NOT "singleton": singleton allows 1 active but UNLIMITED
+    // queued, which is serialization without duplicate suppression. stately
+    // allows one job per state, so with retryLimit 0 (no `retry` rows) the
+    // depth is provably one `created` + one `active` per connection, forever,
+    // regardless of how fast requests arrive.
+    policy: "stately",
+    retryLimit: 0,
+    expireInSeconds: 900,
+  },
   [CAPTURE_PARSE_QUEUE]: { retryLimit: 5, retryDelay: 30, retryBackoff: true },
   [OCCURRENCES_EXPAND_WINDOW_QUEUE]: { retryLimit: 3, retryDelay: 60 },
   [OCCURRENCES_GENERATE_LAZY_QUEUE]: { retryLimit: 5, retryDelay: 15, retryBackoff: true },

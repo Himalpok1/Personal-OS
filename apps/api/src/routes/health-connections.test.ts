@@ -1,10 +1,16 @@
 import { decryptSecret } from "@personal-os/ai-providers";
-import { healthConnections, healthMetricStreams, healthOauthStates } from "@personal-os/db";
+import {
+  healthConnections,
+  healthMetricStreams,
+  healthOauthStates,
+  healthSyncRuns,
+} from "@personal-os/db";
 import { createFakeGoogleHealthClient, PHASE_6A_SCOPES } from "@personal-os/health-providers";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
+import { HEALTH_SYNC_CONNECTION_QUEUE } from "../queue-names.js";
 
 const REDIRECT = "https://personal-os.tail62a68f.ts.net/health-connections/google/callback";
 const ALT_REDIRECT = "https://alt.example.ts.net/health-connections/google/callback";
@@ -628,6 +634,222 @@ describe("connection reads", () => {
     const res = await app.inject({
       method: "GET",
       url: "/health-connections/11111111-1111-4111-8111-111111111111/streams",
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Checkpoint 6.3 -- sync, sync-runs and backfill routes
+// ---------------------------------------------------------------------------
+
+async function connectedId(): Promise<string> {
+  await connect();
+  const [row] = await app.db.select().from(healthConnections);
+  return row!.id;
+}
+
+describe("POST /health-connections/:id/sync", () => {
+  it("enqueues exactly one connection-level job and reports it", async () => {
+    const id = await connectedId();
+    const res = await app.inject({ method: "POST", url: `/health-connections/${id}/sync` });
+    expect(res.statusCode).toBe(202);
+    expect(res.json<{ queued: number }>().queued).toBe(1);
+  });
+
+  it("suppresses duplicates: repeated requests never build an unbounded queue", async () => {
+    const id = await connectedId();
+    // `stately` allows one job per state per singletonKey. With retryLimit 0
+    // no `retry` row can exist, so the depth is provably <= 1 created + 1
+    // active per connection no matter how fast requests arrive.
+    for (let i = 0; i < 25; i += 1) {
+      const res = await app.inject({ method: "POST", url: `/health-connections/${id}/sync` });
+      expect(res.statusCode).toBe(202);
+    }
+    const rows = await app.db.execute(
+      sql`select count(*)::int as n from pgboss.job
+          where name = ${HEALTH_SYNC_CONNECTION_QUEUE}
+            and singleton_key = ${id}
+            and state < 'completed'`,
+    );
+    const n = (rows.rows[0] as { n: number }).n;
+    expect(n).toBeLessThanOrEqual(2);
+  });
+
+  it("honours an explicit kind:hot rather than promoting it to an authoritative pass", async () => {
+    const id = await connectedId();
+    const res = await app.inject({
+      method: "POST",
+      url: `/health-connections/${id}/sync`,
+      payload: { kind: "hot" },
+    });
+    expect(res.statusCode).toBe(202);
+    const rows = await app.db.execute(
+      sql`select data from pgboss.job
+          where name = ${HEALTH_SYNC_CONNECTION_QUEUE} and singleton_key = ${id}
+          order by created_on desc limit 1`,
+    );
+    const data = (rows.rows[0] as { data: { requestedKind?: string; trigger?: string } }).data;
+    expect(data.requestedKind).toBe("hot");
+    expect(data.trigger).toBe("manual");
+  });
+
+  it("carries no token and no health value in the job payload", async () => {
+    const id = await connectedId();
+    await app.inject({ method: "POST", url: `/health-connections/${id}/sync` });
+    const rows = await app.db.execute(
+      sql`select data::text as d from pgboss.job
+          where name = ${HEALTH_SYNC_CONNECTION_QUEUE} and singleton_key = ${id} limit 1`,
+    );
+    const d = (rows.rows[0] as { d: string }).d;
+    expect(d).not.toMatch(/ya29\.|1\/\/|access_token|refresh_token|ciphertext/i);
+  });
+
+  it("409s when the connection is not active", async () => {
+    const id = await connectedId();
+    await app.db
+      .update(healthConnections)
+      .set({ status: "needs_reauth" })
+      .where(eq(healthConnections.id, id));
+    const res = await app.inject({ method: "POST", url: `/health-connections/${id}/sync` });
+    expect(res.statusCode).toBe(409);
+    expect(res.json<{ error: string }>().error).toBe("connection_not_active");
+  });
+
+  it("404s for an unknown connection", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/health-connections/11111111-1111-4111-8111-111111111111/sync",
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+describe("GET /health-connections/:id/sync-runs", () => {
+  it("returns runs newest-first and never exposes error_message", async () => {
+    const id = await connectedId();
+    const [stream] = await app.db
+      .select()
+      .from(healthMetricStreams)
+      .where(eq(healthMetricStreams.metric, "steps"));
+    for (const [i, metric] of ["steps", "distance"].entries()) {
+      await app.db.insert(healthSyncRuns).values({
+        connectionId: id,
+        streamId: stream!.id,
+        metric,
+        kind: "warm",
+        rangeStartDate: "2026-08-01",
+        rangeEndDate: "2026-08-02",
+        status: "succeeded",
+        startedAt: new Date(Date.UTC(2026, 7, 20 + i)),
+      });
+    }
+    const res = await app.inject({ method: "GET", url: `/health-connections/${id}/sync-runs` });
+    expect(res.statusCode).toBe(200);
+    const items = res.json<{ items: { metric: string }[] }>().items;
+    expect(items.map((r) => r.metric)).toEqual(["distance", "steps"]);
+    // HealthSyncRunSchema deliberately omits error_message: it is free text
+    // and must never reach a client.
+    expect(res.body).not.toContain("error_message");
+  });
+});
+
+describe("backfill routes", () => {
+  async function streamRow(connectionId: string, metric: string) {
+    const [row] = await app.db
+      .select()
+      .from(healthMetricStreams)
+      .where(
+        and(
+          eq(healthMetricStreams.connectionId, connectionId),
+          eq(healthMetricStreams.metric, metric),
+        ),
+      );
+    return row!;
+  }
+
+  it("starts a backfill, setting status/target/cursor together", async () => {
+    const id = await connectedId();
+    await app.db
+      .update(healthMetricStreams)
+      .set({ earliestVerifiedDate: "2026-07-01" })
+      .where(
+        and(eq(healthMetricStreams.connectionId, id), eq(healthMetricStreams.metric, "steps")),
+      );
+    const res = await app.inject({
+      method: "POST",
+      url: `/health-connections/${id}/streams/steps/backfill`,
+      payload: { target_date: "2026-01-01" },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = await streamRow(id, "steps");
+    expect(row.backfillStatus).toBe("running");
+    expect(row.backfillTargetDate).toBe("2026-01-01");
+    expect(row.backfillCursorDate).toBe("2026-07-01");
+    expect(row.backfillCancelRequested).toBe(false);
+  });
+
+  it("cancel sets only the flag, leaving the run for the worker to settle", async () => {
+    const id = await connectedId();
+    await app.inject({
+      method: "POST",
+      url: `/health-connections/${id}/streams/steps/backfill`,
+      payload: { target_date: "2026-01-01" },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/health-connections/${id}/streams/steps/backfill/cancel`,
+    });
+    expect(res.statusCode).toBe(200);
+    const row = await streamRow(id, "steps");
+    expect(row.backfillCancelRequested).toBe(true);
+    expect(row.backfillStatus).toBe("running");
+  });
+
+  it("409s a cancel when nothing is running", async () => {
+    const id = await connectedId();
+    const res = await app.inject({
+      method: "POST",
+      url: `/health-connections/${id}/streams/steps/backfill/cancel`,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json<{ error: string }>().error).toBe("backfill_not_running");
+  });
+
+  it("409s heart-rate-intraday structurally, by acquisition mode", async () => {
+    const id = await connectedId();
+    const res = await app.inject({
+      method: "POST",
+      url: `/health-connections/${id}/streams/heart-rate-intraday/backfill`,
+      payload: { target_date: "2026-01-01" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json<{ error: string }>().error).toBe("metric_out_of_scope");
+  });
+
+  it("409s a target that is not strictly older than the verified frontier", async () => {
+    const id = await connectedId();
+    await app.db
+      .update(healthMetricStreams)
+      .set({ earliestVerifiedDate: "2026-07-01" })
+      .where(
+        and(eq(healthMetricStreams.connectionId, id), eq(healthMetricStreams.metric, "steps")),
+      );
+    const res = await app.inject({
+      method: "POST",
+      url: `/health-connections/${id}/streams/steps/backfill`,
+      payload: { target_date: "2026-08-01" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json<{ error: string }>().error).toBe("backfill_target_not_in_past");
+  });
+
+  it("404s an unknown metric", async () => {
+    const id = await connectedId();
+    const res = await app.inject({
+      method: "POST",
+      url: `/health-connections/${id}/streams/not-a-metric/backfill`,
+      payload: { target_date: "2026-01-01" },
     });
     expect(res.statusCode).toBe(404);
   });
