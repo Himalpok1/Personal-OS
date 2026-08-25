@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@personal-os/core": "workspace:*",
+    "@personal-os/schema": "workspace:*",
     "fast-xml-parser": "^5.11.0",
     "ical.js": "^2.2.1"
   },

@@ -9,8 +9,11 @@ import {
   refreshAccessToken,
   type CalDavClient,
   type GoogleCalendarClient,
+  classifyCalendarProviderError,
   type GoogleEventWriteBody,
 } from "@personal-os/calendar-providers";
+import { CALENDAR_PUSH_EVENT_QUEUE } from "../queue-names.js";
+import { withCalendarJobErrorContainment } from "./calendar-job-error.js";
 import {
   calendarConnections,
   calendarEventInstances,
@@ -148,6 +151,18 @@ function eventRowToGoogleWriteBody(
 }
 
 export function createCalendarPushEventHandler(
+  db: Db,
+  googleClient: GoogleCalendarClient,
+  caldavClient?: CalDavClient,
+): (jobs: Job<CalendarPushEventJobData>[]) => Promise<void> {
+  // See calendar-job-error.ts.
+  return withCalendarJobErrorContainment(
+    CALENDAR_PUSH_EVENT_QUEUE,
+    createCalendarPushEventHandlerUncontained(db, googleClient, caldavClient),
+  );
+}
+
+function createCalendarPushEventHandlerUncontained(
   db: Db,
   googleClient: GoogleCalendarClient,
   caldavClient?: CalDavClient,
@@ -373,7 +388,12 @@ export function createCalendarPushEventHandler(
         if (err instanceof GoogleOAuthError && err.isPermanent) {
           await db
             .update(calendarConnections)
-            .set({ status: "needs_reauth", lastSyncError: err.message, updatedAt: new Date() })
+            .set({
+              status: "needs_reauth",
+              // See calendar-sync-calendar.ts: err.message is provider prose.
+              lastSyncError: classifyCalendarProviderError(err),
+              updatedAt: new Date(),
+            })
             .where(eq(calendarConnections.id, connection.id));
           continue;
         }

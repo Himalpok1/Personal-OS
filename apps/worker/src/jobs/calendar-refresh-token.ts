@@ -1,10 +1,16 @@
 import { decryptSecret, encryptSecret } from "@personal-os/ai-providers";
-import { GoogleOAuthError, refreshAccessToken } from "@personal-os/calendar-providers";
+import {
+  GoogleOAuthError,
+  classifyCalendarProviderError,
+  refreshAccessToken,
+} from "@personal-os/calendar-providers";
+import type { CalendarSyncErrorCode } from "@personal-os/schema";
 import { calendarConnections, devices, type Db } from "@personal-os/db";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Job, PgBoss } from "pg-boss";
 import { env } from "../env.js";
-import { NOTIFICATIONS_DISPATCH_QUEUE } from "../queue-names.js";
+import { CALENDAR_REFRESH_TOKEN_QUEUE, NOTIFICATIONS_DISPATCH_QUEUE } from "../queue-names.js";
+import { withCalendarJobErrorContainment } from "./calendar-job-error.js";
 
 export interface CalendarRefreshTokenJobData {
   connectionId: string;
@@ -17,6 +23,17 @@ export interface CalendarRefreshTokenJobData {
 const REFRESH_MARGIN_MS = 10 * 60_000;
 
 export function createCalendarRefreshTokenHandler(
+  db: Db,
+  boss: PgBoss,
+): (jobs: Job<CalendarRefreshTokenJobData>[]) => Promise<void> {
+  // See calendar-job-error.ts.
+  return withCalendarJobErrorContainment(
+    CALENDAR_REFRESH_TOKEN_QUEUE,
+    createCalendarRefreshTokenHandlerUncontained(db, boss),
+  );
+}
+
+function createCalendarRefreshTokenHandlerUncontained(
   db: Db,
   boss: PgBoss,
 ): (jobs: Job<CalendarRefreshTokenJobData>[]) => Promise<void> {
@@ -40,7 +57,7 @@ export function createCalendarRefreshTokenHandler(
         // No refresh token stored at all -- treat identically to a
         // permanent OAuth failure (nothing this job can do without the
         // user re-authorizing).
-        await markNeedsReauth(db, boss, connection.id, "no refresh token stored");
+        await markNeedsReauth(db, boss, connection.id, "auth_expired");
         continue;
       }
 
@@ -79,7 +96,8 @@ export function createCalendarRefreshTokenHandler(
         // being used, per google-oauth.ts's documented contract.
       } catch (err) {
         if (err instanceof GoogleOAuthError && err.isPermanent) {
-          await markNeedsReauth(db, boss, connection.id, err.message);
+          // Never err.message -- see calendar-sync-calendar.ts.
+          await markNeedsReauth(db, boss, connection.id, classifyCalendarProviderError(err));
           continue; // permanent -- no retry
         }
         throw err; // transient -- let pg-boss retry
@@ -92,7 +110,7 @@ async function markNeedsReauth(
   db: Db,
   boss: PgBoss,
   connectionId: string,
-  reason: string,
+  reason: CalendarSyncErrorCode,
 ): Promise<void> {
   const [updated] = await db
     .update(calendarConnections)
@@ -142,7 +160,7 @@ export function createCalendarRefreshTokenDeadLetterHandler(
       await db
         .update(calendarConnections)
         .set({
-          lastSyncError: "calendar.google.refresh-token: retries exhausted (transient)",
+          lastSyncError: "retries_exhausted" satisfies CalendarSyncErrorCode,
           updatedAt: new Date(),
         })
         .where(eq(calendarConnections.id, job.data.connectionId));

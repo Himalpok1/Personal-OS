@@ -518,7 +518,7 @@ describe("calendar.google.sync-calendar", () => {
       .select()
       .from(calendarConnections)
       .where(eq(calendarConnections.id, connectionId));
-    expect(row?.lastSyncError).toContain("retries exhausted");
+    expect(row?.lastSyncError).toBe("retries_exhausted");
   });
 
   describe("deterministic conflict resolution and baseline invariants", () => {

@@ -14,8 +14,12 @@ import {
   type GoogleCalendarClient,
   type GoogleCalendarEvent,
   type LocalEventFields,
+  classifyCalendarProviderError,
   type LocalMutationIntent,
 } from "@personal-os/calendar-providers";
+import type { CalendarSyncErrorCode } from "@personal-os/schema";
+import { CALENDAR_SYNC_CALENDAR_QUEUE } from "../queue-names.js";
+import { withCalendarJobErrorContainment } from "./calendar-job-error.js";
 import {
   calendarConnectionCalendars,
   calendarConnections,
@@ -945,7 +949,14 @@ export async function runCalendarSync(
     if (err instanceof GoogleOAuthError && err.isPermanent) {
       await db
         .update(calendarConnections)
-        .set({ status: "needs_reauth", lastSyncError: err.message, updatedAt: new Date() })
+        .set({
+          status: "needs_reauth",
+          // Never err.message: for Google that is `error_description`, i.e.
+          // vendor prose lifted verbatim out of the token endpoint's JSON
+          // body, and this column is projected by GET /calendar-connections.
+          lastSyncError: classifyCalendarProviderError(err),
+          updatedAt: new Date(),
+        })
         .where(eq(calendarConnections.id, connection.id));
       return;
     }
@@ -1030,6 +1041,19 @@ export function createCalendarSyncCalendarHandler(
   client: GoogleCalendarClient,
   caldavClient?: CalDavClient,
 ): (jobs: Job<CalendarSyncCalendarJobData>[]) => Promise<void> {
+  // Nothing provider-authored may reach pgboss.job.output -- see
+  // calendar-job-error.ts.
+  return withCalendarJobErrorContainment(
+    CALENDAR_SYNC_CALENDAR_QUEUE,
+    createCalendarSyncCalendarHandlerUncontained(db, client, caldavClient),
+  );
+}
+
+function createCalendarSyncCalendarHandlerUncontained(
+  db: Db,
+  client: GoogleCalendarClient,
+  caldavClient?: CalDavClient,
+): (jobs: Job<CalendarSyncCalendarJobData>[]) => Promise<void> {
   return async function handleCalendarSyncCalendar(jobs) {
     for (const job of jobs) {
       await runCalendarSync({ db, client, caldavClient }, job.data);
@@ -1045,7 +1069,7 @@ export function createCalendarSyncCalendarDeadLetterHandler(
       await db
         .update(calendarConnections)
         .set({
-          lastSyncError: "calendar.sync-calendar: retries exhausted",
+          lastSyncError: "retries_exhausted" satisfies CalendarSyncErrorCode,
           updatedAt: new Date(),
         })
         .where(eq(calendarConnections.id, job.data.connectionId));

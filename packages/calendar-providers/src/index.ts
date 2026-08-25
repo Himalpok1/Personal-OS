@@ -70,3 +70,8 @@ export {
 } from "./caldav/translate.js";
 
 export { validateCalDavUrl, isSameOrigin } from "./caldav/ssrf.js";
+
+export {
+  classifyCalendarProviderError,
+  classifyStoredCalendarSyncError,
+} from "./classify-error.js";

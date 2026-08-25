@@ -134,7 +134,13 @@ describe("calendar.google.refresh-token", () => {
       .from(calendarConnections)
       .where(eq(calendarConnections.id, connectionId));
     expect(row?.status).toBe("needs_reauth");
-    expect(row?.lastSyncError).toContain("revoked");
+    // This assertion previously read `toContain("revoked")` -- i.e. it PINNED
+    // the defect: "Token has been revoked" is Google's own error_description,
+    // and asserting it survived into the column is asserting the leak works.
+    // The column now carries a classification code and nothing else.
+    expect(row?.lastSyncError).toBe("auth_expired");
+    expect(row?.lastSyncError).not.toContain("revoked");
+    expect(row?.lastSyncError).not.toContain("Token");
     expect(boss.send).toHaveBeenCalledTimes(1);
     const [queueName, payload] = boss.send.mock.calls[0] as [string, Record<string, unknown>];
     expect(queueName).toBe("notifications.dispatch");
@@ -165,7 +171,7 @@ describe("calendar.google.refresh-token", () => {
       .from(calendarConnections)
       .where(eq(calendarConnections.id, connectionId));
     expect(row?.status).toBe("active");
-    expect(row?.lastSyncError).toContain("retries exhausted");
+    expect(row?.lastSyncError).toBe("retries_exhausted");
   });
 
   describe("enqueueCalendarRefreshForAllActiveConnections (provider scoping)", () => {

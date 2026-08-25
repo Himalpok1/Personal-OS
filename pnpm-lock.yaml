@@ -334,6 +334,9 @@ importers:
       '@personal-os/core':
         specifier: workspace:*
         version: link:../core
+      '@personal-os/schema':
+        specifier: workspace:*
+        version: link:../schema
       fast-xml-parser:
         specifier: ^5.11.0
         version: 5.11.0
