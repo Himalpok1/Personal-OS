@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L and 6.4 COMPLETE (6.3/6.3L/6.4 local only, 6.4 on 2026-08-25).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`. Neither is merged to `main`. 6.5 (hardening) is next and requires separate approval.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
-**Implementation status:** Phases 0–5 are implemented and production-deployed. **Production migration level is unchanged at 0000–0012 = 13 migrations**; Phase 6's additive `0013` exists in local dev/test only and is not deployed. **Checkpoints 6.3, 6.3L and 6.4 added NO migration** — the local level stays at 14 `.sql` / 14 journal entries. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
-**Next phase allowed:** **Checkpoint 6.5 (hardening), on separate explicit approval only.** 6.0–6.4 are closed. 6.4 delivered the read surface and the Health UI on web; **no physical Rabbit pass was run and no APK was built** — `versionCode` is untouched at 6, so on-device verification is 6.5's or 6.7's to do. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app remains in **Testing**, so the development refresh token expires **2026-08-31T23:57:45Z**. Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
+**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4 and 6.5 COMPLETE (6.3/6.3L/6.4/6.5 local only; 6.4 and 6.5 on 2026-08-25).** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`. Neither is merged to `main`. 6.5 (hardening) is next and requires separate approval.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Implementation status:** Phases 0–5 are implemented and production-deployed. **Production migration level is unchanged at 0000–0012 = 13 migrations**; Phase 6's additive `0013` exists in local dev/test only and is not deployed. **Checkpoints 6.3, 6.3L, 6.4 and 6.5 added NO migration** — the local level stays at 14 `.sql` / 14 journal entries. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
+**Next phase allowed:** **Checkpoint 6.6 (full live proof), on separate explicit approval only.** 6.0–6.5 are closed. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app remains in **Testing**, so the development refresh token expires **2026-08-31T23:57:45Z**. Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 6 — Google Health Integration (plan approved 2026-08-24)
@@ -103,6 +103,196 @@ liveness probe, so Phase 6 uses `health-*` siblings throughout (C7).
 **Deliberately not yet changed (C6):** the three lines asserting "13 `.sql` files, 13
 journal entries, **no 0013**" remain **accurate** until migration `0013` actually lands in
 Checkpoint 6.1, and are updated then — not pre-emptively.
+
+### Checkpoint 6.5 — Full product audit, Rabbit verification and hardening (COMPLETE, local only, 2026-08-25)
+
+Built on branch `phase-6-audit-hardening` from `d5e4cb5` (main, with 6.4 already fast-forwarded
+in). HEAD `df08da8`, 16 commits, **not merged to `main`**. No production access, no deployment,
+no OAuth publishing, **no live Google call**, **no migration** — the local level stays 14 `.sql` /
+14 journal entries and production stays 0000–0012. `versionCode` untouched at **6**; `.env` still
+on the loopback callback; `health_observations` still empty; `heart-rate-intraday` still
+`sync_enabled = false`; F5 still holds `capture-1.json` only.
+
+Nineteen sub-agents across three waves: nine read-only discovery/audit agents, five implementers
+under strictly disjoint file ownership, and five adversarial/verification agents. The integrator
+owned every shared file — schemas, route registration, navigation, dependencies, `pnpm-lock.yaml`,
+Android config, docs — plus every commit and every database-backed test run.
+
+#### The headline: Google's own prose was reaching the screen
+
+`calendar_connections.last_sync_error` was a free-text column used two incompatible ways at once.
+Three worker sites wrote `err.message` into it; for Google that message is
+`parsedError.error_description`, lifted verbatim out of the token endpoint's JSON error body. The
+API projected the column, and Settings interpolated it into the "Reconnect Google Calendar"
+banner. `docs/STATUS.md` had recorded the render site as known debt; the audit found it was the
+**terminal sink of a seven-hop chain**, not a display nit.
+
+Two further hops were worse than the recorded one, and neither was known:
+
+- **`POST /calendar-connections/google` and `/caldav` returned `message: err.message` outright** —
+  a synchronous leak at connect time needing no database round trip at all.
+- **pg-boss persists whatever a failing handler throws.** `mapCompletionDataArg` hands it to
+  `serialize-error`, which copies every own-enumerable property, so an escaping `CalDavError`
+  wrote its `responseBody` — the provider's full raw response body — into `pgboss.job.output`, a
+  durable Postgres table. `HealthSyncJobError` has contained exactly this for the health pass
+  since 6.3; the three calendar jobs predate that discipline and never got it.
+
+The fix is structural rather than a review rule. `CalendarSyncErrorCode` is a closed enum of
+twelve **actionable** states (never HTTP statuses — two failures a user would respond to
+identically share a code). `CalendarConnectionSchema` types the wire field as that enum rather
+than `z.string()`, so an accidental leak becomes a **parse failure at the API boundary** instead
+of a silently-passing free-text field — the same trick `HealthMetricPointSchema`'s state refine
+uses to make a fabricated zero inexpressible. `sanitizeCalendarSyncErrorCode` collapses anything
+unrecognised to `provider_error`, which is what makes rows written by earlier builds safe **with
+no data migration**. Classification reads the provider's *structured* fields — `googleErrorCode`,
+`googleReason`, `isConflict` — never a human message, which is the check that breaks silently the
+first time a vendor rewords an error; HTTP status is the last resort, because a Google 403 is
+usually a scope problem while a CalDAV 403 is a plain refusal and CalDAV has no scope concept.
+
+**One existing test asserted `expect(lastSyncError).toContain("revoked")` against a fixture whose
+`error_description` is "Token has been revoked".** It was pinning the leak as correct behaviour.
+Corrected, not loosened, and it now asserts the prose is absent.
+
+#### The log was leaking too, and the first fix was breakable
+
+`buildLoggerOptions` overrode only `req`. Fastify **merges** custom serializers over its own
+defaults, so `err` silently kept `pino.stdSerializers.err` — which emits type/message/stack, then
+copies every own-enumerable property of the error, then attaches the untouched original as `.raw`.
+`GET /calendar-connections/:id/available-calendars` has no local catch and neither provider error
+class exposes a numeric `statusCode`, so both miss the error handler's 4xx branch and reach
+`request.log.error({ err })` carrying Google's message or CalDAV's raw body. A `pg` constraint
+violation on the same line would carry `detail`, i.e. the user's own task titles and capture text.
+
+The replacement emits exactly four allowlisted fields. **The adversarial review then broke it.**
+The first version stripped the stack's header by keeping only lines starting with `at ` — but V8
+puts `<name>: <message>` at the head of the stack, and a provider-controlled message containing
+its own line shaped like `    at attacker (leak-<secret>.js:1:1)` passes that filter intact. It
+was reproduced live against the real function. Provider-authored errors now have their stack
+withheld outright, and for errors we author the header is removed **by length** — exactly
+`${name}: ${message}`, however many lines that spans — with the frame filter as a second layer
+rather than the only one. The test asserting the old behaviour encoded the disproved premise and
+was corrected.
+
+A Fastify subtlety worth recording: `SerializedError` must carry Fastify's index signature **and**
+a non-optional `stack`. Without both, the options object stops matching Fastify's overload and
+`Fastify()` silently resolves to its **HTTP/2** signature, breaking every downstream
+`FastifyInstance` annotation in the app. That surfaced as ~20 unrelated-looking type errors.
+
+#### Every other provider-connection surface got the same sweep
+
+`POST /ai/providers/:id/test` returned `err.message` off a vendor SDK — the one route whose whole
+job is to call a user-supplied endpoint with a user-supplied key. Now a bounded classification.
+Health was **already** disciplined (`markHealthConnectionNeedsReauth` documents that Google's prose
+must not reach a stored column), but the pre-6.4 connection-management routes still projected the
+raw string, a wider contract than the architecture's own rule. Unlike calendar there is no closed
+enum to freeze — the health failure-class set legitimately grows, and ADR-050 keeps it out of a
+CHECK — so what is enforced is the **shape**: a lowercase machine token with an optional
+`:`-qualifier. Prose cannot satisfy it, so a future writer that reaches for a message fails there
+rather than on a user's screen.
+
+#### The product audit found a P1 dead end nobody had noticed
+
+The task, note and event **detail screens** gated on `isLoading || !item` and never read `isError`.
+The query hooks retry, then settle to `isError: true, data: undefined` — so `!item` stays true
+forever and the screen spins permanently with no message, no retry and no way out but Back. It
+reproduces on any unreachable API **and on a deep link to a deleted id, which is exactly what a
+stale reminder notification is.** Branch order is now loading → error → not-found → content.
+
+Also fixed across 29 mobile files: no destructive action in the app had a confirmation (Revoke,
+both Disconnects, Forget-this-device, and four Archives now confirm, with copy that is honest per
+type — only projects have an Archived section to restore from, so only that dialog promises one);
+a revoked device could not recover, because the auto-clear path lives on a device card that cannot
+render once the device list itself 401s; six sites put `API error 422: google_oauth_failed` on
+screen; five list screens had no Retry; ~28px selection chips in seven files, 36px recurrence
+weekday circles, and 40px review/agenda rows all sat under the app's own 44px convention while
+signalling selection by colour and weight alone; `text-neutral-400` with no dark variant is about
+2.5:1 on white and was used for **empty-state copy**, often the only text on screen; and the
+hour-gutter labels were 9px at that same ratio.
+
+#### The adversarial wave earned its keep
+
+Beyond the serializer escape, an independent review of the parallel UI work found seven real
+defects that existed **because each lane could only see its own files**: Retry offered on a
+terminal 404 in three screens (the same commit had already got it right in a fourth); fourteen
+Retry buttons drifted into four shapes; Settings kept the one error state with no Retry, on the
+file most heavily reworked; the FAB badge relied on `pointerEvents="none"` to stay out of the
+accessibility tree, which it does not — that governs touch dispatch, and a bare `<Text>` stays
+discoverable, so removing its label left a screen reader able to land on a context-free count; the
+Settings gear, mounted on every tab, had no accessible name and sat in a file no lane owned; chips
+got `min-h-` but not `min-w-`; and the Google Calendar link error still interpolated
+`ApiClientError.message`.
+
+**A regression the full suite caught, which review had not.** `usePlaceholderColor` reaches
+`nativewind`, whose entry point the mobile vitest transform cannot parse — importing it throws
+`SyntaxError: Unexpected token 'typeof'` and takes the **whole suite file** to zero tests.
+`events-screen.test.tsx` and `recurrence-editor.test.tsx` both collapsed. Aliased to a mock, the
+route already taken for `expo-router`, with a guard test that names the reason if the alias is
+ever dropped.
+
+#### Physical Rabbit R1 verification — the gap 6.4 left open
+
+Run on the real device (Android 16 / SDK 36, 480×640, density override 190) through the
+established side-by-side `com.himal.personalos.dev` UI-test identity. **Production
+`com.himal.personalos` was never targeted by any install, uninstall, clear, force-stop or data
+command**, and its evidence is identical before and after: versionCode `6`, versionName `1.0.0`,
+`firstInstallTime 2026-08-19 16:26:10`, `lastUpdateTime 2026-08-24 05:17:43`, dataDir unchanged.
+The dev package was uninstalled afterwards, the pushed APK and UI dumps removed, and the `adb
+reverse` mapping cleared, leaving only the production package installed.
+
+A release-mode UI-test APK was used rather than a debug build, so **no Metro or other watch server
+was ever started** — the API ran as a single one-shot `node` process against the local dev
+database, and **the worker was never started, so no scheduled fan-out and no Google call was
+reachable**. Values are deliberately not reproduced here.
+
+| Workflow | Result |
+|---|---|
+| Cold launch, existing session | Launches to Today with live dev-API data through `adb reverse`; zero crash-buffer entries |
+| Five tabs | Today / Inbox / Notes / Projects / Calendar all render and switch |
+| Health entry from Settings | Settings' Health card shows the safe copy and "View health data" links through |
+| Health summary | Connection card reads "Connected" + "Data through <date>" — **no error string of any kind** |
+| **Missing vs true zero** | Two DIFFERENT sentences on screen: "Today hasn't been synced yet" for a metric with history, "No data has reached Google Health for this yet" for one without. **Not one fabricated zero** |
+| Last-recorded line | Rendered **alongside** the missing words, never instead of them |
+| Health trends | Range selector labelled ("Show the last 7/30/90 days"); every chart mark carries its own per-day `accessibilityLabel` |
+| Sleep | Honest empty state, "Last 30 days, **by wake date**" (ADR-049) |
+| Workouts | Honest empty state plus the note attributing the missing stage/zone detail to Personal OS |
+| **404 detail screen** | "This task couldn't be found." with **no Retry button** — the terminal-404 fix, live |
+| **Offline / API unavailable** | API stopped → "Couldn't load the inbox." + a labelled 74×52 Retry → API restored → Retry tapped → real data loaded |
+| Calendar direction buttons | "Previous month" / "Next month" / "Jump to today", 53×53 |
+| FAB / PTT | 58×58 each, 314px apart, correctly labelled; PTT inert (`layoutOnly`, no `RECORD_AUDIO` in the manifest) |
+| Back navigation, app resume | Both correct; resume returns to the same screen |
+| Side button / scroll wheel | No workflow depends on either — the app is touch-only by construction (Checkpoint 3 proved both are claimed by the OS) |
+
+**One defect was found only on the device**: the quick-capture modal's Cancel and Capture buttons
+measured 84×39 and 94×39 — the last step of the app's most-used flow, in a modal no audit lane
+owned. Fixed and committed.
+
+**An honest limitation of this lane:** UI-test mode does not mount pairing, notifications or push,
+so the Settings **device** rows, the revoked-session banner and the reminder paths could not be
+exercised on-device. They are covered by unit tests and by the browser-equivalent evidence only.
+
+#### Verification actually run
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Full gate | build 9/9, typecheck 17/17, lint **0 warnings**, `format:check` clean, `git diff --check` clean |
+| 2 | Full suite, uncached and serial | **2023 tests / 17 turbo tasks** (1965 → **+58**) |
+| 3 | No baseline decreased | worker 145→**152**, schema 162→**174**, api 466→**484**, mobile 359→**363**, api-client **93**, core **326**, db **21**, ai-providers **25**, health-providers **311** |
+| 4 | `calendar-providers` canary | 57→**74** — moved **deliberately**: this checkpoint's whole subject is the calendar error path. No test was removed |
+| 5 | Migration invariant | 14 `.sql` / 14 journal entries; `packages/db/` diff **empty**; no `0014` |
+| 6 | Forbidden-area drift | **zero** across `apps/mobile/app.config.ts`, `eas.json`, every compose file, every Dockerfile, `.github/`, `packages/db` |
+| 7 | Brief / AI isolation | `apps/api/src/brief/**` diff **empty**; zero "health" hits in that directory; `BriefInput` carries no health field |
+| 8 | Health invariants | No write to `health_observations` anywhere (one comment only); `heart-rate-intraday` still excluded by acquisition mode; **no OAuth scope added or changed** |
+| 9 | Dependencies | Exactly one addition: the internal `@personal-os/schema` **workspace** edge on `calendar-providers` (server-only; mobile never reaches it). Lockfile +3 lines. **No new registry package** |
+| 10 | Web export | Clean, single `index.html` |
+| 11 | Android | Release UI-test APK built successfully via Gradle (JDK 17) |
+| 12 | Secret scans | `gitleaks git` **130 commits, no leaks**. Working tree 76 findings, **0 in any file git would commit**, classified programmatically with `git check-ignore` |
+| 13 | Process/port cleanup | No repository api, worker, Metro, Expo, watch or test process left running; ports 3000/8081/8082/5173/19000 free; `adb reverse` cleared |
+
+#### Deliberately NOT done
+
+No merge to `main`, no push (the repository has **no remote**), no branch deleted. No production
+Docker or SSH command. No migration. No `versionCode` change and no EAS build. No OAuth publishing
+and no callback change. F5 capture 2 not run; raw intraday heart rate not enabled.
 
 ### Checkpoint 6.3 — Google Health sync engine (COMPLETE, local only, 2026-08-25)
 
@@ -1088,6 +1278,13 @@ Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, 
 - [x] Phase 5 Checkpoint 5.6 — Mobile / Rabbit daily-use polish: reproducible dev harness via expo-build-properties (dev-profile only, production proved unaffected), dev-shell parity, FAB/PTT clearance, notification cold-start, all-day date off-by-one, serialized review saves, keyboard reachability, touch/layout polish — complete 2026-08-23 (physically verified on the Rabbit R1; production untouched; zero migrations).
 - [x] **Phase 5 Checkpoint 5.7 — Production deployment + Phase 5 closure: migrations 0010–0012 applied exactly once (level 0000–0012 = 13), api/worker/web rolled out from `656c1fc`, Rabbit upgraded in place to versionCode 5 with pairing/PRIMARY/credential preserved, production `daily_brief` route registered on the existing gpt-4.1 model, reminder real-fire + push delivery + PTT all physically verified, and BOTH reboot axes passed — complete 2026-08-24. PHASE 5 COMPLETE.**
 - [x] **Phase 5 Checkpoint 5.7.1 — All-day noon-anchor hotfix: ADR-042's local-noon recurrence anchor no longer reaches presentation. Two live leaks fixed (Today `12:00`, Brief "beginning at 12:00 PM"), three latent spots hardened, `BriefEventItem` gained a `date` field, one shared all_day-first helper, regression + mutation tests across Chicago/Auckland/Santiago. api+web rebuilt, versionCode 6 installed in place. Google/CalDAV untouched and provably unaffected. **No migration.** — complete 2026-08-24.**
+- [x] **Phase 6 Checkpoint 6.5 — Full product audit, Rabbit verification and hardening: a
+  seven-hop Google Calendar raw-error chain closed at every hop (durable column, API response,
+  UI render, API log, pg-boss job output), the same sweep applied to the AI-provider and Health
+  connection surfaces, a P1 infinite-spinner dead end on three detail screens resolved, and the
+  deferred physical Rabbit pass completed on the real R1 with production untouched. Complete
+  2026-08-25 (local only; branch `phase-6-audit-hardening`, unmerged; no migration; no APK;
+  `versionCode` unchanged at 6).**
 - [x] **Phase 6 Checkpoint 6.4 — Health dashboard (web): four `/health-*` read routes, typed api-client, four pure display-logic modules, five components, four screens from a Settings card, and one self-contained Today card. Missing-is-never-zero and no-credential-crosses-the-boundary are both structural. Independent audit found no broken invariant and seven real defects, all fixed. Complete 2026-08-25 (local only; branch `phase-6-google-health-ui`, unmerged; no migration; no APK; no physical device pass).**
 - [x] Phase 5 Checkpoint 5.5 — Personal OS Daily Brief: migration 0012 (`ai_daily_briefs`, identity `(brief_date, timezone)`), deterministic Today-derived collector, injection-guarded prompt, provider-agnostic generation with true model provenance, `POST /briefs` + `GET /briefs/current`, Today brief metadata, and the Today Brief card — complete 2026-08-23 (local only; production untouched; no paid provider call).
 
@@ -2970,38 +3167,34 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-**Phase 6 Checkpoints 6.0 through 6.4 are complete. Work has stopped, as planned.**
+**Phase 6 Checkpoints 6.0 through 6.5 are complete. Work has stopped, as planned.**
 
-6.4 delivered the user-facing Health experience on branch `phase-6-google-health-ui`
-(unmerged, local only, **no migration**, production untouched, **no live Google call**):
-four `/health-*` read routes, typed api-client methods, four pure display-logic modules,
-five components, four screens reached from a Settings card, and one self-contained card on
-Today.
+6.5 was the full-product audit and hardening pass. Its most consequential finding was not the one
+already recorded as debt: `settings.tsx` rendering `last_sync_error` was the **end** of a chain that
+also ran through the durable column, two 422 API responses, the API's own log line, and pg-boss's
+`job.output` table. Google's `error_description` and CalDAV's raw response body were reaching four
+different persistent or user-visible places, and the recorded debt named only the last one.
 
-Two properties are worth carrying forward because they are structural rather than
-conventional. **Missing is never zero** -- `HealthMetricPoint`'s refine pins `value` non-null
-exactly when `state === "value"`, so a zero-filled gap is unrepresentable and a genuine
-recorded zero survives to the screen. **No credential and no provider error string can cross
-the boundary** -- `last_sync_error` is simply not projected.
+Two properties are worth carrying forward because they are structural rather than conventional.
+**A provider message is now inexpressible on the calendar wire** — `CalendarConnectionSchema` types
+`last_sync_error` as a closed enum, so a leak fails to serialize rather than shipping. **And nothing
+provider-authored survives into pg-boss**, because `CalendarJobError` deliberately does not retain
+`cause`, which `serialize-error` would otherwise walk straight back into.
 
-An independent read-only audit attacked 13 invariants and broke none, but found seven real
-defects, all fixed: the pixel-identical zero-vs-gap marks, an app-open refresh firing on a
-condition its own mechanism could never clear, four credential canaries proven incapable of
-firing, a duplicated tiling function, a doubled paragraph, a "0 days behind" string, and a
-per-session sleep mean calling itself nightly.
+The adversarial wave broke the first version of the log serializer — a provider message containing a
+line shaped like a V8 stack frame survived a shape-based filter — which is exactly the kind of defect
+a self-review does not find. It was reproduced live and fixed by removing the header by length rather
+than by shape.
 
-Live verification ran against already-stored development data with the API only -- the worker
-was never started, so no scheduled fan-out and no Google call was reachable. On a morning with
-nothing yet synced, all 16 tiles read `unknown` and not one rendered a fabricated zero; ADR-049
-was confirmed live, with the one stored sleep session present in its wake-date window and
-absent from its start-date window.
+The deferred physical Rabbit pass is done. It confirmed on real hardware what 6.4 could only show in a
+browser: the two kinds of missing render as two different sentences, and not one fabricated zero
+appears anywhere.
 
-**State at closure:** branch `phase-6-google-health-ui`, **not merged to `main`**. Production
-untouched. OAuth app in **Testing**. `versionCode` untouched at **6** -- no APK, and **no
-physical Rabbit pass was run**. The development refresh token expires
-**2026-08-31T23:57:45Z**.
+**State at closure:** branch `phase-6-audit-hardening`, HEAD `df08da8`, **not merged to `main`**, and
+the repository has no remote. Production untouched. OAuth app in **Testing**. `versionCode` **6**.
+The development refresh token expires **2026-08-31T23:57:45Z**.
 
-**Do not begin Checkpoint 6.5 without a separate explicit user approval.**
+**Do not begin Checkpoint 6.6 without a separate explicit user approval.**
 
 ## Remaining warnings / technical debt
 
@@ -3020,6 +3213,11 @@ physical Rabbit pass was run**. The development refresh token expires
   is retained as a rollback source.
 - **There is no DELETE endpoint for AI task routes.** Undoing the production `daily_brief`
   registration requires another upsert repointing `primary_model_id`, or direct SQL.
+- ~~**`apps/mobile/src/app/settings.tsx` renders `connection.last_sync_error` verbatim for Google
+  Calendar.**~~ — **CLOSED by Checkpoint 6.5.** It was the terminal sink of a seven-hop chain, not a
+  display nit: the column, the API response, the API log and pg-boss's durable `job.output` were all
+  carrying provider-authored text. Closed at every hop, with the wire field now typed to a closed
+  enum so a regression is a parse failure rather than a silent leak.
 - **The Settings screen ships no test-notification control**, although
   `POST /devices/:id/test-notification` and the api-client method both exist. Verifying push
   therefore requires enqueuing a `notifications.dispatch` job server-side, since the device bearer
@@ -3097,6 +3295,22 @@ physical Rabbit pass was run**. The development refresh token expires
   produces shifting, meaningless failures in unrelated pre-existing tests. Sub-agents run pure unit
   tests only and hand off first. Never pipe a vitest run through `| head`: the SIGPIPE can orphan a
   worker that keeps truncating into the next run.
+- **List-row Archive and Drop still fire without confirmation (6.5).** Checkpoint 6.5 added
+  `Alert.alert` gates to the four detail screens and to Settings' Revoke/Disconnect/Forget, but the
+  same actions one tap away in a Tasks or Notes list row are still unconfirmed — and the new detail
+  copy correctly tells the user that an archived task, note or event has no in-app route back. A
+  fat-finger tap on the Rabbit's 480px screen therefore hides an item with no recovery. Deliberately
+  left: routing list rows through the same gate is a behaviour change to the app's highest-traffic
+  interaction and wanted its own decision.
+- **Reminder, notification and pairing paths cannot be verified on the UI-test identity (6.5).** It
+  mounts none of them by design, so the physical Rabbit pass covers layout, navigation, Health, the
+  error/retry paths and offline behaviour — but not a real alarm firing, a real push, or the
+  revoked-session banner. Closing that needs a production-identity build, i.e. an EAS build and a
+  `versionCode` bump.
+- **`nativewind` cannot be imported under the mobile vitest transform (6.5).** It is aliased to a
+  mock, the same route already taken for `expo-router`. Any future module that reaches NativeWind at
+  import time inherits the mock rather than the real runtime; `placeholder-color.test.ts` guards the
+  alias itself.
 - **Stopping a stale dev server requires enumerating ALL `tsx watch` supervisors (process rule,
   6.3),** by command line and working directory, and stopping supervisors before children. Walking
   up from the port-3000 listener finds only the one currently serving; a surviving supervisor will
@@ -3104,34 +3318,45 @@ physical Rabbit pass was run**. The development refresh token expires
 
 ## Last verification
 
-**Phase 6 Checkpoint 6.4 -- Health dashboard (2026-08-25).** Local development only;
-production untouched; branch `phase-6-google-health-ui`, unmerged.
+**Phase 6 Checkpoint 6.5 — full product audit, Rabbit verification and hardening (2026-08-25).**
+Local development only; production untouched; branch `phase-6-audit-hardening`, HEAD `df08da8`,
+unmerged; the repository has no remote.
 
 Full gate: build 9/9, typecheck 17/17, lint **0 warnings**, `format:check` clean,
-`git diff --check` clean, `expo export --platform web` clean with a single `index.html`.
+`git diff --check` clean, `expo export --platform web` clean with a single `index.html`, and a
+release Android APK built successfully via Gradle under JDK 17.
 
-Full suite, **uncached and serial** (`turbo run test --force --concurrency=1`): **1965 tests
-across 17 turbo tasks** (1714 -> **+251**). Per package -- core 326 · db 21 · schema **162** ·
-**calendar-providers 57 (canary held)** · health-providers 311 · ai-providers 25 ·
-api-client **93** · api **466** · **worker 145 (canary held)** · mobile **359**.
+Full suite, **uncached and serial** (`turbo run test --force`, root script pins
+`--concurrency=1`): **2023 tests across 17 turbo tasks** (1965 → **+58**). Per package — core 326 ·
+db 21 · schema **174** · **calendar-providers 74** · health-providers 311 · ai-providers 25 ·
+api-client 93 · api **484** · worker **152** · mobile **363**. **No package decreased.**
 
-`gitleaks git`: 112 commits, no leaks. Working tree: 77 findings, **every one in a gitignored
+The `calendar-providers` zero-drift canary moved from 57 to 74 for the first time since Phase 4.
+That is deliberate and is the point of the checkpoint: 6.5's subject is the calendar provider-error
+path, so the package legitimately gained a classifier and its tests. No test was removed or
+weakened; two assertions were **corrected** because they pinned disproved premises — one literally
+asserted that Google's prose survived into a stored column.
+
+`gitleaks git`: **130 commits, no leaks**. Working tree: 76 findings, **every one in a gitignored
 path** and **zero in any file git would commit**, classified programmatically with
 `git check-ignore` rather than asserted.
 
-Migration invariant: **14 `.sql`, 14 journal entries** -- 6.4 adds none; production stays
-0000-0012. Forbidden-area drift **zero** across `packages/db`, `apps/worker`,
-`packages/calendar-providers`, all compose files, `eas.json`, `app.config.ts` and
-`apps/mobile/android`. `apps/api/src/read-models/today.ts`, `packages/schema/src/today.ts`,
-`apps/api/src/routes/today.ts` and `apps/api/src/brief/**` are **byte-unchanged**.
+Migration invariant: **14 `.sql`, 14 journal entries** — 6.5 adds none, and `packages/db/` has an
+empty diff against `d5e4cb5`. Forbidden-area drift **zero** across `app.config.ts`, `eas.json`,
+every compose file and Dockerfile, `.github/`, and `packages/db`. `apps/api/src/brief/**` is
+byte-unchanged and `BriefInput` still carries no health field. No OAuth scope was added or changed;
+nothing writes `health_observations`; `heart-rate-intraday` remains excluded by acquisition mode.
 
-Expo's generated typed-routes artifact was **deleted and regenerated with the real generator**
-rather than trusted as hand-patched; it emits all four `/health` routes, and typecheck is clean
-both with and without it. Every server started for verification was stopped and every port
-released; the dev database was returned to its exact pre-pass state, count-verified.
+Physical device: Rabbit R1, Android 16 / SDK 36, 480×640, via the side-by-side
+`com.himal.personalos.dev` UI-test identity. Production `com.himal.personalos` evidence is
+identical before and after (versionCode 6, versionName 1.0.0, `firstInstallTime`, `lastUpdateTime`,
+dataDir), and only the production package remained installed at the end. A release APK was used so
+**no Metro or watch server ran**; the API ran as one short-lived process and **the worker was never
+started**, so no Google call was reachable. Every repository process was stopped and every port
+released.
 
-*Previous verification -- Phase 6 Checkpoint 6.3L (2026-08-25): 1714 tests across 17 turbo
-tasks, calendar-providers 57, worker 145, 14 migrations.*
+*Previous verification — Phase 6 Checkpoint 6.4 (2026-08-25): 1965 tests across 17 turbo tasks,
+calendar-providers 57, worker 145, 14 migrations.*
 
 ## Superseded verification
 
@@ -3196,29 +3421,27 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Stopped. Checkpoints 6.0 through 6.4 are complete.** The next checkpoint is **6.5
-(hardening)**, and it needs a separate explicit approval. 6.4 lives on branch
-`phase-6-google-health-ui` and is **not merged to `main`** -- merging, and the still-unmerged
-`phase-6-google-health-sync`, are their own decisions.
+**Stopped. Checkpoints 6.0 through 6.5 are complete.** The next checkpoint is **6.6 (full live
+proof)**, and it needs a separate explicit approval. 6.5 lives on branch `phase-6-audit-hardening`
+and is **not merged to `main`** — merging it, and the still-unmerged `phase-6-google-health-sync`
+and `phase-6-google-health-ui`, are their own decisions.
 
-**Carried into 6.5:**
+**Carried into 6.6:**
 
-1. **No physical Rabbit pass and no APK.** 6.4 verified the UI in a browser at desktop width
-   and at 480x640, which is a web-DOM proxy for the Rabbit, not native evidence. `versionCode`
-   is untouched at 6.
-2. **A pre-existing raw-provider-error render.** `apps/mobile/src/app/settings.tsx` prints
-   `connection.last_sync_error` verbatim for **Google Calendar**. Checkpoint 4.5 code, outside
-   6.4's scope and untouched by it, but exactly the pattern the Health card deliberately
-   avoids.
-3. **Twelve of eighteen value specs remain unverified** because this account has never produced
-   data for them -- recorded as an account-data fact, not a defect.
-4. **F5 (raw-heart-rate reconcile stability) remains deferred acceptance debt.**
+1. **Reminder, notification and device-pairing paths are still unverified on-device by 6.5.** The
+   UI-test identity deliberately mounts none of them, so the Settings device rows, the revoked-session
+   banner and local reminder scheduling have unit-test and browser evidence only. Verifying them needs
+   a production-identity build, which means an EAS build and a `versionCode` bump — out of 6.5's scope
+   by rule.
+2. **Twelve of eighteen value specs remain unverified** because this account has never produced data
+   for those streams. An account-data fact, not a defect.
+3. **F5 (raw-heart-rate reconcile stability) remains deferred acceptance debt.**
    `heart-rate-intraday` stays `sync_enabled = false` and `health_observations` stays empty.
-5. **Sleep stages and workout distance/calories/HR zones are not stored** by the 6.3 sync
-   engine. Capturing them means changing that engine and re-fetching from Google -- a scoped
-   decision, not a UI change.
+4. **Sleep stages and workout distance/calories/HR zones are still not stored** by the 6.3 sync
+   engine. Capturing them means changing that engine and re-fetching from Google.
+5. **List-row Archive and Drop still fire without confirmation**, while the same actions now confirm
+   from the detail screens. Deliberately scoped out rather than missed — see the debt list.
 
-**Operational notes:** the development refresh token expires **2026-08-31T23:57:45Z**; the
-local `.env` still points at the development loopback callback and must be restored before
-anything production-facing; the OAuth app remains in **Testing** and publishing is still
-deliberately not done.
+**Operational notes:** the development refresh token expires **2026-08-31T23:57:45Z**; the local
+`.env` still points at the development loopback callback and must be restored before anything
+production-facing; the OAuth app remains in **Testing** and publishing is still deliberately not done.
