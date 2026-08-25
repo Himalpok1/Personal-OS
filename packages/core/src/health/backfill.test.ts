@@ -43,7 +43,12 @@ describe("startBackfill", () => {
 
   it("clears a stale cancel flag so a restart is not immediately cancelled", () => {
     const c = startBackfill(
-      state({ backfillStatus: "cancelled", backfillTargetDate: "2026-02-01", backfillCancelRequested: true, earliestVerifiedDate: "2026-07-01" }),
+      state({
+        backfillStatus: "cancelled",
+        backfillTargetDate: "2026-02-01",
+        backfillCancelRequested: true,
+        earliestVerifiedDate: "2026-07-01",
+      }),
       "2026-01-01",
       NOW,
     );
@@ -53,7 +58,12 @@ describe("startBackfill", () => {
 
   it("restarts a completed backfill with a new, older target", () => {
     const c = startBackfill(
-      state({ backfillStatus: "complete", backfillTargetDate: "2026-06-01", backfillCursorDate: "2026-06-01", earliestVerifiedDate: "2026-06-01" }),
+      state({
+        backfillStatus: "complete",
+        backfillTargetDate: "2026-06-01",
+        backfillCursorDate: "2026-06-01",
+        earliestVerifiedDate: "2026-06-01",
+      }),
       "2026-01-01",
       NOW,
     );
@@ -63,14 +73,18 @@ describe("startBackfill", () => {
 
   it("refuses a second concurrent run", () => {
     expect(() =>
-      startBackfill(state({ backfillStatus: "running", backfillTargetDate: "2026-01-01" }), "2025-01-01", NOW),
+      startBackfill(
+        state({ backfillStatus: "running", backfillTargetDate: "2026-01-01" }),
+        "2025-01-01",
+        NOW,
+      ),
     ).toThrow(BackfillTransitionError);
   });
 
   it("refuses a target that is not strictly older than the verified frontier", () => {
-    expect(() => startBackfill(state({ earliestVerifiedDate: "2026-07-01" }), "2026-07-01", NOW)).toThrow(
-      /strictly older/,
-    );
+    expect(() =>
+      startBackfill(state({ earliestVerifiedDate: "2026-07-01" }), "2026-07-01", NOW),
+    ).toThrow(/strictly older/);
   });
 });
 
@@ -134,7 +148,11 @@ describe("every transition satisfies the database CHECK", () => {
   });
 
   it("holds for start, advance, complete, settle and clear", () => {
-    expect(satisfiesBackfillInvariant(startBackfill(state({ earliestVerifiedDate: "2026-07-01" }), "2026-01-01", NOW))).toBe(true);
+    expect(
+      satisfiesBackfillInvariant(
+        startBackfill(state({ earliestVerifiedDate: "2026-07-01" }), "2026-01-01", NOW),
+      ),
+    ).toBe(true);
     expect(satisfiesBackfillInvariant(requestBackfillCancel(running))).toBe(true);
     expect(satisfiesBackfillInvariant(advanceBackfillCursor(running, "2026-06-01"))).toBe(true);
     expect(satisfiesBackfillInvariant(completeBackfill(running))).toBe(true);

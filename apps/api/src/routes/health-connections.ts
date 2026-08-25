@@ -440,7 +440,9 @@ export default function healthConnectionsRoutes(app: FastifyInstance): void {
       // Structural exclusion of heart-rate-intraday, and of any future
       // reconcile metric, rather than a string blocklist.
       if (mode === "sample_reconcile") {
-        return reply.code(409).send({ error: "metric_out_of_scope", metric: request.params.metric });
+        return reply
+          .code(409)
+          .send({ error: "metric_out_of_scope", metric: request.params.metric });
       }
 
       const stream = await loadStream(connection.id, request.params.metric);
@@ -464,8 +466,7 @@ export default function healthConnectionsRoutes(app: FastifyInstance): void {
         // same call: that is the only caller clearBackfill needs, and it is
         // how a complete/cancelled/failed backfill is restarted with a new
         // target without a separate reset route.
-        const base =
-          state.backfillStatus === "idle" ? state : { ...state, ...clearBackfill() };
+        const base = state.backfillStatus === "idle" ? state : { ...state, ...clearBackfill() };
         const columns = startBackfill(base, body.target_date, new Date());
         const updated = await applyBackfillColumns(stream.id, columns);
 
