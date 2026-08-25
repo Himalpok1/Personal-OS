@@ -239,6 +239,109 @@ remaining children — port-listener traversal alone is insufficient; and only t
 database-backed suites, with sub-agents restricted to pure unit tests and required to hand off
 first.**
 
+### Checkpoint 6.3L — Bounded live acceptance proof (COMPLETE, 2026-08-25)
+
+Explicit user approval for **local development Google Health calls only**. Development account and
+local development database throughout. Production never contacted, nothing merged, no migration, no
+F5 operation, `heart-rate-intraday` never enabled or queried, `.env` kept on the loopback callback.
+
+Run as a **one-shot direct invocation** of the sync engine rather than by starting the API and
+worker: no daemon, no pg-boss, no cron registration, and therefore no path by which a scheduled
+fan-out could fire. Strictly fewer moving parts than the alternative, and bounded by construction.
+
+#### The proof found two real shape defects — on exactly the data that exists
+
+Both are the class the typed extractor was built to catch. **Every affected record was rejected
+with a sanitized key path and nothing wrong was stored**, which is the containment working rather
+than a near miss.
+
+**1. Rollup leaves carry an aggregation suffix.** The specs derived the leaf from the catalog
+`unit`, reasoning from ADR-047 that the API bakes units into field names. `dailyRollUp` returns a
+ROLLUP, so it appends `Sum`/`Avg`/`Min`/`Max` — and the prefix is the bare unit noun, not the
+catalog's unit string:
+
+| metric | observed leaf | JSON type |
+|---|---|---|
+| `steps` | `steps.countSum` | string (int64) |
+| `distance` | `distance.millimetersSum` | string (int64) |
+| `floors` | `floors.countSum` | string (int64) |
+| `total-calories` | `totalCalories.kcalSum` | number |
+| `heart-rate` | `heartRate.beatsPerMinuteAvg` (+ `Min`, `Max`) | number |
+
+`total-calories` is the case no derivation could have produced — unit `caloriesKcal`, leaf
+`kcalSum`. A heart-rate rollup is an **average**, not a sum, so Min and Max go to the allowlisted
+breakdown. The **container** derivation (camelCase of the dataType) was correct and is unchanged.
+Run 1 rejected 35 + 35 + 35 + 32 records across the four metrics with data and wrote nothing.
+
+**2. Sessions carry no civil times.** `SessionTimeInterval` sends `startTime`, `startUtcOffset`,
+`endTime`, `endUtcOffset` and **no** `civilStartTime`/`civilEndTime`; requiring them rejected the
+only sleep record this account has. The civil clock is now derived from the instant plus its
+explicit offset when absent, taken verbatim when present. **This is not the conversion ADR-048
+forbids** — that rule exists to stop a civil date being invented by guessing a timezone, which is
+why daily rows take `civilStartTime.date` verbatim and no IANA zone is stored. Here the provider
+supplies the instant AND its exact offset as independent facts, so the arithmetic is lossless, and
+both inputs are stored on the row.
+
+Also recovered: provider `createTime`/`updateTime` live on the **container**, not the data-point
+root, so a root-only lookup silently stored nulls — and they are part of the hashed content, so
+losing them would have blunted change detection.
+
+Three test assertions encoded the disproved premises — one literally named *"derives the leaf from
+the catalog unit for every metric"* — and were **corrected, not loosened**. One new test asserts the
+pre-fix shape is still rejected, so the regression cannot return.
+
+#### Live results, sanitized
+
+| | Run 1 (pre-fix) | Run 2 (post-fix) | Run 3 (identical) | Run 4 (identical) |
+|---|---|---|---|---|
+| Runs succeeded | 20 / 24 | **24 / 24** | 24 / 24 | 24 / 24 |
+| Daily rows inserted | 0 | **139** | 0 | 0 |
+| Daily rows updated | 0 | 0 | 1 | **0** |
+| Rows rejected | **137** | 0 | 0 | 0 |
+
+The single update in run 3 was `total-calories` for local date **2026-08-24** — a day still
+accumulating when run 2 executed at 22:17 local. Genuine upstream movement producing exactly one
+UPDATE, which is the change-detection mechanism working; run 4 settled to zero.
+
+**Zero-write proof (runs 3 → 4, settled pair):** `health_daily_metrics` 139 → 139, **0 inserts, 0
+updates, 0 deletes, 139/139 rows byte-identical** by `ctid`, `xmin`, `content_hash` and
+`updated_at`. `health_sessions` 0 tombstones. Only `health_sync_runs` changed (72 → 96), which is
+operational metadata and is expected to.
+
+**Sessions**, verified by a bounded backfill to the one historical window that holds a record: 1
+sleep session inserted, then re-fetched twice — 1 update when the recovered provider timestamps
+changed its content hash, then **0 inserts / 0 updates / 1 unchanged**.
+
+#### Two standing debts closed by live evidence
+
+- **Session UTC-offset field names are no longer unknown**: `interval.startUtcOffset` /
+  `endUtcOffset`, exactly one of the two spellings the translator already accepted.
+- **Session tombstoning is NOT inert.** The record carries a resource `name`, so it keys as
+  `external_key_source = 'data_point_name'` — the only source the ADR-047a sweep acts on. The worry
+  that F5's empty `dataPointName` on raw heart rate would generalise to sessions is disproved.
+
+#### What remains unverified, and why that is not a defect
+
+Twelve of the eighteen value specs are still declarations rather than observations, because **this
+account has never produced data for those streams** — recorded as `unverified_no_account_data`, not
+as a fault. No fixture was fabricated for any of them. `active-zone-minutes`, `active-energy-burned`
+and `sedentary-period` now follow the observed rollup-suffix pattern but have never been seen; the
+six precomputed daily vitals, `weight`, `body-fat` and `exercise` likewise. A wrong declaration
+fails the run loudly and cannot store a wrong number, and the circuit breaker stops it failing
+forever in silence.
+
+#### Verification
+
+Full gate green: build 9/9, typecheck 17/17, lint 0 warnings, `format:check` clean,
+`git diff --check` clean. Full suite serial and uncached: **1714 tests / 17 turbo tasks**
+(`calendar-providers` **57** canary held, worker **145**, health-providers **311**).
+
+Safety after the proof: `health_observations` = **0** in dev and test; zero advisory locks held;
+`heart-rate-intraday` `sync_enabled = false` with **zero** sync runs ever; no health job or schedule
+in pg-boss; no health refresh queue or cron anywhere in source; migrations still **14 / 14**; F5
+holds `capture-1.json` only; `.env` still on the loopback callback; no repository API, worker, watch
+or test process left running and port 3000 free.
+
 ### Checkpoint 6.2P — Live development-account probe (CLOSED, 2026-08-25)
 
 > **Status: core OAuth and capability proof PASSED. Raw-heart-rate reconciliation
@@ -2819,20 +2922,20 @@ callback. The development refresh token expires **2026-08-31T23:57:45Z**.
   deliberately left in Testing). Reconnect before any further live work.
 - **The local `.env` holds the development loopback callback**, not the Tailscale one.
   Restore before anything production-facing.
-- **Fourteen of eighteen Google Health value specs are unverified against the live API (6.3).** Only
-  `steps`, `distance`, `total-calories` and `floors` have ever returned data on the development
-  account, and the fixtures come from the same documentation as the specs — a green extraction suite
-  proves self-consistency, not correctness. A wrong spec fails loudly rather than storing a wrong
-  number; the circuit breaker stops it failing forever silently. Confirming them needs a live probe,
-  which needs approval.
-- **Session interval UTC-offset field names are unknown (6.3).** No session payload has ever been
-  observed. Two spellings are accepted; anything else is rejected rather than defaulted to zero.
+- **Twelve of eighteen Google Health value specs remain unverified (6.3L).** Six are now OBSERVED
+  live — `steps`, `distance`, `floors`, `total-calories`, `heart-rate` (rollup leaves) and the
+  `sleep` session shape. The rest are `unverified_no_account_data`: this account has never produced
+  data for them, which is not a defect and for which no fixture was fabricated. A wrong declaration
+  fails the run loudly and cannot store a wrong number.
+- ~~**Session interval UTC-offset field names are unknown (6.3).**~~ — **CLOSED by 6.3L.** Observed
+  live: `interval.startUtcOffset` / `endUtcOffset`. Sessions also carry NO civil times, so the civil
+  clock is derived from the instant plus its explicit offset (lossless, both inputs stored).
 - **An authoritative window returning zero sessions cannot tombstone the last remaining one (6.3),**
   because the sweep is gated on a non-empty seen-key set — `x <> ALL('{}'::text[])` is TRUE in
   Postgres, so an ungated sweep would tombstone the whole window. Deliberate cost of the guard.
-- **Session tombstoning may be inert on this account (6.3).** F5 found `dataPointName` empty on all
-  307 raw-HR records; if session records also lack names, every row keys as derived and the
-  `data_point_name`-only sweep never fires. A per-pass warning makes that observable.
+- ~~**Session tombstoning may be inert on this account (6.3).**~~ — **CLOSED by 6.3L.** The real
+  sleep record carries a resource `name`, so it keys as `data_point_name` and the ADR-047a sweep is
+  reachable. F5's empty `dataPointName` on raw heart rate does not generalise to sessions.
 - **`enqueueHealthSyncForAllActiveConnections` and the `not_configured` skip path are untested
   (6.3)** — the first needs a live pg-boss, the second is unreachable in a workspace whose `.env`
   sets the Health credentials.
