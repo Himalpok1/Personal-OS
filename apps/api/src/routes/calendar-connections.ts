@@ -1,6 +1,8 @@
 import { decryptSecret, encryptSecret } from "@personal-os/ai-providers";
 import {
   CalDavError,
+  classifyCalendarProviderError,
+  classifyStoredCalendarSyncError,
   exchangeAuthCode,
   GoogleOAuthError,
   refreshAccessToken,
@@ -34,7 +36,10 @@ function toConnectionResponse(row: typeof calendarConnections.$inferSelect): Cal
     auth_type: row.authType ?? null,
     status: row.status,
     granted_scope: row.grantedScope ?? null,
-    last_sync_error: row.lastSyncError,
+    // Rows written before Checkpoint 6.5 may still hold Google's own prose;
+    // the sanitizer collapses anything outside the vocabulary to
+    // "provider_error" so no data migration is needed to make them safe.
+    last_sync_error: classifyStoredCalendarSyncError(row.lastSyncError),
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
   });
@@ -82,7 +87,11 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
       });
     } catch (err) {
       if (err instanceof GoogleOAuthError) {
-        return reply.code(422).send({ error: "google_oauth_failed", message: err.message });
+        // err.message is Google's `error_description` -- vendor prose. Only a
+        // code from the closed vocabulary crosses the API boundary.
+        return reply
+          .code(422)
+          .send({ error: "google_oauth_failed", reason: classifyCalendarProviderError(err) });
       }
       throw err;
     }
@@ -139,10 +148,12 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
       });
     } catch (err) {
       if (err instanceof CalDavError) {
+        // CalDavError messages can embed the raw response body and the server
+        // URL; neither may cross the boundary. The status code is dropped too --
+        // the classification already carries every actionable distinction.
         return reply.code(422).send({
           error: "caldav_discovery_failed",
-          message: err.message,
-          statusCode: err.status,
+          reason: classifyCalendarProviderError(err),
         });
       }
       throw err;

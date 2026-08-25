@@ -1,4 +1,5 @@
 import {
+  CalDavError,
   createFakeCalDavClient,
   createFakeGoogleCalendarClient,
   type FakeCalDavClient,
@@ -414,6 +415,167 @@ describe("calendar-connections routes", () => {
       expect(reRes.statusCode).toBe(200);
       expect(reRes.json<CalendarConnection>().id).toBe(conn.id);
       expect(reRes.json<CalendarConnection>().status).toBe("active");
+    });
+  });
+  // ---------------------------------------------------------------------
+  // Checkpoint 6.5 -- provider-error redaction.
+  //
+  // Before this checkpoint, `parsedError.error_description` (Google's own
+  // prose) travelled: worker -> calendar_connections.last_sync_error ->
+  // GET /calendar-connections -> interpolated into the Settings screen. These
+  // tests pin every hop of that chain shut.
+  // ---------------------------------------------------------------------
+  describe("provider-error redaction", () => {
+    // A sentinel shaped like the real leak, carrying something that must never
+    // be echoed anywhere.
+    const GOOGLE_PROSE = "Token has been expired or revoked. ya29.SENTINEL-not-a-real-token";
+
+    it("returns a code, never Google's error_description, on a failed OAuth exchange", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(
+              JSON.stringify({ error: "invalid_grant", error_description: GOOGLE_PROSE }),
+              { status: 400 },
+            ),
+          ),
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/calendar-connections/google",
+        payload: { auth_code: "a-code-google-will-reject" },
+      });
+
+      expect(response.statusCode).toBe(422);
+      const raw = response.body;
+      expect(raw).not.toContain("ya29");
+      expect(raw).not.toContain("SENTINEL");
+      expect(raw).not.toContain("revoked");
+      const body = response.json<{ error: string; reason: string; message?: string }>();
+      expect(body.error).toBe("google_oauth_failed");
+      expect(body.reason).toBe("auth_expired");
+      // The old contract carried `message`. Its absence is the fix.
+      expect(body.message).toBeUndefined();
+    });
+
+    it("classifies an unknown OAuth failure without inventing a reason", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ error_description: GOOGLE_PROSE }), { status: 503 }),
+          ),
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/calendar-connections/google",
+        payload: { auth_code: "x" },
+      });
+      expect(response.statusCode).toBe(422);
+      expect(response.body).not.toContain("SENTINEL");
+      expect(response.json<{ reason: string }>().reason).toBe("provider_unavailable");
+    });
+
+    it("returns a code, never a CalDAV message or response body, on failed discovery", async () => {
+      const failing = createFakeCalDavClient();
+      failing.discoverHomeSet = () => {
+        throw new CalDavError(
+          `PROPFIND rejected: ${GOOGLE_PROSE}`,
+          401,
+          `<D:error>${GOOGLE_PROSE}</D:error>`,
+        );
+      };
+      const localApp = await buildTestApp({
+        googleCalendarClient: fakeClient,
+        caldavClient: failing,
+      });
+      try {
+        const response = await localApp.inject({
+          method: "POST",
+          url: "/calendar-connections/caldav",
+          payload: {
+            server_url: "https://caldav.example.com",
+            username: "testuser",
+            password: "my-app-password",
+          },
+        });
+        expect(response.statusCode).toBe(422);
+        expect(response.body).not.toContain("SENTINEL");
+        expect(response.body).not.toContain("PROPFIND");
+        const body = response.json<{ error: string; reason: string; statusCode?: number }>();
+        expect(body.error).toBe("caldav_discovery_failed");
+        expect(body.reason).toBe("auth_failed");
+        // The raw upstream status is no longer echoed either -- the
+        // classification already carries every actionable distinction.
+        expect(body.statusCode).toBeUndefined();
+      } finally {
+        await localApp.close();
+      }
+    });
+
+    it("neutralises a legacy row that still holds provider prose", async () => {
+      // Simulates a row written by a pre-6.5 build. No data migration was run,
+      // so the projection has to make it safe.
+      const connectRes = await connectViaApi(app);
+      const created = connectRes.json<CalendarConnection>();
+      await app.db
+        .update(calendarConnections)
+        .set({ status: "needs_reauth", lastSyncError: GOOGLE_PROSE })
+        .where(eq(calendarConnections.id, created.id));
+
+      const listRes = await app.inject({ method: "GET", url: "/calendar-connections" });
+      expect(listRes.statusCode).toBe(200);
+      expect(listRes.body).not.toContain("SENTINEL");
+      expect(listRes.body).not.toContain("revoked");
+      const items = listRes.json<{ items: CalendarConnection[] }>().items;
+      expect(items[0]?.last_sync_error).toBe("provider_error");
+
+      const detailRes = await app.inject({
+        method: "GET",
+        url: `/calendar-connections/${created.id}`,
+      });
+      expect(detailRes.body).not.toContain("SENTINEL");
+      expect(detailRes.json<CalendarConnection>().last_sync_error).toBe("provider_error");
+    });
+
+    it("passes a current classification code through unchanged", async () => {
+      const connectRes = await connectViaApi(app);
+      const created = connectRes.json<CalendarConnection>();
+      await app.db
+        .update(calendarConnections)
+        .set({ status: "needs_reauth", lastSyncError: "missing_scope" })
+        .where(eq(calendarConnections.id, created.id));
+
+      const listRes = await app.inject({ method: "GET", url: "/calendar-connections" });
+      expect(listRes.json<{ items: CalendarConnection[] }>().items[0]?.last_sync_error).toBe(
+        "missing_scope",
+      );
+    });
+
+    it("never exposes credential material alongside an error", async () => {
+      const connectRes = await connectViaApi(app);
+      const created = connectRes.json<CalendarConnection>();
+      await app.db
+        .update(calendarConnections)
+        .set({ status: "needs_reauth", lastSyncError: GOOGLE_PROSE })
+        .where(eq(calendarConnections.id, created.id));
+
+      const listRes = await app.inject({ method: "GET", url: "/calendar-connections" });
+      for (const needle of [
+        "access-token-abc",
+        "refresh-token-abc",
+        "ciphertext",
+        "auth_tag",
+        "authTag",
+        "client_secret",
+      ]) {
+        expect(listRes.body).not.toContain(needle);
+      }
     });
   });
 });
