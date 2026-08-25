@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0, 6.1, 6.2 and 6.2P COMPLETE.** 6.2P closed 2026-08-25 as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 is the next checkpoint and requires separate approval.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
-**Implementation status:** Phases 0–5 are implemented and production-deployed. **Production migration level is unchanged at 0000–0012 = 13 migrations**; Phase 6's additive `0013` exists in local dev/test only and is not deployed. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
-**Next phase allowed:** **Checkpoint 6.3 (sync engine), on separate explicit approval only.** 6.0–6.2P are closed. 6.3 **excludes raw intraday heart-rate ingestion** (see the F5 deferral below) and **must begin with the HTTP-400 probe-classification hardening**. The OAuth app remains in **Testing**, so the development refresh token expires **2026-08-31T23:57:45Z**. Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
+**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0, 6.1, 6.2, 6.2P and 6.3 COMPLETE (6.3 local only, 2026-08-25).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`, unmerged; 6.4 (dashboard) is next and requires separate approval.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Implementation status:** Phases 0–5 are implemented and production-deployed. **Production migration level is unchanged at 0000–0012 = 13 migrations**; Phase 6's additive `0013` exists in local dev/test only and is not deployed. **Checkpoint 6.3 added NO migration** — the local level stays at 14 `.sql` / 14 journal entries. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
+**Next phase allowed:** **Checkpoint 6.4 (dashboard, web + Rabbit), on separate explicit approval only.** 6.0–6.3 are closed. The HTTP-400 probe-classification hardening that 6.3 was required to begin with is **done**. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app remains in **Testing**, so the development refresh token expires **2026-08-31T23:57:45Z**. Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 6 — Google Health Integration (plan approved 2026-08-24)
@@ -103,6 +103,141 @@ liveness probe, so Phase 6 uses `health-*` siblings throughout (C7).
 **Deliberately not yet changed (C6):** the three lines asserting "13 `.sql` files, 13
 journal entries, **no 0013**" remain **accurate** until migration `0013` actually lands in
 Checkpoint 6.1, and are updated then — not pre-emptively.
+
+### Checkpoint 6.3 — Google Health sync engine (COMPLETE, local only, 2026-08-25)
+
+Built on branch `phase-6-google-health-sync` from `296380c`. **Not merged to `main`.** No
+production access, no deployment, no OAuth publishing, no live Google call, **no migration** — the
+local level stays 14 `.sql` / 14 journal entries and production stays 0000–0012.
+
+**Two ADR amendments were required and were approved before implementation**, because 6.3 needs
+behaviour the originals forbid and reading around a Locked decision is not permitted:
+
+- **ADR-046a** — a fully fetched, rejection-free, non-hot daily window returning zero buckets may
+  create verified-absence rows, **insert-only**, never downgrading an existing `has_data = true`
+  row, still clamped by `first_data_date` and `lastGloballyCompleteDateExclusive`.
+- **ADR-047a** — a soft, reversible `deleted_at` marker reflecting a provider-side deletion is
+  reconciliation, not the automatic deletion ADR-047 forbids. Permitted only for
+  `external_key_source = 'data_point_name'`, only on an authoritative warm/manual window, only with
+  a non-empty seen-key set, never on hot, cleared on reappearance, row retained indefinitely.
+
+#### What was built
+
+One **connection-level** queue and job, `health.google.sync-connection`, `policy: "stately"`,
+`singletonKey = connectionId`, hourly cron fan-out. A per-stream job would have let all eighteen
+streams of one connection hit the provider concurrently; walking them sequentially inside one job
+makes "no overlapping syncs for the same connection" true by construction rather than by
+convention, and a namespaced `pg_try_advisory_lock` on a pinned pool client guards what pg-boss
+cannot see.
+
+**There is no dead-letter queue and no pg-boss retry, and that is the single most consequential
+decision in the checkpoint.** pg-boss's own `manager.js:1293` documents that under `stately` a
+retry insert can be dropped by `ON CONFLICT` and the job re-inserted as `failed` — straight to the
+dead-letter queue, skipping its remaining retries. With an hourly cron and a persistent fault a
+*first* transient failure could therefore reach a handler meant for terminal cleanup. `retryLimit: 0`
+removes the interaction entirely: no `retry` rows exist, the depth bound becomes exactly one
+`created` + one `active` per connection, and the hourly tick is the retry — a better one, because
+it re-derives the window from current state instead of replaying a stale job. Verified empirically
+by booting the worker against the test database: `policy=stately, retry_limit=0,
+expire_seconds=900, dead_letter=null`.
+
+**Error classification is reason-driven.** The 6.2P defect — any HTTP 400 mapped to
+`not_supported`, which reported all eight rollup metrics as unsupported when the real cause was two
+request-shape bugs of ours — is fixed by reading Google's structured `error.details[].reason`.
+`missing_scope` and `not_supported` require an *evidenced* reason; the unsupported set starts
+**empty**, so a genuinely unsupported metric currently reports `provider_error`. That is the safe
+direction: it never disables a working stream.
+
+**Extraction is declared and validated per metric**, never guessed. An unrecognised payload yields
+a rejection carrying a key path and `typeof` only — never a value — which surfaces as
+`rows_rejected` and a failed run. `breakdown` is assembled solely from an allowlist, so a
+credential is structurally inexpressible.
+
+**Idempotency** comes from a guarded upsert whose UPDATE branch is skipped on a content-hash match,
+so an unchanged row produces no heap tuple and `updated_at` is untouched — proven by snapshotting
+`ctid`/`xmin`/`updated_at` across a second identical sync (never `xmax`, which the `ON CONFLICT`
+speculative row lock sets in place regardless). Provider timestamps are **included** in the hash
+rather than excluded to buy idempotency.
+
+#### Honest limitations, recorded rather than resolved
+
+- **Fourteen of eighteen value specs are unverified against Google.** Only `steps`, `distance`,
+  `total-calories` and `floors` have ever returned live data on this account, and the fixtures are
+  transcribed from the same documentation as the specs — so a green extraction suite proves
+  fixture/spec self-consistency, **not** correctness. A wrong spec fails loudly rather than storing
+  a wrong number, and the circuit breaker stops it failing forever in silence.
+- **Session interval offset field names are unknown.** No session payload has ever been observed on
+  this account. Two plausible spellings are accepted and anything else is **rejected**, never
+  defaulted to a zero offset — zero is a positive claim of UTC, not a neutral placeholder.
+- **An authoritative window returning zero sessions can never tombstone the last remaining one**,
+  because the sweep is gated on a non-empty seen-key set. That gate is load-bearing:
+  `x <> ALL('{}'::text[])` is TRUE in Postgres, so an ungated sweep would tombstone the entire
+  window. The detection gap is the deliberate cost.
+- **Session tombstoning may be inert on this account.** F5 found `dataPointName` empty on all 307
+  raw-HR records; if session records also carry no name, every row keys as derived and the sweep —
+  restricted to `data_point_name` — never fires. A per-pass warning makes that observable rather
+  than assumed.
+
+#### The independent audit found two blockers, both real
+
+1. **`${VAR:-}` renders an empty string, not an absent key**, and `z.string().min(1).optional()`
+   throws on `""`. On a host with no Health credentials — which is production today — **both api
+   and worker would have died at import**, taking capture, calendar, notifications and reminders
+   with them. The api half predates 6.3 (it shipped in 6.2); the worker half was added by 6.3.
+   Fixed in both with an `optionalNonEmpty()` preprocess and a five-test regression guard that pins
+   the naive shape as failing.
+2. **Densification keyed `insertOnly` off pass kind rather than off zero-buckets**, so a warm or
+   manual chunk returning an empty array would overwrite real `has_data = true` rows — directly
+   contrary to ADR-046a, and the test suite *codified* the violation. One HTTP 200 carrying
+   `rollupDataPoints: []` is indistinguishable from a genuinely empty account, and `authoritative`
+   proves only that *we* fetched completely, never that Google's answer was right. Fixed, and the
+   incorrect assertion was rewritten rather than loosened; a companion test still pins deletion
+   detection for the non-empty case.
+
+Three further findings were fixed in the same pass: a backfill **cancel arriving during a chunk's
+fetch was overwritten** by the pre-fetch snapshot when the chunk committed (the API having already
+returned 200); **restarting a running backfill silently reverted** to the old target and made
+`backfill_already_running` dead code; and a **Postgres error escaping the handler** would have put
+`detail` — literally `Failing row contains (...)`, health value included — into `pgboss.job.output`,
+now reduced to a SQLSTATE. Two minor ones: a raw NUL byte made `identity.test.ts` **binary to git**
+and therefore undiffable, and the session attribution axis was re-decided by string comparison in
+two places, now catalog-owned data.
+
+**One audit premise was itself wrong and is corrected here:** it claimed nothing uses
+`singletonSeconds`, so the new global `timestamp` type parser could not reach pg-boss's
+`singleton_on`. `apps/api/src/routes/events.ts:84` does use it. The parser does reach that column;
+pg-boss only reads the value and passes it straight back as a parameter, and a naive timestamp
+string re-inserted into a `timestamp` column is byte-for-byte identical — strictly safer than the
+old `Date` form, which round-tripped through a timezone-dependent serialization. Proven by a
+regression test rather than argued.
+
+#### Verification actually run
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Full gate | build 9/9, typecheck 17/17, lint **0 warnings**, `format:check` clean |
+| 2 | Full suite, serial (`--concurrency=1`) | **1693 tests / 17 turbo tasks**, uncached |
+| 3 | Zero-drift canary | `calendar-providers` exactly **57** |
+| 4 | Worker | **80 → 145** |
+| 5 | Migration invariant | 14 `.sql`, 14 journal entries, last `0013_google_health_sync`; **6.3 adds none** |
+| 6 | Worker boot | Booted against the **test** database (zero connections, so no provider call is reachable); queue persisted `stately / 0 / 900 / no dead-letter` |
+| 7 | Web export | Clean, single `index.html` |
+| 8 | Secret scans | `gitleaks git` 103 commits, no leaks. Working tree: 73 findings, **all in gitignored paths, 0 in any file git would commit** |
+| 9 | Health invariants | `health_observations` = **0** in dev and test; zero advisory locks left held; `heart-rate-intraday` `sync_enabled = false` |
+
+**A process failure worth recording, because the corrected procedure is not obvious.** The
+preflight shutdown identified the port-3000 listener and walked *up* to its supervisor. There were
+**three** `tsx watch` supervisors for this repo and only one was serving the port; stopping it freed
+the port and looked correct, but a survivor later noticed an edit, respawned a child, and reclaimed
+port 3000. Separately, a sub-agent ran its own vitest against the shared `personalos_test` database
+while the integrator ran the suite, producing shifting pre-existing failures that were *measurement
+artefacts, not regressions* — corroborated by the sub-agent independently, which traced its own
+episode to piping vitest through `| head` (a SIGPIPE that can orphan a worker which keeps
+truncating into the next run). **The corrected rules: enumerate every verified repository `tsx
+watch` supervisor by command line and working directory, stop supervisors first, then re-identify
+remaining children — port-listener traversal alone is insufficient; and only the integrator runs
+database-backed suites, with sub-agents restricted to pure unit tests and required to hand off
+first.**
 
 ### Checkpoint 6.2P — Live development-account probe (CLOSED, 2026-08-25)
 
@@ -2577,7 +2712,11 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-**Phase 6 Checkpoints 6.0, 6.1, 6.2 and 6.2P are complete. Work has stopped, as planned.**
+**Phase 6 Checkpoints 6.0, 6.1, 6.2, 6.2P and 6.3 are complete. Work has stopped, as planned.**
+
+6.3 delivered the sync engine on branch `phase-6-google-health-sync` (unmerged, local only, no
+migration, production untouched). See the 6.3 section above for what was built, the two ADR
+amendments it required, the two blockers the independent audit found, and the honest limitations.
 
 6.0 delivered ADR-046..050 and reconciled seven documented conflicts. 6.1 delivered the
 shared contracts, additive migration `0013` (local dev/test only — **production is still at
@@ -2671,15 +2810,75 @@ callback. The development refresh token expires **2026-08-31T23:57:45Z**.
   `heart-rate-intraday` stays disabled and raw intraday ingestion is excluded from 6.3.
   Reconsider via either the delayed reconcile-stability proof or the `list` + local
   multi-source de-duplication fallback keyed on `DataPoint.dataSource`.
-- **The 6.2P probe classifies any HTTP 400 as `not_supported`.** That masked two of our own
-  request-shape bugs during 6.2P and must be hardened to surface Google's
-  `error.details[].reason` — recorded as the **first mandatory task of Checkpoint 6.3**.
+- ~~**The 6.2P probe classifies any HTTP 400 as `not_supported`.**~~ — **CLOSED by Checkpoint 6.3.**
+  Classification is now reason-driven: `missing_scope` and `not_supported` each require an
+  evidenced `error.details[].reason`, and an ambiguous 400/403/404 is `provider_error`. The
+  unsupported-reason set starts empty, so a genuinely unsupported metric currently reports
+  `provider_error` — the safe direction, since it never disables a working stream.
 - **The development Google Health refresh token expires 2026-08-31T23:57:45Z** (OAuth app
   deliberately left in Testing). Reconnect before any further live work.
 - **The local `.env` holds the development loopback callback**, not the Tailscale one.
   Restore before anything production-facing.
+- **Fourteen of eighteen Google Health value specs are unverified against the live API (6.3).** Only
+  `steps`, `distance`, `total-calories` and `floors` have ever returned data on the development
+  account, and the fixtures come from the same documentation as the specs — a green extraction suite
+  proves self-consistency, not correctness. A wrong spec fails loudly rather than storing a wrong
+  number; the circuit breaker stops it failing forever silently. Confirming them needs a live probe,
+  which needs approval.
+- **Session interval UTC-offset field names are unknown (6.3).** No session payload has ever been
+  observed. Two spellings are accepted; anything else is rejected rather than defaulted to zero.
+- **An authoritative window returning zero sessions cannot tombstone the last remaining one (6.3),**
+  because the sweep is gated on a non-empty seen-key set — `x <> ALL('{}'::text[])` is TRUE in
+  Postgres, so an ungated sweep would tombstone the whole window. Deliberate cost of the guard.
+- **Session tombstoning may be inert on this account (6.3).** F5 found `dataPointName` empty on all
+  307 raw-HR records; if session records also lack names, every row keys as derived and the
+  `data_point_name`-only sweep never fires. A per-pass warning makes that observable.
+- **`enqueueHealthSyncForAllActiveConnections` and the `not_configured` skip path are untested
+  (6.3)** — the first needs a live pg-boss, the second is unreachable in a workspace whose `.env`
+  sets the Health credentials.
+- **Only the integrator may run database-backed suites (process rule, 6.3).** `apps/api` and
+  `apps/worker` share one `personalos_test` database, so a sub-agent running vitest concurrently
+  produces shifting, meaningless failures in unrelated pre-existing tests. Sub-agents run pure unit
+  tests only and hand off first. Never pipe a vitest run through `| head`: the SIGPIPE can orphan a
+  worker that keeps truncating into the next run.
+- **Stopping a stale dev server requires enumerating ALL `tsx watch` supervisors (process rule,
+  6.3),** by command line and working directory, and stopping supervisors before children. Walking
+  up from the port-3000 listener finds only the one currently serving; a surviving supervisor will
+  notice the next edit and respawn a child that reclaims the port.
 
 ## Last verification
+
+**Phase 6 Checkpoint 6.3 — Google Health sync engine (2026-08-25).** Local development only;
+production untouched; branch `phase-6-google-health-sync`, unmerged.
+
+Full gate: build 9/9, typecheck 17/17, lint **0 warnings**, `format:check` clean;
+`git diff --check` clean; `expo export --platform web` clean with a single `index.html`.
+
+Full suite, **uncached and serial** (`turbo run test --force --concurrency=1`): **1693 tests across
+17 turbo tasks.** Per package — core 326 · db 21 · schema 138 · **calendar-providers 57
+(zero-drift canary held)** · health-providers 290 · ai-providers 25 · api-client 70 · api 424 ·
+**worker 145 (from 80)** · mobile 197.
+
+`gitleaks git`: 103 commits, no leaks. `gitleaks dir`: 73 findings, **every one in a gitignored
+path** (`.env` and the generated `apps/mobile/android/` tree) and **zero in any file git would
+commit** — classified programmatically with `git check-ignore`, not asserted.
+
+Migration invariant: **14 `.sql`, 14 journal entries, last `0013_google_health_sync`** — 6.3 adds
+none. `health_observations` = **0** in both dev and test; zero advisory locks left held;
+`heart-rate-intraday` `sync_enabled = false`.
+
+Worker boot verified against the **test** database (zero health connections, so no provider call is
+reachable): `health.google.sync-connection` persisted as `policy=stately, retry_limit=0,
+expire_seconds=900, dead_letter=null`, and `health.google.sync-cron` scheduled hourly.
+
+**All database-backed results were re-measured after every sub-agent had quiesced.** Readings taken
+while a sub-agent was running its own vitest against the shared `personalos_test` database were
+discarded as invalid and no test was changed on their basis.
+
+*Previous verification — Phase 6 Checkpoint 6.1 (2026-08-24): 1303 tests across 16 turbo tasks,
+calendar-providers 57, worker 80, 14 migrations.*
+
+## Superseded verification
 
 **Phase 6 Checkpoint 6.1 — contracts, migration `0013`, provider fake (2026-08-24).**
 Local development only; production untouched.
@@ -2742,8 +2941,13 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Stopped. Checkpoints 6.0 through 6.2P are complete.** The next checkpoint is **6.3, the
-sync engine**, and it needs a separate explicit approval.
+**Stopped. Checkpoints 6.0 through 6.3 are complete.** The next checkpoint is **6.4, the health
+dashboard (web + Rabbit)**, and it needs a separate explicit approval. 6.3 lives on branch
+`phase-6-google-health-sync` and is **not merged to `main`** — merging is itself a separate
+decision.
+
+*(The handoff below was written before 6.3 ran. Its item 1 — the HTTP-400 probe hardening — is now
+done; items 2–5 remain binding on 6.4.)*
 
 **Exact 6.3 handoff — binding constraints:**
 
