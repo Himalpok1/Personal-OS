@@ -73,11 +73,19 @@ describe("serializeErrorForLog", () => {
     expect(out.message).toBe("upsert into calendar_connections returned no row");
   });
 
-  it("strips the stack's header line, which is a verbatim copy of the message", () => {
-    const err = new GoogleOAuthError(GOOGLE_PROSE, 400, "invalid_grant");
-    const out = serializeErrorForLog(err);
-    expect(out.stack).not.toContain(GOOGLE_PROSE);
-    // Frames survive, so the log is still navigable.
+  it("withholds a provider-authored error's stack entirely", () => {
+    // This previously asserted the stack kept its frames with the header
+    // stripped. Adversarial review showed header-stripping by SHAPE is
+    // defeatable, so for the five provider classes the stack is now withheld
+    // outright -- their frames land inside undici and are worth little, while
+    // `type` and the request log line already say which route threw.
+    const out = serializeErrorForLog(new GoogleOAuthError(GOOGLE_PROSE, 400, "invalid_grant"));
+    expect(out.stack).toBe("");
+  });
+
+  it("keeps frames for OUR OWN errors, so a log line stays navigable", () => {
+    const out = serializeErrorForLog(new Error("upsert returned no row"));
+    expect(out.stack).not.toBe("");
     expect(out.stack.split("\n").every((line) => line.trimStart().startsWith("at "))).toBe(true);
   });
 
@@ -85,6 +93,28 @@ describe("serializeErrorForLog", () => {
     const multi = `${GOOGLE_PROSE}\n  contained token: ${TOKEN}`;
     const out = serializeErrorForLog(new GoogleOAuthError(multi, 400, undefined));
     expect(flatten(out)).not.toContain(TOKEN);
+  });
+
+  it("resists a provider message disguised as a stack frame", () => {
+    // Found by adversarial review of the first version of this file: keeping
+    // only lines that start with "at " does NOT remove the header, because a
+    // message can contain a line shaped exactly like a frame. Google's
+    // error_description is provider-controlled text, so this is reachable.
+    const disguised = `boom\n    at attacker (leak-${TOKEN}.js:1:1)`;
+    const out = serializeErrorForLog(new GoogleOAuthError(disguised, 400, undefined));
+    expect(out.stack).not.toContain(TOKEN);
+    expect(flatten(out)).not.toContain(TOKEN);
+  });
+
+  it("removes the header from OUR OWN error's stack by length, not by shape", () => {
+    // The same disguise on an error we authored: the header must still go, so
+    // the defence does not depend on which class threw.
+    const err = new Error(`our own failure\n    at notreallyaframe (marker-${TOKEN}.js:1:1)`);
+    const out = serializeErrorForLog(err);
+    expect(out.stack).not.toContain(TOKEN);
+    // Our message is still reported -- that is the point of keeping it.
+    expect(out.message).toContain("our own failure");
+    expect(out.stack).toContain("at ");
   });
 
   it("emits exactly the allowlisted keys and nothing else", () => {

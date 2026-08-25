@@ -1,4 +1,5 @@
 import { loadModelForConnection, encryptSecret } from "@personal-os/ai-providers";
+import { classifyAiProviderTestFailure } from "./ai-provider-test-failure.js";
 import { aiModels, aiProviderConnections, aiTaskRoutes } from "@personal-os/db";
 import {
   AiModelCreateSchema,
@@ -112,10 +113,15 @@ export default function aiConfigRoutes(app: FastifyInstance): void {
         latency_ms: Date.now() - startedAt,
       });
     } catch (err) {
+      // `err` here comes off an LLM vendor's SDK and can carry the upstream
+      // response body -- and this is the one route whose whole job is to talk
+      // to a user-supplied endpoint with a user-supplied key. It gets the same
+      // treatment as the calendar and health provider surfaces: a bounded
+      // classification, never the vendor's words.
       return AiProviderTestResponseSchema.parse({
         success: false,
         latency_ms: Date.now() - startedAt,
-        error: err instanceof Error ? err.message : String(err),
+        error: classifyAiProviderTestFailure(err),
       });
     }
   });

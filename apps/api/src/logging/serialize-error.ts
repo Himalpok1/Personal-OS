@@ -80,21 +80,35 @@ export function serializeErrorForLog(err: unknown): SerializedError {
   return {
     type,
     message: isProviderAuthored ? `[${type} message withheld]` : err.message,
-    stack: err.stack === undefined ? "" : framesOnly(err.stack),
+    // Withheld entirely for provider-authored errors. A stack's own frames are
+    // near-worthless for these (they land inside undici), and `framesOnly`
+    // alone was NOT sufficient -- see its comment.
+    stack: isProviderAuthored || err.stack === undefined ? "" : framesOnly(err),
     ...(code === undefined ? {} : { code }),
   };
 }
 
 /**
- * Keeps only `    at ...` frame lines.
+ * Removes the message header from a stack, then keeps only frame lines.
  *
- * V8 formats a stack as `<name>: <message>\n    at ...`, so the header line is a
- * verbatim copy of the message. Dropping every non-frame line removes it without
- * needing to know how many lines the header occupies (it is more than one for a
- * multi-line message).
+ * V8 formats a stack as `<name>: <message>\n    at ...`, so the header is a
+ * verbatim copy of the message and must go.
+ *
+ * Filtering for lines that look like frames is NOT enough on its own, and an
+ * adversarial review of this file proved it: a message containing a line of its
+ * own shaped like `    at attacker (leak-<secret>.js:1:1)` passes that filter
+ * intact. So the header is removed by LENGTH first -- it is exactly
+ * `${name}: ${message}`, however many lines that spans -- and the frame filter
+ * is the second layer rather than the only one.
+ *
+ * Provider-authored errors never reach here at all; their stack is withheld
+ * outright, so this defence only has to hold for messages we wrote ourselves.
  */
-function framesOnly(stack: string): string {
-  return stack
+function framesOnly(err: Error): string {
+  const stack = err.stack ?? "";
+  const header = `${err.name}: ${err.message}`;
+  const body = stack.startsWith(header) ? stack.slice(header.length) : stack;
+  return body
     .split("\n")
     .filter((line) => line.trimStart().startsWith("at "))
     .join("\n");
