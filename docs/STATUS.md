@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0, 6.1, 6.2, 6.2P and 6.3 COMPLETE (6.3 local only, 2026-08-25).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`, unmerged; 6.4 (dashboard) is next and requires separate approval.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
-**Implementation status:** Phases 0–5 are implemented and production-deployed. **Production migration level is unchanged at 0000–0012 = 13 migrations**; Phase 6's additive `0013` exists in local dev/test only and is not deployed. **Checkpoint 6.3 added NO migration** — the local level stays at 14 `.sql` / 14 journal entries. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
-**Next phase allowed:** **Checkpoint 6.4 (dashboard, web + Rabbit), on separate explicit approval only.** 6.0–6.3 are closed. The HTTP-400 probe-classification hardening that 6.3 was required to begin with is **done**. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app remains in **Testing**, so the development refresh token expires **2026-08-31T23:57:45Z**. Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
+**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L and 6.4 COMPLETE (6.3/6.3L/6.4 local only, 6.4 on 2026-08-25).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`. Neither is merged to `main`. 6.5 (hardening) is next and requires separate approval.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Implementation status:** Phases 0–5 are implemented and production-deployed. **Production migration level is unchanged at 0000–0012 = 13 migrations**; Phase 6's additive `0013` exists in local dev/test only and is not deployed. **Checkpoints 6.3, 6.3L and 6.4 added NO migration** — the local level stays at 14 `.sql` / 14 journal entries. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
+**Next phase allowed:** **Checkpoint 6.5 (hardening), on separate explicit approval only.** 6.0–6.4 are closed. 6.4 delivered the read surface and the Health UI on web; **no physical Rabbit pass was run and no APK was built** — `versionCode` is untouched at 6, so on-device verification is 6.5's or 6.7's to do. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app remains in **Testing**, so the development refresh token expires **2026-08-31T23:57:45Z**. Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 6 — Google Health Integration (plan approved 2026-08-24)
@@ -341,6 +341,160 @@ Safety after the proof: `health_observations` = **0** in dev and test; zero advi
 in pg-boss; no health refresh queue or cron anywhere in source; migrations still **14 / 14**; F5
 holds `capture-1.json` only; `.env` still on the loopback callback; no repository API, worker, watch
 or test process left running and port 3000 free.
+
+### Checkpoint 6.4 — Health dashboard, web (COMPLETE, local only, 2026-08-25)
+
+Built on branch `phase-6-google-health-ui` from `0b9b436`. **Not merged to `main`.** No
+production access, no deployment, no OAuth publishing, **no live Google call**, **no
+migration** — the local level stays 14 `.sql` / 14 journal entries and production stays
+0000–0012. `versionCode` untouched at 6; **no APK was built and no physical Rabbit pass was
+run.**
+
+Six commits, five lanes with non-overlapping file ownership plus an independent read-only
+audit. The integrator owned every shared file — schema, route registration, the api-client
+method bag, navigation, the Today mount, docs, and all database-backed test runs.
+
+#### The read surface
+
+Four perimeter-only routes, `/health-*` siblings because `/health` is the liveness probe:
+
+| Route | Shape |
+|---|---|
+| `GET /health-summary?tz=` | connection + freshness + a tile per daily metric + `latest` + sleep/workout + capabilities |
+| `GET /health-metrics?metric=&from=&to=&include_empty=` | bounded daily series, `to` INCLUSIVE, ≤366 days |
+| `GET /health-sleep?from=&to=&limit=&offset=` | paginated, by WAKE date (ADR-049) |
+| `GET /health-workouts?from=&to=&limit=&offset=` | paginated, by civil start date |
+
+**Missing is never zero, structurally.** `HealthMetricPoint` carries
+`state: "value" | "verified_absent" | "unknown"` with a Zod refine pinning `value` non-null
+*exactly* when `state === "value"`. A zero-filled gap is unrepresentable rather than merely
+discouraged, `"0"` stays a genuine recorded zero, and the client re-parses the same schema so
+a server regression fails at the boundary instead of quietly rendering a fabricated 0.
+
+**No secret and no provider error can cross.** `health_connections.last_sync_error` is
+deliberately not projected — only its timestamp and a boolean — so "never show a raw provider
+error" is a property of the shape, not a rule a screen must remember. (The column turns out to
+hold our own failure *class*, not a Google message; the exclusion is belt-and-braces and costs
+nothing.)
+
+**`heart-rate-intraday` is excluded by acquisition MODE, not a name blocklist**, so it is
+absent from tiles, capabilities and navigation, and `/health-metrics` rejects it with
+`400 metric_not_readable`. `health_observations` is referenced nowhere.
+
+#### What is honestly absent
+
+Sleep stages, awake time, workout distance/calories/HR zones are modelled but **always null**.
+The 6.3 sync engine stores an allowlisted `SessionDetail` of
+`{source, sessionType, sessionSubtype}` and nothing more; capturing stages would mean changing
+the sync engine and re-fetching from Google, which 6.4 is not authorised to do. Modelling them
+keeps the client's "not available" a contract rather than a hardcoded string, and the copy
+attributes the gap to Personal OS rather than to Google.
+
+#### The UI
+
+Four screens — dashboard, per-metric trend, sleep history, workout history — reached from a
+Settings card rather than a sixth tab: the Rabbit's 480px bar already carries five labels, and
+Health is a read-only view of one connection, not a daily driver. A small self-contained card
+sits on Today owning its own query, so `/today`'s read model, schema and route are
+**byte-unchanged** and Today can never wait on, or fail because of, a Google sync.
+
+The dashboard shows a tile for **every** daily metric including the empty ones — a metric that
+silently vanishes is an absence a user reads as zero, and twelve of eighteen streams have never
+produced data on this account. Each missing tile says *which* kind of missing, and a
+"last recorded on <date>" line appears **alongside** the missing words, never instead of them.
+
+**No charting dependency was added** (none exists in this repo); charts are hand-built on
+`View` over tested pure geometry, matching the `week-grid-layout.ts` precedent. A line breaks
+at every gap rather than interpolating a value nobody recorded.
+
+#### The audit found no broken invariant and seven real defects
+
+An independent read-only auditor attacked 13 invariants: all CLEAR or CONCERN, none BROKEN.
+Three findings mattered.
+
+1. **A recorded zero and a data gap were pixel-identical.** `MIN_BAR_HEIGHT` and the
+   component's own `GAP_MARKER_HEIGHT` had drifted to the same 2px in the same slot, leaving
+   **colour as the sole difference** — unreadable in greyscale, at low contrast, or to a
+   colour-blind reader, and precisely the distinction the whole surface exists to preserve.
+   The constants now live together, because what makes a zero readable is a relationship
+   *between* them; a gap is narrower AND shorter than the thinnest possible bar; and every
+   mark gained a per-day `accessibilityLabel`, since the aggregate summary could say how many
+   days had values but never what happened on one.
+2. **The app-open refresh fired on a condition it could not clear.** It requests a `hot`
+   window — correct, and unchanged, because hot is the one mode ADR-046a/047a forbid from
+   densifying or tombstoning and therefore the only kind safe to fire unattended. But hot is
+   by that same rule never authoritative, and `verified_through_date` is written only on an
+   authoritative pass, so `is_stale` could never go false. Every app open spent a request and
+   90 seconds of polling to leave the banner unchanged. The trigger is now "today is not
+   covered yet", which hot *can* satisfy.
+3. **Four credential canaries could not fire** — proven, not assumed. A Buffer serialises to
+   `{"type":"Buffer","data":[...]}`, so a `"ya29."` seed never appears in the body, and
+   lowercase `"ciphertext"` never matches the camelCase property. A total row leak passed all
+   four. They now seed text canaries in adjacent columns, carry positive controls so absence
+   cannot pass by nothing reaching the serializer, and the key-walk catches camelCase.
+
+Also fixed: `slotEdge` was hand-copied into the component on the reasoning that exporting it
+would mean editing a file it "does not own" — an authorship artifact, now one definition; the
+trends screen printed its summary paragraph twice; the stale banner could read "0 days behind"
+where ADR-048's widening legitimately puts coverage level with today; the 7-night sleep mean
+divided by `count(*)` rather than distinct wake dates, making it a per-session average calling
+itself nightly; the zero-substitution guard grepped only for `coalesce`, missing the likelier
+`?? 0`; and the seven frozen 6.4 schemas had no direct tests at all.
+
+#### Live local verification, against already-stored development data
+
+API only — the worker was never started, so no scheduled fan-out and no Google call was
+reachable. Values are deliberately not reproduced here.
+
+| Check | Result |
+|---|---|
+| `/health-summary` on a morning with no sync yet | 16 tiles, **all `unknown`** — not one fabricated zero |
+| `latest` | exactly the 4 metrics that have ever recorded a value, each with its own date |
+| Freshness | verified through the prior day, `days_behind` 1, `is_stale` false at threshold 2 |
+| Sleep | the one stored session, `stages`/`asleep_seconds`/`awake_seconds` all null |
+| **ADR-049, live** | the session appears in its **wake**-date window and is **absent** from its start-date window |
+| Series, a metric with data | `sum` metric prints **Total**; today counts as "not synced", never as a 0 in the total |
+| Series, a metric with none | every aggregate renders **"No data"** as words |
+| Guards | intraday → 400 · session metric → 400 · unknown metric → 400 · 367 days → 400 · 366 → 200 · bad/missing tz → 400 |
+| Leak scan, all four routes + API log | zero matches for `ya29.` / `refresh_token` / `ciphertext` / `auth_tag` / `client_secret` / `last_sync_error` |
+
+**Browser pass** (web export served locally, paired as a real device): Today renders the Health
+card honestly; the dashboard distinguishes "today hasn't been synced yet" from "no data has
+reached Google Health for this yet" in two different sentences; sleep shows its wake date with
+bedtime/wake in the clock time it was lived and the stage-detail note; workouts show an honest
+empty state; the Settings card links through. Verified at desktop width and at the Rabbit's
+480×640.
+
+Smoke cleanup was count-verified: the paired web device and the two pairing codes removed, the
+five pre-existing Android device rows preserved, and the health tables **byte-identical** to
+their pre-pass state. No repository process was left running and every port was released.
+
+#### Deliberately NOT done
+
+No physical Rabbit pass, no APK, no `versionCode` change. No OAuth connect/disconnect flow,
+no per-stream toggles, no backfill control — 6.4 is read-only UI over the existing connection.
+No health data reaches the Daily Brief: `apps/api/brief/**` is byte-unchanged and `BriefInput`
+carries no health field.
+
+#### Verification actually run
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Full gate | build 9/9, typecheck 17/17, lint **0 warnings**, `format:check` clean, `git diff --check` clean |
+| 2 | Full suite, serial and uncached | **1965 tests / 17 turbo tasks** (1714 → **+251**) |
+| 3 | Zero-drift canaries | `calendar-providers` exactly **57**, `worker` exactly **145** |
+| 4 | Per package | schema 138→**162** · api 424→**466** · api-client 70→**93** · mobile 197→**359** |
+| 5 | Migration invariant | 14 `.sql` / 14 journal entries — **6.4 adds none** |
+| 6 | Forbidden-area drift | **zero** across `packages/db`, `apps/worker`, `packages/calendar-providers`, all compose files, `eas.json`, `app.config.ts`, `apps/mobile/android` |
+| 7 | Today/Brief isolation | `read-models/today.ts`, `schema/today.ts`, `routes/today.ts`, `brief/**` all **byte-unchanged** |
+| 8 | Web export | clean, single `index.html` |
+| 9 | Typed routes | deleted the hand-patched generated artifact and **regenerated it with the real generator**, which emits all four `/health` routes; typecheck clean both with and without it |
+| 10 | Secret scans | `gitleaks git` 112 commits, no leaks. Working tree: 77 findings, **all in gitignored paths, 0 in any file git would commit** |
+
+**One pre-existing issue found and deliberately not fixed:** `apps/mobile/src/app/settings.tsx`
+renders `connection.last_sync_error` verbatim for **Google Calendar** — a raw provider string
+on screen. It is Checkpoint 4.5 code, untouched by this branch and outside 6.4's scope, but it
+is exactly the pattern the new Health card avoids. Worth its own fix.
 
 ### Checkpoint 6.2P — Live development-account probe (CLOSED, 2026-08-25)
 
@@ -934,6 +1088,7 @@ Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, 
 - [x] Phase 5 Checkpoint 5.6 — Mobile / Rabbit daily-use polish: reproducible dev harness via expo-build-properties (dev-profile only, production proved unaffected), dev-shell parity, FAB/PTT clearance, notification cold-start, all-day date off-by-one, serialized review saves, keyboard reachability, touch/layout polish — complete 2026-08-23 (physically verified on the Rabbit R1; production untouched; zero migrations).
 - [x] **Phase 5 Checkpoint 5.7 — Production deployment + Phase 5 closure: migrations 0010–0012 applied exactly once (level 0000–0012 = 13), api/worker/web rolled out from `656c1fc`, Rabbit upgraded in place to versionCode 5 with pairing/PRIMARY/credential preserved, production `daily_brief` route registered on the existing gpt-4.1 model, reminder real-fire + push delivery + PTT all physically verified, and BOTH reboot axes passed — complete 2026-08-24. PHASE 5 COMPLETE.**
 - [x] **Phase 5 Checkpoint 5.7.1 — All-day noon-anchor hotfix: ADR-042's local-noon recurrence anchor no longer reaches presentation. Two live leaks fixed (Today `12:00`, Brief "beginning at 12:00 PM"), three latent spots hardened, `BriefEventItem` gained a `date` field, one shared all_day-first helper, regression + mutation tests across Chicago/Auckland/Santiago. api+web rebuilt, versionCode 6 installed in place. Google/CalDAV untouched and provably unaffected. **No migration.** — complete 2026-08-24.**
+- [x] **Phase 6 Checkpoint 6.4 — Health dashboard (web): four `/health-*` read routes, typed api-client, four pure display-logic modules, five components, four screens from a Settings card, and one self-contained Today card. Missing-is-never-zero and no-credential-crosses-the-boundary are both structural. Independent audit found no broken invariant and seven real defects, all fixed. Complete 2026-08-25 (local only; branch `phase-6-google-health-ui`, unmerged; no migration; no APK; no physical device pass).**
 - [x] Phase 5 Checkpoint 5.5 — Personal OS Daily Brief: migration 0012 (`ai_daily_briefs`, identity `(brief_date, timezone)`), deterministic Today-derived collector, injection-guarded prompt, provider-agnostic generation with true model provenance, `POST /briefs` + `GET /briefs/current`, Today brief metadata, and the Today Brief card — complete 2026-08-23 (local only; production untouched; no paid provider call).
 
 ## Phase 5 Checkpoint 5.7.1 — All-day noon-anchor hotfix (COMPLETE, 2026-08-24)
@@ -2815,40 +2970,38 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-**Phase 6 Checkpoints 6.0, 6.1, 6.2, 6.2P and 6.3 are complete. Work has stopped, as planned.**
+**Phase 6 Checkpoints 6.0 through 6.4 are complete. Work has stopped, as planned.**
 
-6.3 delivered the sync engine on branch `phase-6-google-health-sync` (unmerged, local only, no
-migration, production untouched). See the 6.3 section above for what was built, the two ADR
-amendments it required, the two blockers the independent audit found, and the honest limitations.
+6.4 delivered the user-facing Health experience on branch `phase-6-google-health-ui`
+(unmerged, local only, **no migration**, production untouched, **no live Google call**):
+four `/health-*` read routes, typed api-client methods, four pure display-logic modules,
+five components, four screens reached from a Settings card, and one self-contained card on
+Today.
 
-6.0 delivered ADR-046..050 and reconciled seven documented conflicts. 6.1 delivered the
-shared contracts, additive migration `0013` (local dev/test only — **production is still at
-0000–0012**), the `packages/core/src/health/` helpers and the new
-`packages/health-providers` package with its in-memory fake. 6.2 delivered the Google
-Health OAuth connection flow. **6.2P proved it against the real development account:**
-live consent completed, state consumed once and replay rejected, `healthUserId` bound,
-refresh token encrypted, and the capability probe run across all 19 catalog metrics.
+Two properties are worth carrying forward because they are structural rather than
+conventional. **Missing is never zero** -- `HealthMetricPoint`'s refine pins `value` non-null
+exactly when `state === "value"`, so a zero-filled gap is unrepresentable and a genuine
+recorded zero survives to the screen. **No credential and no provider error string can cross
+the boundary** -- `last_sync_error` is simply not projected.
 
-**6.2P closed with one item explicitly deferred by the user:**
+An independent read-only audit attacked 13 invariants and broke none, but found seven real
+defects, all fixed: the pixel-identical zero-vs-gap marks, an app-open refresh firing on a
+condition its own mechanism could never clear, four credential canaries proven incapable of
+firing, a duplicated tiling function, a doubled paragraph, a "0 days behind" string, and a
+per-session sleep mean calling itself nightly.
 
-```text
-Core OAuth and capability proof:                    PASSED
-Raw-heart-rate reconciliation stability (F5):       DEFERRED ACCEPTANCE DEBT
-```
+Live verification ran against already-stored development data with the API only -- the worker
+was never started, so no scheduled fan-out and no Google call was reachable. On a morning with
+nothing yet synced, all 16 tiles read `unknown` and not one rendered a fabricated zero; ADR-049
+was confirmed live, with the one stored sleep session present in its wake-date window and
+absent from its start-date window.
 
-F5 is **neither passed nor failed**. Capture 1 is preserved; capture 2 was deliberately not
-run. `heart-rate-intraday` remains disabled by policy and raw intraday heart-rate ingestion
-is excluded from 6.3.
+**State at closure:** branch `phase-6-google-health-ui`, **not merged to `main`**. Production
+untouched. OAuth app in **Testing**. `versionCode` untouched at **6** -- no APK, and **no
+physical Rabbit pass was run**. The development refresh token expires
+**2026-08-31T23:57:45Z**.
 
-1382 tests pass across 17 turbo tasks; both zero-drift canaries held exactly
-(`calendar-providers` 57, `worker` 80). Migration count unchanged at 14 locally,
-**0000–0012 in production**.
-
-**State at closure:** branch `phase-6-google-health`, **not merged to `main`**. Production
-untouched. OAuth app in **Testing**. The local `.env` keeps the development loopback
-callback. The development refresh token expires **2026-08-31T23:57:45Z**.
-
-**Do not begin Checkpoint 6.3 without a separate explicit user approval.**
+**Do not begin Checkpoint 6.5 without a separate explicit user approval.**
 
 ## Remaining warnings / technical debt
 
@@ -2951,35 +3104,34 @@ callback. The development refresh token expires **2026-08-31T23:57:45Z**.
 
 ## Last verification
 
-**Phase 6 Checkpoint 6.3 — Google Health sync engine (2026-08-25).** Local development only;
-production untouched; branch `phase-6-google-health-sync`, unmerged.
+**Phase 6 Checkpoint 6.4 -- Health dashboard (2026-08-25).** Local development only;
+production untouched; branch `phase-6-google-health-ui`, unmerged.
 
-Full gate: build 9/9, typecheck 17/17, lint **0 warnings**, `format:check` clean;
-`git diff --check` clean; `expo export --platform web` clean with a single `index.html`.
+Full gate: build 9/9, typecheck 17/17, lint **0 warnings**, `format:check` clean,
+`git diff --check` clean, `expo export --platform web` clean with a single `index.html`.
 
-Full suite, **uncached and serial** (`turbo run test --force --concurrency=1`): **1693 tests across
-17 turbo tasks.** Per package — core 326 · db 21 · schema 138 · **calendar-providers 57
-(zero-drift canary held)** · health-providers 290 · ai-providers 25 · api-client 70 · api 424 ·
-**worker 145 (from 80)** · mobile 197.
+Full suite, **uncached and serial** (`turbo run test --force --concurrency=1`): **1965 tests
+across 17 turbo tasks** (1714 -> **+251**). Per package -- core 326 · db 21 · schema **162** ·
+**calendar-providers 57 (canary held)** · health-providers 311 · ai-providers 25 ·
+api-client **93** · api **466** · **worker 145 (canary held)** · mobile **359**.
 
-`gitleaks git`: 103 commits, no leaks. `gitleaks dir`: 73 findings, **every one in a gitignored
-path** (`.env` and the generated `apps/mobile/android/` tree) and **zero in any file git would
-commit** — classified programmatically with `git check-ignore`, not asserted.
+`gitleaks git`: 112 commits, no leaks. Working tree: 77 findings, **every one in a gitignored
+path** and **zero in any file git would commit**, classified programmatically with
+`git check-ignore` rather than asserted.
 
-Migration invariant: **14 `.sql`, 14 journal entries, last `0013_google_health_sync`** — 6.3 adds
-none. `health_observations` = **0** in both dev and test; zero advisory locks left held;
-`heart-rate-intraday` `sync_enabled = false`.
+Migration invariant: **14 `.sql`, 14 journal entries** -- 6.4 adds none; production stays
+0000-0012. Forbidden-area drift **zero** across `packages/db`, `apps/worker`,
+`packages/calendar-providers`, all compose files, `eas.json`, `app.config.ts` and
+`apps/mobile/android`. `apps/api/src/read-models/today.ts`, `packages/schema/src/today.ts`,
+`apps/api/src/routes/today.ts` and `apps/api/src/brief/**` are **byte-unchanged**.
 
-Worker boot verified against the **test** database (zero health connections, so no provider call is
-reachable): `health.google.sync-connection` persisted as `policy=stately, retry_limit=0,
-expire_seconds=900, dead_letter=null`, and `health.google.sync-cron` scheduled hourly.
+Expo's generated typed-routes artifact was **deleted and regenerated with the real generator**
+rather than trusted as hand-patched; it emits all four `/health` routes, and typecheck is clean
+both with and without it. Every server started for verification was stopped and every port
+released; the dev database was returned to its exact pre-pass state, count-verified.
 
-**All database-backed results were re-measured after every sub-agent had quiesced.** Readings taken
-while a sub-agent was running its own vitest against the shared `personalos_test` database were
-discarded as invalid and no test was changed on their basis.
-
-*Previous verification — Phase 6 Checkpoint 6.1 (2026-08-24): 1303 tests across 16 turbo tasks,
-calendar-providers 57, worker 80, 14 migrations.*
+*Previous verification -- Phase 6 Checkpoint 6.3L (2026-08-25): 1714 tests across 17 turbo
+tasks, calendar-providers 57, worker 145, 14 migrations.*
 
 ## Superseded verification
 
@@ -3044,77 +3196,29 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Stopped. Checkpoints 6.0 through 6.3 are complete.** The next checkpoint is **6.4, the health
-dashboard (web + Rabbit)**, and it needs a separate explicit approval. 6.3 lives on branch
-`phase-6-google-health-sync` and is **not merged to `main`** — merging is itself a separate
-decision.
+**Stopped. Checkpoints 6.0 through 6.4 are complete.** The next checkpoint is **6.5
+(hardening)**, and it needs a separate explicit approval. 6.4 lives on branch
+`phase-6-google-health-ui` and is **not merged to `main`** -- merging, and the still-unmerged
+`phase-6-google-health-sync`, are their own decisions.
 
-*(The handoff below was written before 6.3 ran. Its item 1 — the HTTP-400 probe hardening — is now
-done; items 2–5 remain binding on 6.4.)*
+**Carried into 6.5:**
 
-**Exact 6.3 handoff — binding constraints:**
+1. **No physical Rabbit pass and no APK.** 6.4 verified the UI in a browser at desktop width
+   and at 480x640, which is a web-DOM proxy for the Rabbit, not native evidence. `versionCode`
+   is untouched at 6.
+2. **A pre-existing raw-provider-error render.** `apps/mobile/src/app/settings.tsx` prints
+   `connection.last_sync_error` verbatim for **Google Calendar**. Checkpoint 4.5 code, outside
+   6.4's scope and untouched by it, but exactly the pattern the Health card deliberately
+   avoids.
+3. **Twelve of eighteen value specs remain unverified** because this account has never produced
+   data for them -- recorded as an account-data fact, not a defect.
+4. **F5 (raw-heart-rate reconcile stability) remains deferred acceptance debt.**
+   `heart-rate-intraday` stays `sync_enabled = false` and `health_observations` stays empty.
+5. **Sleep stages and workout distance/calories/HR zones are not stored** by the 6.3 sync
+   engine. Capturing them means changing that engine and re-fetching from Google -- a scoped
+   decision, not a UI change.
 
-1. **FIRST MANDATORY TASK: harden the probe's HTTP-400 classification.**
-   `apps/api/src/scripts/probe-google-health.ts` currently maps any HTTP 400 to
-   `not_supported`. During 6.2P that misreported all eight rollup metrics as unsupported
-   when the real cause was two request-shape bugs of ours. A 400 must be surfaced with
-   Google's `error.details[].reason` (e.g. `INVALID_ROLLUP_QUERY_DURATION`,
-   `INVALID_DATA_POINT_DATA_SOURCE_FAMILY`) and classified as a **client-side request
-   defect**, never silently as a provider capability verdict. This is a closure carry-over,
-   not a blocker — 6.2P closed without it.
-2. **Raw intraday heart rate is OUT OF SCOPE for 6.3.** `heart-rate-intraday` stays
-   `sync_enabled = false`. Do not write to `health_observations` in 6.3.
-3. **All other approved streams may proceed** — the 18 enabled streams across daily
-   rollups, precomputed daily vitals, samples and sessions.
-4. **Build on the live-verified facts**, not the original assumptions: `CivilTimeInterval`
-   uses `start`/`end`; **never send `pageSize` on `dailyRollUp`**; `dataSourceFamily` must
-   be the full resource name; empty civil days are **omitted**, so densification is
-   required and the bucket check must detect **truncation only**; sleep is queried on
-   `civil_end_time` and `start_time` is rejected outright.
-5. **Unchanged guardrails:** no migration (6.3 uses `0013`'s tables), no production
-   contact, no publishing, no merge to `main`, OAuth app stays in Testing, no webhooks, no
-   public ingress, no new scopes.
-
-**Operational notes for whoever resumes:**
-
-- The development refresh token expires **2026-08-31T23:57:45Z** (Testing mode, 7 days).
-  After that, reconnect via `GET /health-connections/google/authorize-url` and the loopback
-  callback before any live work.
-- The local `.env` still points at the **development loopback** callback. Restore it to the
-  Tailscale value before anything production-facing.
-- **The account has no wearable paired**, so sleep, heart rate, HRV, SpO₂, resting HR,
-  respiratory rate, temperature, VO₂ max, exercise, weight and body fat are all empty in
-  recent windows. This is an account-data fact, not an integration defect — the streams are
-  correct and will populate when a wearable is paired. Historical heart rate exists on
-  6 days, all more than 30 days old.
-
-**Publishing (the former M8) is superseded and deliberately not done.** It receives separate
-approval only after the deferred F5 proof is completed or the `list` fallback is adopted,
-and after whatever production-readiness bar you set at that point.
-token refresh, partial consent and reconnection.
-
-One acceptance item is outstanding and needs a human with a browser (~15 seconds):
-
-1. **Real-browser CORS proof.** Open `https://personal-os.tail62a68f.ts.net:8443` in a
-   real browser and, from the DevTools console, `fetch` the API origin
-   (`https://personal-os.tail62a68f.ts.net`) with a `PATCH` — any HTTP status proves the
-   preflight succeeded. The unapproved-origin half is already proven server-side.
-
-Optional, not blockers:
-
-2. Generate a fresh Daily Brief on the device whenever wanted — the route is live and the
-   verification brief was deliberately deleted with the smoke data.
-3. `week-grid.tsx` `formatTimeLabel` and Today's `eventStartMs` now carry defensive
-   guards, but both remain functions whose correctness would be easy to re-break by
-   changing a call site; they are covered by the shared-helper convention, not by tests
-   of their own.
-
-**The Phase 6 gate after 6.1 is hard.** Checkpoint 6.2 requires all of M2–M8 (enable
-`health.googleapis.com`; create a **separate** Web Server OAuth client; register the
-Tailscale redirect URI; External user type + test user; select exactly the three read
-scopes; put the credentials in `.env` yourself; press **Publish app**) **and** a separate
-explicit approval. If the Tailscale callback cannot be registered or used, work stops at
-the OAuth gate — there is no automatic loopback fallback and no public ingress under any
-circumstances (Appendix A §A2).
-
-Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
+**Operational notes:** the development refresh token expires **2026-08-31T23:57:45Z**; the
+local `.env` still points at the development loopback callback and must be restored before
+anything production-facing; the OAuth app remains in **Testing** and publishing is still
+deliberately not done.
