@@ -69,6 +69,11 @@ services:
       AUDIO_STORAGE_PATH: /data/audio
       GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:?GOOGLE_OAUTH_CLIENT_ID must be set in .env}
       GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:?GOOGLE_OAUTH_CLIENT_SECRET must be set in .env}
+      # Google Health (Phase 6). `:-` rather than `:?` for the same reason the
+      # api service uses it: a rollout must not hard-fail before the
+      # credentials exist, and the worker's env schema makes both optional.
+      GOOGLE_HEALTH_OAUTH_CLIENT_ID: ${GOOGLE_HEALTH_OAUTH_CLIENT_ID:-}
+      GOOGLE_HEALTH_OAUTH_CLIENT_SECRET: ${GOOGLE_HEALTH_OAUTH_CLIENT_SECRET:-}
     volumes:
       - audio_data:/data/audio
     depends_on:

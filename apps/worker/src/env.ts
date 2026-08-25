@@ -15,6 +15,22 @@ const EnvSchema = z.object({
   // endpoint directly, not through apps/api.
   GOOGLE_OAUTH_CLIENT_ID: z.string().min(1),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().min(1),
+
+  // Google Health OAuth (Phase 6 Checkpoint 6.3). A SEPARATE OAuth client
+  // from GOOGLE_OAUTH_* above -- a Calendar token is never reused as a
+  // Health token.
+  //
+  // OPTIONAL, deliberately unlike the Calendar pair immediately above.
+  // Checkpoint 6.3 refreshes a Health access token INLINE, from whichever
+  // sync operation needs one (there is no refresh-token batch job), so the
+  // worker must still boot when Health is not configured and degrade to a
+  // logged skip rather than crash-looping. That mirrors apps/api's copy,
+  // which is optional for the same reason.
+  //
+  // The redirect-URI allowlist is deliberately absent: only apps/api mints
+  // authorization URLs and handles the callback. The worker never needs it.
+  GOOGLE_HEALTH_OAUTH_CLIENT_ID: z.string().min(1).optional(),
+  GOOGLE_HEALTH_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
 });
 
 export const env = EnvSchema.parse(process.env);
