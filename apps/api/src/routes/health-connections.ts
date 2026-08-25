@@ -26,6 +26,7 @@ import {
   HealthConnectionSchema,
   HealthMetricStreamListResponseSchema,
   HealthStreamUpdateSchema,
+  sanitizeHealthSyncErrorToken,
 } from "@personal-os/schema";
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -63,7 +64,7 @@ function toConnectionResponse(row: HealthConnectionRow) {
     source_family: row.sourceFamily,
     status: row.status,
     identity_verified_at: row.identityVerifiedAt?.toISOString() ?? null,
-    last_sync_error: row.lastSyncError,
+    last_sync_error: sanitizeHealthSyncErrorToken(row.lastSyncError),
     last_sync_error_at: row.lastSyncErrorAt?.toISOString() ?? null,
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
@@ -87,7 +88,7 @@ function toStreamResponse(row: StreamRow) {
     backfill_target_date: row.backfillTargetDate,
     backfill_cursor_date: row.backfillCursorDate,
     backfill_cancel_requested: row.backfillCancelRequested,
-    last_sync_error: row.lastSyncError,
+    last_sync_error: sanitizeHealthSyncErrorToken(row.lastSyncError),
   };
 }
 

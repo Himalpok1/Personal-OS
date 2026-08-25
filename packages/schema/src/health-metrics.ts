@@ -84,6 +84,38 @@ export type HealthSyncRunStatus = z.infer<typeof HealthSyncRunStatusSchema>;
 // Responses
 // ---------------------------------------------------------------------------
 
+/**
+ * The shape every health sync-error value must have to cross the API boundary.
+ *
+ * Health's writers have always stored their own classification tokens rather
+ * than provider prose (`markHealthConnectionNeedsReauth` documents the rule
+ * explicitly), so unlike calendar there is no closed enum to enforce -- the set
+ * legitimately grows with each new failure class, and ADR-050 keeps it out of a
+ * CHECK constraint for exactly that reason.
+ *
+ * What CAN be enforced without freezing the set is the SHAPE: a lowercase
+ * machine token, optionally suffixed with one `:`-separated qualifier (the
+ * `provider_error:503` / `client_request_defect:GOOGLE_REASON` forms the sync
+ * engine emits). Prose cannot satisfy it -- it has spaces, punctuation and
+ * capitals -- so a future writer that reaches for a message instead of a class
+ * fails here rather than on a user's screen.
+ */
+const HEALTH_SYNC_ERROR_TOKEN = /^[a-z][a-z0-9_]{0,63}(:[A-Za-z0-9_.-]{1,64})?$/;
+
+export const HealthSyncErrorTokenSchema = z.string().regex(HEALTH_SYNC_ERROR_TOKEN);
+
+/**
+ * Narrows a stored health sync-error to a token, or `"provider_error"` when it
+ * is not token-shaped.
+ *
+ * Mirrors `sanitizeCalendarSyncErrorCode`. Applied at the projection site so a
+ * legacy or unexpected value is neutralised without a data migration.
+ */
+export function sanitizeHealthSyncErrorToken(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined || raw === "") return null;
+  return HEALTH_SYNC_ERROR_TOKEN.test(raw) ? raw : "provider_error";
+}
+
 export const HealthConnectionSchema = z.object({
   id: z.string().uuid(),
   provider: z.string(),
@@ -96,7 +128,8 @@ export const HealthConnectionSchema = z.object({
   source_family: z.string(),
   status: HealthConnectionStatusSchema,
   identity_verified_at: z.string().datetime({ offset: true }).nullable(),
-  last_sync_error: z.string().nullable(),
+  // A classification token, never a message -- see HealthSyncErrorTokenSchema.
+  last_sync_error: HealthSyncErrorTokenSchema.nullable(),
   last_sync_error_at: z.string().datetime({ offset: true }).nullable(),
   created_at: z.string().datetime({ offset: true }),
   updated_at: z.string().datetime({ offset: true }),
@@ -126,7 +159,8 @@ export const HealthMetricStreamSchema = z.object({
   backfill_target_date: LocalDateSchema.nullable(),
   backfill_cursor_date: LocalDateSchema.nullable(),
   backfill_cancel_requested: z.boolean(),
-  last_sync_error: z.string().nullable(),
+  // A classification token, never a message -- see HealthSyncErrorTokenSchema.
+  last_sync_error: HealthSyncErrorTokenSchema.nullable(),
 });
 export type HealthMetricStream = z.infer<typeof HealthMetricStreamSchema>;
 
