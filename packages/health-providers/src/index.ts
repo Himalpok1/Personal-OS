@@ -60,14 +60,17 @@ export {
 } from "./google-health-client.fake.js";
 
 export {
+  bodySampleKey,
   contentHash,
   listedHeartRateKey,
   reconciledHeartRateKey,
   sessionKey,
+  type BodySampleIdentityInput,
   type ExternalKey,
   type ExternalKeySource,
   type HeartRateIdentityInput,
   type SessionIdentityInput,
+  type SourceIdentityInput,
 } from "./identity.js";
 
 // ---------------------------------------------------------------------------
@@ -93,3 +96,50 @@ export {
   type LimiterOptions,
   type LimiterStats,
 } from "./sync/limiter.js";
+
+export { buildRollupRange, buildWindowFilter } from "./sync/requests.js";
+
+export {
+  camelCase,
+  getValueSpec,
+  HEALTH_VALUE_SPECS,
+  IN_SCOPE_METRICS,
+  type HealthValueSpec,
+  type LeafType,
+} from "./sync/value-spec.js";
+
+export {
+  canonicalNumeric,
+  extractValue,
+  jsonKindOf,
+  type Extracted,
+  type Rejection,
+} from "./sync/extract.js";
+
+export {
+  collapseSamplesToDays,
+  dailyContentInput,
+  readSourceIdentity,
+  sessionContentInput,
+  translateDailyListRecord,
+  translateRollupBucket,
+  translateSampleRecord,
+  translateSession,
+  type CanonicalSourceIdentity,
+  type DailyMetricRow,
+  type SampleCollapseResult,
+  type SampleRow,
+  type SessionDetail,
+  type SessionRow,
+  type Translated,
+} from "./sync/translate.js";
+
+export {
+  assessDailyCompleteness,
+  assessPagedCompleteness,
+  datesOutsideWindow,
+  MAX_PAGES_LARGE,
+  MAX_PAGES_SESSIONS,
+  type Completeness,
+  type PagingEvidence,
+} from "./sync/completeness.js";
