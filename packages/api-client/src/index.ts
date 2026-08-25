@@ -33,6 +33,15 @@ import {
   listEventsInRange,
   updateEvent,
 } from "./events.js";
+import {
+  getHealthMetricSeries,
+  getHealthSleepSessions,
+  getHealthSummary,
+  getHealthWorkoutSessions,
+  listHealthConnections,
+  listHealthMetricStreams,
+  syncHealthConnectionNow,
+} from "./health.js";
 import { confirmInboxItem, getInboxItem, listInbox } from "./inbox.js";
 import { archiveNote, createNote, getNote, listNotes, updateNote } from "./notes.js";
 import { completeOccurrence, listOccurrences, skipOccurrence } from "./occurrences.js";
@@ -99,6 +108,30 @@ export type {
   EventUpdate,
   LinkEventToGoogleCalendarRequest,
 } from "./events.js";
+export type {
+  HealthAggregation,
+  HealthConnection,
+  HealthConnectionListResponse,
+  HealthConnectionSummary,
+  HealthFreshnessDetail,
+  HealthMetricCapability,
+  HealthMetricPoint,
+  HealthMetricSeriesResponse,
+  HealthMetricStream,
+  HealthMetricStreamListResponse,
+  HealthMetricTile,
+  HealthSeriesParams,
+  HealthSeriesQuery,
+  HealthSessionRangeParams,
+  HealthSessionRangeQuery,
+  HealthSleepListResponse,
+  HealthSleepSession,
+  HealthSummaryResponse,
+  HealthSyncQueuedResponse,
+  HealthValueState,
+  HealthWorkoutListResponse,
+  HealthWorkoutSession,
+} from "./health.js";
 export type { InboxListParams } from "./inbox.js";
 export type { NoteListParams } from "./notes.js";
 export type {
@@ -193,6 +226,17 @@ export function createApiClient(baseUrl: string) {
     skipReview: skipReview.bind(null, baseUrl),
     getDailyReviewContext: getDailyReviewContext.bind(null, baseUrl),
     getWeeklyReviewContext: getWeeklyReviewContext.bind(null, baseUrl),
+
+    // Phase 6 Checkpoint 6.4. Named getHealth*/listHealth* rather than
+    // getSummary etc. because `health()` above is already the API's liveness
+    // probe -- the same collision that made every route a /health-* sibling.
+    getHealthSummary: getHealthSummary.bind(null, baseUrl),
+    getHealthMetricSeries: getHealthMetricSeries.bind(null, baseUrl),
+    getHealthSleepSessions: getHealthSleepSessions.bind(null, baseUrl),
+    getHealthWorkoutSessions: getHealthWorkoutSessions.bind(null, baseUrl),
+    listHealthConnections: listHealthConnections.bind(null, baseUrl),
+    listHealthMetricStreams: listHealthMetricStreams.bind(null, baseUrl),
+    syncHealthConnectionNow: syncHealthConnectionNow.bind(null, baseUrl),
 
     connectGoogleCalendar: connectGoogleCalendar.bind(null, baseUrl),
     connectCaldavCalendar: connectCaldavCalendar.bind(null, baseUrl),
