@@ -57,9 +57,19 @@ describe("createGoogleHealthClient request shaping", () => {
     await createGoogleHealthClient(f).dailyRollUp({
       accessToken: "t",
       dataType: "steps",
-      range: { startTime: civil("2026-08-20"), endTime: civil("2026-08-24") },
+      range: { start: civil("2026-08-20"), end: civil("2026-08-24") },
     });
-    const body = JSON.parse(f.mock.calls[0]![1]?.body as string) as { windowSizeDays: number };
+    const body = JSON.parse(f.mock.calls[0]![1]?.body as string) as {
+      windowSizeDays: number;
+      range: Record<string, unknown>;
+    };
+    // CivilTimeInterval uses bare start/end. startTime/endTime -- which the
+    // interval ON a record does use -- makes Google reject every rollup with
+    // `Unknown name "startTime" at 'range'`. Found live during 6.2P.
+    expect(Object.keys(body.range).sort()).toEqual(["end", "start"]);
+    // Sending pageSize on a rollup makes Google reject the call outright, with
+    // the misleading reason INVALID_ROLLUP_QUERY_DURATION. Verified live, 6.2P.
+    expect(body).not.toHaveProperty("pageSize");
     // windowSizeDays > 1 would need alignment arithmetic and destroy per-day
     // resolution, so 1 is the only value used.
     expect(body.windowSizeDays).toBe(1);
@@ -160,12 +170,12 @@ describe("FakeGoogleHealthClient", () => {
     const a = await fake.dailyRollUp({
       accessToken: "t",
       dataType: "steps",
-      range: { startTime: civil("2026-08-20"), endTime: civil("2026-08-21") },
+      range: { start: civil("2026-08-20"), end: civil("2026-08-21") },
     });
     const b = await fake.dailyRollUp({
       accessToken: "t",
       dataType: "steps",
-      range: { startTime: civil("2026-08-21"), endTime: civil("2026-08-22") },
+      range: { start: civil("2026-08-21"), end: civil("2026-08-22") },
     });
     expect(a.rollupDataPoints[0]!["count"]).toBe("10");
     expect(b.rollupDataPoints[0]!["count"]).toBe("20");

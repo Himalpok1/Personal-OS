@@ -127,7 +127,7 @@ export function createFakeGoogleHealthClient(
     dailyRollUp(req: DailyRollUpRequest): Promise<DailyRollUpResponse> {
       const call: FakeCall = { method: "dailyRollUp", dataType: req.dataType };
       if (req.windowSizeDays !== undefined) call.windowSizeDays = req.windowSizeDays;
-      if (req.pageSize !== undefined) call.pageSize = req.pageSize;
+      // No pageSize: DailyRollUpRequest deliberately cannot carry one.
       if (req.dataSourceFamily !== undefined) call.dataSourceFamily = req.dataSourceFamily;
       calls.push(call);
       return Promise.resolve().then(() => drain(rollupQueues, req.dataType, "dailyRollUp"));

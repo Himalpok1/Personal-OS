@@ -24,9 +24,20 @@ export interface ApiCivilDateTime {
   time?: { hours?: number; minutes?: number; seconds?: number; nanos?: number };
 }
 
+/**
+ * The rollup range. Field names are `start`/`end`, NOT `startTime`/`endTime`.
+ *
+ * This is a genuine and easy-to-miss asymmetry in the API: the interval carried
+ * ON A RECORD (ObservationTimeInterval / SessionTimeInterval) uses
+ * startTime/endTime/civilStartTime/civilEndTime, but the CivilTimeInterval used
+ * as a rollup REQUEST range uses bare start/end. Getting it wrong produces
+ * `Unknown name "startTime" at 'range': Cannot find field` on every rollup call.
+ */
 export interface ApiCivilTimeInterval {
-  startTime: ApiCivilDateTime;
-  endTime: ApiCivilDateTime;
+  /** Inclusive start of the range. */
+  start: ApiCivilDateTime;
+  /** Exclusive end of the range. */
+  end: ApiCivilDateTime;
 }
 
 /** Shape returned by dailyRollUp. Note: NO physical instants, NO UTC offsets. */
@@ -51,9 +62,26 @@ export interface DailyRollUpRequest {
   dataType: string;
   range: ApiCivilTimeInterval;
   windowSizeDays?: number;
-  pageSize?: number;
+  /**
+   * MUST be the full resource name, e.g.
+   * "users/me/dataSourceFamilies/all-sources". A bare "all-sources" is rejected
+   * with INVALID_DATA_POINT_DATA_SOURCE_FAMILY. Verified live, 6.2P.
+   */
   dataSourceFamily?: string;
 }
+
+// NOTE: there is deliberately NO pageSize here.
+//
+// The REST reference documents pageSize and pageToken as dailyRollUp request
+// fields, but sending pageSize AT ALL makes the call fail with HTTP 400 --
+// even a small value on a short range, and even well inside the documented
+// 90-day cap. Verified live during 6.2P at pageSize 100 and 10000 over a
+// 7-day range; removing it alone turned the same request into a 200.
+//
+// The error is actively misleading: reason INVALID_ROLLUP_QUERY_DURATION with
+// metadata maxDurationDays 90, which points at the range rather than at
+// pageSize. Omitting the field is the only working shape, so it is made
+// unrepresentable rather than left as a trap.
 
 export interface DailyRollUpResponse {
   rollupDataPoints: ApiDailyRollupDataPoint[];
@@ -188,7 +216,7 @@ export function createGoogleHealthClient(
         range: req.range,
         windowSizeDays: req.windowSizeDays ?? 1,
       };
-      if (req.pageSize !== undefined) payload["pageSize"] = req.pageSize;
+      // pageSize is intentionally never sent -- see DailyRollUpRequest.
       if (req.dataSourceFamily !== undefined) payload["dataSourceFamily"] = req.dataSourceFamily;
 
       const body = await request<Partial<DailyRollUpResponse>>(
