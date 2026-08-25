@@ -1,5 +1,6 @@
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import { usePlaceholderColor } from "@/components/placeholder-color";
 import { useCreateProject } from "@/queries/projects";
 import { useRouter } from "expo-router";
 import { useState } from "react";
@@ -7,6 +8,7 @@ import { Pressable, ScrollView, Text, TextInput } from "react-native";
 
 export default function NewProjectScreen() {
   const keyboardHeight = useKeyboardHeight();
+  const placeholderColor = usePlaceholderColor();
   const router = useRouter();
   const createProject = useCreateProject();
   const [name, setName] = useState("");
@@ -47,7 +49,7 @@ export default function NewProjectScreen() {
         value={color}
         onChangeText={setColor}
         placeholder="#3b82f6"
-        placeholderTextColor="#888"
+        placeholderTextColor={placeholderColor}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
 

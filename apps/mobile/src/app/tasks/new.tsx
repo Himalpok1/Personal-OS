@@ -1,5 +1,6 @@
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import { usePlaceholderColor } from "@/components/placeholder-color";
 import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
 import { coerceProjectIdParam, useProjects } from "@/queries/projects";
 import { useCreateTask } from "@/queries/tasks";
@@ -13,6 +14,7 @@ import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 export default function NewTaskScreen() {
   const keyboardHeight = useKeyboardHeight();
+  const placeholderColor = usePlaceholderColor();
   const router = useRouter();
   const params = useLocalSearchParams<{ projectId?: string }>();
   const createTask = useCreateTask();
@@ -90,7 +92,7 @@ export default function NewTaskScreen() {
         value={title}
         onChangeText={setTitle}
         placeholder="What needs doing?"
-        placeholderTextColor="#888"
+        placeholderTextColor={placeholderColor}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
 
@@ -108,7 +110,7 @@ export default function NewTaskScreen() {
         value={dueAt}
         onChangeText={setDueAt}
         placeholder="2026-08-20T15:00:00"
-        placeholderTextColor="#888"
+        placeholderTextColor={placeholderColor}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
 
@@ -118,10 +120,13 @@ export default function NewTaskScreen() {
           <Pressable
             key={project.id}
             onPress={() => setProjectId(projectId === project.id ? undefined : project.id)}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityState={{ selected: projectId === project.id }}
             className={
               projectId === project.id
-                ? "rounded-full bg-blue-600 px-3 py-1"
-                : "rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
+                ? "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
+                : "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
             }
           >
             <Text className={projectId === project.id ? "text-white" : "text-black dark:text-white"}>

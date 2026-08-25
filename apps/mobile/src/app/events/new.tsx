@@ -1,5 +1,6 @@
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import { usePlaceholderColor } from "@/components/placeholder-color";
 import { GoogleCalendarLinkPicker } from "@/components/calendar/google-calendar-link-picker";
 import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
 import { useLinkableGoogleCalendars, useLinkEventToGoogleCalendar } from "@/queries/calendar-connections";
@@ -45,6 +46,7 @@ type NewEventParams = {
 
 export default function NewEventScreen() {
   const keyboardHeight = useKeyboardHeight();
+  const placeholderColor = usePlaceholderColor();
   const router = useRouter();
   const params = useLocalSearchParams<NewEventParams>();
   const createEvent = useCreateEvent();
@@ -166,7 +168,7 @@ export default function NewEventScreen() {
         value={title}
         onChangeText={setTitle}
         placeholder="What's the event?"
-        placeholderTextColor="#888"
+        placeholderTextColor={placeholderColor}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
 
@@ -197,7 +199,7 @@ export default function NewEventScreen() {
             value={startDate}
             onChangeText={setStartDate}
             placeholder="2026-09-15"
-            placeholderTextColor="#888"
+            placeholderTextColor={placeholderColor}
             className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
           />
 
@@ -206,7 +208,7 @@ export default function NewEventScreen() {
             value={endDate}
             onChangeText={setEndDate}
             placeholder="2026-09-15"
-            placeholderTextColor="#888"
+            placeholderTextColor={placeholderColor}
             className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
           />
         </>
@@ -217,7 +219,7 @@ export default function NewEventScreen() {
             value={startsAt}
             onChangeText={setStartsAt}
             placeholder="2026-09-15T14:00:00"
-            placeholderTextColor="#888"
+            placeholderTextColor={placeholderColor}
             className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
           />
 
@@ -226,7 +228,7 @@ export default function NewEventScreen() {
             value={endsAt}
             onChangeText={setEndsAt}
             placeholder="2026-09-15T14:30:00"
-            placeholderTextColor="#888"
+            placeholderTextColor={placeholderColor}
             className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
           />
         </>
@@ -238,10 +240,13 @@ export default function NewEventScreen() {
           <Pressable
             key={project.id}
             onPress={() => setProjectId(projectId === project.id ? undefined : project.id)}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityState={{ selected: projectId === project.id }}
             className={
               projectId === project.id
-                ? "rounded-full bg-blue-600 px-3 py-1"
-                : "rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
+                ? "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
+                : "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
             }
           >
             <Text className={projectId === project.id ? "text-white" : "text-black dark:text-white"}>

@@ -28,10 +28,13 @@ export function GoogleCalendarLinkPicker({
       <View className="flex-row flex-wrap gap-2">
         <Pressable
           onPress={() => onChange(undefined)}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityState={{ selected: selectedGoogleCalendarId === undefined }}
           className={
             selectedGoogleCalendarId === undefined
-              ? "rounded-full bg-blue-600 px-3 py-1"
-              : "rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
+              ? "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
+              : "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
           }
         >
           <Text
@@ -48,10 +51,15 @@ export function GoogleCalendarLinkPicker({
           <Pressable
             key={calendar.google_calendar_id}
             onPress={() => onChange(calendar.google_calendar_id)}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityState={{
+              selected: selectedGoogleCalendarId === calendar.google_calendar_id,
+            }}
             className={
               selectedGoogleCalendarId === calendar.google_calendar_id
-                ? "rounded-full bg-blue-600 px-3 py-1"
-                : "rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
+                ? "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
+                : "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
             }
           >
             <Text

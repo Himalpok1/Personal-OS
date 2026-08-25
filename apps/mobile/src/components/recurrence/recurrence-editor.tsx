@@ -1,3 +1,4 @@
+import { usePlaceholderColor } from "@/components/placeholder-color";
 import {
   formatRecurrenceSummary,
   SUPPORTED_FREQUENCIES,
@@ -24,6 +25,18 @@ const WEEKDAY_LABELS: Record<RecurrenceWeekday, string> = {
   FR: "Fri",
   SA: "Sat",
   SU: "Sun",
+};
+
+// The visible chip carries only a 1-2 letter abbreviation, which a screen
+// reader spells out as nonsense -- accessibilityLabel uses the full name.
+const WEEKDAY_FULL_LABELS: Record<RecurrenceWeekday, string> = {
+  MO: "Monday",
+  TU: "Tuesday",
+  WE: "Wednesday",
+  TH: "Thursday",
+  FR: "Friday",
+  SA: "Saturday",
+  SU: "Sunday",
 };
 
 const FREQUENCY_LABELS: Record<RecurrenceFrequency, string> = {
@@ -75,6 +88,7 @@ export function RecurrenceEditor({
   isTask = false,
   disabled = false,
 }: RecurrenceEditorProps) {
+  const placeholderColor = usePlaceholderColor();
   const activePreset = determineActivePreset(value);
   const isEnabled = activePreset !== "none";
 
@@ -313,7 +327,9 @@ export function RecurrenceEditor({
             testID="preset-none"
             disabled={disabled}
             onPress={() => handleSelectPreset("none")}
-            className={`rounded-full px-3 py-1.5 ${
+            accessibilityRole="button"
+            accessibilityState={{ selected: activePreset === "none" }}
+            className={`min-h-[44px] justify-center rounded-full px-3 py-1.5 ${
               activePreset === "none"
                 ? "bg-blue-600"
                 : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
@@ -332,7 +348,9 @@ export function RecurrenceEditor({
             testID="preset-daily"
             disabled={disabled}
             onPress={() => handleSelectPreset("daily")}
-            className={`rounded-full px-3 py-1.5 ${
+            accessibilityRole="button"
+            accessibilityState={{ selected: activePreset === "daily" }}
+            className={`min-h-[44px] justify-center rounded-full px-3 py-1.5 ${
               activePreset === "daily"
                 ? "bg-blue-600"
                 : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
@@ -351,7 +369,9 @@ export function RecurrenceEditor({
             testID="preset-weekly"
             disabled={disabled}
             onPress={() => handleSelectPreset("weekly")}
-            className={`rounded-full px-3 py-1.5 ${
+            accessibilityRole="button"
+            accessibilityState={{ selected: activePreset === "weekly" }}
+            className={`min-h-[44px] justify-center rounded-full px-3 py-1.5 ${
               activePreset === "weekly"
                 ? "bg-blue-600"
                 : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
@@ -370,7 +390,9 @@ export function RecurrenceEditor({
             testID="preset-monthly"
             disabled={disabled}
             onPress={() => handleSelectPreset("monthly")}
-            className={`rounded-full px-3 py-1.5 ${
+            accessibilityRole="button"
+            accessibilityState={{ selected: activePreset === "monthly" }}
+            className={`min-h-[44px] justify-center rounded-full px-3 py-1.5 ${
               activePreset === "monthly"
                 ? "bg-blue-600"
                 : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
@@ -389,7 +411,9 @@ export function RecurrenceEditor({
             testID="preset-custom"
             disabled={disabled}
             onPress={() => handleSelectPreset("custom")}
-            className={`rounded-full px-3 py-1.5 ${
+            accessibilityRole="button"
+            accessibilityState={{ selected: activePreset === "custom" }}
+            className={`min-h-[44px] justify-center rounded-full px-3 py-1.5 ${
               activePreset === "custom"
                 ? "bg-blue-600"
                 : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
@@ -445,7 +469,9 @@ export function RecurrenceEditor({
                   testID="anchor-due-date"
                   disabled={disabled}
                   onPress={() => handleAnchorChange("due_date")}
-                  className={`flex-1 items-center rounded-lg p-2.5 ${
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: value.anchor === "due_date" }}
+                  className={`min-h-[44px] flex-1 items-center justify-center rounded-lg p-2.5 ${
                     value.anchor === "due_date"
                       ? "bg-blue-600"
                       : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
@@ -464,7 +490,9 @@ export function RecurrenceEditor({
                   testID="anchor-completion-date"
                   disabled={disabled}
                   onPress={() => handleAnchorChange("completion_date")}
-                  className={`flex-1 items-center rounded-lg p-2.5 ${
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: value.anchor === "completion_date" }}
+                  className={`min-h-[44px] flex-1 items-center justify-center rounded-lg p-2.5 ${
                     value.anchor === "completion_date"
                       ? "bg-blue-600"
                       : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
@@ -503,7 +531,9 @@ export function RecurrenceEditor({
                     testID={`freq-${freq.toLowerCase()}`}
                     disabled={disabled}
                     onPress={() => handleFrequencyChange(freq)}
-                    className={`flex-1 items-center rounded-lg p-2.5 ${
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: isSelected }}
+                    className={`min-h-[44px] flex-1 items-center justify-center rounded-lg p-2.5 ${
                       isSelected
                         ? "bg-blue-600"
                         : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
@@ -558,7 +588,10 @@ export function RecurrenceEditor({
                       testID={`weekday-${day}`}
                       disabled={disabled}
                       onPress={() => handleWeekdayToggle(day)}
-                      className={`h-9 w-9 items-center justify-center rounded-full ${
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: isSelected }}
+                      accessibilityLabel={WEEKDAY_FULL_LABELS[day]}
+                      className={`h-11 w-11 items-center justify-center rounded-full ${
                         isSelected
                           ? "bg-blue-600"
                           : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
@@ -591,7 +624,7 @@ export function RecurrenceEditor({
                   editable={!disabled}
                   keyboardType="number-pad"
                   placeholder="1-31"
-                  placeholderTextColor="#888"
+                  placeholderTextColor={placeholderColor}
                   value={value.monthDay != null ? String(value.monthDay) : ""}
                   onChangeText={handleMonthDayChange}
                   className="w-20 rounded-lg border border-neutral-300 bg-white p-2 text-center text-sm font-semibold text-black dark:border-neutral-700 dark:bg-black dark:text-white"
@@ -676,7 +709,7 @@ export function RecurrenceEditor({
                     testID="until-date-input"
                     editable={!disabled}
                     placeholder="YYYY-MM-DD"
-                    placeholderTextColor="#888"
+                    placeholderTextColor={placeholderColor}
                     value={value.untilDate ?? ""}
                     onChangeText={handleUntilDateChange}
                     className="flex-1 rounded-lg border border-neutral-300 bg-white p-2 text-sm text-black dark:border-neutral-700 dark:bg-black dark:text-white"
@@ -692,7 +725,7 @@ export function RecurrenceEditor({
                     editable={!disabled}
                     keyboardType="number-pad"
                     placeholder="Occurrences"
-                    placeholderTextColor="#888"
+                    placeholderTextColor={placeholderColor}
                     value={value.count != null ? String(value.count) : "1"}
                     onChangeText={handleCountChange}
                     className="w-20 rounded-lg border border-neutral-300 bg-white p-2 text-center text-sm font-semibold text-black dark:border-neutral-700 dark:bg-black dark:text-white"
