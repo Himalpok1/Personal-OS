@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4 and 6.5 COMPLETE (6.3/6.3L/6.4/6.5 local only; 6.4 and 6.5 on 2026-08-25).** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`. Neither is merged to `main`. 6.5 (hardening) is next and requires separate approval.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
-**Implementation status:** Phases 0–5 are implemented and production-deployed. **Production migration level is unchanged at 0000–0012 = 13 migrations**; Phase 6's additive `0013` exists in local dev/test only and is not deployed. **Checkpoints 6.3, 6.3L, 6.4 and 6.5 added NO migration** — the local level stays at 14 `.sql` / 14 journal entries. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
-**Next phase allowed:** **Checkpoint 6.6 (full live proof), on separate explicit approval only.** 6.0–6.5 are closed. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app remains in **Testing**, so the development refresh token expires **2026-08-31T23:57:45Z**. Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
+**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Implementation status:** Phases 0–5 are implemented and production-deployed. **Production migration level is unchanged at 0000–0012 = 13 migrations**; Phase 6's additive `0013` exists in local dev/test only and is not deployed. **Checkpoints 6.3, 6.3L, 6.4, 6.5 and 6.6 added NO migration** — the local level stays at 14 `.sql` / 14 journal entries. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
+**Next phase allowed:** **Checkpoint 6.7 (gated production deployment), on separate explicit approval only.** 6.0–6.6 are closed. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app remains in **Testing**, so the development refresh token still expires seven days after issue; 6.6's approved reconnect re-minted it on **2026-08-27T06:51:49Z**, superseding the previously recorded 2026-08-31 expiry. The **≥7-day refresh-token observation is `blocked_time`** and is structurally unreachable while the app stays in Testing (see the 6.6 section). Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 6 — Google Health Integration (plan approved 2026-08-24)
@@ -103,6 +103,169 @@ liveness probe, so Phase 6 uses `health-*` siblings throughout (C7).
 **Deliberately not yet changed (C6):** the three lines asserting "13 `.sql` files, 13
 journal entries, **no 0013**" remain **accurate** until migration `0013` actually lands in
 Checkpoint 6.1, and are updated then — not pre-emptively.
+
+### Checkpoint 6.6 — Bounded live Google Health proof (COMPLETE, local only, 2026-08-27)
+
+Built on branch `phase-6-google-health-live-proof` from `4f90f9d` (main). **Not merged to `main`.**
+No production access, no deployment, no OAuth publishing, **no scope change**, **no migration** — the
+local level stays 14 `.sql` / 14 journal entries and production stays 0000–0012. `versionCode`
+untouched at **6** (it is EAS-remote-derived and has no repo literal). `.env` unmodified and still on
+the approved loopback callback. F5 capture 2 not run; raw intraday heart rate never enabled;
+`health_observations` **0 rows throughout**.
+
+Run against the **local development** database only: `127.0.0.1:5432/personalos`, Docker compose
+project `personalosdashboard` whose working directory is this repository. Production is a remote host
+under compose project `personal-os` with Postgres unpublished, so a loopback DSN cannot reach it.
+The connected account is a development Google account, recorded here only as connection
+`cb1c90d4-…` / `health_user_id` `236…00`.
+
+Explicit user approval was obtained for the whole lane, for the 42-day range specifically, and for
+the single revoke plus interactive consent the disconnect/reconnect lane required.
+
+#### Process model — deliberately smaller than a running system
+
+ONE short-lived built API (`node dist/index.js`, never `tsx watch`) served the routes. **No worker
+daemon ran.** Each sync "pass" was a one-shot direct call to `runHealthConnectionSync(deps, data)` —
+the exact function the pg-boss handler invokes — with `boss: null`, which is legal because the only
+thing the pass uses `boss` for is a best-effort alert that returns immediately when it is null.
+
+That removes a real hazard rather than merely being tidy: the worker's hourly cron fans out to every
+active connection, and pg-boss fires a schedule once at boot if the process happens to start within
+60 s after an hour boundary. A one-shot has no queue, no cron and no fan-out, so the number of Google
+calls is exactly what the plan says it is.
+
+#### The one range decision that needed its own approval
+
+`total-calories` was chosen because its `maxRangeDays` is **14** — the smallest chunk in the catalog —
+and because it is one of only four metrics that has ever returned data on this account, so a backfill
+genuinely writes rows instead of proving the empty path. Its `earliest_verified_date` was `2026-07-21`,
+which is the exclusive upper bound a backfill starts from.
+
+`target_date = 2026-06-09` gives `[2026-06-09, 2026-07-21)` = 42 days = **exactly three chunks**.
+Three is the minimum that can prove a cross-pass resume, because `BACKFILL_CHUNKS_PER_PASS = 2` would
+consume a two-chunk range in a single pass. 3 × 14 = 42 is therefore the smallest range that can prove
+it at all. That exceeds the session's 30-day default, which is why it was approved separately. Worth
+recording precisely: **the 30-day limit is session policy, not a server rule** —
+`HealthBackfillRequestSchema` is `{ target_date }` only and the API would not have rejected it.
+
+#### Results
+
+| Lane | Evidence |
+|---|---|
+| **Guard rails** | `backfill_already_running` (409), `backfill_target_not_in_past` (409) and `metric_out_of_scope` for `heart-rate-intraday` (409) all fired **and none mutated state** |
+| **A — backfill** | Chunks exactly as predicted: `[07-07,07-21)`, `[06-23,07-07)`, `[06-09,06-23)`. 14 rows each, `rows_rejected = 0`, 14/14 buckets, 1 request and 1 page per chunk |
+| **B — interruption / resume** | Cursor advanced to `2026-06-23` **in the same transaction as the chunk's rows** and survived a genuine process exit. Both committed chunks are **whole** (14/14); chunk 3's window held 0 rows — no partial commit exists |
+| **C — cancellation** | Settles to `cancelled` with `backfillChunks: 0` and a run row carrying **`request_count = 0`** — no Google call was made after the cancel was accepted. All 28 already-imported rows intact. `backfill_not_running` 409s on an idle stream |
+| **D — completed backfill** | Re-POSTing the same target resumed the cursor at **`2026-06-23`, not `2026-07-21`**, fetched only chunk 3, and settled `complete` with `cursor = target`. The run log shows chunks 1 and 2 **exactly once each** — never refetched |
+| **E — incremental** | Ordinary warm pass, bounded window, watermark used, **zero** material writes against already-verified data |
+| **F — idempotency** | Two identical cycles: **all 183 rows byte-identical** by `ctid`/`xmin`/`content_hash`/`updated_at` — **0 inserted, 0 updated, 0 tombstoned, 0 rejected, 141 unchanged, 0 duplicate identities** |
+| **G — disconnect** | All six credential columns NULLed, `status = disconnected`, every stream disabled, identity retained. **Every health row byte-identical** (row counts, digests and backfill state all unchanged). A pass then skipped in 25 ms with `connection_not_active`, writing nothing; `POST /sync` 409'd |
+| **G — reconnect** | Interactive consent by the user, same account. **Same connection row `cb1c90d4-…` with `created_at` still `2026-08-24T23:57:45.015Z`** — reused, not recreated; exactly one connection row. History neither duplicated nor lost. Post-reconnect, two more identical passes left **all 188 rows byte-identical** |
+
+**One cycle mid-run updated exactly one row, and that is the mechanism working.** It was
+`total-calories` on `2026-08-25` — the then-current, still-accumulating civil day — reported as
+`rows_updated: 1, rows_unchanged: 12` in its chunk. The same phenomenon 6.3L recorded. The following
+pair settled to a full zero across every row including that one.
+
+#### A real defect, found only because the proof ran
+
+`PATCH /health-connections/:id/streams` **accepted `{"metric":"heart-rate-intraday","sync_enabled":true}`
+with HTTP 200 and flipped the column.** That contradicts the standing rule that raw intraday heart
+rate stays disabled while F5 is unproven. The backfill route has refused reconcile-mode metrics
+structurally since 6.3; this route simply had no equivalent guard.
+
+The flag was **inert** — the worker selects streams through `isSyncableMetric`, which excludes
+`sample_reconcile` **by mode**, so the stream is never fetched and `health_observations` was never at
+risk. Confirmed on the live database: `heart-rate-intraday` has **zero sync runs, ever**, and
+`health_observations` stayed at 0. But the endpoint still reported the stream as enabled to every
+reader, which is a false statement about the system's own invariant. State was restored within
+seconds and no pass ran in between.
+
+Fixed by applying the **same mode-based guard** the backfill route uses, so a second reconcile-mode
+metric added later is refused automatically rather than needing to be remembered. **Disabling is
+deliberately left ungated**: a stream somehow enabled by an older build must always be switchable back
+off, or the invariant would be unrecoverable through the API — which is precisely the call needed to
+restore state during this proof.
+
+The fix also made the batch **validate-then-apply**. Previously each entry was checked and written in
+the same pass, so a batch whose second entry was rejected had already committed its first, and the
+caller received a 4xx describing a state the database had partly entered. That affected the
+pre-existing `unknown_metric` and `scope_not_granted` guards too. Three regression tests cover the
+refusal, the still-permitted disable, and the all-or-nothing batch; all three were then re-verified
+against the **real running API**, not only under `inject`.
+
+#### The adversarial review earned its place before a single call was made
+
+An independent read-only reviewer attacked the execution plan against source and found **two defects
+that would each have produced a false pass**:
+
+1. **The post-reconnect idempotency step could not fail.** `disconnectHealthConnection` disables
+   every stream, and `syncStreamsForGrantedScopes` deliberately does **not** restore `sync_enabled` on
+   reconnect — it cannot distinguish a disconnect's blanket disable from a user's own choice. A pass
+   with no enabled stream returns `skipped: "no_enabled_streams"` before any Google call and any write,
+   so "0 material writes" would have been true because **nothing ran**. This was then **confirmed on
+   live infrastructure**: after the real reconnect, `enabled = 0 of 19`, and a pass returned
+   `skipped: "no_enabled_streams"` in 29 ms. The corrected plan re-enables the streams explicitly and
+   asserts `skipped: null` with `streamsAttempted > 0` — which is what the recorded result shows.
+2. **Every pass must be `trigger: "manual"`.** A 5-minute debounce skips a stream entirely when the
+   kind is not manual, *before* the attempt counter increments and before a run row is opened. Passes
+   E and F are back-to-back by design, so any other trigger would have made the idempotency proof
+   vacuous.
+
+It also confirmed by hand-trace the one genuinely subtle correctness property this checkpoint rests
+on: `backfill_cursor_date` and `earliest_verified_date` advance **in lockstep**, because both are set
+from the same `chunk.startDate` inside the same transaction, and both are gated on the same
+`authoritative` check — so they cannot silently diverge. That is why the resume assertion is paired
+with `rows_rejected = 0` on the earlier chunks; a non-authoritative chunk would have left the property
+untested rather than proven.
+
+#### Privacy
+
+No health measurement, token, ciphertext, authorization code, client secret or raw provider payload
+appears in this record, in any commit, or in any terminal output that was retained. Evidence is
+counts, dates, digests and state names only.
+
+The genuine OAuth callback — carrying a real authorization code — was logged as
+`?state=[redacted]&iss=…&code=[redacted]`. A scan of the complete live API log for `ya29.`, `1//`,
+`refresh_token`, `client_secret`, `ciphertext`, `auth_tag` and `access_token` returned **0 hits**.
+The disconnect response body carried **no** credential-bearing field.
+
+#### The ≥7-day refresh-token requirement — `blocked_time`
+
+Not met, and deliberately not manufactured. The token in the lineage was issued
+`2026-08-24T23:57:45Z`; roughly two days have elapsed. The deeper point is structural: the OAuth app
+is deliberately in **Testing**, where Google expires refresh tokens at exactly seven days, so
+"seven complete days elapsed **and** the token still valid" is unreachable without a publishing-status
+change — which this checkpoint forbids. The nominal earliest date, `2026-08-31T23:57:45Z`, **is** the
+expiry instant.
+
+The approved disconnect/reconnect additionally **supersedes that lineage**: reconnect always forces
+`prompt=consent`, which mints a new refresh token and restarts the clock from
+`2026-08-27T06:51:49Z`. That was disclosed before approval and accepted. No token was renewed merely
+to restart the clock, and OAuth publishing status was not touched.
+
+#### Verification actually run
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Full gate | build 9/9, typecheck 17/17, lint **0 warnings**, `format:check` clean, `git diff --check` clean |
+| 2 | Full suite, uncached and serial | **2038 tests / 17 turbo tasks** (2035 → **+3**), zero failing |
+| 3 | No baseline decreased | core 326 · db 21 · schema 174 · calendar-providers **74** · health-providers 311 · ai-providers 25 · api-client 93 · worker **152** · mobile 367 · api 492 → **495** |
+| 4 | Zero-drift canaries | `calendar-providers` **74** and `worker` **152**, both unchanged |
+| 5 | Migration invariant | 14 `.sql` / 14 journal entries; `packages/db/` diff vs `main` **empty**; no `0014` |
+| 6 | Forbidden-area drift | **zero** across `app.config.ts`, `eas.json`, every compose file, every Dockerfile, `packages/db`, `apps/worker`, `packages/calendar-providers`, `apps/api/src/brief` |
+| 7 | Web export | clean, single `index.html` |
+| 8 | Secret scans | `gitleaks git` **153 commits, no leaks**; working tree 79 findings, **0 in any file git would commit** (74 in the gitignored generated `apps/mobile/android` tree, 5 in `.env`), classified with `git check-ignore` |
+| 9 | Health invariants | `health_observations` **0**; `heart-rate-intraday` `sync_enabled = false` with **zero sync runs ever**; 18 of 19 streams enabled; scopes unchanged |
+| 10 | Process / lock cleanup | no repository process running; ports 3000/8081/8082/5173/19000/19001 free; **zero advisory locks held** |
+
+#### Deliberately NOT done
+
+Not merged to `main`; no push (the repository has no remote); no branch deleted or rewritten. No
+production Docker, SSH or migration command. No migration. No `versionCode` change, no EAS build, no
+APK, no Rabbit install. No OAuth publishing and no callback change. No scope added or changed. F5
+capture 2 not run; raw intraday heart rate never enabled; nothing written to `health_observations`. No
+health data reaches the Daily Brief. Checkpoint 6.7 not begun.
 
 ### Checkpoint 6.5 — Full product audit, Rabbit verification and hardening (COMPLETE, local only, 2026-08-25)
 
@@ -1320,6 +1483,14 @@ Phase 2 (Expo Router app, web target) is complete: quick-add box, inbox triage, 
 - [x] Phase 5 Checkpoint 5.6 — Mobile / Rabbit daily-use polish: reproducible dev harness via expo-build-properties (dev-profile only, production proved unaffected), dev-shell parity, FAB/PTT clearance, notification cold-start, all-day date off-by-one, serialized review saves, keyboard reachability, touch/layout polish — complete 2026-08-23 (physically verified on the Rabbit R1; production untouched; zero migrations).
 - [x] **Phase 5 Checkpoint 5.7 — Production deployment + Phase 5 closure: migrations 0010–0012 applied exactly once (level 0000–0012 = 13), api/worker/web rolled out from `656c1fc`, Rabbit upgraded in place to versionCode 5 with pairing/PRIMARY/credential preserved, production `daily_brief` route registered on the existing gpt-4.1 model, reminder real-fire + push delivery + PTT all physically verified, and BOTH reboot axes passed — complete 2026-08-24. PHASE 5 COMPLETE.**
 - [x] **Phase 5 Checkpoint 5.7.1 — All-day noon-anchor hotfix: ADR-042's local-noon recurrence anchor no longer reaches presentation. Two live leaks fixed (Today `12:00`, Brief "beginning at 12:00 PM"), three latent spots hardened, `BriefEventItem` gained a `date` field, one shared all_day-first helper, regression + mutation tests across Chicago/Auckland/Santiago. api+web rebuilt, versionCode 6 installed in place. Google/CalDAV untouched and provably unaffected. **No migration.** — complete 2026-08-24.**
+- [x] **Phase 6 Checkpoint 6.6 — Bounded live Google Health proof: backfill chunking on the exact
+  three predicted boundaries with zero rejections, a durable cursor across a real process exit,
+  cancellation that made no further provider call, a restart that resumed at the checkpoint instead of
+  re-fetching, two identical cycles leaving every row byte-identical, and a real disconnect/reconnect
+  that reused the same connection row and duplicated no history. Found and fixed one real defect: the
+  stream-toggle route could enable a `sample_reconcile` metric. Complete 2026-08-27 (local only;
+  branch `phase-6-google-health-live-proof`, unmerged; no migration; no APK; scopes unchanged;
+  `health_observations` still empty). ≥7-day refresh-token observation recorded `blocked_time`.**
 - [x] **Phase 6 Checkpoint 6.5 — Full product audit, Rabbit verification and hardening: a
   seven-hop Google Calendar raw-error chain closed at every hop (durable column, API response,
   UI render, API log, pg-boss job output), the same sweep applied to the AI-provider and Health
@@ -3209,34 +3380,35 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-**Phase 6 Checkpoints 6.0 through 6.5 are complete. Work has stopped, as planned.**
+**Phase 6 Checkpoints 6.0 through 6.6 are complete. Work has stopped, as planned.**
 
-6.5 was the full-product audit and hardening pass. Its most consequential finding was not the one
-already recorded as debt: `settings.tsx` rendering `last_sync_error` was the **end** of a chain that
-also ran through the durable column, two 422 API responses, the API's own log line, and pg-boss's
-`job.output` table. Google's `error_description` and CalDAV's raw response body were reaching four
-different persistent or user-visible places, and the recorded debt named only the last one.
+6.6 was the bounded live proof. Every lane passed against the real Google Health API on a development
+account and the local development database: backfill chunking landed on the exact three predicted
+boundaries with zero rejections, the cursor survived a real process exit, cancellation stopped the
+work without making another provider call, the restart resumed at the durable checkpoint instead of
+re-fetching, and two identical cycles left **every row byte-identical** by `ctid`/`xmin`/
+`content_hash`/`updated_at`.
 
-Two properties are worth carrying forward because they are structural rather than conventional.
-**A provider message is now inexpressible on the calendar wire** — `CalendarConnectionSchema` types
-`last_sync_error` as a closed enum, so a leak fails to serialize rather than shipping. **And nothing
-provider-authored survives into pg-boss**, because `CalendarJobError` deliberately does not retain
-`cause`, which `serialize-error` would otherwise walk straight back into.
+**The most useful thing 6.6 produced is not a green tick.** An independent review of the execution
+plan, run before a single live call, found that the post-reconnect idempotency step *could not fail* —
+disconnect disables every stream, reconnect deliberately does not restore them, and a pass with no
+enabled stream returns `skipped: "no_enabled_streams"` before any Google call or write. "Zero material
+writes" would have been true because nothing ran. That prediction was then confirmed on live
+infrastructure, `enabled = 0 of 19`, and the plan was corrected before the measurement was taken.
 
-The adversarial wave broke the first version of the log serializer — a provider message containing a
-line shaped like a V8 stack frame survived a shape-based filter — which is exactly the kind of defect
-a self-review does not find. It was reproduced live and fixed by removing the header by length rather
-than by shape.
+**And the proof found a real defect that no amount of reading had.**
+`PATCH /health-connections/:id/streams` accepted `heart-rate-intraday` with HTTP 200 and set
+`sync_enabled = true`, contradicting the standing rule that raw intraday heart rate stays disabled
+while F5 is unproven. It was inert — the worker excludes reconcile-mode metrics structurally, so the
+stream was never fetched and `health_observations` stayed empty — but the endpoint was reporting a
+false statement about the system's own invariant. Now refused by the same mode-based guard the
+backfill route already used, with disabling deliberately left open so the state stays recoverable.
 
-The deferred physical Rabbit pass is done. It confirmed on real hardware what 6.4 could only show in a
-browser: the two kinds of missing render as two different sentences, and not one fabricated zero
-appears anywhere.
+**State at closure:** branch `phase-6-google-health-live-proof`, HEAD `11cd3bb`, **not merged to
+`main`**, and the repository has no remote. Production untouched. OAuth app in **Testing**, scopes
+unchanged. `versionCode` **6**. Migrations 14 / 14. `health_observations` **0**.
 
-**State at closure:** branch `phase-6-audit-hardening`, HEAD `df08da8`, **not merged to `main`**, and
-the repository has no remote. Production untouched. OAuth app in **Testing**. `versionCode` **6**.
-The development refresh token expires **2026-08-31T23:57:45Z**.
-
-**Do not begin Checkpoint 6.6 without a separate explicit user approval.**
+**Do not begin Checkpoint 6.7 without a separate explicit user approval.**
 
 ## Remaining warnings / technical debt
 
@@ -3311,6 +3483,31 @@ The development refresh token expires **2026-08-31T23:57:45Z**.
   evidenced `error.details[].reason`, and an ambiguous 400/403/404 is `provider_error`. The
   unsupported-reason set starts empty, so a genuinely unsupported metric currently reports
   `provider_error` — the safe direction, since it never disables a working stream.
+- **The ≥7-day refresh-token observation is `blocked_time` AND structurally unreachable in Testing
+  (2026-08-27, Checkpoint 6.6).** Google expires Testing-mode refresh tokens at exactly seven days, so
+  "seven complete days elapsed **and** the token still valid" cannot both hold; the nominal earliest
+  date *is* the expiry instant. Closing it needs a publishing-status decision, which 6.6 forbade and
+  6.7 owns. 6.6's approved reconnect re-minted the token on **2026-08-27T06:51:49Z**, superseding the
+  previously recorded 2026-08-31 expiry.
+- **Disconnect disables every stream, and reconnect deliberately does not restore them (6.6).** This
+  is by design — `syncStreamsForGrantedScopes` cannot distinguish a disconnect's blanket disable from
+  a user's own per-stream choice, and silently re-enabling a stream the user turned off would be
+  worse. The consequence is real though: after a reconnect the connection is active but **nothing
+  syncs** until streams are re-enabled, and a sync pass reports `skipped: "no_enabled_streams"` rather
+  than anything a user would read as a problem. There is no UI affordance for this today. It is also
+  the exact condition that would have turned 6.6's post-reconnect idempotency check into a false pass.
+- **`health_sessions.session_type` / `session_subtype` and the three `HealthSourceIdentity` fields are
+  unconstrained `z.string()` with no length cap (6.6 review).** Currently safe because they come from
+  Google's documented enum-shaped fields through an allowlisted three-field `SessionDetail`, but
+  nothing in the schema would catch it if that assumption broke. The daily-metric path has no
+  equivalent exposure.
+- **`resolveFreshAccessToken` (API) writes the access-token columns by id without re-checking
+  `status` (6.6 review).** A disconnect landing concurrently with a refresh could re-populate a column
+  being NULLed, last-write-wins. Unreachable today — no route calls that function; only the two
+  standalone scripts do — and the worker's equivalent re-checks `status` inside the advisory lock.
+- **One pre-existing pg-boss `health.google.sync-connection` job sits in state `created`** from an
+  earlier session and was left untouched by 6.6 (no worker ran, so nothing consumed it). It is inert
+  and `singletonKey`-deduped, but it will be the first job a worker picks up whenever one next starts.
 - **The development Google Health refresh token expires 2026-08-31T23:57:45Z** (OAuth app
   deliberately left in Testing). Reconnect before any further live work.
 - **The local `.env` holds the development loopback callback**, not the Tailscale one.
@@ -3360,6 +3557,29 @@ The development refresh token expires **2026-08-31T23:57:45Z**.
 
 ## Last verification
 
+**Phase 6 Checkpoint 6.6 — bounded live Google Health proof (2026-08-27).** Local development only;
+production untouched; branch `phase-6-google-health-live-proof`, HEAD `11cd3bb`, unmerged; the
+repository has no remote.
+
+Full gate: build 9/9, typecheck 17/17, lint **0 warnings**, `format:check` clean,
+`git diff --check` clean, `expo export --platform web` clean with a single `index.html`.
+
+Full suite, **uncached and serial**: **2038 tests across 17 turbo tasks** (2035 → **+3**), zero
+failing. Per package — core 326 · db 21 · schema 174 · **calendar-providers 74** · health-providers
+311 · ai-providers 25 · api-client 93 · api **495** · **worker 152** · mobile 367. **No package
+decreased**, and both zero-drift canaries (`calendar-providers` 74, `worker` 152) held exactly.
+
+`gitleaks git`: **153 commits, no leaks.** Working tree 79 findings, **0 in any file git would
+commit**, classified with `git check-ignore`. Migrations **14 `.sql` / 14 journal entries** with
+`packages/db/` byte-unchanged against `main`. Forbidden-area drift **zero**. `health_observations`
+**0**; `heart-rate-intraday` `sync_enabled = false` with zero sync runs ever; OAuth scopes unchanged.
+No repository process left running, all ports free, **zero advisory locks held**.
+
+*Previous verification — Phase 6 Checkpoint 6.5 (2026-08-25): 2035 tests across 17 turbo tasks,
+calendar-providers 74, worker 152, api 492, 14 migrations.*
+
+## Superseded verification
+
 **Phase 6 Checkpoint 6.5 — full product audit, Rabbit verification and hardening (2026-08-25).**
 Local development only; production untouched; branch `phase-6-audit-hardening`, HEAD `df08da8`,
 unmerged; the repository has no remote.
@@ -3400,7 +3620,7 @@ released.
 *Previous verification — Phase 6 Checkpoint 6.4 (2026-08-25): 1965 tests across 17 turbo tasks,
 calendar-providers 57, worker 145, 14 migrations.*
 
-## Superseded verification
+### Earlier — Phase 6 Checkpoint 6.1
 
 **Phase 6 Checkpoint 6.1 — contracts, migration `0013`, provider fake (2026-08-24).**
 Local development only; production untouched.
@@ -3463,32 +3683,34 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Stopped. Checkpoints 6.0 through 6.5 are complete.** The next checkpoint is **6.6 (full live
-proof)**, and it needs a separate explicit approval. 6.5 lives on branch `phase-6-audit-hardening`
-and is **not merged to `main`** — `phase-6-audit-hardening-linear` is what integrates instead. The
-still-unmerged `phase-6-google-health-sync` and `phase-6-google-health-ui` remain their own decisions.
+**Stopped. Checkpoints 6.0 through 6.6 are complete.** The next checkpoint is **6.7 (gated production
+deployment)**, and it needs a separate explicit approval. 6.6 lives on branch
+`phase-6-google-health-live-proof` (HEAD `11cd3bb`) and is **not merged to `main`**. The unmerged
+`phase-6-audit-hardening-linear`, `phase-6-google-health-sync` and `phase-6-google-health-ui` remain
+their own integration decisions; the original `phase-6-audit-hardening` is never merged.
 
-**The `7c6ba30`/`180b5b2` build break is repaired.** `phase-6-audit-hardening-linear` replays the
-audited history with that pair combined into one atomic commit, carries a tree byte-identical to
-`189d954`, and is what fast-forwards `main`. The original audited branch is preserved unchanged and
-is never merged. See the 6.5 section for the full account.
+**Carried into 6.7:**
 
-**Carried into 6.6:**
+1. **The ≥7-day refresh-token observation is `blocked_time`, and is unreachable while the OAuth app
+   stays in Testing** — Google expires Testing-mode refresh tokens at exactly seven days, so
+   "seven days elapsed and still valid" cannot both hold. 6.6's approved reconnect re-minted the token
+   on **2026-08-27T06:51:49Z**, restarting the clock. Closing this genuinely requires a
+   publishing-status decision, which is a 6.7 gate item and was explicitly forbidden in 6.6.
+2. **Reminder, notification and device-pairing paths remain unverified on-device.** The UI-test
+   identity mounts none of them; verifying them needs a production-identity build, i.e. an EAS build
+   and a `versionCode` bump.
+3. **Twelve of eighteen value specs remain unverified**, because this account has never produced data
+   for those streams. 6.6 did not change this: the four metrics with data (`steps`, `distance`,
+   `total-calories`, `floors`) plus the one stored sleep session are still the whole observed set.
+4. **F5 (raw-heart-rate reconcile stability) remains deferred acceptance debt.**
+   `heart-rate-intraday` stays `sync_enabled = false` — now enforced by the API as well as the worker
+   — and `health_observations` stays empty.
+5. **Sleep stages and workout distance/calories/HR zones are still not stored** by the sync engine.
+6. **List-row Archive and Drop still fire without confirmation**, while the detail screens now confirm.
+7. **The real-browser CORS proof against the Phase 5 deployment** is still the one uncompleted 5.7
+   acceptance item.
 
-1. **Reminder, notification and device-pairing paths are still unverified on-device by 6.5.** The
-   UI-test identity deliberately mounts none of them, so the Settings device rows, the revoked-session
-   banner and local reminder scheduling have unit-test and browser evidence only. Verifying them needs
-   a production-identity build, which means an EAS build and a `versionCode` bump — out of 6.5's scope
-   by rule.
-2. **Twelve of eighteen value specs remain unverified** because this account has never produced data
-   for those streams. An account-data fact, not a defect.
-3. **F5 (raw-heart-rate reconcile stability) remains deferred acceptance debt.**
-   `heart-rate-intraday` stays `sync_enabled = false` and `health_observations` stays empty.
-4. **Sleep stages and workout distance/calories/HR zones are still not stored** by the 6.3 sync
-   engine. Capturing them means changing that engine and re-fetching from Google.
-5. **List-row Archive and Drop still fire without confirmation**, while the same actions now confirm
-   from the detail screens. Deliberately scoped out rather than missed — see the debt list.
-
-**Operational notes:** the development refresh token expires **2026-08-31T23:57:45Z**; the local
-`.env` still points at the development loopback callback and must be restored before anything
-production-facing; the OAuth app remains in **Testing** and publishing is still deliberately not done.
+**Operational notes:** the local `.env` is unmodified and still points at the development loopback
+callback — it must be restored before anything production-facing. The OAuth app remains in **Testing**
+with exactly the three original read-only scopes; publishing is still deliberately not done.
+Production remains at migrations 0000–0012 and `versionCode` **6**.
