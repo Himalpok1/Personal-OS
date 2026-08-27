@@ -262,6 +262,13 @@ export interface HealthConnectionCardProps {
   isSyncPending?: boolean;
   /** Transient confirmation, e.g. after a sync is queued. */
   notice?: string | null;
+  /**
+   * A failed request, e.g. the sync mutation erroring. Rendered in the
+   * warning tone. Without this the Sync button silently reverted to "Sync
+   * now" on failure -- offline, a 409, a 503 -- and the user had no way to
+   * tell a failed request from one that went through (6.7A, finding H3/E2).
+   */
+  errorNotice?: string | null;
 }
 
 export function HealthConnectionCard({
@@ -273,6 +280,7 @@ export function HealthConnectionCard({
   onReconnect,
   isSyncPending,
   notice,
+  errorNotice,
 }: HealthConnectionCardProps) {
   const copy = copyFor(state, freshness, todayLocalDate);
 
@@ -322,6 +330,10 @@ export function HealthConnectionCard({
 
       {notice ? (
         <Text className="mt-2 text-sm text-blue-600 dark:text-blue-400">{notice}</Text>
+      ) : null}
+
+      {errorNotice ? (
+        <Text className="mt-2 text-sm text-amber-700 dark:text-amber-400">{errorNotice}</Text>
       ) : null}
 
       {showSync || showConnect || showReconnect ? (

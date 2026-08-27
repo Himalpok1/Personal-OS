@@ -254,6 +254,14 @@ function HealthDashboard({ data }: { data: HealthSummaryResponse }) {
           // notice says what actually happened and no more. Real progress
           // arrives as `freshness.sync_in_progress` on the next summary read.
           notice={noticeVisible ? "Sync requested." : undefined}
+          // Latched (not a timer) deliberately: a failure stays on screen
+          // until the next attempt clears it, because unlike the success
+          // notice it is not news that goes stale -- it is the current state
+          // of the last request. Cleared automatically when the user taps
+          // Sync again (TanStack resets isError on mutate).
+          errorNotice={
+            sync.isError ? "Couldn't request a sync — check your connection and try again." : undefined
+          }
           // Navigates to Settings rather than starting OAuth here. The consent
           // flow and the connect mutation live on that screen; running a second
           // copy of a credential-handling path from the dashboard would mean two

@@ -471,6 +471,7 @@ const ALL_STATES: HealthConnectionDisplayState[] = [
   "not_configured",
   "not_connected",
   "needs_reconnect",
+  "no_streams_enabled",
   "syncing",
   "partial_scope",
   "stale",
@@ -494,6 +495,7 @@ const SYNC_BLOCKED: [HealthConnectionDisplayState, "absent" | "disabled"][] = [
   ["not_configured", "absent"],
   ["not_connected", "absent"],
   ["needs_reconnect", "disabled"],
+  ["no_streams_enabled", "disabled"],
   ["syncing", "disabled"],
 ];
 
@@ -519,7 +521,7 @@ function syncButton(tree: unknown): WalkedElement | undefined {
 }
 
 describe("<HealthConnectionCard />", () => {
-  it("gives all nine states distinct copy", () => {
+  it("gives all ten states distinct copy", () => {
     const bodies = ALL_STATES.map((state) => getTextContent(renderConnectionCard(state)));
     expect(new Set(bodies).size).toBe(ALL_STATES.length);
   });
@@ -557,6 +559,15 @@ describe("<HealthConnectionCard />", () => {
       expect(button!.props?.accessibilityState).toEqual({ disabled: false });
     },
   );
+
+  it("renders a failed sync request as a visible error notice", () => {
+    // Without this the Sync button silently reverted to "Sync now" on
+    // failure and nothing distinguished a failed request from a queued one.
+    const message = "Couldn't request a sync — check your connection and try again.";
+    const tree = renderConnectionCard("current", { errorNotice: message });
+    expect(getTextContent(tree)).toContain(message);
+    expect(getTextContent(renderConnectionCard("current"))).not.toContain(message);
+  });
 
   it("isSyncPending disables the control even in an otherwise-enabled state", () => {
     const button = syncButton(renderConnectionCard("current", { isSyncPending: true }));
