@@ -918,6 +918,8 @@ const HEALTH_STATUS_TEXT: Record<HealthConnectionDisplayState, string> = {
   not_configured: "Google Health isn't set up on this server.",
   not_connected: "No Google Health account is connected yet.",
   needs_reconnect: "Google Health needs to be reconnected before syncing can continue.",
+  no_streams_enabled:
+    "Connected, but every data type is turned off, so nothing will sync until they're turned back on.",
   syncing: "Syncing with Google Health now.",
   partial_scope: "Connected, but some data types weren't granted.",
   stale: "Connected, but the data hasn't caught up recently.",
@@ -933,6 +935,7 @@ function healthStatusToneClass(state: HealthConnectionDisplayState): string {
     case "unavailable":
       return "text-red-600 dark:text-red-400";
     case "needs_reconnect":
+    case "no_streams_enabled":
     case "partial_scope":
     case "stale":
     case "error":

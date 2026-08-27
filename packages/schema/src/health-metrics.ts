@@ -563,6 +563,17 @@ export const HealthConnectionSummarySchema = z.object({
   needs_reconnect: z.boolean(),
   has_sync_error: z.boolean(),
   last_sync_error_at: z.string().datetime({ offset: true }).nullable(),
+  /**
+   * Streams currently enabled for sync, out of every stream seeded for this
+   * connection. Disconnecting disables every stream and reconnecting
+   * deliberately does NOT re-enable them (a blanket disable is
+   * indistinguishable from the user's own per-stream choice), so an active
+   * connection with `enabled_stream_count === 0` is one where nothing will
+   * ever sync -- a state the dashboard must be able to name rather than
+   * report as "Connected" (Checkpoint 6.7A, finding H1).
+   */
+  enabled_stream_count: z.number().int().nonnegative(),
+  stream_count: z.number().int().nonnegative(),
 });
 export type HealthConnectionSummary = z.infer<typeof HealthConnectionSummarySchema>;
 

@@ -21,6 +21,8 @@ function connection(over: Partial<HealthConnectionSummary> = {}): HealthConnecti
     needs_reconnect: false,
     has_sync_error: false,
     last_sync_error_at: null,
+    enabled_stream_count: 18,
+    stream_count: 19,
     ...over,
   };
 }
@@ -88,6 +90,49 @@ describe("resolveHealthConnectionState precedence", () => {
         freshness: freshness({ sync_in_progress: true, is_stale: true }),
       }),
     ).toBe("needs_reconnect");
+  });
+
+  it("names the post-reconnect trap: active connection, zero enabled streams", () => {
+    expect(
+      resolveHealthConnectionState({
+        configured: true,
+        connection: connection({ enabled_stream_count: 0, stream_count: 19 }),
+        freshness: freshness(),
+      }),
+    ).toBe("no_streams_enabled");
+  });
+
+  it("ranks no_streams_enabled below needs_reconnect but above everything it would falsify", () => {
+    // Below needs_reconnect: re-enabling streams on a revoked grant fixes nothing.
+    expect(
+      resolveHealthConnectionState({
+        configured: true,
+        connection: connection({
+          needs_reconnect: true,
+          status: "needs_reauth",
+          enabled_stream_count: 0,
+        }),
+        freshness: freshness(),
+      }),
+    ).toBe("needs_reconnect");
+    // Above syncing/stale/error: those all presume syncing is possible.
+    expect(
+      resolveHealthConnectionState({
+        configured: true,
+        connection: connection({ enabled_stream_count: 0, has_sync_error: true }),
+        freshness: freshness({ sync_in_progress: true, is_stale: true }),
+      }),
+    ).toBe("no_streams_enabled");
+  });
+
+  it("does not fire for a connection whose streams were never seeded at all", () => {
+    expect(
+      resolveHealthConnectionState({
+        configured: true,
+        connection: connection({ enabled_stream_count: 0, stream_count: 0 }),
+        freshness: freshness(),
+      }),
+    ).toBe("current");
   });
 
   it("puts a sync in progress ahead of partial scope, staleness and errors", () => {
@@ -159,6 +204,9 @@ describe("canRequestSync", () => {
     not_configured: false,
     not_connected: false,
     needs_reconnect: false,
+    // The server would accept the request and the worker would then skip it
+    // (`no_enabled_streams`) -- a control that can never do anything.
+    no_streams_enabled: false,
     syncing: false,
     // Allowed: exactly the states a manual retry is for. `stale` and `error`
     // are deliberately in this half -- refusing to retry the states that most
@@ -180,7 +228,7 @@ describe("canRequestSync", () => {
     // Ties the two functions together instead of restating the union a second
     // time (the Record annotation above already fails typecheck on a missing
     // or extra key). Each input below is a real reachable configuration, so
-    // this also proves the nine states are not merely declared but emittable.
+    // this also proves the ten states are not merely declared but emittable.
     const reachable = [
       resolveHealthConnectionState({
         configured: true,
@@ -193,6 +241,11 @@ describe("canRequestSync", () => {
       resolveHealthConnectionState({
         configured: true,
         connection: connection({ needs_reconnect: true }),
+        freshness: freshness(),
+      }),
+      resolveHealthConnectionState({
+        configured: true,
+        connection: connection({ enabled_stream_count: 0 }),
         freshness: freshness(),
       }),
       resolveHealthConnectionState({
@@ -222,7 +275,7 @@ describe("canRequestSync", () => {
       }),
     ];
 
-    expect(new Set(reachable).size).toBe(9);
+    expect(new Set(reachable).size).toBe(10);
     expect([...new Set(reachable)].sort()).toEqual(Object.keys(EXPECTED).sort());
   });
 

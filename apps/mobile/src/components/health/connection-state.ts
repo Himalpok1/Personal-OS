@@ -16,6 +16,7 @@ export type HealthConnectionDisplayState =
   | "not_configured" // the server has no Google Health OAuth client at all
   | "not_connected" // configured, but nobody has completed the consent flow
   | "needs_reconnect" // needs_reauth or revoked
+  | "no_streams_enabled" // active, but every stream is off -- nothing will sync
   | "syncing"
   | "partial_scope" // connected, but some approved scopes were not granted
   | "stale" // beyond the staleness threshold (ADR-046's 35-day contract)
@@ -35,7 +36,15 @@ export interface ResolveHealthConnectionStateInput {
  * Frozen precedence, most-blocking first:
  *
  *   unavailable -> not_configured -> not_connected -> needs_reconnect ->
- *   syncing -> partial_scope -> stale -> error -> current
+ *   no_streams_enabled -> syncing -> partial_scope -> stale -> error -> current
+ *
+ * `no_streams_enabled` sits directly after `needs_reconnect` because it is the
+ * post-reconnect trap: disconnecting disables every stream and reconnecting
+ * deliberately does not re-enable them, so an active connection with zero
+ * enabled streams will never sync anything. Every state below it presumes
+ * syncing is at least possible, so reporting any of them ("syncing", "stale",
+ * "Connected") would be a false statement about a connection that is
+ * structurally idle.
  *
  * `syncing` outranks `partial_scope`, `stale` and `error` because all three of
  * those are about to be re-evaluated by the run currently in flight; showing a
@@ -58,6 +67,12 @@ export function resolveHealthConnectionState(
   if (!configured) return "not_configured";
   if (connection === null) return "not_connected";
   if (connection.needs_reconnect) return "needs_reconnect";
+  // `stream_count > 0` keeps a connection whose streams were never seeded at
+  // all (a mid-connect crash) out of this state -- that shape is not the
+  // reconnect trap and the other states describe it better.
+  if (connection.stream_count > 0 && connection.enabled_stream_count === 0) {
+    return "no_streams_enabled";
+  }
   if (freshness.sync_in_progress) return "syncing";
   if (connection.has_partial_scope) return "partial_scope";
   if (freshness.is_stale) return "stale";
@@ -84,6 +99,10 @@ export function canRequestSync(state: HealthConnectionDisplayState): boolean {
     case "not_configured":
     case "not_connected":
     case "needs_reconnect":
+    // A queued sync for a zero-streams connection is accepted by the server
+    // and then skipped by the worker (`no_enabled_streams`) -- a button that
+    // "works" but can never do anything is exactly the trap this state names.
+    case "no_streams_enabled":
     case "syncing":
       return false;
     case "partial_scope":

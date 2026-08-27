@@ -328,6 +328,20 @@ describe("GET /health-summary — freshness", () => {
     expect(freshness.days_behind).toBe(6);
   });
 
+  it("reports enabled-vs-total stream counts so a zero-streams connection is detectable", async () => {
+    // The post-reconnect trap (Checkpoint 6.7A, finding H1): disconnect
+    // disables every stream and reconnect does not re-enable them, so the
+    // client needs the counts to name "connected but nothing will sync".
+    const connectionId = await seedConnection();
+    await seedStream(connectionId, "steps", { syncEnabled: false });
+    await seedStream(connectionId, "floors", { syncEnabled: false });
+    await seedStream(connectionId, "weight", { syncEnabled: false });
+
+    const { connection } = (await getSummary()).json<HealthSummaryResponse>();
+    expect(connection?.stream_count).toBe(3);
+    expect(connection?.enabled_stream_count).toBe(0);
+  });
+
   it("reports a sync as running only while an unfinished run is recent", async () => {
     const connectionId = await seedConnection();
     await app.db.insert(healthSyncRuns).values({

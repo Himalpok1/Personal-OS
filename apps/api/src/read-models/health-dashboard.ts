@@ -552,6 +552,11 @@ export async function buildHealthSummary(
       // to remember (ADR-043's structural-exclusion reasoning).
       has_sync_error: connection.lastSyncError !== null,
       last_sync_error_at: connection.lastSyncErrorAt?.toISOString() ?? null,
+      // Counts only -- which streams, and why one is off, stays server-side.
+      // Zero enabled on an active connection is the post-reconnect trap the
+      // dashboard names explicitly (see HealthConnectionSummarySchema).
+      enabled_stream_count: streams.filter((row) => row.syncEnabled).length,
+      stream_count: streams.length,
     },
     timezone: params.tz,
     local_date: localDate,

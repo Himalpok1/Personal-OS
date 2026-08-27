@@ -119,7 +119,7 @@ interface CopyBlock {
 }
 
 /**
- * All nine states' copy, assembled in one function so it reads as copy and
+ * All ten states' copy, assembled in one function so it reads as copy and
  * can be reviewed as copy -- the same reason METRIC_EXPLANATIONS lives as a
  * flat record in metric-state.ts.
  */
@@ -163,6 +163,23 @@ function copyFor(
       return {
         status: "Reconnect needed",
         body: "Google Health access has ended. Reconnect to start reading new data again. Data already stored stays where it is.",
+        tone: "warning",
+      };
+
+    case "no_streams_enabled":
+      // The post-reconnect trap: disconnecting turns every data type off, and
+      // reconnecting deliberately does not turn them back on (a blanket
+      // disable is indistinguishable from the user's own choice). Without
+      // this state the card would read "Connected" while nothing can ever
+      // sync. Honest about the recovery path too: there is no in-app toggle
+      // yet (a recorded scope decision), so the copy names the fact, not a
+      // control that doesn't exist.
+      return {
+        status: "Connected, but nothing is set to sync",
+        body:
+          "Every data type on this connection is currently turned off — disconnecting turns them all off, and reconnecting doesn't turn them back on. " +
+          (through ? `Data already stored still goes through ${through}, but no` : "No") +
+          " new data will sync until data types are turned back on for this connection.",
         tone: "warning",
       };
 

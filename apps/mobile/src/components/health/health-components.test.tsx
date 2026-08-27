@@ -205,6 +205,8 @@ function connection(overrides: Partial<HealthConnectionSummary> = {}): HealthCon
     needs_reconnect: false,
     has_sync_error: false,
     last_sync_error_at: null,
+    enabled_stream_count: 18,
+    stream_count: 19,
     ...overrides,
   };
 }
