@@ -285,9 +285,17 @@ to restart the clock, and OAuth publishing status was not touched.
 | 5 | Migration invariant | 14 `.sql` / 14 journal entries; `packages/db/` diff vs `main` **empty**; no `0014` |
 | 6 | Forbidden-area drift | **zero** across `app.config.ts`, `eas.json`, every compose file, every Dockerfile, `packages/db`, `apps/worker`, `packages/calendar-providers`, `apps/api/src/brief` |
 | 7 | Web export | clean, single `index.html` |
-| 8 | Secret scans | `gitleaks git` **153 commits, no leaks**; working tree 79 findings, **0 in any file git would commit** (74 in the gitignored generated `apps/mobile/android` tree, 5 in `.env`), classified with `git check-ignore` |
+| 8 | Secret scans | `gitleaks git` **153 commits, no leaks**; working tree 79 findings, **0 in any file git would commit** (74 in the gitignored generated `apps/mobile/android` tree, 5 in `.env`), classified with `git check-ignore`. The 153 is an **all-refs** count (`git rev-list --count --all`) taken at `11cd3bb`, before the two documentation commits — not the branch depth, which is why a later re-run reports 155 |
 | 9 | Health invariants | `health_observations` **0**; `heart-rate-intraday` `sync_enabled = false` with **zero sync runs ever**; 18 of 19 streams enabled; scopes unchanged |
 | 10 | Process / lock cleanup | no repository process running; ports 3000/8081/8082/5173/19000/19001 free; **zero advisory locks held** |
+
+#### A pre-existing documentation defect, named but not fixed here
+
+`docs/STATUS.md` has **two** `## Remaining warnings / technical debt` headings. The duplication
+predates this checkpoint — it is already present at `4f90f9d` — and 6.6 added its bullets to the
+second block, which is what every prior checkpoint did. Merging them is a whole-file documentation
+edit with no bearing on the live proof, so it is recorded rather than done. A reader searching that
+heading must check both blocks.
 
 #### Deliberately NOT done
 
