@@ -274,6 +274,14 @@ The approved disconnect/reconnect additionally **supersedes that lineage**: reco
 `2026-08-27T06:51:49Z`. That was disclosed before approval and accepted. No token was renewed merely
 to restart the clock, and OAuth publishing status was not touched.
 
+**Accepted and transferred (user decision, 2026-08-27).** Checkpoint 6.6's executable live-proof lanes
+are **accepted as complete and merged to `main`**. This one requirement stays **`blocked_time`** and
+moves to Checkpoint 6.7 as a **mandatory pre-deployment acceptance gate**. It does not block the merge
+of the verified 6.6 work — it blocks deployment. The full gate definition is under "Carried into 6.7"
+at the end of this file; the short form is that **production migration, production rollout and the
+Rabbit `versionCode 7` installation must not begin until the gate passes.** Nothing about it is
+claimed to have passed here.
+
 #### Verification actually run
 
 | # | Check | Result |
@@ -3730,11 +3738,38 @@ their own integration decisions; the original `phase-6-audit-hardening` is never
 
 **Carried into 6.7:**
 
-1. **The ≥7-day refresh-token observation is `blocked_time`, and is unreachable while the OAuth app
-   stays in Testing** — Google expires Testing-mode refresh tokens at exactly seven days, so
-   "seven days elapsed and still valid" cannot both hold. 6.6's approved reconnect re-minted the token
-   on **2026-08-27T06:51:49Z**, restarting the clock. Closing this genuinely requires a
-   publishing-status decision, which is a 6.7 gate item and was explicitly forbidden in 6.6.
+1. **MANDATORY PRE-DEPLOYMENT ACCEPTANCE GATE — the ≥7-day refresh-token observation, still
+   `blocked_time`.** Checkpoint 6.6's executable live-proof lanes are accepted and merged; this
+   requirement is the one item that did not close, and it is carried forward as a **gate on
+   deployment, not on the merge**.
+
+   **Why it could not be satisfied in 6.6.** The OAuth app is in **Testing**, and Google expires
+   Testing-mode refresh tokens at exactly seven days — so "seven complete days elapsed **and** the
+   token still valid" cannot both hold. It is unreachable by waiting; only a publishing-status change
+   can make it reachable, and 6.6 was explicitly forbidden from making one. 6.6's approved reconnect
+   also re-minted the token on **2026-08-27T06:51:49Z**, restarting the clock.
+
+   **`Production migration, production API/worker/web rollout, and the Rabbit versionCode 7
+   installation MUST NOT BEGIN until this gate passes.`** The gate, in order:
+
+   1. Checkpoint 6.7 obtains **separate explicit approval for OAuth publishing** — publishing is not
+      authorized by this entry and must not be inferred from it.
+   2. After publishing, the **development** connection is **reauthorized using the same three
+      approved read-only scopes**, to obtain a post-publishing token. No scope may be added or
+      changed.
+   3. **Seven complete days must then elapse** with **no reconsent, no manual renewal, and no
+      token-lineage replacement.** Any of those restarts the clock and the seven days begin again.
+   4. After seven complete days, the **smallest harmless bounded refresh/read must succeed without
+      interactive authorization.**
+   5. Throughout, **token values, provider payloads and health values must remain absent** from
+      output, logs and documentation.
+
+   Only after that proof passes may the **production deployment portion of 6.7** proceed. Until then
+   this item is `blocked_time` and **nothing here asserts it has passed.**
+
+   **At the time of this documentation commit, nothing has been done toward it:** production,
+   OAuth publishing status, the callback, the scopes, the Rabbit, `versionCode`, F5 and raw intraday
+   heart rate are all **untouched**.
 2. **Reminder, notification and device-pairing paths remain unverified on-device.** The UI-test
    identity mounts none of them; verifying them needs a production-identity build, i.e. an EAS build
    and a `versionCode` bump.
