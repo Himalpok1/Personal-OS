@@ -503,6 +503,81 @@ describe("partial consent within the three scopes", () => {
     const items = off.json<{ items: { metric: string; sync_enabled: boolean }[] }>().items;
     expect(items.find((i) => i.metric === "steps")!.sync_enabled).toBe(false);
   });
+
+  // Checkpoint 6.6, found live: this route was the one path that could set
+  // sync_enabled = true on a sample_reconcile stream. The worker's
+  // isSyncableMetric filter meant it was never actually fetched, so the flag
+  // was inert -- but the endpoint still reported the stream as enabled.
+  it("refuses to ENABLE a sample_reconcile stream, by mode and not by name", async () => {
+    const res = await connect(ALL_SCOPES);
+    const id = res.json<{ id: string }>().id;
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/health-connections/${id}/streams`,
+      payload: [{ metric: "heart-rate-intraday", sync_enabled: true }],
+    });
+    expect(patch.statusCode).toBe(409);
+    expect(patch.json()).toMatchObject({
+      error: "metric_out_of_scope",
+      metric: "heart-rate-intraday",
+    });
+
+    const [row] = await app.db
+      .select()
+      .from(healthMetricStreams)
+      .where(eq(healthMetricStreams.metric, "heart-rate-intraday"));
+    expect(row!.syncEnabled).toBe(false);
+  });
+
+  it("still allows DISABLING a sample_reconcile stream, so the state is recoverable", async () => {
+    const res = await connect(ALL_SCOPES);
+    const id = res.json<{ id: string }>().id;
+    // Simulate a row left enabled by an older build.
+    await app.db
+      .update(healthMetricStreams)
+      .set({ syncEnabled: true })
+      .where(eq(healthMetricStreams.metric, "heart-rate-intraday"));
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/health-connections/${id}/streams`,
+      payload: [{ metric: "heart-rate-intraday", sync_enabled: false }],
+    });
+    expect(patch.statusCode).toBe(200);
+
+    const [row] = await app.db
+      .select()
+      .from(healthMetricStreams)
+      .where(eq(healthMetricStreams.metric, "heart-rate-intraday"));
+    expect(row!.syncEnabled).toBe(false);
+  });
+
+  it("applies NOTHING when a later entry in the batch is rejected", async () => {
+    const res = await connect(ALL_SCOPES);
+    const id = res.json<{ id: string }>().id;
+    await app.inject({
+      method: "PATCH",
+      url: `/health-connections/${id}/streams`,
+      payload: [{ metric: "steps", sync_enabled: false }],
+    });
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/health-connections/${id}/streams`,
+      payload: [
+        { metric: "steps", sync_enabled: true },
+        { metric: "heart-rate-intraday", sync_enabled: true },
+      ],
+    });
+    expect(patch.statusCode).toBe(409);
+
+    // `steps` must NOT have been enabled by the accepted first entry.
+    const [steps] = await app.db
+      .select()
+      .from(healthMetricStreams)
+      .where(eq(healthMetricStreams.metric, "steps"));
+    expect(steps!.syncEnabled).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -269,26 +269,71 @@ export default function healthConnectionsRoutes(app: FastifyInstance): void {
       if (!connection) return reply.code(404).send({ error: "not_found" });
 
       const now = new Date();
+
+      // Validate EVERY update before applying ANY of them. Previously each
+      // update was checked and written in the same pass, so a batch whose
+      // second entry was rejected had already committed its first -- the
+      // caller got a 4xx describing a state the database had partly entered.
+      const planned: Array<{ metric: string; syncEnabled: boolean }> = [];
       for (const update of updates) {
-        // Scoped by connection AND metric: a bare metric match would update
-        // every connection's stream if a second provider is ever added.
-        const streamWhere = and(
-          eq(healthMetricStreams.connectionId, connection.id),
-          eq(healthMetricStreams.metric, update.metric),
-        );
-        const [row] = await app.db.select().from(healthMetricStreams).where(streamWhere);
+        const [row] = await app.db
+          .select()
+          .from(healthMetricStreams)
+          .where(
+            and(
+              eq(healthMetricStreams.connectionId, connection.id),
+              eq(healthMetricStreams.metric, update.metric),
+            ),
+          );
         if (!row) {
           return reply.code(404).send({ error: "unknown_metric", metric: update.metric });
         }
-        // A stream whose scope was never granted must not be enablable -- doing
-        // so would only produce a storm of 403s at sync time.
-        if (update.sync_enabled && row.lastSyncError === "scope_not_granted") {
-          return reply.code(409).send({ error: "scope_not_granted", metric: update.metric });
+        if (update.sync_enabled) {
+          // Structural exclusion of heart-rate-intraday, and of any future
+          // reconcile metric -- the SAME guard the backfill route already
+          // applies, tested on MODE rather than on the metric name.
+          //
+          // Without it this route was the one path that could set
+          // sync_enabled = true on a sample_reconcile stream, contradicting
+          // the standing rule that raw intraday heart rate stays disabled
+          // while F5 (reconcile identity stability) is unproven. The worker's
+          // isSyncableMetric filter meant such a stream was never actually
+          // fetched, so the flag was inert -- but it still misreported the
+          // stream as enabled to every reader of this endpoint. Found live in
+          // Checkpoint 6.6.
+          let mode: string;
+          try {
+            mode = getHealthMetric(update.metric).mode;
+          } catch {
+            return reply.code(404).send({ error: "unknown_metric", metric: update.metric });
+          }
+          if (mode === "sample_reconcile") {
+            return reply.code(409).send({ error: "metric_out_of_scope", metric: update.metric });
+          }
+          // A stream whose scope was never granted must not be enablable --
+          // doing so would only produce a storm of 403s at sync time.
+          if (row.lastSyncError === "scope_not_granted") {
+            return reply.code(409).send({ error: "scope_not_granted", metric: update.metric });
+          }
         }
+        // Disabling is deliberately NOT gated on any of the above. A stream
+        // that is somehow enabled must always be switchable back off, or the
+        // invariant this guard protects would be unrecoverable through the API.
+        planned.push({ metric: update.metric, syncEnabled: update.sync_enabled });
+      }
+
+      for (const change of planned) {
+        // Scoped by connection AND metric: a bare metric match would update
+        // every connection's stream if a second provider is ever added.
         await app.db
           .update(healthMetricStreams)
-          .set({ syncEnabled: update.sync_enabled, updatedAt: now })
-          .where(streamWhere);
+          .set({ syncEnabled: change.syncEnabled, updatedAt: now })
+          .where(
+            and(
+              eq(healthMetricStreams.connectionId, connection.id),
+              eq(healthMetricStreams.metric, change.metric),
+            ),
+          );
       }
 
       const rows = await app.db
