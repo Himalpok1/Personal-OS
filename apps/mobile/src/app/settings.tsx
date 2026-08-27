@@ -455,7 +455,7 @@ function GoogleCalendarRow({
 // -- there's no GET for that data, so it's only known after a toggle or a
 // sync-now response in the current session).
 function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConnection }) {
-  const { data: available, isLoading, isError } = useAvailableGoogleCalendars(connection.id);
+  const { data: available, isLoading, isError, refetch } = useAvailableGoogleCalendars(connection.id);
   const { data: persisted } = usePersistedCalendarConnectionCalendars(connection.id);
   const updateCalendars = useUpdateCalendarConnectionCalendars();
   const syncNow = useSyncCalendarConnectionNow();
@@ -486,7 +486,18 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
 
       {isLoading ? <Text className="text-neutral-500">Loading calendars…</Text> : null}
       {isError ? (
-        <Text className="text-red-600">Couldn&apos;t load Google calendars.</Text>
+        <View className="mb-2 items-start gap-2">
+          <Text className="text-red-600">Couldn&apos;t load Google calendars.</Text>
+          <Pressable
+            onPress={() => void refetch()}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading Google calendars"
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          >
+            <Text className="text-sm font-medium text-white">Retry</Text>
+          </Pressable>
+        </View>
       ) : null}
 
       {merged.map((cal) => (
@@ -548,7 +559,7 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
 }
 
 function CaldavCalendarConnectionCard({ connection }: { connection: CalendarConnection }) {
-  const { data: available, isLoading, isError } = useAvailableCalendars(connection.id);
+  const { data: available, isLoading, isError, refetch } = useAvailableCalendars(connection.id);
   const { data: persisted } = usePersistedCalendarConnectionCalendars(connection.id);
   const updateCalendars = useUpdateCalendarConnectionCalendars();
   const syncNow = useSyncCalendarConnectionNow();
@@ -576,7 +587,18 @@ function CaldavCalendarConnectionCard({ connection }: { connection: CalendarConn
 
       {isLoading ? <Text className="text-neutral-500">Loading calendars…</Text> : null}
       {isError ? (
-        <Text className="text-red-600">Couldn&apos;t load CalDAV calendars.</Text>
+        <View className="mb-2 items-start gap-2">
+          <Text className="text-red-600">Couldn&apos;t load CalDAV calendars.</Text>
+          <Pressable
+            onPress={() => void refetch()}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading CalDAV calendars"
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          >
+            <Text className="text-sm font-medium text-white">Retry</Text>
+          </Pressable>
+        </View>
       ) : null}
 
       {merged.map((cal) => (
@@ -648,7 +670,7 @@ function CaldavCalendarConnectionCard({ connection }: { connection: CalendarConn
 }
 
 function ConnectedCalendarsCard() {
-  const { data, isLoading, isError } = useCalendarConnections();
+  const { data, isLoading, isError, refetch } = useCalendarConnections();
   const connectGoogle = useConnectGoogleCalendar();
   const connectCaldav = useConnectCaldavCalendar();
   const placeholderColor = usePlaceholderColor();
@@ -710,7 +732,18 @@ function ConnectedCalendarsCard() {
 
       {isLoading ? <Text className="text-neutral-500">Loading…</Text> : null}
       {isError ? (
-        <Text className="text-red-600">Couldn&apos;t load calendar connections.</Text>
+        <View className="mb-2 items-start gap-2">
+          <Text className="text-red-600">Couldn&apos;t load calendar connections.</Text>
+          <Pressable
+            onPress={() => void refetch()}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading calendar connections"
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          >
+            <Text className="text-sm font-medium text-white">Retry</Text>
+          </Pressable>
+        </View>
       ) : null}
 
       {/* Google Connections (Android only) */}
