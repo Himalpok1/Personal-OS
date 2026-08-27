@@ -109,7 +109,10 @@ Checkpoint 6.1, and are updated then — not pre-emptively.
 Built on branch `phase-6-google-health-live-proof` from `4f90f9d` (main). **Not merged to `main`.**
 No production access, no deployment, no OAuth publishing, **no scope change**, **no migration** — the
 local level stays 14 `.sql` / 14 journal entries and production stays 0000–0012. `versionCode`
-untouched at **6** (it is EAS-remote-derived and has no repo literal). `.env` unmodified and still on
+untouched at **6** — the *app's* versionCode is EAS-remote-derived (`appVersionSource: "remote"`,
+`autoIncrement` on the production profile) and has no literal in tracked source. Two unrelated
+`versionCode 1` literals do exist, in the `exact-alarm-status` and `google-calendar-auth` Expo
+modules' own `android/build.gradle`; both are byte-unchanged by this checkpoint. `.env` unmodified and still on
 the approved loopback callback. F5 capture 2 not run; raw intraday heart rate never enabled;
 `health_observations` **0 rows throughout**.
 
@@ -187,6 +190,13 @@ deliberately left ungated**: a stream somehow enabled by an older build must alw
 off, or the invariant would be unrecoverable through the API — which is precisely the call needed to
 restore state during this proof.
 
+**Both halves of the fix are mutation-proven, not asserted.** Disabling the mode guard fails exactly
+two of the three new tests (the enable-refusal and the batch test) while the third — "still allows
+disabling" — correctly keeps passing, which is what distinguishes this guard from a blanket rejection
+that would have made the invariant unrecoverable. Separately, restoring the interleaved write while
+leaving the guard intact fails exactly one test, the batch-atomicity one. Neither test can pass
+against the pre-fix behaviour.
+
 The fix also made the batch **validate-then-apply**. Previously each entry was checked and written in
 the same pass, so a batch whose second entry was rejected had already committed its first, and the
 caller received a 4xx describing a state the database had partly entered. That affected the
@@ -218,6 +228,26 @@ from the same `chunk.startDate` inside the same transaction, and both are gated 
 `authoritative` check — so they cannot silently diverge. That is why the resume assertion is paired
 with `rows_rejected = 0` on the earlier chunks; a non-authoritative chunk would have left the property
 untested rather than proven.
+
+#### A process failure worth recording: a sub-agent returned a fabricated report
+
+One of the final read-only reconciliation agents returned a confident, well-formatted report that was
+**almost entirely invented**. It made **zero tool calls** and claimed: that no Checkpoint 6.6 section
+existed, that HEAD was `df08da8` (6.5's branch), that the branch was 16 commits ahead of `main`, that
+`BriefInput` was `{ tz, now }`, that the OAuth scopes lived in
+`packages/calendar-providers/src/google-health-catalog.ts` (a file that does not exist), and that a
+user named `himallinux` — the *production server's* account, not this machine's — owned a running
+process.
+
+Every one of those was checked directly and refuted: HEAD `177980a`, 2 commits ahead, the 6.6 section
+present, `BriefInput` carrying twelve fields and no health field, the scopes in
+`packages/health-providers/src/google-health-catalog.ts`, and no repository process running.
+
+The report is discarded in full and none of it informs this record. It is written down because the
+failure mode is the dangerous one: a fabricated verification is worse than a missing one, since it
+reads exactly like evidence. **The operative rule is that a sub-agent's claim is a hypothesis until
+the integrator reproduces it** — which is why every repository-checkable number in this section was
+re-derived first-hand rather than transcribed.
 
 #### Privacy
 
@@ -3508,8 +3538,9 @@ unchanged. `versionCode` **6**. Migrations 14 / 14. `health_observations` **0**.
 - **One pre-existing pg-boss `health.google.sync-connection` job sits in state `created`** from an
   earlier session and was left untouched by 6.6 (no worker ran, so nothing consumed it). It is inert
   and `singletonKey`-deduped, but it will be the first job a worker picks up whenever one next starts.
-- **The development Google Health refresh token expires 2026-08-31T23:57:45Z** (OAuth app
-  deliberately left in Testing). Reconnect before any further live work.
+- **The development Google Health refresh token expires seven days after issue** (OAuth app
+  deliberately left in Testing). 6.6's approved reconnect re-minted it on **2026-08-27T06:51:49Z**,
+  so the previously recorded 2026-08-31 expiry is superseded. Reconnect before any further live work.
 - **The local `.env` holds the development loopback callback**, not the Tailscale one.
   Restore before anything production-facing.
 - **Twelve of eighteen Google Health value specs remain unverified (6.3L).** Six are now OBSERVED
