@@ -104,6 +104,101 @@ liveness probe, so Phase 6 uses `health-*` siblings throughout (C7).
 journal entries, **no 0013**" remain **accurate** until migration `0013` actually lands in
 Checkpoint 6.1, and are updated then — not pre-emptively.
 
+### Checkpoint 6.7A — Fable release audit + OAuth production transition (audit phase COMPLETE, 2026-08-28)
+
+Split from Checkpoint 6.7 by explicit user direction: 6.7A is the full release-candidate
+audit plus the OAuth Testing→Production publishing and the start of the mandatory seven-day
+token-longevity observation. **Production deployment (migration `0013`, api/worker/web
+rollout, Rabbit versionCode 7) stays blocked until the post-publishing token survives seven
+complete days.** No migration — the level stays 14 `.sql` / 14 journal entries. No scope,
+callback or credential change. `versionCode` untouched at **6**.
+
+**Branches.** Work began on `phase-6-production-readiness-6-7a` from `main` at `c250fa2`.
+Mid-checkpoint the user directed a commit-prefix independence verification (below), which
+led to a repaired linear branch, **`phase-6-production-readiness-6-7a-linear`**, also from
+`c250fa2` — that branch is the release candidate. The original branch is preserved
+unmodified as the audit record and is never merged. Neither branch is merged to `main`.
+
+#### The audit
+
+Six parallel read-only sub-agent lanes (route/test inventory · accessibility/touch-target ·
+health UX and missing-vs-zero · security/provider-boundary · error-state/navigation ·
+restriction checklist), plus integrator-owned lanes: live browser pass (desktop + 480×640 +
+dark), dev-database invariants, and the physical-device preflight. Inventory: 23 mobile
+routes, ~90 API routes, 140 test files. The restriction sweep passed all seven items
+(no `health_observations` write path; no `0014`; versionCode literals only in the two known
+Expo-module gradle files; no credential values in committable files; the UI-test/production
+build guard intact; the three read-only scopes exact in `google-health-catalog.ts`).
+
+#### Findings and dispositions
+
+**Fixed (all verified by focused tests, typecheck, and the full gate):**
+
+| ID | Severity | Finding | Fix |
+|---|---|---|---|
+| S1 | P1 | `capture.parse`/`ptt.transcribe` rethrew raw provider errors (AI SDK `responseBody`/`requestBodyValues` — the user's own capture text — and the STT vendor's response body) into pg-boss's durable `job.output`; the exact class 6.3 fixed for health and 6.5 for calendar, never extended to these two older jobs | `AiJobError` + `withAiJobErrorContainment`, applied in both factories, mutation-proven; the two tests pinning the raw rethrow corrected in the same commit |
+| H1 | P2 | After a reconnect (which disables every stream by design) the dashboard said "Connected" with a Sync button whose queued job the worker silently skips — the 6.6-recorded trap, with no detectable state client-side | Additive `enabled_stream_count`/`stream_count` on `HealthConnectionSummarySchema`; new `no_streams_enabled` display state ranked after `needs_reconnect`, `canRequestSync` false; honest copy in the card and the Settings health line |
+| H3/E2 | P2 | Health "Sync now" read only `isPending`/`isSuccess`; a failed request (offline, 409, 503) re-enabled the button silently | `errorNotice` on the connection card, latched until the next attempt |
+| E1 | P2 | The three Settings calendar cards showed a permanent error line with no Retry (6.5's fix covered only the Devices list) | Devices-pattern Retry on all three |
+| A1/A2 | P2 | Today's completion circle and the Agenda row's Complete/Skip/+1-day computed pending flags but never bound `disabled` — rapid taps fired concurrent mutations | `disabled` bound on all four controls |
+| AY8 | P2 | "Cancel this occurrence" fired unconfirmed from the recurring-event action sheet, unlike Archive on the same screen | Same `Alert.alert` gate |
+| AY1/AY2/AX6 | P2/P3 | Recurrence editor: the three Ends buttons and the replace-custom-rule button under 44px; Ends buttons missing role/selected state | `min-h-[44px]` + role + `accessibilityState.selected` |
+| AY5 | P2 | Agenda project-filter chips conveyed selection by color alone with nothing in the accessibility tree | role + selected state, both chip shapes |
+| AY6 | P2 | The calendar "today" marker was a blue circle only | ", today" in the month cell label; accessible week-header day nodes |
+| AX5/AX7 | P3 | PTT's accessible name was static regardless of state; FAB/PTT had no explicit role | Status-driven label; `accessibilityRole="button"` on both |
+| AY11 | P2 | Five Settings diagnostics buttons (Flush now, Register push, Remote test, both Schedule tests) had no busy guard — raw async calls with no mutation object | `useBusyPress` single-flight hook (ref-guarded re-entry) + harness tests |
+| — | — | Full-gate flake: all 21 "Overdue pool" review fixtures shared one `dueAt`; the overdue sort breaks ties on a UUID key, so the 20-item slice dropped "pool 0" ~1 run in 10 (pre-existing since 5.3) | One-minute spacing; five consecutive green runs |
+
+**Deferred with rationale:** H2 (backfill/disconnect/stream-toggle/connect have no client
+UI — **ratified here as a deliberate scope decision through 6.7**, per 6.4's recorded
+"deliberately NOT done"; server-side operation is the contract until a separately approved
+checkpoint builds the UI). AX3/AX4 (month-grid chips ~24-26px, week-grid short blocks
+~28px, 40px hour slots — density tradeoffs where larger hitSlop would overlap stacked
+siblings; day-cell tap and Agenda provide alternate access; needs its own design pass on
+hardware). A8/AY9/AY10 (list-row Archive/Drop unconfirmed — standing recorded debt awaiting
+its own product decision). S2 (worker top-level `console.error` lacks serializer
+discipline — informational; fires only on startup paths). Observation, not a defect:
+Agenda's overdue section is range-bounded (its 5.4-audited contract); Today remains the
+all-overdue surface.
+
+#### A masked typecheck failure, and the commit-prefix verification it forced
+
+During the H1 work a `pnpm typecheck | tail` pipe masked a real failure and the commit
+landed anyway. The user directed a full commit-prefix independence verification. Result:
+the masked failure had **never entered history** — it lived only at intermediate commit
+`9efb96e` (TS2741/TS2366: `settings.tsx` missing the new union member, plus stale
+`api-client` dist types) and was folded in by `--amend` before the next commit existed.
+All five original prefixes passed build + typecheck + focused tests independently.
+
+**But the sweep then surfaced a real entanglement of the 6.5 class:** the S1 containment
+commit changed the throw contract while two existing worker tests still pinned the raw
+rethrow, so prefixes from `ece935c` onward failed the full worker suite (2 of 159) until a
+later test-correction commit. My earlier "all prefixes pass" had run only the new
+containment test file — corrected here. Repaired by the 6.5 linearization pattern: the
+containment fix and its test corrections were combined into one commit on
+`phase-6-production-readiness-6-7a-linear`, every other commit cherry-picked in order with
+**zero conflicts**, and the final trees proven **byte-identical**
+(`73b24d45e173dd66a1c4b39597bb12858e8c2a4e` on both branches, empty diff). Every linear
+prefix passes build + typecheck + its focused tests, including the full worker suite at
+the combined commit.
+
+#### Verification actually run (linear HEAD)
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Full gate | build 9/9, typecheck 17/17, lint **0 warnings** (three pre-existing warnings at base fixed rather than tolerated), `format:check` clean, `git diff --check` clean |
+| 2 | Full suite, uncached and serial | **2055 tests / 17 turbo tasks** (2038 → **+17**), zero failing |
+| 3 | No baseline decreased | core 326 · db 21 · schema 174 · calendar-providers **74** · health-providers 311 · ai-providers 25 · api-client 93 · api **496** · worker **159** · mobile **376** |
+| 4 | Web export | clean, exactly one `index.html` |
+| 5 | Secret scans | `gitleaks git` **174 commits, no leaks**; working tree 80 findings in 5 files, **0 in any committable file**, classified with `git check-ignore` |
+| 6 | Android | `assembleRelease` of the side-by-side UI-test identity: BUILD SUCCESSFUL (653 tasks) |
+| 7 | Live browser pass | Paired a real web device against the dev API: Today, Health dashboard (honest per-tile missing-vs-never copy, wake-date sleep), Settings (health line, diagnostics, calendar cards), Calendar month + Agenda — at desktop, 480×640 and dark; console clean except the documented `GET /briefs/current` 404→null convention. Pass artifacts removed count-verified (5 Android device rows preserved, 0 pairing codes) |
+| 8 | Dev-DB invariants | connection active · 18/19 streams enabled · `heart-rate-intraday` disabled, 0 runs ever · `health_observations` **0** · migrations tracked 14 · 0 advisory locks |
+| 9 | Physical Rabbit (bounded) | Side-by-side `com.himal.personalos.dev` release UI-test APK built at the linear HEAD with the UI-test flag baked (the package-isolation assertion passed at launch); Today, Settings (health line, all five diagnostics buttons), the Health dashboard (live dev data through `adb reverse`, honest per-tile states) and the New Task recurrence editor (Daily preset -> Ends buttons) all rendered with **zero crash-buffer entries**; `.dev` uninstalled afterward, tunnel cleared, and production `com.himal.personalos` **never targeted** — versionCode 6, `firstInstallTime 2026-08-19 16:26:10`, `lastUpdateTime 2026-08-24 05:17:43` byte-identical before and after |
+
+The browser-pass web device and all pairing codes were removed count-verified (5 Android
+device rows preserved); the dev database's health tables were read, never written.
+
 ### Checkpoint 6.6 — Bounded live Google Health proof (COMPLETE, local only, 2026-08-27)
 
 Built on branch `phase-6-google-health-live-proof` from `4f90f9d` (main). **Not merged to `main`.**
