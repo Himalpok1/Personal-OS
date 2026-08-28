@@ -1,4 +1,5 @@
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
+import { useBusyPress } from "@/components/use-busy-press";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { calendarSyncErrorCopy } from "@/components/calendar/sync-error-copy";
 import { usePlaceholderColor } from "@/components/placeholder-color";
@@ -118,6 +119,17 @@ function OutboxDiagnostics() {
   });
   const [flushResult, setFlushResult] = useState<string | null>(null);
 
+  // 6.7A AY11: raw async onPress with no mutation object meant nothing bound
+  // `disabled` -- repeated taps fired flushOutbox() concurrently.
+  const flush = useBusyPress(async () => {
+    const { flushed, remaining, failed } = await flushOutbox();
+    setFlushResult(
+      `Flushed ${flushed}, ${remaining} pending${failed ? `, ${failed} need attention` : ""}`,
+    );
+    void queryClient.invalidateQueries({ queryKey: ["outbox"] });
+    void queryClient.invalidateQueries({ queryKey: ["inbox"] });
+  });
+
   return (
     <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
       <Text className="mb-2 text-base font-bold text-black dark:text-white">Offline outbox</Text>
@@ -126,17 +138,13 @@ function OutboxDiagnostics() {
         {stats?.failed ? ` · Needs attention: ${stats.failed}` : ""}
       </Text>
       <Pressable
-        onPress={async () => {
-          const { flushed, remaining, failed } = await flushOutbox();
-          setFlushResult(
-            `Flushed ${flushed}, ${remaining} pending${failed ? `, ${failed} need attention` : ""}`,
-          );
-          void queryClient.invalidateQueries({ queryKey: ["outbox"] });
-          void queryClient.invalidateQueries({ queryKey: ["inbox"] });
-        }}
-        className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+        onPress={flush.onPress}
+        disabled={flush.busy}
+        className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 disabled:opacity-50 dark:bg-neutral-800"
       >
-        <Text className="text-center text-sm text-black dark:text-white">Flush now</Text>
+        <Text className="text-center text-sm text-black dark:text-white">
+          {flush.busy ? "Flushing…" : "Flush now"}
+        </Text>
       </Pressable>
       {flushResult ? <Text className="mt-1 text-xs text-neutral-500">{flushResult}</Text> : null}
     </View>
@@ -154,6 +162,75 @@ function NotificationDiagnostics() {
   const [pushResult, setPushResult] = useState<string | null>(null);
   const [testScheduled, setTestScheduled] = useState<string | null>(null);
   const [remoteTestResult, setRemoteTestResult] = useState<string | null>(null);
+
+  // 6.7A AY11: same single-flight discipline as every mutation-backed button.
+  const registerPush = useBusyPress(async () => {
+    setPushResult("Registering…");
+    try {
+      const expoPushToken = await registerForPushNotifications();
+      if (identity) {
+        await updatePushToken.mutateAsync({
+          id: identity.deviceId,
+          body: { push_token: expoPushToken },
+        });
+      }
+      setPushResult(`Got token: ${expoPushToken.slice(0, 24)}...`);
+    } catch (err) {
+      setPushResult(`Failed: ${describeActionFailure(err)}`);
+    }
+  });
+
+  const remoteTest = useBusyPress(async () => {
+    if (!identity) return;
+    setRemoteTestResult("Queueing…");
+    try {
+      await api.sendTestNotification(identity.token, identity.deviceId);
+      setRemoteTestResult("Queued for this device.");
+    } catch (error) {
+      setRemoteTestResult(`Failed: ${describeActionFailure(error)}`);
+    }
+  });
+
+  const scheduleTest = useBusyPress(async () => {
+    await ensureReminderChannel();
+    const granted = await ensureNotificationPermission();
+    if (!granted) {
+      setTestScheduled("Permission not granted.");
+      return;
+    }
+    await Notifications.scheduleNotificationAsync({
+      content: { title: "Test reminder", body: "Checkpoint 4 manual verification" },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+        seconds: 10,
+        channelId: REMINDERS_CHANNEL_ID,
+      },
+    });
+    setTestScheduled(`Scheduled for ${new Date(Date.now() + 10_000).toLocaleTimeString()}`);
+  });
+
+  const scheduleRebootTest = useBusyPress(async () => {
+    await ensureReminderChannel();
+    const granted = await ensureNotificationPermission();
+    if (!granted) {
+      setTestScheduled("Permission not granted.");
+      return;
+    }
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "Reboot survival test",
+        body: "Delivered without reopening Personal OS",
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+        seconds: 120,
+        channelId: REMINDERS_CHANNEL_ID,
+      },
+    });
+    setTestScheduled(
+      `Reboot test scheduled for ${new Date(Date.now() + 120_000).toLocaleTimeString()}`,
+    );
+  });
 
   return (
     <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
@@ -182,22 +259,9 @@ function NotificationDiagnostics() {
       ) : null}
 
       <Pressable
-        onPress={async () => {
-          setPushResult("Registering…");
-          try {
-            const expoPushToken = await registerForPushNotifications();
-            if (identity) {
-              await updatePushToken.mutateAsync({
-                id: identity.deviceId,
-                body: { push_token: expoPushToken },
-              });
-            }
-            setPushResult(`Got token: ${expoPushToken.slice(0, 24)}...`);
-          } catch (err) {
-            setPushResult(`Failed: ${describeActionFailure(err)}`);
-          }
-        }}
-        className="mb-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+        onPress={registerPush.onPress}
+        disabled={registerPush.busy}
+        className="mb-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 disabled:opacity-50 dark:bg-neutral-800"
       >
         <Text className="text-center text-sm text-black dark:text-white">
           Register for push notifications
@@ -206,17 +270,9 @@ function NotificationDiagnostics() {
       {pushResult ? <Text className="mb-2 text-xs text-neutral-500">{pushResult}</Text> : null}
 
       <Pressable
-        onPress={async () => {
-          if (!identity) return;
-          setRemoteTestResult("Queueing…");
-          try {
-            await api.sendTestNotification(identity.token, identity.deviceId);
-            setRemoteTestResult("Queued for this device.");
-          } catch (error) {
-            setRemoteTestResult(`Failed: ${describeActionFailure(error)}`);
-          }
-        }}
-        className="mb-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+        onPress={remoteTest.onPress}
+        disabled={remoteTest.busy}
+        className="mb-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 disabled:opacity-50 dark:bg-neutral-800"
       >
         <Text className="text-center text-sm text-black dark:text-white">
           Send remote test notification
@@ -227,24 +283,9 @@ function NotificationDiagnostics() {
       ) : null}
 
       <Pressable
-        onPress={async () => {
-          await ensureReminderChannel();
-          const granted = await ensureNotificationPermission();
-          if (!granted) {
-            setTestScheduled("Permission not granted.");
-            return;
-          }
-          await Notifications.scheduleNotificationAsync({
-            content: { title: "Test reminder", body: "Checkpoint 4 manual verification" },
-            trigger: {
-              type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-              seconds: 10,
-              channelId: REMINDERS_CHANNEL_ID,
-            },
-          });
-          setTestScheduled(`Scheduled for ${new Date(Date.now() + 10_000).toLocaleTimeString()}`);
-        }}
-        className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+        onPress={scheduleTest.onPress}
+        disabled={scheduleTest.busy}
+        className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 disabled:opacity-50 dark:bg-neutral-800"
       >
         <Text className="text-center text-sm text-black dark:text-white">
           Schedule test reminder (10s)
@@ -253,29 +294,9 @@ function NotificationDiagnostics() {
       {testScheduled ? <Text className="mt-1 text-xs text-neutral-500">{testScheduled}</Text> : null}
 
       <Pressable
-        onPress={async () => {
-          await ensureReminderChannel();
-          const granted = await ensureNotificationPermission();
-          if (!granted) {
-            setTestScheduled("Permission not granted.");
-            return;
-          }
-          await Notifications.scheduleNotificationAsync({
-            content: {
-              title: "Reboot survival test",
-              body: "Delivered without reopening Personal OS",
-            },
-            trigger: {
-              type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-              seconds: 120,
-              channelId: REMINDERS_CHANNEL_ID,
-            },
-          });
-          setTestScheduled(
-            `Reboot test scheduled for ${new Date(Date.now() + 120_000).toLocaleTimeString()}`,
-          );
-        }}
-        className="mt-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+        onPress={scheduleRebootTest.onPress}
+        disabled={scheduleRebootTest.busy}
+        className="mt-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 disabled:opacity-50 dark:bg-neutral-800"
       >
         <Text className="text-center text-sm text-black dark:text-white">
           Schedule reboot test (2m)
