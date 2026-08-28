@@ -250,36 +250,37 @@ export function createCaptureParseHandler(db: Db, boss: PgBoss) {
   // user's own capture text in requestBodyValues -- never reaches pg-boss's
   // durable job.output table raw. NoProviderConfiguredError is still handled
   // inside (finalized as failed, never thrown), so it never gets here.
-  return withAiJobErrorContainment(CAPTURE_PARSE_QUEUE, async function handleCaptureParse(
-    jobs: Job<CaptureParseJobData>[],
-  ): Promise<void> {
-    for (const job of jobs) {
-      const { inboxId, mode } = job.data;
-      const [row] = await db.select().from(inboxItems).where(eq(inboxItems.id, inboxId));
-      if (!row) {
-        console.warn(`capture.parse: inbox_items ${inboxId} not found, skipping`);
-        continue;
-      }
-
-      if (mode === "confirm") {
-        // Idempotency guard: a duplicate delivery of an already-confirmed
-        // job is a no-op, not an error.
-        if (row.status !== "needs_confirm") continue;
-        await runConfirm(db, row);
-      } else {
-        // A prior attempt may have committed needs_confirm and then failed
-        // before enqueueing its push. Re-enqueue from durable row state;
-        // notifications.dispatch's per-device dedupe prevents duplicates.
-        if (row.status === "needs_confirm") {
-          await enqueueConfirmationPush(boss, row);
+  return withAiJobErrorContainment(
+    CAPTURE_PARSE_QUEUE,
+    async function handleCaptureParse(jobs: Job<CaptureParseJobData>[]): Promise<void> {
+      for (const job of jobs) {
+        const { inboxId, mode } = job.data;
+        const [row] = await db.select().from(inboxItems).where(eq(inboxItems.id, inboxId));
+        if (!row) {
+          console.warn(`capture.parse: inbox_items ${inboxId} not found, skipping`);
           continue;
         }
-        // Idempotency guard: a duplicate delivery of an already-processed
-        // capture is a no-op.
-        if (row.status !== "pending") continue;
-        const needsConfirmation = await runAutoParse(db, row);
-        if (needsConfirmation) await enqueueConfirmationPush(boss, row);
+
+        if (mode === "confirm") {
+          // Idempotency guard: a duplicate delivery of an already-confirmed
+          // job is a no-op, not an error.
+          if (row.status !== "needs_confirm") continue;
+          await runConfirm(db, row);
+        } else {
+          // A prior attempt may have committed needs_confirm and then failed
+          // before enqueueing its push. Re-enqueue from durable row state;
+          // notifications.dispatch's per-device dedupe prevents duplicates.
+          if (row.status === "needs_confirm") {
+            await enqueueConfirmationPush(boss, row);
+            continue;
+          }
+          // Idempotency guard: a duplicate delivery of an already-processed
+          // capture is a no-op.
+          if (row.status !== "pending") continue;
+          const needsConfirmation = await runAutoParse(db, row);
+          if (needsConfirmation) await enqueueConfirmationPush(boss, row);
+        }
       }
-    }
-  });
+    },
+  );
 }

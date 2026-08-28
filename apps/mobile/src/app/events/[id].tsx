@@ -145,7 +145,7 @@ export interface EditEventViewProps {
   endsAt: string;
   onEndsAtChange: (val: string) => void;
   timezone: string;
-  projects?: Array<{ id: string; name: string }>;
+  projects?: { id: string; name: string }[];
   projectId?: string;
   onProjectIdChange: (id?: string) => void;
   onSubmit: () => void;

@@ -41,6 +41,9 @@ vi.mock("react", () => ({
   useRef: hooksHarness.useRef,
 }));
 
+// Must import after vi.mock("react") -- same ordering
+// use-reminder-reconciliation.test.ts relies on.
+// eslint-disable-next-line import/first
 import { useBusyPress } from "./use-busy-press";
 
 function deferred(): { promise: Promise<void>; resolve: () => void; reject: (e: Error) => void } {
@@ -55,6 +58,9 @@ function deferred(): { promise: Promise<void>; resolve: () => void; reject: (e: 
 
 function render(action: () => Promise<void>): ReturnType<typeof useBusyPress> {
   hooksHarness.beginRender();
+  // The harness above IS the "renderer" here; same precedent as
+  // use-reminder-reconciliation.test.ts.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   return useBusyPress(action);
 }
 

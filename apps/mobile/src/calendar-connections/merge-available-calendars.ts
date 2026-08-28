@@ -18,7 +18,7 @@ export interface MergedCalendarItem {
 export type MergedGoogleCalendar = MergedCalendarItem & { google_calendar_id: string };
 
 export function mergeAvailableCalendars(
-  available: Array<AvailableGoogleCalendar | AvailableCalendar>,
+  available: (AvailableGoogleCalendar | AvailableCalendar)[],
   persisted: CalendarConnectionCalendar[],
 ): MergedCalendarItem[] {
   const persistedByGoogleId = new Map(

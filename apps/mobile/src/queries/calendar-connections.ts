@@ -7,7 +7,7 @@ import type {
   LinkEventToGoogleCalendarRequest,
 } from "@personal-os/schema";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { mergeAvailableCalendars, type MergedCalendarItem } from "@/calendar-connections/merge-available-calendars";
+import { mergeAvailableCalendars } from "@/calendar-connections/merge-available-calendars";
 import { api } from "./client";
 
 const connectionsKey = ["calendar-connections"] as const;
