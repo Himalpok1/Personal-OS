@@ -579,13 +579,20 @@ describe("reviews routes", () => {
       const window = localDayWindow(TZ, now);
       if (!dayHasHourMargins(now, window, 3)) return; // midnight-edge guard
 
-      // Honest-total pool: 21 clearly-overdue tasks (yesterday noon local).
+      // Honest-total pool: 21 clearly-overdue tasks starting yesterday noon
+      // local. One minute apart, NOT identical: the overdue sort breaks
+      // instant ties on a UUID-bearing key, so 21 tied instants sliced to 20
+      // made "pool 0 survives the slice" a ~19-in-21 coin flip -- the flake
+      // Checkpoint 6.7A's full-gate run caught. Distinct instants make pool 0
+      // the oldest pool row deterministically.
       for (let i = 0; i < 21; i += 1) {
         await app.db.insert(tasks).values({
           title: `Overdue pool ${i}`,
           timezone: TZ,
           status: "active",
-          dueAt: atLocal(TZ, addLocalDays(window.localDate, -1), 12),
+          dueAt: new Date(
+            atLocal(TZ, addLocalDays(window.localDate, -1), 12).getTime() + i * 60_000,
+          ),
         });
       }
       await app.db.insert(tasks).values({
