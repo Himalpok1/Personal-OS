@@ -101,6 +101,11 @@ function TaskRow({ item }: { item: TodayTaskItem }) {
         }}
         hitSlop={8}
         accessibilityLabel={`Complete ${item.title}`}
+        accessibilityRole="button"
+        // Without this the pending flags only drew the indicator dot -- the
+        // circle stayed tappable and rapid taps fired concurrent completion
+        // mutations (including the 409 -> occurrence fallback) (6.7A, A1).
+        disabled={complete.isPending || completeOccurrence.isPending}
         className="h-8 w-8 items-center justify-center rounded-full border-2 border-neutral-400 dark:border-neutral-600"
       >
         {complete.isPending || completeOccurrence.isPending ? (

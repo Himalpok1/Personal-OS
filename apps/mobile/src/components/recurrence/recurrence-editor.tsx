@@ -446,7 +446,8 @@ export function RecurrenceEditor({
             testID="replace-custom-rule-button"
             disabled={disabled}
             onPress={handleReplaceCustomRule}
-            className="mt-1 self-start rounded-md bg-amber-600 px-3 py-1.5 active:bg-amber-700"
+            accessibilityRole="button"
+            className="mt-1 min-h-[44px] justify-center self-start rounded-md bg-amber-600 px-3 py-1.5 active:bg-amber-700"
           >
             <Text className="text-xs font-semibold text-white">
               Replace with standard recurrence
@@ -647,7 +648,9 @@ export function RecurrenceEditor({
                   testID="end-never"
                   disabled={disabled}
                   onPress={() => handleEndModeChange("never")}
-                  className={`flex-1 items-center rounded-lg p-2.5 ${
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: value.endMode === "never" }}
+                  className={`min-h-[44px] flex-1 items-center justify-center rounded-lg p-2.5 ${
                     value.endMode === "never"
                       ? "bg-blue-600"
                       : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
@@ -666,7 +669,9 @@ export function RecurrenceEditor({
                   testID="end-until"
                   disabled={disabled}
                   onPress={() => handleEndModeChange("until")}
-                  className={`flex-1 items-center rounded-lg p-2.5 ${
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: value.endMode === "until" }}
+                  className={`min-h-[44px] flex-1 items-center justify-center rounded-lg p-2.5 ${
                     value.endMode === "until"
                       ? "bg-blue-600"
                       : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
@@ -685,7 +690,9 @@ export function RecurrenceEditor({
                   testID="end-count"
                   disabled={disabled}
                   onPress={() => handleEndModeChange("count")}
-                  className={`flex-1 items-center rounded-lg p-2.5 ${
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: value.endMode === "count" }}
+                  className={`min-h-[44px] flex-1 items-center justify-center rounded-lg p-2.5 ${
                     value.endMode === "count"
                       ? "bg-blue-600"
                       : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"

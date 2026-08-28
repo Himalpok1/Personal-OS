@@ -576,17 +576,32 @@ export default function EditEventScreen() {
 
   const handleCancelOccurrence = () => {
     if (!occursAt) return;
-    cancelEventOccurrence.mutate(
-      {
-        id: event.id,
-        body: { original_start_at: occursAt },
-      },
-      {
-        onSuccess: () => {
-          setModalVisible(false);
-          router.back();
+    // Confirmed like Archive on this same screen: cancelling an occurrence
+    // exdates it from the series with no in-app way back, and the button sits
+    // one tap from two non-destructive options in the same modal (6.7A, AY8).
+    Alert.alert(
+      "Cancel this occurrence?",
+      "This removes just this occurrence from the series. There's currently no way to restore it from the app.",
+      [
+        { text: "Keep it", style: "cancel" },
+        {
+          text: "Cancel occurrence",
+          style: "destructive",
+          onPress: () =>
+            cancelEventOccurrence.mutate(
+              {
+                id: event.id,
+                body: { original_start_at: occursAt },
+              },
+              {
+                onSuccess: () => {
+                  setModalVisible(false);
+                  router.back();
+                },
+              },
+            ),
         },
-      },
+      ],
     );
   };
 

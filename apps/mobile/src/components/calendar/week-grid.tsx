@@ -139,7 +139,14 @@ export function WeekGrid({ week, entries, onSlotPress, onEntryPress }: WeekGridP
         {layout.days.map((day, dayIndex) => {
           const isToday = isSameLocalDay(day, today);
           return (
-            <View key={dayIndex} className="flex-1 items-center py-1">
+            <View
+              key={dayIndex}
+              className="flex-1 items-center py-1"
+              // One accessible node per header day, naming "today" explicitly:
+              // the blue circle was otherwise the only signal (6.7A, AY6).
+              accessible
+              accessibilityLabel={`${format(day, "EEEE d")}${isToday ? ", today" : ""}`}
+            >
               <Text className="text-[10px] uppercase text-neutral-500 dark:text-neutral-400">
                 {format(day, "EEE")}
               </Text>

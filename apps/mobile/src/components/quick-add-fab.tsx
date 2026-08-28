@@ -110,6 +110,7 @@ export function QuickAddFab() {
         // PttButton and with every scroll container's bottom padding -- see
         // that file for why the old bottom-40 was wrong.
         className={`absolute ${FLOATING_BUTTON_BOTTOM} right-6 ${FLOATING_BUTTON_SIZE} items-center justify-center rounded-full bg-blue-600 shadow-lg active:bg-blue-700`}
+        accessibilityRole="button"
         accessibilityLabel={fabAccessibilityLabel}
       >
         <Text className="text-2xl font-bold text-white">+</Text>

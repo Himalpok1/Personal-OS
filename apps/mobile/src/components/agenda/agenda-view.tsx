@@ -33,7 +33,15 @@ function ProjectFilterBar({
       className="mt-3"
       contentContainerClassName="flex-row gap-2 px-4"
     >
-      <Pressable onPress={() => onSelect(undefined)} hitSlop={4}>
+      {/* Role + selected state on both chip shapes: selection was previously
+          conveyed by border/background color alone with nothing in the
+          accessibility tree, unlike every other picker in the app (6.7A, AY5). */}
+      <Pressable
+        onPress={() => onSelect(undefined)}
+        hitSlop={4}
+        accessibilityRole="button"
+        accessibilityState={{ selected: selectedProjectId === undefined }}
+      >
         <View
           className={`min-h-[40px] items-center justify-center rounded-full border px-3 ${
             selectedProjectId === undefined
@@ -53,7 +61,13 @@ function ProjectFilterBar({
         </View>
       </Pressable>
       {projects.map((project) => (
-        <Pressable key={project.id} onPress={() => onSelect(project.id)} hitSlop={4}>
+        <Pressable
+          key={project.id}
+          onPress={() => onSelect(project.id)}
+          hitSlop={4}
+          accessibilityRole="button"
+          accessibilityState={{ selected: selectedProjectId === project.id }}
+        >
           <View
             className={`min-h-[40px] items-center justify-center rounded-full border px-3 ${
               selectedProjectId === project.id

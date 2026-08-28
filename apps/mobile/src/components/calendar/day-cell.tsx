@@ -30,7 +30,9 @@ export function DayCell({ date, isCurrentPeriod, isToday, entries, onPress, onEn
   return (
     <Pressable
       onPress={() => onPress(date)}
-      accessibilityLabel={`${date.toDateString()}${entries.length > 0 ? `, ${entries.length} event${entries.length === 1 ? "" : "s"}` : ""}`}
+      // ", today" in the label: the blue circle was the only signal for which
+      // day is today, i.e. meaning conveyed by color alone (6.7A, AY6).
+      accessibilityLabel={`${date.toDateString()}${isToday ? ", today" : ""}${entries.length > 0 ? `, ${entries.length} event${entries.length === 1 ? "" : "s"}` : ""}`}
       className={`min-h-[64px] flex-1 border-b border-r border-neutral-200 p-1 dark:border-neutral-800 ${
         isCurrentPeriod ? "bg-white dark:bg-black" : "bg-neutral-50 dark:bg-neutral-950"
       }`}

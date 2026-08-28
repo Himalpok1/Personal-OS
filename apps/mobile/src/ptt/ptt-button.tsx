@@ -36,6 +36,7 @@ function PttButtonLayoutOnly() {
   return (
     <View className={`absolute ${FLOATING_BUTTON_BOTTOM} left-6 items-start`}>
       <Pressable
+        accessibilityRole="button"
         accessibilityLabel="Push to talk (layout only)"
         accessibilityState={{ disabled: true }}
         disabled
@@ -45,6 +46,30 @@ function PttButtonLayoutOnly() {
       </Pressable>
     </View>
   );
+}
+
+// The accessible name reflects live state (6.7A, AX5): the glyph and color
+// change with status, but a screen reader previously always heard the static
+// "Push to talk" -- no way to tell the button was recording, busy or failed.
+// Same pattern as QuickAddFab's fabAccessibilityLabel.
+function pttAccessibilityLabel(status: string, canRetry: boolean): string {
+  switch (status) {
+    case "recording":
+      return "Push to talk, recording. Tap to stop.";
+    case "preparing":
+    case "stopping":
+    case "uploading":
+    case "transcribing":
+      return "Push to talk, busy.";
+    case "done":
+      return "Push to talk, capture sent. Tap to record again.";
+    case "failed":
+      return canRetry
+        ? "Push to talk, failed. Tap to retry."
+        : "Push to talk, failed. Tap to dismiss.";
+    default:
+      return "Push to talk";
+  }
 }
 
 function PttButtonLive() {
@@ -83,7 +108,8 @@ function PttButtonLive() {
         onPress={onPress}
         disabled={busy}
         className={`${FLOATING_BUTTON_SIZE} items-center justify-center rounded-full shadow-lg ${bg}`}
-        accessibilityLabel="Push to talk"
+        accessibilityRole="button"
+        accessibilityLabel={pttAccessibilityLabel(ptt.status, ptt.canRetry)}
       >
         <Text className="text-2xl">{LABEL_BY_STATUS[ptt.status]}</Text>
       </Pressable>

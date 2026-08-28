@@ -109,6 +109,10 @@ export function AgendaTaskRow({ item }: { item: AgendaTaskItem | AgendaOccurrenc
         onPress={onComplete}
         hitSlop={8}
         accessibilityLabel={`Complete ${item.title}`}
+        accessibilityRole="button"
+        // `pending` previously only drew the indicator dot; all three action
+        // controls in this row stayed tappable mid-flight (6.7A, A2).
+        disabled={pending}
         className="h-8 w-8 items-center justify-center rounded-full border-2 border-neutral-400 dark:border-neutral-600"
       >
         {pending ? <View className="h-2 w-2 rounded-full bg-neutral-400" /> : null}
@@ -146,6 +150,8 @@ export function AgendaTaskRow({ item }: { item: AgendaTaskItem | AgendaOccurrenc
           onPress={onSkip}
           hitSlop={8}
           accessibilityLabel={`Skip ${item.title}`}
+          accessibilityRole="button"
+          disabled={pending}
           className="min-h-[40px] items-center justify-center px-2"
         >
           <Text className="text-xs text-neutral-500 dark:text-neutral-400">Skip</Text>
@@ -155,6 +161,8 @@ export function AgendaTaskRow({ item }: { item: AgendaTaskItem | AgendaOccurrenc
           onPress={onPlusOneDay}
           hitSlop={8}
           accessibilityLabel={`Move ${item.title} to tomorrow`}
+          accessibilityRole="button"
+          disabled={pending}
           className="min-h-[40px] items-center justify-center px-2"
         >
           <Text className="text-xs text-blue-600 dark:text-blue-400">+1 day</Text>
