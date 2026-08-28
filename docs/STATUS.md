@@ -3,7 +3,7 @@
 **Project:** Personal OS
 **Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
 **Implementation status:** Phases 0–5 are implemented and production-deployed. **Production migration level is unchanged at 0000–0012 = 13 migrations**; Phase 6's additive `0013` exists in local dev/test only and is not deployed. **Checkpoints 6.3, 6.3L, 6.4, 6.5 and 6.6 added NO migration** — the local level stays at 14 `.sql` / 14 journal entries. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
-**Next phase allowed:** **Checkpoint 6.7 (gated production deployment), on separate explicit approval only.** 6.0–6.6 are closed. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app remains in **Testing**, so the development refresh token still expires seven days after issue; 6.6's approved reconnect re-minted it on **2026-08-27T06:51:49Z**, superseding the previously recorded 2026-08-31 expiry. The **≥7-day refresh-token observation is `blocked_time`** and is structurally unreachable while the app stays in Testing (see the 6.6 section). Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
+**Next phase allowed:** **Checkpoint 6.7 (gated production deployment), on separate explicit approval only.** 6.0–6.6 are closed. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 6 — Google Health Integration (plan approved 2026-08-24)
@@ -221,6 +221,81 @@ are re-enabled to 18 (reconnect deliberately does not restore them -- the state 
 (5) the seven-day clock starts at the post-publishing token issuance instant. Production
 migration `0013`, api/worker/web rollout and Rabbit versionCode 7 stay blocked until that
 token survives seven complete days.
+
+#### OWNER DECISION (2026-08-28) — seven-day pre-deployment gate superseded; OAuth published to Production
+
+The project owner amended the Checkpoint 6.7 acceptance, superseding the mandatory
+seven-day pre-deployment token-longevity gate recorded by 6.6 and above:
+
+- **OAuth must be In Production before deployment** — done this session (below).
+- **Immediate post-publishing authorization and a bounded synchronization remain
+  mandatory** — done and verified this session (below).
+- **Seven-day longevity is NOT claimed as passed.** Residual longevity verification is
+  accepted for deployment and **moved to post-deployment monitoring**.
+- Any later `invalid_grant`, unexpected reauthorization prompt or credential failure on
+  this connection **must be treated as a production incident**.
+- **No second development OAuth application, client, project, account or credential set
+  exists or will be used.**
+
+```text
+pre-deployment wait: waived_by_owner
+immediate production-mode proof: verified
+seven-day longevity: deferred_post_deployment
+```
+
+**Publishing (2026-08-28, ~20:05Z).** The user signed the Claude browser pane into their
+own Google session (credentials never handled by the agent); the agent then drove the
+Console. Project `personal-os-196cf` verified; Data Access verified to hold **exactly the
+three restricted Google Health read-only scopes** and nothing sensitive/non-sensitive;
+the Clients page verified to hold only the five known clients, none created or deleted.
+One new Google requirement surfaced: the new Auth Platform console **requires a homepage
+URL and privacy-policy URL** before an external app may publish (revealed by the disabled
+Publish button's tooltip). With explicit owner approval, both were set to
+`https://personal-os.tail62a68f.ts.net` — display-only consent-screen links under the
+**already-authorized** domain from 6.2; no logo, no terms link, no new domain, no scope,
+callback, credential or client change. Branding saved, **Publish app -> Push to
+production? -> Confirm**, and the status now reads **In production** (with the documented
+"requires verification" advisory for an unverified production app; no verification was
+submitted).
+
+**Reauthorization (2026-08-28T20:08:25Z).** Disconnect -> reconnect on the retained row —
+the only path that mints a post-publishing refresh token (`needsForcedConsent` is false
+for an active connection). The authorize URL carried `prompt=consent`,
+`access_type=offline`, the loopback redirect and the three scopes; the flow used the
+existing "Personal OS Google Health Web" client and the same account; Google showed the
+expected unverified-app interstitial (Advanced -> continue) and the consent screen listing
+exactly the three scopes, all granted. The callback landed on the loopback and rebound
+**the same connection row `cb1c90d4-…` with `created_at` still 2026-08-24T23:57:45.015Z**
+— reused, not recreated, exactly one row; both credential triples complete (253B/103B
+ciphertext); `identity_verified_at = 2026-08-28T20:08:25.239Z` is the post-publishing
+authorization instant. History fully preserved: 188 daily rows, 1 session, 0 observations,
+before and after.
+
+**Live H1 evidence, in passing:** immediately after reconnect, `/health-summary` reported
+`status: active, enabled_stream_count: 0, stream_count: 19` — the exact
+connected-but-nothing-will-sync state this checkpoint's audit taught the dashboard to name.
+The 6.6 stream-guard also fired live: enabling `heart-rate-intraday` was refused
+`409 metric_out_of_scope`.
+
+**Bounded synchronization (immediate production-mode proof).** With ONLY `steps` enabled,
+one one-shot manual pass (`runHealthConnectionSync`, `boss: null` — the 6.6 process model;
+no worker daemon, no cron, no fan-out) ran against the new credentials:
+`skipped: null, streamsAttempted: 1, runsWritten: 1, streamsFailed: 0`; run row
+`steps · manual · succeeded · 2 inserted · 33 unchanged · 0 rejected · 1 request`.
+
+**Refresh path exercised for real (not simulated).** `resolveFreshHealthAccessToken` with
+`force: true` — the existing 401-retry seam, no expiry metadata fabricated — performed a
+genuine refresh grant with the stored post-publishing refresh token:
+`access_token_expires_at` advanced 21:08:24Z -> 21:11:12Z, the refresh-token columns
+byte-untouched (103B), status still active. Immediate authorization, read and refresh are
+therefore **verified**; **longevity is unverified** and is post-deployment monitoring.
+The nominal seven-day milestone for that monitoring is **2026-09-04T20:08:25Z**.
+
+Afterward the remaining 17 streams were re-enabled: end state **18/19 enabled**,
+`heart-rate-intraday` still false, summary `active, 18/19`. The two temporary one-shot
+scripts were untracked and deleted; the frozen application tree (`bcf11fc`) is unmodified.
+No token, authorization code (spent at exchange), provider payload, account email or
+health value appears in any commit or this record.
 
 ### Checkpoint 6.6 — Bounded live Google Health proof (COMPLETE, local only, 2026-08-27)
 
