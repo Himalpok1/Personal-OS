@@ -22,7 +22,8 @@ import { eq } from "drizzle-orm";
 import type { Job, PgBoss } from "pg-boss";
 import { commitParsedEntity, hasKnownProject } from "../commit-parsed-entity.js";
 import { env } from "../env.js";
-import { NOTIFICATIONS_DISPATCH_QUEUE } from "../queue-names.js";
+import { CAPTURE_PARSE_QUEUE, NOTIFICATIONS_DISPATCH_QUEUE } from "../queue-names.js";
+import { withAiJobErrorContainment } from "./ai-job-error.js";
 import type { NotificationsDispatchJobData } from "./notifications-dispatch.js";
 
 export const TASK_NAME = "capture_parser";
@@ -244,7 +245,14 @@ async function enqueueConfirmationPush(
 }
 
 export function createCaptureParseHandler(db: Db, boss: PgBoss) {
-  return async function handleCaptureParse(jobs: Job<CaptureParseJobData>[]): Promise<void> {
+  // Containment (AiJobError) is applied at the batch boundary so an escaping
+  // provider error -- an AI SDK APICallError carrying responseBody and the
+  // user's own capture text in requestBodyValues -- never reaches pg-boss's
+  // durable job.output table raw. NoProviderConfiguredError is still handled
+  // inside (finalized as failed, never thrown), so it never gets here.
+  return withAiJobErrorContainment(CAPTURE_PARSE_QUEUE, async function handleCaptureParse(
+    jobs: Job<CaptureParseJobData>[],
+  ): Promise<void> {
     for (const job of jobs) {
       const { inboxId, mode } = job.data;
       const [row] = await db.select().from(inboxItems).where(eq(inboxItems.id, inboxId));
@@ -273,5 +281,5 @@ export function createCaptureParseHandler(db: Db, boss: PgBoss) {
         if (needsConfirmation) await enqueueConfirmationPush(boss, row);
       }
     }
-  };
+  });
 }

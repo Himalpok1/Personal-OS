@@ -3,6 +3,7 @@ import type { Job, PgBoss } from "pg-boss";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NOTIFICATIONS_DISPATCH_QUEUE } from "../queue-names.js";
 import { buildTestDb, truncateTestTables } from "../test/build-test-db.js";
+import { AiJobError } from "./ai-job-error.js";
 import { createCaptureParseHandler, type CaptureParseJobData } from "./capture-parse.js";
 
 function fakeJob(inboxId: string): Job<CaptureParseJobData> {
@@ -63,8 +64,17 @@ describe("capture.parse confirmation notification recovery", () => {
       .returning({ id: inboxItems.id });
     send.mockRejectedValue(new Error("queue unavailable"));
 
-    await expect(createCaptureParseHandler(db, boss)([fakeJob(row!.id)])).rejects.toThrow(
-      /queue unavailable/,
+    // Still fails the job so pg-boss retries -- but as the contained
+    // AiJobError, never the raw error (6.7A, S1): the raw message would
+    // otherwise be persisted into pgboss.job.output by serialize-error.
+    const caught: unknown = await createCaptureParseHandler(
+      db,
+      boss,
+    )([fakeJob(row!.id)]).then(
+      () => null,
+      (err: unknown) => err,
     );
+    expect(caught).toBeInstanceOf(AiJobError);
+    expect(String((caught as Error).message)).not.toContain("queue unavailable");
   });
 });

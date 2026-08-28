@@ -9,7 +9,8 @@ import { inboxItems, type Db } from "@personal-os/db";
 import { eq } from "drizzle-orm";
 import type { Job, PgBoss } from "pg-boss";
 import { env } from "../env.js";
-import { CAPTURE_PARSE_QUEUE } from "../queue-names.js";
+import { CAPTURE_PARSE_QUEUE, PTT_TRANSCRIBE_QUEUE } from "../queue-names.js";
+import { withAiJobErrorContainment } from "./ai-job-error.js";
 
 export const VOICE_TRANSCRIBE_TASK_NAME = "voice_transcribe";
 
@@ -62,7 +63,15 @@ async function finalizeAsFailed(
 // already committed the transcript (or the dead-letter handler already
 // finalized it as failed) -- either way, a no-op, not a re-attempt.
 export function createPttTranscribeHandler(db: Db, boss: PgBoss) {
-  return async function handlePttTranscribe(jobs: Job<PttTranscribeJobData>[]): Promise<void> {
+  // Containment (AiJobError) is applied at the batch boundary so an escaping
+  // provider error -- the transcription client embeds the STT vendor's raw
+  // HTTP response body verbatim in its Error message -- never reaches
+  // pg-boss's durable job.output table raw. Retry semantics are unchanged: a
+  // contained error still fails the job, so pg-boss's queue-level retries and
+  // the dead-letter finalization path behave exactly as before.
+  return withAiJobErrorContainment(PTT_TRANSCRIBE_QUEUE, async function handlePttTranscribe(
+    jobs: Job<PttTranscribeJobData>[],
+  ): Promise<void> {
     for (const job of jobs) {
       const { inboxId } = job.data;
       const [row] = await db.select().from(inboxItems).where(eq(inboxItems.id, inboxId));
@@ -120,7 +129,7 @@ export function createPttTranscribeHandler(db: Db, boss: PgBoss) {
       // reused rather than duplicated into a second parsing path.
       await boss.send(CAPTURE_PARSE_QUEUE, { inboxId }, { singletonKey: inboxId });
     }
-  };
+  });
 }
 
 // Dead-letter handler: runs only once pg-boss has exhausted every retry

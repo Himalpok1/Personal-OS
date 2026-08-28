@@ -24,6 +24,7 @@ const {
   createPttTranscribeHandler,
   VOICE_TRANSCRIBE_TASK_NAME,
 } = await import("./ptt-transcribe.js");
+const { AiJobError } = await import("./ai-job-error.js");
 
 function fakeJob(inboxId: string): Job<{ inboxId: string }> {
   return { id: "job-1", name: "ptt.transcribe", data: { inboxId } } as Job<{ inboxId: string }>;
@@ -141,7 +142,18 @@ describe("ptt.transcribe", () => {
     });
     vi.mocked(transcribeAudio).mockRejectedValue(new Error("transcription request failed: 503"));
 
-    await expect(createPttTranscribeHandler(db, boss)([fakeJob(inboxId)])).rejects.toThrow(/503/);
+    // Still fails the job so pg-boss retries -- but as the contained
+    // AiJobError, never the raw STT error whose message embeds the vendor's
+    // response body (6.7A, S1).
+    const caught: unknown = await createPttTranscribeHandler(
+      db,
+      boss,
+    )([fakeJob(inboxId)]).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(caught).toBeInstanceOf(AiJobError);
+    expect(String((caught as Error).message)).not.toContain("503");
 
     const [row] = await db.select().from(inboxItems).where(eq(inboxItems.id, inboxId));
     expect(row?.rawText).toBeNull();
