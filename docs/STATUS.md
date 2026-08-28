@@ -199,6 +199,29 @@ the combined commit.
 The browser-pass web device and all pairing codes were removed count-verified (5 Android
 device rows preserved); the dev database's health tables were read, never written.
 
+#### OAuth production transition — blocked_external at the Console step
+
+The audit phase closed with the frozen RC, but the OAuth lane could not start: publishing
+requires the user's authenticated Google Cloud Console session, the Claude-in-Chrome
+extension was not connected, and the sandboxed browser pane has no Google session (signing
+in there would mean handling the user's password, which is prohibited). Nothing was
+published; the app remains in **Testing**, the local connection remains **active** on its
+pre-publishing token lineage (re-minted 2026-08-27T06:51:49Z, Testing-mode expiry seven
+days later), and no disconnect/reconnect was performed. The **seven-day clock has NOT
+started.**
+
+What resuming needs, in order: (1) the user connects Claude-in-Chrome (or performs the
+Console steps themselves): project `personal-os-196cf` -> OAuth consent screen -> verify
+status Testing, three read-only scopes and callbacks unchanged -> Publish app; (2) the
+local reauthorization then runs the sanctioned disconnect->reconnect (the only path that
+mints a post-publishing refresh token, since `needsForcedConsent` is false for an active
+connection) against the loopback callback, reusing the same connection row; (3) streams
+are re-enabled to 18 (reconnect deliberately does not restore them -- the state the new
+`no_streams_enabled` card names); (4) one bounded manual sync pass proves the new token;
+(5) the seven-day clock starts at the post-publishing token issuance instant. Production
+migration `0013`, api/worker/web rollout and Rabbit versionCode 7 stay blocked until that
+token survives seven complete days.
+
 ### Checkpoint 6.6 — Bounded live Google Health proof (COMPLETE, local only, 2026-08-27)
 
 Built on branch `phase-6-google-health-live-proof` from `4f90f9d` (main). **Not merged to `main`.**
