@@ -1,8 +1,8 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
-**Implementation status:** Phases 0–5 are implemented and production-deployed. **Production migration level is unchanged at 0000–0012 = 13 migrations**; Phase 6's additive `0013` exists in local dev/test only and is not deployed. **Checkpoints 6.3, 6.3L, 6.4, 6.5 and 6.6 added NO migration** — the local level stays at 14 `.sql` / 14 journal entries. The production Rabbit runs `com.himal.personalos` versionCode **6** (Checkpoint 5.7.1 hotfix).
+**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0 through 6.6 plus 6.7A COMPLETE; 6.7B production deployment COMPLETE on the server side (2026-08-29), with the production Google Health connection, the Rabbit versionCode 7 install and both reboot proofs still outstanding.** **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Implementation status:** Phases 0–5 are implemented and production-deployed, and **Phase 6's server side is now deployed too (Checkpoint 6.7B, 2026-08-29)**. **Production migration level moved to 0000–0013 = 14 migrations** — `0013_google_health_sync` was applied exactly once on 2026-08-29, matching the local level of 14 `.sql` / 14 journal entries. Production api/worker/web serve the 6.7 release images built from `c0dbff3`. The production Rabbit still runs `com.himal.personalos` versionCode **6**; versionCode **7** is built and audited but **not yet installed**.
 **Next phase allowed:** **Checkpoint 6.7 (gated production deployment), on separate explicit approval only.** 6.0–6.6 are closed. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
@@ -103,6 +103,218 @@ liveness probe, so Phase 6 uses `health-*` siblings throughout (C7).
 **Deliberately not yet changed (C6):** the three lines asserting "13 `.sql` files, 13
 journal entries, **no 0013**" remain **accurate** until migration `0013` actually lands in
 Checkpoint 6.1, and are updated then — not pre-emptively.
+
+### Checkpoint 6.7B — Production deployment (server side COMPLETE, 2026-08-29)
+
+Phase 6 is deployed to production. Migration `0013` is applied, api/worker/web serve the
+6.7 release images, and the Google Health integration is live behind the Tailscale
+perimeter. **Production migration level moved 0000–0012 = 13 → 0000–0013 = 14** for the
+first time since Phase 5. `versionCode 7` was built and audited.
+
+Branch `phase-6-production-deployment-6-7b`, cut from `main` at `c0dbff3`. Every production
+command was issued by the integrator; sub-agents were read-only, made no production, network,
+Google or database connection, and returned evidence only.
+
+#### Starting state, verified before any production access
+
+Branch `main`, HEAD `c0dbff3`, clean tree, linear history, **no remote**. The application
+tree is byte-identical to frozen RC `bcf11fc`: `git diff --name-only bcf11fc c0dbff3`
+returns exactly `docs/DECISIONS.md` and `docs/STATUS.md`, and the same diff excluding those
+two paths is **empty**. 14 `.sql` / 14 journal entries, highest `0013_google_health_sync`,
+**no `0014`**. F5 `capture-1.json` only. No repository process running; ports 3000/8081/8082/
+5173/19000/19001 free. EAS remote `versionCode` **6**. ADR-051 present.
+
+#### Four preflight findings, surfaced before the authorization gate
+
+The owner's approval arrived mid-preflight, before this evidence existed. It was treated as
+standing but **not** acted on until the findings below were put in front of them, because two
+are conditions the checkpoint brief explicitly says to stop on.
+
+1. **Production had no Google Health credentials.** `/home/himallinux/personal-os/.env` held
+   11 keys; `GOOGLE_HEALTH_OAUTH_CLIENT_ID`, `_CLIENT_SECRET` and `_REDIRECT_URI` were all
+   absent. Compose declares them `:-` (optional) precisely so a rollout cannot crash-loop
+   before they exist, so migration and rollout were never blocked — only the production
+   Health connection was.
+2. **There is no backup procedure, by design.** ADR-024 is Locked. No backup infrastructure
+   was built.
+3. **The Rabbit R1 was not visible to `adb`.**
+4. **The OAuth privacy-policy URL serves HTTP 404** — see the compliance-debt section below.
+
+Owner decisions: silent credential copy + production callback · one-off pre-migration
+snapshot · connect the Rabbit and proceed.
+
+#### Credential provisioning — same client, no Console change
+
+`GOOGLE_HEALTH_OAUTH_CLIENT_ID` and `_CLIENT_SECRET` were piped from the local `.env`
+straight into the production `.env` over SSH by a **silent shell operation** — never printed,
+never placed in a command line, never read with a model-facing file tool. This is the exact
+Checkpoint 6.2 precedent. `GOOGLE_HEALTH_OAUTH_REDIRECT_URI` was written explicitly as the
+**already-registered** production callback
+`https://personal-os.tail62a68f.ts.net/health-connections/google/callback` — the local
+development loopback callback was deliberately **not** copied.
+
+Verified by name, length and structure only: prod lengths (72 / 35) equal the local source
+lengths exactly; the client id ends in `.apps.googleusercontent.com`; exactly one occurrence
+of each key; mode `600` and ownership preserved; the pre-change file was kept as
+`.env.pre-6.7b`. **No new OAuth application, project, client, account or credential exists,
+and no scope or callback changed.**
+
+#### Release lineage
+
+| Component | Source | Image digest |
+|---|---|---|
+| api | `c0dbff3` | `sha256:da08f150cd43357d06bed495bbf8af12a00ca8c7780b38aa9eaf5e89f13288ee` |
+| worker | `c0dbff3` | `sha256:5e3318a0a41d070effc535bda0c812d9169403c80c6486542d567a7d91797942` |
+| web | `c0dbff3` | `sha256:36153ab10ed13779b3ffb98a50646a0148bc9699fd74c772a728e10943407653` |
+| postgres | unchanged | `sha256:d4bb0a8c1b7bb2e29f976d099e7bfb9a5d8858cffe9e46b35cd302cd1f1f8168` |
+| Android | `c0dbff3` | EAS `9d05d31c-d322-4864-ae51-b51806cf0966`, versionCode **7** |
+
+Rollback tags `personal-os-{api,worker,web}:pre-6.7` were created **by resolved digest**
+before any build, and each was re-inspected to confirm it resolves to the original digest:
+api `bf0f5ea0…`, worker `bb0f3ec4…`, web `93250778…`. Never `docker commit`.
+
+**A transcription lesson worth recording.** The first tagging attempt failed with
+`No such image` because the digest had been hand-copied from an earlier `docker inspect`
+whose `\n` separators printed literally, and one character pair was transposed
+(`…a99dbc9…` for `…a99bdc9…`). The fix was to stop transcribing entirely and resolve every
+digest server-side into a variable. `docs/STATUS.md`'s recorded 5.7.1 api digest was then
+checked against the live container and **matches exactly** — the error was in this session's
+transcription, not in the document.
+
+#### Release tree and snapshot
+
+Shipped as `git archive` of `c0dbff3` into a **new** `/home/himallinux/personal-os-6.7-release`
+(absent beforehand; the 4.7, 5.7 and 5.7.1 directories are preserved as rollback sources, and
+the stale `/home/himallinux/personal-os` was never used as a build source). Archive sha256
+**`2dbae6f789f915ab11cd992ffc400bb4e73f2f126a786e741a5918e00d7b74a8`**, byte-identical on
+both ends of the transfer; 587 files extracted. Contains **no** `.env`, `google-services.json`,
+`node_modules`, `.git`, keystore, or generated `apps/mobile/android/` prebuild tree. The two
+`android` directories present are the tracked Expo module sources
+(`google-calendar-auth`, `exact-alarm-status`), not generated output.
+
+One-off pre-migration snapshot (ADR-024 unamended — a point-in-time artifact for this
+deployment, not recurring infrastructure): `pre-6.7b-20260829T060033Z.sql.gz`, 1 638 384 B,
+sha256 `7391d09f68b750ac1bf0c3552ede1aea9aed3aea8991a65c9a1b7662c92e579c`, mode 600, gzip
+integrity verified, 34 `CREATE TABLE` / 32 `COPY` blocks. Contents never printed. Postgres
+was not restarted by the dump.
+
+#### Migration `0013` — the 5.7 silent-no-op trap cleared explicitly
+
+Because the migration runs **from the api image**, the release image was built first and its
+contents inspected before the migration ran: **14 `.sql` files, 14 journal entries, no
+`0014`**, and `0013` inside the image hashing to
+`21149ee97a2b1e146282d2201b0081fa05de543367e5c0189a815f4912df8a19` — identical to the local
+file and to the release tree.
+
+An independent read-only sub-agent re-derived the object inventory from the SQL alone and
+**agreed with the 6.1 record on every count**: 7 `CREATE TABLE` · 12 CHECK · 6 FK · 14
+`CREATE INDEX` · 39 statements · 38 breakpoints · **zero `DROP`/`ALTER COLUMN`/`RENAME`/
+`TRUNCATE`** · zero DML · no pre-existing table referenced. It also supplied the
+reconciliation that makes the live check unambiguous: the 7 inline `PRIMARY KEY`s create
+implicit `_pkey` indexes, so `pg_indexes` shows **21**, not 14 — the two figures are
+consistent, not contradictory.
+
+Applied once, from the new api image, as `posops_migrator`, with `--no-deps`, pinned to
+project `personal-os`, the production env file and both production compose files. `db:reconcile`
+was **not** run.
+
+| Check | Result |
+|---|---|
+| Journal rows | 13 → **14** |
+| New row | exactly one: `id=14`, hash `21149ee9…` (= the file's sha256), `created_at` **1787591489044** (the journal `when`, not wall-clock) |
+| Replay of 0000–0012 | none |
+| Health tables | **7** |
+| CHECK constraints | **12** |
+| Foreign keys | **6** |
+| Indexes | **21** = 14 explicit + 7 implicit `_pkey` |
+| Total public tables | 21 → **28** |
+| Existing data | byte-identical to baseline — tasks 2 · notes 3 · events 0 · inbox 6 · devices 2 · projects 0 · calendar_connections 1 · ai_task_routes 3 |
+| New health tables | all **empty**, `health_observations` **0** |
+| `posops_app` | DDL still denied (`permission denied for schema public`); DML on a health table succeeds (rolled back) |
+
+**The Checkpoint 4.7 Gate C incident did not recur.** Postgres kept container
+`404de24ef86b…`, image digest `d4bb0a8c…`, `restarts=0`, start time
+`2026-08-24T09:35:33.938Z` and created time `2026-08-21T19:26:39.456Z` across the migration
+and both rollout steps; `personal-os_postgres_data` kept its identity and its
+`2026-08-15T17:32:00-05:00` creation timestamp. Postgres was never named as a target of
+`up`, `run`, `restart`, `stop` or `rm`, and every command carried `--no-deps`.
+
+#### Rollout
+
+`up -d --no-deps --no-build --force-recreate api worker web`. All three recreated onto the new
+digests with `restarts=0`; **postgres untouched and still reporting "Up 4 days"**.
+
+| Check | Result |
+|---|---|
+| API health | `{"status":"ok","db":"connected","worker":{"stale":false}}` |
+| Web | HTTP 200 locally and at `https://personal-os.tail62a68f.ts.net:8443` over the tailnet |
+| Bindings | api `127.0.0.1:3000`, web `127.0.0.1:8081`, **Postgres publishes no host port** — identical to baseline |
+| Tailscale Serve | both routes **tailnet only**; no Funnel; no public ingress introduced |
+| Queues | 18 → **20**; `health.google.sync-connection` registered as **`stately` / `retry_limit 0` / no dead-letter**, exactly the ADR-recorded 6.3 design |
+| Schedules | 5 → **6** (`health.google.sync-cron` hourly) |
+| Jobs | all `completed`; zero failed, active or created |
+| Worker | heartbeat fresh; startup line lists every queue including `health.google.sync-connection` |
+| Log secret scan | api and worker: **0** matches for `ya29.` / `1//` / `refresh_token` / `client_secret` / `ciphertext` / `auth_tag` / `access_token`; **0** error-level lines |
+
+#### Production API smoke
+
+`/health-summary?tz=America/Chicago` returns **`configured: true`** — the direct proof that
+the provisioned credentials are wired — with `connection: null`, empty `today`/`latest`/
+`capabilities` and **not one fabricated zero**. `/health-connections` returns `{"items":[]}`.
+Guard rails fire: `heart-rate-intraday` → **400 `metric_not_readable`**, unknown metric →
+400, missing `tz` → 400 `validation_failed`. Phase 5 regression intact: `/today?tz=` returns
+a full read model.
+
+#### Android `versionCode 7` — built and audited, install pending
+
+EAS build **`9d05d31c-d322-4864-ae51-b51806cf0966`**, profile `production-internal`,
+`--freeze-credentials`, remote credentials (`Build Credentials 91FWKRpxFX`).
+`gitCommitHash` **`c0dbff3be5366148974291120f88428a74a89cd2`** — the approved release commit.
+APK sha256 **`5c400467905fbb042a9f4c83999f529674d64fd6eb6631b7fc923e15835f96a4`**, preserved
+outside the repository under `checkpoint-6.7b/`.
+
+| Audit | Result |
+|---|---|
+| Package | `com.himal.personalos` (**not** `.dev`) |
+| versionCode / versionName | **7** / 1.0.0, targetSdk 36 |
+| Signing certificate SHA-256 | **`4601e3a2c4ecfe791b0bf6d960871c017fe1f3bc56087389f7ccc3a3f6cc23ea`** — exact match to the production identity (SHA-1 `7eac1aa4…`) |
+| Debuggable | absent |
+| `usesCleartextTraffic` | **absent** (the UI-test-only plugin correctly not applied) |
+| Scheme | `mobile` |
+| Expo Updates | `ENABLED=false` |
+| Bundle | Hermes bytecode |
+| Production API URL | present |
+| `localhost:3000` / `127.0.0.1` | **absent** — proving EAS supplied `EXPO_PUBLIC_API_URL` |
+| UI-test markers | `personal-os-ui-test` **0**, `EXPO_PUBLIC_UI_TEST_MODE` **0** |
+| `EXPO_TOKEN` / private keys | 0 |
+
+**Fingerprint `5e208f678a90699d930e3cdf40c6431dc7d32857` is identical to versionCode 5 and 6**,
+so the native dependency graph — and therefore the React Native version behind the Category A
+adjudication — is unchanged. The single `http://localhost:8081` occurrence is that same
+React Native `getDevServer.js` framework fallback; occurrence count (1), RN version and
+provenance all match the recorded exception, but the exception remains bound to an APK hash
+and this is a **new** hash, so it is adjudicated afresh here rather than inherited silently.
+
+**One string-table false positive, adjudicated rather than waved through.** A naive grep for
+`com.himal.personalos.dev` returned one hit. Hermes packs strings contiguously, and the hit
+is `com.himal.personalos` immediately followed by `devDependencies`. The `.dev` is the head of
+`devDependencies`, not a package suffix — the same artifact class the 5.7 Gate G record
+adjudicated for its `sk-` match. Real UI-test markers are zero.
+
+#### OAuth branding / compliance debt — recorded, deliberately not fixed
+
+Checkpoint 6.7A set the OAuth homepage and privacy-policy URLs to
+`https://personal-os.tail62a68f.ts.net` to satisfy the new Auth Platform console's publishing
+requirement. That URL is the **Fastify API root**, and it returns
+`{"message":"Route GET:/ not found"}` — **HTTP 404**. `/privacy` is likewise 404, and the web
+app is on a different port (`:8443`) and contains no privacy text either. Because the host is
+tailnet-only under ADR-018, Google cannot reach the URL at all.
+
+So the privacy-policy URL serves **no privacy disclosure of any kind** — a stronger statement
+than "the app root carries no disclosure". No policy was fabricated, the Console URLs were not
+changed, and Google verification was not submitted; the application remains an unverified
+personal-use production app. This is **branding/compliance debt only** and is explicitly
+distinct from the OAuth functionality, which is verified working.
 
 ### Checkpoint 6.7A — Fable release audit + OAuth production transition (audit phase COMPLETE, 2026-08-28)
 
