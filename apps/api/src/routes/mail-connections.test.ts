@@ -798,3 +798,90 @@ describe("API wire safety", () => {
     expect(res.json()).toEqual({ error: "gmail_oauth_failed" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Unconfigured Gmail
+// ---------------------------------------------------------------------------
+
+describe("when Gmail is not configured", () => {
+  // The vitest env block sets the Gmail trio for every other test in this file,
+  // so the unconfigured path is reached by blanking the parsed env object for
+  // the duration of one test and restoring it afterwards. That exercises the
+  // REAL route rather than re-deriving the config rule, which is what
+  // env-mail-config.test.ts already covers at the schema level.
+  //
+  // The property under test is the one the Checkpoint 6.3 audit was written
+  // about: an unconfigured integration must degrade to a structured 409, never
+  // take the API down. Capture, calendar, health, reminders and notifications
+  // must all keep working.
+  const saved = {
+    id: env.GMAIL_OAUTH_CLIENT_ID,
+    secret: env.GMAIL_OAUTH_CLIENT_SECRET,
+    redirects: env.GMAIL_OAUTH_REDIRECT_URI,
+  };
+
+  function blank(which: "all" | "id" | "secret" | "redirects") {
+    if (which === "all" || which === "id") env.GMAIL_OAUTH_CLIENT_ID = undefined;
+    if (which === "all" || which === "secret") env.GMAIL_OAUTH_CLIENT_SECRET = undefined;
+    if (which === "all" || which === "redirects") env.GMAIL_OAUTH_REDIRECT_URI = [];
+  }
+
+  afterEach(() => {
+    env.GMAIL_OAUTH_CLIENT_ID = saved.id;
+    env.GMAIL_OAUTH_CLIENT_SECRET = saved.secret;
+    env.GMAIL_OAUTH_REDIRECT_URI = saved.redirects;
+  });
+
+  it("returns 409 mail_not_configured from the authorize-url route", async () => {
+    blank("all");
+    const res = await app.inject({
+      method: "GET",
+      url: `/mail-connections/gmail/authorize-url?redirect_uri=${encodeURIComponent(REDIRECT)}`,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "mail_not_configured" });
+  });
+
+  it("returns 409 from the callback rather than crashing", async () => {
+    blank("all");
+    const res = await app.inject({
+      method: "GET",
+      url: "/mail-connections/gmail/callback?code=c&state=s",
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "mail_not_configured" });
+  });
+
+  it("treats EVERY partial configuration as unconfigured", async () => {
+    // A half-configured client cannot complete a flow, so one clear 409 beats
+    // three different failures at Google.
+    for (const missing of ["id", "secret", "redirects"] as const) {
+      blank(missing);
+      const res = await app.inject({
+        method: "GET",
+        url: `/mail-connections/gmail/authorize-url?redirect_uri=${encodeURIComponent(REDIRECT)}`,
+      });
+      expect(res.statusCode, `blanking ${missing} should 409`).toBe(409);
+      env.GMAIL_OAUTH_CLIENT_ID = saved.id;
+      env.GMAIL_OAUTH_CLIENT_SECRET = saved.secret;
+      env.GMAIL_OAUTH_REDIRECT_URI = saved.redirects;
+    }
+  });
+
+  it("still LISTS connections, reporting configured:false", async () => {
+    blank("all");
+    const res = await app.inject({ method: "GET", url: "/mail-connections" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ configured: false, items: [] });
+  });
+
+  it("leaves every other API surface working", async () => {
+    // The actual regression this guards: an unconfigured optional integration
+    // must not take down capture, tasks, today or the liveness probe.
+    blank("all");
+    for (const url of ["/health", "/tasks", "/today?tz=America/Chicago", "/inbox"]) {
+      const res = await app.inject({ method: "GET", url });
+      expect(res.statusCode, `${url} should still work`).toBeLessThan(400);
+    }
+  });
+});
