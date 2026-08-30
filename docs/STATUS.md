@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 7 — Email summaries + service monitoring — **Checkpoint 7.0 (ADR gate, documentation reconciliation, repository baseline correction) COMPLETE (2026-08-30).** Phase 7 is **documentation-only so far**: ADR-052/053/054/055 are recorded, the open Phase 7 decision in `docs/DECISIONS.md` is closed, and stale present-state documentation is corrected. **No code, no migration, no dependency, no credential, no Google Cloud change, no production access.** Local migration level is unchanged at 14 `.sql` / 14 journal entries and there is no `0014`. Phase 6 — Google Health Integration — **COMPLETE AND CLOSED (2026-08-30).** Checkpoint 6.7B deployed Phase 6 to production, all lanes passed, closure actions are done and the work is merged to `main`. Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, the Rabbit runs **`versionCode 7`** with pairing/PRIMARY/session preserved, and **both reboot-survival proofs (host and Rabbit) passed**. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Current phase:** Phase 7 — Email summaries + service monitoring — **Checkpoints 7.0 (ADR gate, documentation reconciliation, baseline correction) and 7.1 (contracts, mail provider foundation, migration `0014`) COMPLETE (2026-08-30).** Work lives on branch `phase-7-mail-monitoring`, **not merged to `main`**; the repository has no remote. **Local migration level moved 0000–0013 = 14 → 0000–0014 = 15**; `0014_mail_integration` is additive, `CREATE TABLE`-only, and applied to dev and `personalos_test` only — **production is untouched and remains at 14**. Still absent by design: no OAuth flow, no credential, no Google Cloud change, no worker job, no queue, no route, no UI, no monitoring, no production access. Phase 6 — Google Health Integration — **COMPLETE AND CLOSED (2026-08-30).** Checkpoint 6.7B deployed Phase 6 to production, all lanes passed, closure actions are done and the work is merged to `main`. Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, the Rabbit runs **`versionCode 7`** with pairing/PRIMARY/session preserved, and **both reboot-survival proofs (host and Rabbit) passed**. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
 **Implementation status:** Phases 0–5 are implemented and production-deployed, and **Phase 6's server side is now deployed too (Checkpoint 6.7B, 2026-08-29)**. **Production migration level moved to 0000–0013 = 14 migrations** — `0013_google_health_sync` was applied exactly once on 2026-08-29, matching the local level of 14 `.sql` / 14 journal entries. Production api/worker/web serve the 6.7 release images built from `c0dbff3`. The production Rabbit now runs `com.himal.personalos` **versionCode 7**, installed in place with `adb install -r` on 2026-08-30 — `firstInstallTime` unchanged, pairing/PRIMARY/push token/session all preserved.
-**Next phase allowed:** **Checkpoint 7.1 — Phase 7 contracts, migration `0014` and the Gmail provider fake — on separate explicit approval only.** Phase 6 and every one of its checkpoints are closed, and Phase 7 Checkpoint 7.0 (documentation only) is closed. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). **Phase 7 is approved and scoped by ADR-052: Gmail-first and read-only, `gmail.metadata` only, no message bodies, no mail actions, Microsoft Graph deferred, plus a worker-owned service-monitoring engine whose worker-heartbeat watchdog is API-owned. Phase 7 development may proceed through Checkpoint 7.7; production deployment (7.8) must not begin before the `2026-09-04T20:08:25Z` Phase 6 monitoring milestone completes (ADR-051, ADR-052).** Phase 8 has not been approved or planned.
+**Next phase allowed:** **Checkpoint 7.2 — Gmail OAuth and connection lifecycle — on separate explicit approval only.** Phase 6 and every one of its checkpoints are closed; Phase 7 Checkpoints 7.0 and 7.1 are closed. 7.2 is the first checkpoint that needs user-only action: a third OAuth client in the existing `personal-os-196cf` project, and a publicly reachable privacy-policy URL, since the registered one currently serves HTTP 404 on a tailnet-only host Google cannot reach. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). **Phase 7 is approved and scoped by ADR-052: Gmail-first and read-only, `gmail.metadata` only, no message bodies, no mail actions, Microsoft Graph deferred, plus a worker-owned service-monitoring engine whose worker-heartbeat watchdog is API-owned. Phase 7 development may proceed through Checkpoint 7.7; production deployment (7.8) must not begin before the `2026-09-04T20:08:25Z` Phase 6 monitoring milestone completes (ADR-051, ADR-052).** Phase 8 has not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 7 — Email summaries + service monitoring (planning gate approved 2026-08-30)
@@ -98,7 +98,93 @@ expected to, and did, reproduce 6.7A's numbers.
 
 No migration `0014`. No `packages/mail-providers`. No routes, jobs, queues, or `exports` edits. No
 OAuth client, no Google Cloud change, no `.env` change. No mobile UI. No new or modified test. No
-commit (commits require explicit request). No production access. Checkpoint 7.1 not begun.
+commit (commits require explicit request). No production access. Checkpoint 7.1 had not begun at
+that point; it is recorded below.
+
+### Checkpoint 7.1 — Contracts, mail provider foundation, migration `0014` (COMPLETE, 2026-08-30)
+
+Local development only. No production access, no OAuth flow, no credential, no Google Cloud change,
+no worker job, no queue, no route, no UI. Branch `phase-7-mail-monitoring`, cut from `main` at
+`8b7a9eb`; Checkpoint 7.0 was committed first as `7a2a6e7`, its committed tree proven byte-identical
+to the accepted working tree (`0573522…`).
+
+**Migration `0014_mail_integration`** — hand-written, additive, forward-only, drizzle-kit-styled with
+`--> statement-breakpoint`. **`CREATE TABLE` only; no existing table is altered.** 39 statements: 6
+tables, 5 foreign keys, 7 CHECK constraints, 9 explicit indexes. **Local migration level moved
+0000–0013 = 14 → 0000–0014 = 15**; production is untouched and remains at 14.
+
+| Table | Shape and why |
+|---|---|
+| `mail_connections` | Identity is **`(provider, external_account_id)`**, deliberately unlike `health_connections`, which is unique on the account id alone — two mailboxes are legitimate and a second provider could mint a colliding id. `provider` carries **no CHECK** (ADR-050). Both encrypted triples are **all-or-nothing** CHECKed, copying health rather than calendar, which lacks them. `status` CHECKed to the four-state lifecycle |
+| `mail_oauth_states` | Near-copy of `health_oauth_states`. Persistence contract only; the routes are 7.2's |
+| `mail_sync_cursors` | Stores an **opaque provider cursor**, inverting `backfill_cursor_date`'s "a date, never a page token" rule. `needs_full_resync` defaults **true**, because a cursorless row genuinely needs a full pass |
+| `mail_messages` | Metadata only. **No body, snippet or attachment column.** Named **`provider_labels`**, not `label_ids` |
+| `mail_digests` | `(digest_date, timezone)` unique with **no `connection_id`** — global across mailboxes (ADR-053). `model_id` → `ai_models` `ON DELETE SET NULL` |
+| `mail_sync_runs` | `timestamptz` ranges, not health's civil dates, because Gmail supplies real instants. `cursor_expired` makes ADR-053's transition visible in the audit trail |
+
+**One deviation from the plan, forced by repository evidence.** The recent-mail index is
+`(connection_id, internal_date)` **ascending**, not `DESC` as the planning gate proposed:
+`deriveIndexProbe` in `packages/db/scripts/reconcile-drizzle-tracking.ts` requires every indexed
+column to match `/^[a-z_][a-z0-9_]*$/`, so a `DESC` modifier **aborts `db:reconcile` outright**. It
+costs nothing — a btree is scanned in either direction, so the index serves
+`ORDER BY internal_date DESC` identically.
+
+**`packages/mail-providers`** (new, server-only, 57 tests) — `gmail-catalog.ts`, `mail-client.ts`
+(the interface), `gmail-client.ts`, `gmail-client.fake.ts`, `gmail-oauth.ts`, `identity.ts`. The
+interface is **read-only by construction**: no send, reply, modify, trash or label-mutation method
+exists, so ADR-052's rule is a type rather than a policy. Two Gmail traps are made unrepresentable —
+`ListMessagesRequest` has no `q` field and `GetMessageMetadataRequest` has no `format` field, because
+Gmail rejects both under `gmail.metadata`. `GmailApiError` **destroys the provider's message**,
+keeping only status, status token, deduped reason/domain tokens and `Retry-After`.
+
+**`packages/core/src/mail/provider-strings.ts`**, behind a new `./mail/*` exports subpath and
+**deliberately not in the core barrel**, which pulls in `node:module` and `node:crypto`. Two
+primitives: `truncateProviderString` (never splits a surrogate pair — a lone surrogate is invalid
+UTF-8 and Postgres rejects it, which one emoji in a subject line is enough to trigger) and
+`extractEmailDomain` (returns null rather than guessing).
+
+**`packages/schema`** uses **both** established error patterns, each where it belongs: a **closed
+`MailSyncErrorCode` enum** for `mail_connections.last_sync_error`, because "what should the user do
+about this mailbox" has finitely many answers, typed onto the wire so provider prose is a parse
+failure; and a **shape-constrained `MailSyncFailureClass` token** for `mail_sync_runs.failure_class`,
+because that diagnostic set grows. `MailSyncErrorCode` is not a copy of `CalendarSyncErrorCode`:
+calendar has `conflict` and no cursor, mail has `cursor_expired` and no ETag.
+
+#### Two real defects found by the new tests rather than by review
+
+1. **`Date.parse` accepted `"12.5"` and `"-5"` as dates.** Both land in the past, so
+   `parseRetryAfterSeconds` clamped them to `0` — telling a caller "retry now" on a value it should
+   have rejected. The date branch now requires an `h:mm:ss` time, which all three RFC 7231 formats
+   carry and neither of those strings does.
+2. **The scripted fake threw synchronously out of a Promise-returning method**, so an unqueued call
+   raised where every caller written against the real client expects a rejection. Now settled.
+
+#### Verification actually run
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Full gate | build **10/10**, typecheck **18/18**, `eslint .` **0 errors 0 warnings**, `format:check` clean, `git diff --check` clean |
+| 2 | Full suite, **uncached and serial** | **2202 tests / 18 turbo tasks** (2055 → **+147**), zero failing |
+| 3 | No package decreased | core 326→**339** · db 21→**56** · schema 174→**216** · **mail-providers 57 (new)** · health-providers 311 · ai-providers 25 · api-client 93 · api 496 · mobile 376 |
+| 4 | Zero-drift canaries | `calendar-providers` **74** and `worker` **159**, both unchanged |
+| 5 | Migration applied | Once each to dev and `personalos_test` as `posops_migrator`: 14 → **15** tracked rows, 28 → **34** public tables, 6 tables / 7 CHECKs / 5 FKs / 15 indexes (9 explicit + 6 implicit `_pkey`) in both |
+| 6 | Fresh lineage | A disposable database migrated **`0000` → `0014`** produced a `public` schema **byte-identical to dev** — 632 lines, matching sha256 — then was dropped |
+| 7 | Reconcile | `db:reconcile --check` consistent; and against the disposable database with `0014`'s tracking row removed, reconcile **derived and confirmed 27/27 probes** without aborting on any statement class |
+| 8 | DB constraints | 35 new proofs in `packages/db/test/mail-constraints.test.ts`, including all six partial credential triples, both unique keys, both FK directions, and role separation (`posops_app` denied `CREATE TABLE` and denied dropping a mail CHECK, `42501`) |
+| 9 | Bundle safety | `expo export --platform web` clean, exactly one `index.html`; core barrel does not re-export mail; no Node builtin under `core/src/mail`; `packages/schema` imports the deep subpath; `mail-providers` is not a mobile dependency |
+| 10 | Forbidden-area drift | **zero** across `apps/api/src/brief`, `apps/worker/src/{health,jobs}`, `packages/health-providers`, `packages/calendar-providers`, `packages/core/src/recurrence`, `apps/mobile`, all three compose files, `apps/api/src/{routes,plugins}`, and migrations `0000`–`0013` |
+| 11 | Health invariants | `health_observations` **0** in dev and test; `heart-rate-intraday` `sync_enabled = false` with **zero sync runs ever** |
+| 12 | Dependencies | **Zero new registry packages.** The lockfile gains 6 lines: the workspace entry and its existing vitest devDependency |
+| 13 | Secret scans | `gitleaks` clean on every commit via the pre-commit hook |
+
+#### Deliberately NOT done
+
+No OAuth route, no Google Console change, no credential, no `.env` change, no real Gmail connection
+lifecycle. No worker job, no pg-boss queue, no cron. No digest generation and no AI integration — the
+digest **input** allowlist is deliberately undefined, because it is a security contract that belongs
+with the code that must honour it (7.4). No monitoring, no migration `0015`. No notifications, no
+mobile UI, no api-client method. No merge to `main`, no rebase, no push (the repository has no
+remote). No production access. **Checkpoint 7.2 not begun.**
 
 ## Phase 6 — Google Health Integration (plan approved 2026-08-24)
 
@@ -4271,8 +4357,25 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-**Phase 7 Checkpoint 7.0 (ADR gate, documentation reconciliation, repository baseline correction) is
-complete. Work has stopped, as planned.** It changed documentation only: ADR-052 (Phase 7 scope),
+**Phase 7 Checkpoints 7.0 and 7.1 are complete. Work has stopped, as planned.**
+
+7.1 built the contracts, the mail provider foundation and migration `0014` — six additive tables, a
+new server-only `packages/mail-providers`, mail schemas using both established error patterns, and
+two provider-neutral core primitives behind a new `./mail/*` exports subpath. **2202 tests, +147, no
+package decreased, both canaries held.** Two real defects were found by the new tests rather than by
+review: `Date.parse` accepting `"12.5"` and `"-5"` as dates so `Retry-After` clamped to zero, and a
+scripted fake throwing synchronously where callers expect a rejection.
+
+One planned detail changed on repository evidence: the recent-mail index is ascending, not `DESC`,
+because `deriveIndexProbe` rejects a non-bare-identifier index column and a `DESC` modifier would
+abort `db:reconcile`. A btree scans in either direction, so nothing is lost.
+
+**Checkpoint 7.2 has not begun.** It is the first checkpoint needing user-only action.
+
+---
+
+**Checkpoint 7.0 (ADR gate, documentation reconciliation, repository baseline correction).**
+It changed documentation only: ADR-052 (Phase 7 scope),
 ADR-053 (mail integration architecture), ADR-054 (mail retention and privacy), ADR-055 (service
 monitoring architecture); the open "email account scope / may the app act on mail" decision closed;
 and stale present-state records corrected — the `Last verification` baseline, the release-directory
@@ -4475,6 +4578,32 @@ unchanged. `versionCode` **6**. Migrations 14 / 14. `health_observations` **0**.
 
 ## Last verification
 
+**Phase 7 Checkpoint 7.1 — contracts, mail provider foundation, migration `0014` (2026-08-30).**
+Branch `phase-7-mail-monitoring`, HEAD `211d41e`, clean tree; not merged to `main`; no remote.
+
+Full gate, integrator-run: build **10/10** · typecheck **18/18** · `eslint .` **0 errors, 0
+warnings** · `prettier --check .` clean · `git diff --check` clean · `expo export --platform web`
+clean with exactly one `index.html`.
+
+Full suite, **uncached and serial** (`turbo run test --force --concurrency=1`, 0 of 18 cached):
+**2202 tests across 18 turbo tasks** (2055 → **+147**), zero failing. Per package — core **339** ·
+db **56** · schema **216** · **mail-providers 57 (new)** · calendar-providers **74** ·
+health-providers 311 · ai-providers 25 · api-client 93 · api 496 · worker **159** · mobile 376.
+**No package decreased**, and both zero-drift canaries (`calendar-providers` 74, `worker` 159) held
+exactly.
+
+Migrations **15 `.sql` / 15 journal entries**, highest `0014_mail_integration`. Applied once each to
+dev and `personalos_test`; a disposable database migrated `0000` → `0014` produced a `public` schema
+**byte-identical to dev** (632 lines, matching sha256); `db:reconcile` derived and confirmed
+**27/27 probes** for `0014` without aborting. `health_observations` **0**; `heart-rate-intraday`
+disabled with zero runs ever. Forbidden-area drift **zero**. **Zero new registry dependencies.**
+
+*Previous verification — Phase 7 Checkpoint 7.0 (2026-08-30): 2055 tests across 17 turbo tasks,
+calendar-providers 74, worker 159, 14 migrations. Before it, Checkpoint 6.7A (2026-08-28): the same
+2055 / 17.*
+
+## Superseded verification (Checkpoint 7.0)
+
 **Phase 7 Checkpoint 7.0 — ADR gate and documentation reconciliation (2026-08-30).** Branch `main`,
 HEAD `8b7a9eb`, clean tree before the documentation edits; the repository has no remote. This
 checkpoint changed **documentation only** — `docs/DECISIONS.md`, `docs/STATUS.md`,
@@ -4614,13 +4743,19 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Stopped after Phase 7 Checkpoint 7.0 (documentation only). Do not begin Checkpoint 7.1 without a
-separate explicit user approval.**
+**Stopped after Phase 7 Checkpoint 7.1. Do not begin Checkpoint 7.2 without a separate explicit user
+approval.**
 
-7.1 is contracts, migration `0014` and the Gmail provider fake: `packages/schema/src/mail-*.ts`, a
-new server-only `packages/mail-providers`, `packages/core/src/mail/` behind a new `exports` subpath,
-the six `mail_*` tables as `CREATE TABLE`-only SQL, the journal-guard allowlist entry, and both
-test-harness truncation lists. No routes, no jobs, no queues, no credentials, no Google call.
+7.2 is Gmail OAuth and the connection lifecycle. **It is the first Phase 7 checkpoint that cannot
+proceed on repository work alone**, and two user-only actions gate it:
+
+1. **A third OAuth client** ("Personal OS Gmail Web") in the existing `personal-os-196cf` project —
+   never a second project, per ADR-051 — with the `gmail.metadata` scope added to the shared consent
+   screen, and its id/secret provisioned by the silent-shell precedent, never through chat.
+2. **A publicly reachable privacy-policy URL.** The registered one is the Fastify API root, which
+   returns HTTP 404 on a tailnet-only host Google cannot reach. Adding a Restricted scope re-runs the
+   Auth Platform console's branding validation that 6.7A already hit. Hosting the policy somewhere
+   genuinely public adds **no ingress to the Personal OS host**, so ADR-018 is untouched.
 
 **Phase 6 is closed.** Checkpoint 6.7B deployed it to production on 2026-08-29/30 — migration `0013`
 applied (production level 0000–0013 = 14), api/worker/web serving the `c0dbff3` release images, the
