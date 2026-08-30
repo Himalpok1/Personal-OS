@@ -69,3 +69,45 @@ describe("request logging suppresses OAuth credentials", () => {
     expect(Object.keys(parsed.req)).toContain("method");
   });
 });
+
+describe("the Gmail callback inherits the same suppression", () => {
+  // Phase 7 Checkpoint 7.2. The scrubber is registered globally and is
+  // path-independent BY DESIGN -- scrub-url.ts says so: "Applied on EVERY
+  // route, not just the callback, so a future route that gains a sensitive
+  // parameter is covered without anyone having to remember." These cases prove
+  // the new route is in fact covered rather than assuming inheritance, and
+  // assert against the REAL captured stream, not against the redact config.
+  const CODE = "4/0AeaYSHZgmail-authorization-code";
+  const STATE = "bWFpbC1zdGF0ZS12YWx1ZQ";
+  const ACCESS = "ya29.a0AfB_mail-access-token";
+
+  it("never writes the Gmail authorization code or state", async () => {
+    const logs = await captureLogsFor(
+      `/mail-connections/gmail/callback?code=${CODE}&state=${STATE}`,
+    );
+    expect(logs).toContain("incoming request");
+    expect(logs).not.toContain(CODE);
+    expect(logs).not.toContain(STATE);
+    expect(logs).toContain("[redacted]");
+  });
+
+  it("still records the callback path, so a connect attempt remains observable", async () => {
+    const logs = await captureLogsFor(`/mail-connections/gmail/callback?code=${CODE}`);
+    expect(logs).toContain("/mail-connections/gmail/callback");
+    expect(logs).toContain("code=[redacted]");
+  });
+
+  it("redacts an access_token appearing anywhere in a mail route's query", async () => {
+    const logs = await captureLogsFor(`/mail-connections?access_token=${ACCESS}`);
+    expect(logs).not.toContain(ACCESS);
+  });
+
+  it("leaves a mail route's non-sensitive query intact", async () => {
+    // redirect_uri is not a secret and stays readable, which is what makes an
+    // allowlist rejection diagnosable from the logs.
+    const logs = await captureLogsFor(
+      "/mail-connections/gmail/authorize-url?redirect_uri=https%3A%2F%2Fhost.example.ts.net%2Fcb",
+    );
+    expect(logs).toContain("redirect_uri=");
+  });
+});
