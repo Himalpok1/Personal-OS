@@ -15,6 +15,12 @@ import {
   healthSessions,
   healthSyncRuns,
   inboxItems,
+  mailConnections,
+  mailDigests,
+  mailMessages,
+  mailOauthStates,
+  mailSyncCursors,
+  mailSyncRuns,
   notes,
   notificationDispatchLog,
   occurrences,
@@ -77,4 +83,17 @@ export async function truncateTestTables(app: FastifyInstance): Promise<void> {
   await app.db.delete(healthMetricStreams);
   await app.db.delete(healthConnections);
   await app.db.delete(healthOauthStates);
+  // Phase 7 mail tables (migration 0014). FK order: mail_sync_runs references
+  // both mail_connections (cascade) and mail_sync_cursors (set null), so it
+  // clears first; mail_messages and mail_sync_cursors reference
+  // mail_connections; mail_connections last of that group. mail_digests
+  // references ai_models (set null) and NOT mail_connections -- the digest is
+  // global across mailboxes by design (ADR-053) -- so it clears independently,
+  // as does mail_oauth_states, which has no foreign keys at all.
+  await app.db.delete(mailSyncRuns);
+  await app.db.delete(mailMessages);
+  await app.db.delete(mailSyncCursors);
+  await app.db.delete(mailConnections);
+  await app.db.delete(mailDigests);
+  await app.db.delete(mailOauthStates);
 }

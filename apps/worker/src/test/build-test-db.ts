@@ -17,6 +17,12 @@ import {
   healthSessions,
   healthSyncRuns,
   inboxItems,
+  mailConnections,
+  mailDigests,
+  mailMessages,
+  mailOauthStates,
+  mailSyncCursors,
+  mailSyncRuns,
   notificationDispatchLog,
   occurrences,
   tasks,
@@ -59,4 +65,14 @@ export async function truncateTestTables(db: Db): Promise<void> {
   await db.delete(healthMetricStreams);
   await db.delete(healthConnections);
   await db.delete(healthOauthStates);
+  // Phase 7 mail tables (migration 0014). Same FK order as
+  // apps/api/src/test/build-test-app.ts: runs, then messages and cursors, then
+  // connections; mail_digests and mail_oauth_states clear independently because
+  // neither references mail_connections.
+  await db.delete(mailSyncRuns);
+  await db.delete(mailMessages);
+  await db.delete(mailSyncCursors);
+  await db.delete(mailConnections);
+  await db.delete(mailDigests);
+  await db.delete(mailOauthStates);
 }

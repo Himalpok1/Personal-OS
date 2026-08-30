@@ -99,6 +99,13 @@
       "when": 1787591489044,
       "tag": "0013_google_health_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1788120327047,
+      "tag": "0014_mail_integration",
+      "breakpoints": true
     }
   ]
 }
