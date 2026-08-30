@@ -69,10 +69,7 @@ export const mailSyncRuns = pgTable(
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
   (table) => [
-    check(
-      "mail_sync_runs_kind",
-      sql`${table.kind} in ('incremental','full','backfill','manual')`,
-    ),
+    check("mail_sync_runs_kind", sql`${table.kind} in ('incremental','full','backfill','manual')`),
     check(
       "mail_sync_runs_status",
       sql`${table.status} in ('succeeded','failed','skipped','cancelled')`,

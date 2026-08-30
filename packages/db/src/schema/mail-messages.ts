@@ -52,7 +52,10 @@ export const mailMessages = pgTable(
     fromDomain: text("from_domain"),
     fromDisplayName: text("from_display_name"),
     subject: text("subject"),
-    providerLabels: text("provider_labels").array().notNull().default(sql`'{}'::text[]`),
+    providerLabels: text("provider_labels")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     hasAttachment: boolean("has_attachment").notNull().default(false),
     sizeEstimate: integer("size_estimate"),
     contentHash: text("content_hash").notNull(),
