@@ -1,3 +1,10 @@
+import {
+  connectGmail,
+  disconnectMailConnection,
+  getGmailAuthorizeUrl,
+  getMailConnection,
+  listMailConnections,
+} from "./mail.js";
 import { HealthCheckResponseSchema, type HealthCheckResponse } from "@personal-os/schema";
 import {
   connectCaldavCalendar,
@@ -132,6 +139,13 @@ export type {
   HealthWorkoutListResponse,
   HealthWorkoutSession,
 } from "./health.js";
+export type {
+  ConnectGmailRequest,
+  MailAuthorizeUrlResponse,
+  MailConnection,
+  MailConnectionListResponse,
+  MailDisconnectResponse,
+} from "./mail.js";
 export type { InboxListParams } from "./inbox.js";
 export type { NoteListParams } from "./notes.js";
 export type {
@@ -237,6 +251,15 @@ export function createApiClient(baseUrl: string) {
     listHealthConnections: listHealthConnections.bind(null, baseUrl),
     listHealthMetricStreams: listHealthMetricStreams.bind(null, baseUrl),
     syncHealthConnectionNow: syncHealthConnectionNow.bind(null, baseUrl),
+
+    // Phase 7 Checkpoint 7.2 -- connection lifecycle only. No sync, message,
+    // digest or monitoring method exists yet, deliberately: a client method
+    // whose route does not exist is a contract nobody can honour.
+    getGmailAuthorizeUrl: getGmailAuthorizeUrl.bind(null, baseUrl),
+    connectGmail: connectGmail.bind(null, baseUrl),
+    listMailConnections: listMailConnections.bind(null, baseUrl),
+    getMailConnection: getMailConnection.bind(null, baseUrl),
+    disconnectMailConnection: disconnectMailConnection.bind(null, baseUrl),
 
     connectGoogleCalendar: connectGoogleCalendar.bind(null, baseUrl),
     connectCaldavCalendar: connectCaldavCalendar.bind(null, baseUrl),
