@@ -50,6 +50,17 @@ services:
       GOOGLE_HEALTH_OAUTH_CLIENT_ID: ${GOOGLE_HEALTH_OAUTH_CLIENT_ID:-}
       GOOGLE_HEALTH_OAUTH_CLIENT_SECRET: ${GOOGLE_HEALTH_OAUTH_CLIENT_SECRET:-}
       GOOGLE_HEALTH_OAUTH_REDIRECT_URI: ${GOOGLE_HEALTH_OAUTH_REDIRECT_URI:-}
+      # Gmail OAuth (Phase 7 Checkpoint 7.2). Same `:-` (optional) form as the
+      # Health trio above, and for the same load-bearing reason: production has
+      # no Gmail credentials, and a rollout must not crash-loop before they
+      # exist. Absent config degrades to 409 mail_not_configured at the route.
+      #
+      # api only in 7.2 -- apps/worker has no mail code yet, so passing these to
+      # it would be config for something that does not exist. Checkpoint 7.3
+      # adds the worker passthrough alongside the sync engine that needs it.
+      GMAIL_OAUTH_CLIENT_ID: ${GMAIL_OAUTH_CLIENT_ID:-}
+      GMAIL_OAUTH_CLIENT_SECRET: ${GMAIL_OAUTH_CLIENT_SECRET:-}
+      GMAIL_OAUTH_REDIRECT_URI: ${GMAIL_OAUTH_REDIRECT_URI:-}
     volumes:
       - audio_data:/data/audio
     depends_on:

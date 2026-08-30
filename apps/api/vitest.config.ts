@@ -33,6 +33,21 @@ export default defineConfig({
       GOOGLE_HEALTH_OAUTH_CLIENT_SECRET: "test-health-client-secret",
       GOOGLE_HEALTH_OAUTH_REDIRECT_URI:
         "https://personal-os.tail62a68f.ts.net/health-connections/google/callback,https://alt.example.ts.net/health-connections/google/callback",
+      // Deterministic Gmail OAuth config (Phase 7 Checkpoint 7.2), same
+      // reasoning as the Health trio above: placeholders, never credentials.
+      // Every outbound call is a stubbed global fetch or the injected scripted
+      // fake, so no test reaches Google. The redirect list is the real
+      // production callback plus a second entry, so the exact-match allowlist
+      // and redirect-binding checks run against realistic values.
+      //
+      // The "Gmail omitted / empty-string" startup cases deliberately do NOT
+      // rely on this: env-mail-config.test.ts re-parses the schema in-process
+      // with those shapes, because a vitest `env` block cannot express an
+      // absent variable for one file while another needs it present.
+      GMAIL_OAUTH_CLIENT_ID: "test-gmail-client-id",
+      GMAIL_OAUTH_CLIENT_SECRET: "test-gmail-client-secret",
+      GMAIL_OAUTH_REDIRECT_URI:
+        "https://personal-os.tail62a68f.ts.net/mail-connections/gmail/callback,https://alt.example.ts.net/mail-connections/gmail/callback",
     },
     // Fastify + pg-boss startup (registerBoss retries on connect) is slow
     // enough that the default 5s hook timeout can flake under load.

@@ -79,6 +79,40 @@ const EnvSchema = z.object({
             .map((uri) => uri.trim())
             .filter((uri) => uri.length > 0),
     ),
+
+  // Gmail OAuth (Phase 7 Checkpoint 7.2, ADR-053). A THIRD OAuth client in the
+  // same `personal-os-196cf` project -- never a second project (ADR-051), and
+  // never the Calendar or Health client: a token minted for one integration is
+  // never reused for another.
+  //
+  // OPTIONAL for exactly the reason the Health trio is, and this is
+  // load-bearing rather than stylistic. docker-compose passes these as
+  // `${VAR:-}`, which renders an EMPTY STRING rather than omitting the key, and
+  // `z.string().min(1).optional()` throws on "" because it tolerates only
+  // `undefined`. The Checkpoint 6.3 audit found that exact combination would
+  // have killed BOTH api and worker at import on a host without Health
+  // credentials -- which was production at the time -- taking capture,
+  // calendar, notifications and reminders down with them. An unconfigured Gmail
+  // integration must degrade to a structured 409 `mail_not_configured`, never
+  // to a crash-looping process.
+  //
+  // GMAIL_OAUTH_REDIRECT_URI is the exact-match ALLOWLIST, not a default.
+  // Comma-separated so the loopback development callback and the tailnet
+  // production callback can coexist; a redirect_uri outside it is rejected
+  // outright, and it is never taken from the client.
+  GMAIL_OAUTH_CLIENT_ID: optionalNonEmpty(),
+  GMAIL_OAUTH_CLIENT_SECRET: optionalNonEmpty(),
+  GMAIL_OAUTH_REDIRECT_URI: z
+    .string()
+    .optional()
+    .transform((value) =>
+      value === undefined
+        ? []
+        : value
+            .split(",")
+            .map((uri) => uri.trim())
+            .filter((uri) => uri.length > 0),
+    ),
 });
 
 // Fail fast on missing config. This is distinct from DB *reachability*,
