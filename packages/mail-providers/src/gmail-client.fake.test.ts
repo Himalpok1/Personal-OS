@@ -114,6 +114,30 @@ describe("FakeMailClient", () => {
       listHistory: 0,
     });
   });
+
+  it("reset() drops queued responses AND recorded calls", async () => {
+    // Guards the cross-test bleed this method exists for: a suite that builds
+    // its app once shares one fake, so an unconsumed response would be drained
+    // by the next test.
+    const fake = createFakeMailClient();
+    fake.queueProfile({ emailAddress: "a@b.com", historyId: "1" });
+    fake.queueListMessages({ messages: [] });
+    await fake.listMessages("tok", {});
+    expect(fake.calls).toHaveLength(1);
+    expect(fake.pending().getProfile).toBe(1);
+
+    fake.reset();
+
+    expect(fake.calls).toHaveLength(0);
+    expect(fake.pending()).toEqual({
+      getProfile: 0,
+      listMessages: 0,
+      getMessageMetadata: 0,
+      listHistory: 0,
+    });
+    // And the stale profile is genuinely gone, not merely uncounted.
+    await expect(fake.getProfile("tok")).rejects.toThrow(/unexpected call to getProfile/);
+  });
 });
 
 describe("fakeMessage", () => {

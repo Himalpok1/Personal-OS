@@ -52,6 +52,19 @@ export interface FakeMailClient extends MailClient {
   callsFor(method: FakeCall["method"]): FakeCall[];
   /** Queue lengths, so a test can assert every scripted response was consumed. */
   pending(): Record<FakeCall["method"], number>;
+  /**
+   * Drops every queued response and every recorded call.
+   *
+   * Necessary, not merely convenient. A suite that builds the app ONCE and
+   * injects one fake -- which is the established `buildTestApp` shape -- shares
+   * these queues across every test in the file. A test that queues a response
+   * and then fails before consuming it leaves that response at the head of the
+   * queue, and the NEXT test silently drains it instead of its own. That
+   * produces failures attributed to the wrong test and, worse, passes for code
+   * paths nobody exercised. Found exactly that way while writing
+   * mail-connections.test.ts.
+   */
+  reset(): void;
 }
 
 function drain<T>(queue: Scripted<T>[], method: string): T {
@@ -100,6 +113,13 @@ export function createFakeMailClient(): FakeMailClient {
     queueMessageMetadata: (r) => void metadatas.push(r),
     queueListHistory: (r) => void histories.push(r),
     callsFor: (method) => calls.filter((c) => c.method === method),
+    reset: () => {
+      calls.length = 0;
+      profiles.length = 0;
+      messageLists.length = 0;
+      metadatas.length = 0;
+      histories.length = 0;
+    },
     pending: () => ({
       getProfile: profiles.length,
       listMessages: messageLists.length,
