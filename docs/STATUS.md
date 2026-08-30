@@ -424,6 +424,51 @@ Likely causes are a charge-only cable, a loose or unseated connection, or the R1
 to charging. Production `com.himal.personalos` **versionCode 6 was never targeted** by any
 install, uninstall, clear, force-stop or data command in this checkpoint.
 
+#### Post-deployment monitoring milestone — registered
+
+Per ADR-051 the seven-day refresh-token longevity is **not** a pre-deployment gate and is
+**not claimed as passed**. It is post-deployment monitoring, and the nominal milestone is:
+
+```text
+2026-09-04T20:08:25Z
+```
+
+At or after that instant, perform the smallest harmless production-mode refresh/read on the
+same token lineage. Any earlier `invalid_grant`, unexpected reauthorization prompt, credential
+loss, refresh failure or scope loss on this connection is a **production incident**. No new
+scheduler, cron or application feature was added to track this — it is an operational note.
+
+One honesty note on the production credential: the bounded sync proves **authorization and
+read** against the production access token. A *forced* refresh grant was **not** exercised in
+production, because doing so would require running a temporary script inside the api container
+and ADR-051 already assigns longevity to monitoring. The refresh token is stored (103 B
+ciphertext) and will be exercised naturally by the hourly cron once the access token expires.
+`pre-deployment wait: waived_by_owner` · `immediate production-mode authorization + read:
+verified` · `production forced-refresh: not exercised` · `seven-day longevity:
+deferred_post_deployment`.
+
+#### Cleanup and final state
+
+Removed from the production host: the release tar, the digest temp files, the build log, and
+**`/home/himallinux/personal-os/.env.pre-6.7b`** (the temporary credential backup taken before
+provisioning). The live `.env` retains its three Health keys, mode `600`, owner unchanged.
+Removed locally: the release archive, the extracted APK working tree and the scratch files. No
+repository api, worker, Metro, Expo, watch or test process is running; ports 3000/8081/8082/
+5173/19000/19001 are free; no `adb reverse` mapping exists. The only non-project container on
+the host is the pre-existing exited `hello-world` from Phase 0.
+
+**One artifact deliberately retained, and flagged for an owner decision:**
+`/home/himallinux/personal-os-deploy-snapshots/pre-6.7b-20260829T060033Z.sql.gz` (1.6 MB, mode
+600). It is a plain `pg_dump` of production and therefore contains real data. It was kept as
+rollback insurance while the Rabbit lane is still open. ADR-024 forbids a backup *system*, and
+a lingering dump is drift in that direction, so it should be deleted once the checkpoint fully
+closes unless the owner decides otherwise.
+
+Final production state: four containers running — api `608bf044a82e`, worker `2122152c78ce`,
+web `2eee2b4490e7`, postgres `404de24ef86b` — api bound `127.0.0.1:3000`, web
+`127.0.0.1:8081`, Postgres publishing no host port, Tailscale Serve tailnet-only on both
+routes, no Funnel, no public ingress.
+
 ### Checkpoint 6.7A — Fable release audit + OAuth production transition (audit phase COMPLETE, 2026-08-28)
 
 Split from Checkpoint 6.7 by explicit user direction: 6.7A is the full release-candidate
@@ -4243,11 +4288,29 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Stopped. Checkpoints 6.0 through 6.6 are complete.** The next checkpoint is **6.7 (gated production
-deployment)**, and it needs a separate explicit approval. 6.6 lives on branch
-`phase-6-google-health-live-proof` (HEAD `11cd3bb`) and is **not merged to `main`**. The unmerged
-`phase-6-audit-hardening-linear`, `phase-6-google-health-sync` and `phase-6-google-health-ui` remain
-their own integration decisions; the original `phase-6-audit-hardening` is never merged.
+**Stopped. Checkpoint 6.7B deployed Phase 6 to production on 2026-08-30, except the Rabbit lane.**
+Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3`
+release images, the production Google Health connection is live and synchronising, and the host
+reboot-survival proof passed. Work lives on branch `phase-6-production-deployment-6-7b`
+(HEAD `f25bd0f`), **not merged to `main`**; the repository has no remote.
+
+**Outstanding, in priority order:**
+
+1. **Rabbit `versionCode 7` install — `blocked_external`.** The APK is built and fully audited
+   (EAS `9d05d31c-…`, signer `4601e3a2…`, sha256 `5c400467…`, preserved outside the repo). No
+   Android device enumerates on the Mac Mini's USB bus and wireless adb is refused, so the
+   install, the Rabbit acceptance pass and the Rabbit reboot proof could not run. Resolve the
+   physical connection (cable, port, or the R1's USB mode), then install with `adb install -r`
+   only — never uninstall, clear, downgrade or use `-d`.
+2. **Delete the retained pre-migration dump** once the checkpoint closes, unless the owner wants
+   it kept (see the cleanup section).
+3. **Post-deployment monitoring at `2026-09-04T20:08:25Z`** (ADR-051). Not a gate; not passed.
+4. **OAuth privacy-policy URL serves HTTP 404** — branding/compliance debt, recorded and
+   deliberately unfixed.
+
+The unmerged `phase-6-audit-hardening-linear`, `phase-6-google-health-sync`,
+`phase-6-google-health-ui` and `phase-6-google-health-live-proof` branches remain their own
+integration decisions; the original `phase-6-audit-hardening` is never merged.
 
 **Carried into 6.7:**
 
