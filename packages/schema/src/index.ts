@@ -17,3 +17,7 @@ export * from "./reviews.js";
 export * from "./brief.js";
 export * from "./health-metrics.js";
 export * from "./calendar-sync-errors.js";
+export * from "./mail-sync-errors.js";
+export * from "./mail-connections.js";
+export * from "./mail-messages.js";
+export * from "./mail-digests.js";
