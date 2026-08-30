@@ -1,7 +1,7 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 6 — Google Health Integration — **COMPLETE. Checkpoint 6.7B deployed Phase 6 to production on 2026-08-30 and all lanes have now passed.** Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, the Rabbit runs **`versionCode 7`** with pairing/PRIMARY/session preserved, and **both reboot-survival proofs (host and Rabbit) passed**. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Current phase:** Phase 6 — Google Health Integration — **COMPLETE AND CLOSED (2026-08-30).** Checkpoint 6.7B deployed Phase 6 to production, all lanes passed, closure actions are done and the work is merged to `main`. Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, the Rabbit runs **`versionCode 7`** with pairing/PRIMARY/session preserved, and **both reboot-survival proofs (host and Rabbit) passed**. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
 **Implementation status:** Phases 0–5 are implemented and production-deployed, and **Phase 6's server side is now deployed too (Checkpoint 6.7B, 2026-08-29)**. **Production migration level moved to 0000–0013 = 14 migrations** — `0013_google_health_sync` was applied exactly once on 2026-08-29, matching the local level of 14 `.sql` / 14 journal entries. Production api/worker/web serve the 6.7 release images built from `c0dbff3`. The production Rabbit now runs `com.himal.personalos` **versionCode 7**, installed in place with `adb install -r` on 2026-08-30 — `firstInstallTime` unchanged, pairing/PRIMARY/push token/session all preserved.
 **Next phase allowed:** **Checkpoint 6.7 (gated production deployment), on separate explicit approval only.** 6.0–6.6 are closed. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
@@ -593,6 +593,74 @@ Final production state: four containers running — api `608bf044a82e`, worker `
 web `2eee2b4490e7`, postgres `404de24ef86b` — api bound `127.0.0.1:3000`, web
 `127.0.0.1:8081`, Postgres publishing no host port, Tailscale Serve tailnet-only on both
 routes, no Funnel, no public ingress.
+
+#### Checkpoint 6.7B closure (2026-08-30)
+
+Production deployment and Rabbit acceptance were approved by the owner. This section records
+the closure actions; no application code was modified or redeployed.
+
+**Rabbit `versionCode 7` — installation and reboot proof PASSED.** Installed in place with
+`adb install -r` only: versionCode 6 → 7, `firstInstallTime` unchanged at
+`2026-08-19 16:26:10`, `lastUpdateTime` advanced, signature identical, pairing/PRIMARY/push
+token/session all preserved with no re-pair and zero pairing codes consumed. The reboot proof
+passed with Tailscale auto-starting, both install timestamps unchanged, the session preserved
+and an empty crash buffer. Full evidence is in the Rabbit sections above.
+
+**The `Start`-button finding is CORRECTED as verified — the effective target meets 44×44 dp.**
+The Today-screen `Start` control is the daily/weekly review entry banner's button
+(`apps/mobile/src/app/(tabs)/index.tsx`, the `info.status === null` branch):
+
+```jsx
+<Pressable onPress={() => router.push(href)} hitSlop={8} accessibilityRole="button"
+  className="rounded-lg bg-blue-600 px-3 py-2 active:bg-blue-700">
+```
+
+The device reports physical density 320 with **override density 190**, so the dp→px scale is
+`190/160 = 1.1875`. The measured `uiautomator` bounds of 59×38 px are therefore
+**49.7 × 32.0 dp of visible box**. `hitSlop={8}` expands the touch rectangle by 8 dp on every
+side — **+16 dp per axis** — giving an effective target of **≈65.7 × 48.0 dp (78 × 57 px)**,
+which clears 44×44 dp in both dimensions. The second instance (59×37 px) computes to 47.2 dp
+tall and also clears.
+
+The reason the raw measurement understated it is that **`uiautomator` reports the visible
+bounds, never the hit rectangle**, so `hitSlop` is invisible to it. The 44 dp vertical margin
+is thin (48 vs 44), and the visible box alone is below 44 dp, so this remains worth a
+deliberate design decision later — but it is **not** an accessibility defect and is **not**
+carried into Phase 7 as debt.
+
+**The one-off pre-migration snapshot was deleted after final acceptance.** Exactly one matching
+regular file existed at `/home/himallinux/personal-os-deploy-snapshots/`; its SHA-256
+(`7391d09f…`), size (1 638 384 B) and mode (600) were each re-verified immediately before
+removal, it was confirmed to be a regular file (not a symlink) outside any repository, and its
+contents were never printed or inspected. It was removed with a single non-recursive `rm` on
+that exact path — the directory and everything else were left alone — and its absence was
+confirmed afterwards, with no temporary copy remaining anywhere on the host.
+
+**ADR-024 is therefore restored in full: Personal OS retains no backup system.** The snapshot
+was a point-in-time artifact for this one deployment and never became infrastructure; no
+backup policy, schedule or tooling was added, and the (now empty) snapshot directory holds
+nothing.
+
+Production was untouched by the closure: all four container IDs, image digests and restart
+counts are unchanged, `personal-os_postgres_data` retains its original identity, the migration
+journal is **14** with `0013` present exactly once, application data is unchanged, there are
+zero failed jobs, and the API, web and both tailnet-only Serve routes are healthy.
+
+**Deferred and outstanding — unchanged by this closure:**
+
+- **OAuth privacy-policy URL still serves HTTP 404** and remains deferred branding/compliance
+  debt. Google's own consent screen corroborates it. No policy was fabricated and no Console
+  URL was changed.
+- **Post-deployment monitoring remains scheduled for `2026-09-04T20:08:25Z`** (ADR-051).
+- **Seven-day refresh-token longevity is NOT claimed as passed.** Immediate production-mode
+  authorization and read are verified; longevity is post-deployment monitoring, and any
+  `invalid_grant`, unexpected reauthorization, credential loss, refresh failure or scope loss
+  before then is a production incident. A *forced* refresh grant was never exercised in
+  production; the hourly cron exercises refresh naturally.
+- Raw intraday heart rate stays excluded (`heart-rate-intraday` disabled, zero runs ever),
+  `health_observations` stays empty, and F5 capture 2 remains absent.
+
+**Phase 7 has not begun.** No Phase 7 work was planned, scoped or started.
 
 ### Checkpoint 6.7A — Fable release audit + OAuth production transition (audit phase COMPLETE, 2026-08-28)
 
@@ -4419,23 +4487,24 @@ release images, the production Google Health connection is live and synchronisin
 reboot-survival proof passed. Work lives on branch `phase-6-production-deployment-6-7b`
 (HEAD `f25bd0f`), **not merged to `main`**; the repository has no remote.
 
-**All Checkpoint 6.7B lanes have passed.** Remaining items are follow-ups, not blockers:
+**Checkpoint 6.7B is CLOSED and Phase 6 is COMPLETE.** All lanes passed, closure actions are
+done, and the deployment branch was fast-forwarded into `main`. Remaining items are follow-ups,
+not blockers:
 
 1. **Post-deployment monitoring at `2026-09-04T20:08:25Z`** (ADR-051). Not a gate; seven-day
    longevity is **not** claimed as passed. Any `invalid_grant`, unexpected reauthorization,
    credential loss, refresh failure or scope loss before then is a production incident.
-2. **The pre-6.7B production snapshot is retained by owner instruction** at
-   `/home/himallinux/personal-os-deploy-snapshots/pre-6.7b-20260829T060033Z.sql.gz` (mode 600).
-   It is a plain `pg_dump` containing real data; delete it when the owner decides.
-3. **OAuth privacy-policy URL serves HTTP 404** — branding/compliance debt, recorded and
-   deliberately unfixed. Google's own consent screen corroborates it.
-4. **Task-row `Start` buttons measure 59×38** — under the 44 px convention, pre-existing, needs
-   a hardware design pass.
-5. **A production forced-refresh grant was never exercised** — authorization and read are
-   verified; the hourly cron will exercise refresh naturally.
+2. **OAuth privacy-policy URL serves HTTP 404** — deferred branding/compliance debt, recorded
+   and deliberately unfixed. Google's own consent screen corroborates it.
+3. **A production forced-refresh grant was never exercised** — authorization and read are
+   verified; the hourly cron exercises refresh naturally.
 
-Branch `phase-6-production-deployment-6-7b` is **not merged to `main`**; the repository has no
-remote. The unmerged `phase-6-audit-hardening-linear`, `phase-6-google-health-sync`,
+The `Start`-button finding is **closed as verified**, not carried forward: `hitSlop={8}` gives
+it an effective ≈65.7 × 48.0 dp target (see the closure section). The one-off pre-migration
+snapshot was **deleted after final acceptance**, restoring ADR-024 in full — Personal OS keeps
+no backup system.
+
+**Phase 7 has not been approved, planned or begun.** The unmerged The unmerged `phase-6-audit-hardening-linear`, `phase-6-google-health-sync`,
 `phase-6-google-health-ui` and `phase-6-google-health-live-proof` branches remain their own
 integration decisions; the original `phase-6-audit-hardening` is never merged.
 
