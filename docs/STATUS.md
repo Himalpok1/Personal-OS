@@ -1,8 +1,8 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0 through 6.6 plus 6.7A COMPLETE; 6.7B production deployment COMPLETE except the Rabbit lane (2026-08-30).** Migration `0013` is applied to production, api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, and the **host reboot-survival proof passed**. The Rabbit `versionCode 7` APK is built and audited but **not installed** — the device does not enumerate on USB (`blocked_external`), so the Rabbit acceptance pass and Rabbit reboot proof are outstanding. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
-**Implementation status:** Phases 0–5 are implemented and production-deployed, and **Phase 6's server side is now deployed too (Checkpoint 6.7B, 2026-08-29)**. **Production migration level moved to 0000–0013 = 14 migrations** — `0013_google_health_sync` was applied exactly once on 2026-08-29, matching the local level of 14 `.sql` / 14 journal entries. Production api/worker/web serve the 6.7 release images built from `c0dbff3`. The production Rabbit still runs `com.himal.personalos` versionCode **6**; versionCode **7** is built and audited but **not yet installed**.
+**Current phase:** Phase 6 — Google Health Integration — **COMPLETE. Checkpoint 6.7B deployed Phase 6 to production on 2026-08-30 and all lanes have now passed.** Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, the Rabbit runs **`versionCode 7`** with pairing/PRIMARY/session preserved, and **both reboot-survival proofs (host and Rabbit) passed**. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Implementation status:** Phases 0–5 are implemented and production-deployed, and **Phase 6's server side is now deployed too (Checkpoint 6.7B, 2026-08-29)**. **Production migration level moved to 0000–0013 = 14 migrations** — `0013_google_health_sync` was applied exactly once on 2026-08-29, matching the local level of 14 `.sql` / 14 journal entries. Production api/worker/web serve the 6.7 release images built from `c0dbff3`. The production Rabbit now runs `com.himal.personalos` **versionCode 7**, installed in place with `adb install -r` on 2026-08-30 — `firstInstallTime` unchanged, pairing/PRIMARY/push token/session all preserved.
 **Next phase allowed:** **Checkpoint 6.7 (gated production deployment), on separate explicit approval only.** 6.0–6.6 are closed. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
@@ -407,23 +407,148 @@ value in a non-`value` state** — not one fabricated zero. A leak scan across
 
 No health measurement appears in this record, in any commit, or in the deployment report.
 
-#### Rabbit `versionCode 7` — install blocked_external
+#### Rabbit `versionCode 7` — installed and verified (2026-08-30)
 
-The APK is built and fully audited (above) but **was not installed**, because the device does
-not enumerate. Diagnosed rather than assumed:
+The device was reconnected by the owner and the lane resumed under the existing 6.7B
+authorization. The earlier `blocked_external` diagnosis was correct and physical: once
+connected, `ioreg` enumerated `rabbit r1@02110000` and `adb` listed the device as
+`device` (authorized) immediately, with no adb-server or authorization work needed.
 
-- This session runs on `Himals-Mac-mini.local` — the machine the device was reported connected to.
-- `adb devices -l` is empty after `adb kill-server` / `start-server`; an *unauthorized* device
-  would still be listed, so this is not a debugging-authorization prompt.
-- `ioreg -p IOUSB` enumerates only hubs, a USB3.0 card reader, a Stream Deck Neo and the
-  `CT1000X9PROSSD9` external SSD. **No Android device is present on the USB bus at all.**
-- Wireless ADB over the tailnet was tried as a fallback: `rabbit-r1` (100.123.210.37) pings
-  fine, but `adb connect` is refused on 5555 and 37000, so wireless debugging is not listening.
+**Device identity confirmed before anything was installed:** serial `919109A4M16001324668`,
+manufacturer `rabbit`, model `rabbit r1`, device `r1`, product `cipher_r1`, build
+`BP2A.250605.031.A2`, **Android 16 / SDK 36**, 480×640 at physical density 320 with override
+190 — the expected unit and OS.
 
-Likely causes are a charge-only cable, a loose or unseated connection, or the R1's USB mode set
-to charging. Production `com.himal.personalos` **versionCode 6 was never targeted** by any
-install, uninstall, clear, force-stop or data command in this checkpoint.
+**Pre-install gate — every check passed:**
 
+| Check | Result |
+|---|---|
+| Installed package | `com.himal.personalos` only; no `.dev` present |
+| Installed versionCode | **6** |
+| `firstInstallTime` / `lastUpdateTime` | `2026-08-19 16:26:10` / `2026-08-24 05:17:43` — matching the recorded values |
+| New APK sha256 | **`5c400467905fbb042a9f4c83999f529674d64fd6eb6631b7fc923e15835f96a4`** — matches the audited artifact |
+| Signature compatibility | the **installed v6 APK was pulled from the device** and its certificate compared directly against the new one: both `4601e3a2c4ecfe791b0bf6d960871c017fe1f3bc56087389f7ccc3a3f6cc23ea`, and both equal the recorded production identity |
+| New APK | package `com.himal.personalos`, **versionCode 7**, non-debuggable, **no `usesCleartextTraffic`**, scheme `mobile`, Expo Updates `false` |
+| Bundle | production API URL present; `localhost:3000`, `127.0.0.1` and private-IP dev hosts all **0**; `personal-os-ui-test` and `EXPO_PUBLIC_UI_TEST_MODE` **0**; one `localhost:8081` (the adjudicated RN framework fallback) |
+| Pairing / PRIMARY / session | device row `c6c0b43d-…` PRIMARY, notifications enabled, push token present, not revoked, exactly one PRIMARY, **0** live pairing codes |
+
+Data preservation was **proved, not assumed**: signature equality is what makes Android treat
+the install as an update rather than rejecting it `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, and
+versionCode 7 > 6 means no downgrade and therefore no `-d`.
+
+**Installed with `adb install -r` only** — no uninstall, no data clear, no `-d`, no signing
+change. Result `Success`.
+
+| Post-install | Result |
+|---|---|
+| versionCode | 6 → **7** |
+| `firstInstallTime` | **`2026-08-19 16:26:10` — unchanged** (proves update, not reinstall) |
+| `lastUpdateTime` | advanced to `2026-08-29 22:40:57` |
+| `dataDir` | `/data/user/0/com.himal.personalos`, unchanged and present |
+| Signature | identical signature object before and after |
+| Packages installed | production only |
+
+#### Rabbit workflow pass (production identity)
+
+Cold launch (`force-stop` then launcher intent) reached `MainActivity` with **zero crash-buffer
+entries** and zero `FATAL`/ANR. **No pairing screen**, no new device row and **zero pairing
+codes consumed** — the SecureStore credential survived the update — and the server saw
+`last_seen_at` refresh within seconds.
+
+| Area | Result |
+|---|---|
+| Five tabs | Today / Inbox / Notes / Projects / Calendar all render at y≈601, evenly spaced |
+| Clipping | **zero** nodes exceeding 480×640 on every screen exercised |
+| Today | date header, All tasks, Overdue, Due today, Inbox count, OVERDUE / DUE TODAY / TODAY'S EVENTS / INBOX NEEDS ATTENTION / ACTIVE PROJECTS, Health card, Daily Brief |
+| Calendar | Month / Week / Agenda toggle plus Previous month, Next month, Jump to today |
+| Settings | Devices, PRIMARY, notification toggles, Revoke, Forget this device, Connected Calendars showing **`Google Calendar · connected` with no raw provider error**, the Health card, and all five notification-diagnostics buttons |
+| Settings gear | 51×52 with accessible name `Settings` |
+| FAB / PTT | 58×58 each at `[397,482]`–`[455,540]` and `[25,482]`–`[83,540]`, both mounted on the production identity |
+| Capture | one row created (`source: "web"`, the frozen entry-path value), parsed by production gpt-4.1 to a task, **no duplicate** |
+| Capture buttons | Cancel **84×52** (`Cancel this capture`), Capture **94×52** (`Capture this note`) — both clear 44 px |
+| Back navigation | returns correctly from the trends screen to the Health dashboard |
+| Side button | kernel input layout reports **`KEY_POWER`** |
+| Scroll wheel | kernel input layout reports **`KEY_VOLUMEUP` / `KEY_VOLUMEDOWN`** |
+| Raw provider errors | none on any screen — no `API error`, `google_oauth_failed`, `invalid_grant`, `error_description` or token-shaped string |
+
+**Health surfaces, live against production.** The dashboard reads *"Google Health · Connected ·
+Data through Aug 29, 2026"* with no error string. **Missing-versus-zero is visible as two
+structurally different sentences on one screen**: *"Today hasn't been synced yet…"* for metrics
+that have history — printed **alongside** their last-recorded line, never instead of it — and
+*"No data has reached Google Health for this yet…"* for metrics that have never had any.
+**Not one fabricated zero.** ACTIVITY, VITALS, BODY, SLEEP and WORKOUTS all render, the two
+session sections with honest empty states.
+
+The trend screen is the strongest evidence, because it renders the three-state model **in
+words**: its accessibility summary distinguishes days with a recorded value, days *"checked
+with nothing recorded"* (verified-absent) and a day *"not synced"* (unknown). The 7/30/90 range
+selector carries labels (`Show the last N days`), every chart mark has a per-day
+`accessibilityLabel`, and `Navigate up` is named.
+
+**Manual Sync deduplication proved.** Four rapid taps of *Sync now* produced **exactly one**
+`health.google.sync-connection` job (3 → 4 total) — the `singletonKey` + `stately` policy
+collapsing them. Afterwards `health_daily_metrics` was still **137** rows with **zero duplicate
+`(connection, metric, local_date)` identities**, `health_sessions` 0, `health_observations` 0,
+and **no failed job anywhere in pg-boss**.
+
+**Offline / API-unavailable, tested device-side only.** Production services were never altered;
+the device's own Wi-Fi was disabled instead. With `Active default network: none` the app
+stayed alive with zero crash lines and leaked no raw network error; a capture made offline was
+queued locally and **the server had 0 rows**. On restoring Wi-Fi the row **flushed exactly
+once**, with the outbox badge reading `Pending captures: 0` and no duplicate.
+
+#### Rabbit reboot proof — PASSED
+
+`adb reboot`; `sys.boot_completed` in ~25 s, uptime 0 min.
+
+| Check | Result |
+|---|---|
+| Tailscale | **auto-started with no manual action** — `tun0` up, `VPN CONNECTED extra: VPN:com.tailscale.ipn` |
+| Production reachability | ping to the server 0% loss |
+| versionCode | **7** |
+| `firstInstallTime` / `lastUpdateTime` | **both unchanged** |
+| Packages | production only |
+| App process | self-started after boot (the `RECEIVE_BOOT_COMPLETED` path, ADR-031) |
+| Pairing screen | **absent** |
+| Device row | same row, **PRIMARY / notifications / push token / active all preserved**; device count still 2 (**no re-pair**); **0** pairing codes consumed |
+| `POST_NOTIFICATIONS` | granted |
+| Check-in | `last_seen_at` refreshed ~30 s after reboot |
+| App traffic | push-token re-registration plus `/today`, `/tasks`, `/health-summary`, `/devices`, `/briefs/current` |
+| Crash buffer | **empty** |
+| Production Health | intact — 137 daily rows, 0 observations, connection `active` |
+
+Two environmental interruptions are recorded because they cost time and could mislead a later
+reader, and neither is an application fault. The device rebooted into a **locked** state, so
+the app sat behind the keyguard and could not reach credential-encrypted storage or the network
+until first unlock — normal Android behaviour, cleared with a swipe (**no PIN was entered by
+the agent**). A CipherOS **system-update dialog** ("3.47 GB") then appeared; it was dismissed
+with Back and **`Download & install now` was never tapped** — no OS update was performed.
+
+#### Minor findings from the device pass — recorded, not fixed
+
+- **Task-row `Start` buttons measure 59×38** on clickable nodes, under the app's own 44 px
+  convention. `hitSlop` is not reflected in `uiautomator` bounds, so the effective target may
+  still clear 44; it needs a hardware design pass to settle. Pre-existing, not a regression —
+  this APK's application tree is byte-identical to the audited RC.
+- Two measurement traps worth writing down so they are not re-litigated: a naive grep for a
+  button's `text=` returns the inner `Text` node, which is much smaller than its touchable
+  parent (Capture read 61×23 as text but **94×52** as the clickable node); and a substring
+  search across a raw `uiautomator` dump matches **numbers inside `bounds=` coordinates**,
+  which is what produced a spurious "422 on screen" reading.
+- `uiautomator` captures only the rendered viewport of a virtualized list, so a single dump
+  cannot prove a section absent. The Settings Health card and the lower Today sections both
+  read as "absent" until the screen was walked viewport by viewport.
+
+#### Smoke data
+
+Both smoke captures and their committed entities were removed in one count-verified pass —
+1 task, 1 note, 2 inbox rows — returning production to its exact pre-smoke baseline
+(inbox 6, tasks 2, notes 3, occurrences 0) with **zero residue and zero orphan occurrences**.
+Device-side UI dumps were deleted from `/data/local/tmp`; no `adb reverse` or `forward` mapping
+remains; the pulled v6 APK was deleted locally while the audited v7 artifact is preserved.
+
+**The pre-6.7B production snapshot is retained by explicit owner instruction** and was not
+deleted.
 #### Post-deployment monitoring milestone — registered
 
 Per ADR-051 the seven-day refresh-token longevity is **not** a pre-deployment gate and is
@@ -4294,21 +4419,23 @@ release images, the production Google Health connection is live and synchronisin
 reboot-survival proof passed. Work lives on branch `phase-6-production-deployment-6-7b`
 (HEAD `f25bd0f`), **not merged to `main`**; the repository has no remote.
 
-**Outstanding, in priority order:**
+**All Checkpoint 6.7B lanes have passed.** Remaining items are follow-ups, not blockers:
 
-1. **Rabbit `versionCode 7` install — `blocked_external`.** The APK is built and fully audited
-   (EAS `9d05d31c-…`, signer `4601e3a2…`, sha256 `5c400467…`, preserved outside the repo). No
-   Android device enumerates on the Mac Mini's USB bus and wireless adb is refused, so the
-   install, the Rabbit acceptance pass and the Rabbit reboot proof could not run. Resolve the
-   physical connection (cable, port, or the R1's USB mode), then install with `adb install -r`
-   only — never uninstall, clear, downgrade or use `-d`.
-2. **Delete the retained pre-migration dump** once the checkpoint closes, unless the owner wants
-   it kept (see the cleanup section).
-3. **Post-deployment monitoring at `2026-09-04T20:08:25Z`** (ADR-051). Not a gate; not passed.
-4. **OAuth privacy-policy URL serves HTTP 404** — branding/compliance debt, recorded and
-   deliberately unfixed.
+1. **Post-deployment monitoring at `2026-09-04T20:08:25Z`** (ADR-051). Not a gate; seven-day
+   longevity is **not** claimed as passed. Any `invalid_grant`, unexpected reauthorization,
+   credential loss, refresh failure or scope loss before then is a production incident.
+2. **The pre-6.7B production snapshot is retained by owner instruction** at
+   `/home/himallinux/personal-os-deploy-snapshots/pre-6.7b-20260829T060033Z.sql.gz` (mode 600).
+   It is a plain `pg_dump` containing real data; delete it when the owner decides.
+3. **OAuth privacy-policy URL serves HTTP 404** — branding/compliance debt, recorded and
+   deliberately unfixed. Google's own consent screen corroborates it.
+4. **Task-row `Start` buttons measure 59×38** — under the 44 px convention, pre-existing, needs
+   a hardware design pass.
+5. **A production forced-refresh grant was never exercised** — authorization and read are
+   verified; the hourly cron will exercise refresh naturally.
 
-The unmerged `phase-6-audit-hardening-linear`, `phase-6-google-health-sync`,
+Branch `phase-6-production-deployment-6-7b` is **not merged to `main`**; the repository has no
+remote. The unmerged `phase-6-audit-hardening-linear`, `phase-6-google-health-sync`,
 `phase-6-google-health-ui` and `phase-6-google-health-live-proof` branches remain their own
 integration decisions; the original `phase-6-audit-hardening` is never merged.
 
