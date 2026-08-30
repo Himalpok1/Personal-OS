@@ -122,3 +122,59 @@ export type MailSyncRunKind = z.infer<typeof MailSyncRunKindSchema>;
 
 export const MailSyncRunStatusSchema = z.enum(["succeeded", "failed", "skipped", "cancelled"]);
 export type MailSyncRunStatus = z.infer<typeof MailSyncRunStatusSchema>;
+
+// ---------------------------------------------------------------------------
+// Connection-lifecycle route contracts (Checkpoint 7.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /mail-connections/gmail/authorize-url?redirect_uri=`.
+ *
+ * The client may only SELECT among server-allowlisted redirects; it can never
+ * introduce one. That is what stops the endpoint becoming an open redirect
+ * against our own OAuth client.
+ */
+export const MailAuthorizeUrlQuerySchema = z.object({ redirect_uri: z.string().url() }).strict();
+export type MailAuthorizeUrlQuery = z.infer<typeof MailAuthorizeUrlQuerySchema>;
+
+export const MailAuthorizeUrlResponseSchema = z.object({
+  url: z.string().url(),
+  state_expires_at: z.string().datetime({ offset: true }),
+});
+export type MailAuthorizeUrlResponse = z.infer<typeof MailAuthorizeUrlResponseSchema>;
+
+/**
+ * `POST /mail-connections/gmail` — the manual completion fallback for a flow
+ * that could not use the browser callback. Same service, same allowlist, same
+ * single-use state, so it bypasses no check.
+ *
+ * `auth_code` reuses the exact field name the API's logger already redacts.
+ */
+export const ConnectGmailRequestSchema = z
+  .object({
+    auth_code: z.string().min(1),
+    redirect_uri: z.string().url(),
+    state: z.string().min(1),
+  })
+  .strict();
+export type ConnectGmailRequest = z.infer<typeof ConnectGmailRequestSchema>;
+
+export const MailConnectionListResponseSchema = z.object({
+  configured: z.boolean(),
+  items: z.array(MailConnectionSchema),
+});
+export type MailConnectionListResponse = z.infer<typeof MailConnectionListResponseSchema>;
+
+/**
+ * `POST /mail-connections/:id/disconnect`.
+ *
+ * `revoked` reports whether Google accepted the revocation, and is deliberately
+ * SEPARATE from the operation succeeding. Revocation is best-effort: failing to
+ * tell Google must never leave the user unable to clear their own credentials,
+ * so a `false` here accompanies a fully disconnected connection.
+ */
+export const MailDisconnectResponseSchema = z.object({
+  connection: MailConnectionSchema,
+  revoked: z.boolean(),
+});
+export type MailDisconnectResponse = z.infer<typeof MailDisconnectResponseSchema>;

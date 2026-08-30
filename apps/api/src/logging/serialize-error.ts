@@ -42,6 +42,13 @@ const PROVIDER_ERROR_NAMES: ReadonlySet<string> = new Set([
   "CalDavError",
   "GoogleHealthOAuthError",
   "GoogleHealthApiError",
+  // Phase 7. GmailApiError already destroys the provider's message in its own
+  // constructor, and GmailOAuthError constructs one from an error token -- so
+  // neither should carry prose in the first place. They are listed anyway
+  // because this allowlist is the layer that must hold when a constructor is
+  // later changed by someone who has not read that comment.
+  "GmailOAuthError",
+  "GmailApiError",
 ]);
 
 /**
