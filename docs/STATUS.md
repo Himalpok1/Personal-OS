@@ -1,10 +1,104 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 6 — Google Health Integration — **COMPLETE AND CLOSED (2026-08-30).** Checkpoint 6.7B deployed Phase 6 to production, all lanes passed, closure actions are done and the work is merged to `main`. Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, the Rabbit runs **`versionCode 7`** with pairing/PRIMARY/session preserved, and **both reboot-survival proofs (host and Rabbit) passed**. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Current phase:** Phase 7 — Email summaries + service monitoring — **Checkpoint 7.0 (ADR gate, documentation reconciliation, repository baseline correction) COMPLETE (2026-08-30).** Phase 7 is **documentation-only so far**: ADR-052/053/054/055 are recorded, the open Phase 7 decision in `docs/DECISIONS.md` is closed, and stale present-state documentation is corrected. **No code, no migration, no dependency, no credential, no Google Cloud change, no production access.** Local migration level is unchanged at 14 `.sql` / 14 journal entries and there is no `0014`. Phase 6 — Google Health Integration — **COMPLETE AND CLOSED (2026-08-30).** Checkpoint 6.7B deployed Phase 6 to production, all lanes passed, closure actions are done and the work is merged to `main`. Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, the Rabbit runs **`versionCode 7`** with pairing/PRIMARY/session preserved, and **both reboot-survival proofs (host and Rabbit) passed**. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
 **Implementation status:** Phases 0–5 are implemented and production-deployed, and **Phase 6's server side is now deployed too (Checkpoint 6.7B, 2026-08-29)**. **Production migration level moved to 0000–0013 = 14 migrations** — `0013_google_health_sync` was applied exactly once on 2026-08-29, matching the local level of 14 `.sql` / 14 journal entries. Production api/worker/web serve the 6.7 release images built from `c0dbff3`. The production Rabbit now runs `com.himal.personalos` **versionCode 7**, installed in place with `adb install -r` on 2026-08-30 — `firstInstallTime` unchanged, pairing/PRIMARY/push token/session all preserved.
-**Next phase allowed:** **Checkpoint 6.7 (gated production deployment), on separate explicit approval only.** 6.0–6.6 are closed. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
+**Next phase allowed:** **Checkpoint 7.1 — Phase 7 contracts, migration `0014` and the Gmail provider fake — on separate explicit approval only.** Phase 6 and every one of its checkpoints are closed, and Phase 7 Checkpoint 7.0 (documentation only) is closed. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). **Phase 7 is approved and scoped by ADR-052: Gmail-first and read-only, `gmail.metadata` only, no message bodies, no mail actions, Microsoft Graph deferred, plus a worker-owned service-monitoring engine whose worker-heartbeat watchdog is API-owned. Phase 7 development may proceed through Checkpoint 7.7; production deployment (7.8) must not begin before the `2026-09-04T20:08:25Z` Phase 6 monitoring milestone completes (ADR-051, ADR-052).** Phase 8 has not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
+
+## Phase 7 — Email summaries + service monitoring (planning gate approved 2026-08-30)
+
+Phase 7 is the `docs/ARCHITECTURE.md` phase-plan entry *"Email summaries + service monitoring"*,
+refined and made operative by **ADR-052**. A read-only Planning & Discovery Gate ran first — four
+parallel read-only investigation lanes plus integrator-owned first-hand verification — and its
+conclusions are the specification these ADRs record.
+
+**Approved checkpoints:** 7.0 ADRs + documentation reconciliation · 7.1 contracts + migration `0014`
++ provider fake · **⛔ stop** · 7.2 Gmail OAuth · 7.2P live capability probe · **⛔ stop** · 7.3 sync
+engine · 7.4 digest · 7.5 monitoring + migration `0015` · 7.6 UI · 7.7 hardening + live proof · 7.8
+gated production deployment.
+
+**Approved scope at this time is 7.0 only.**
+
+### Checkpoint 7.0 — ADR gate, documentation reconciliation, baseline correction (COMPLETE, 2026-08-30)
+
+Documentation only. No code, no migration, no dependency, no test change, no credential, no Google
+Cloud action, no production access. Branch `main`, HEAD `8b7a9eb` at start, clean tree.
+
+**Added `docs/DECISIONS.md` ADR-052** (Phase 7 scope: Gmail-first, read-only, Graph deferred,
+polling-only under ADR-018, checkpoint structure, and the deployment gate on Phase 6's monitoring
+milestone) · **ADR-053** (mail integration: `gmail.metadata` only, opaque `historyId` cursor
+deliberately inverting the health date-cursor rule, 404 → full resync as a first-class state, a third
+OAuth client in the existing project, `Retry-After` honoured, closed `MailSyncErrorCode` enum) ·
+**ADR-054** (header-only storage, no bodies, bounded prune permitted, and the prompt-injection
+posture for the first attacker-authored input to reach the AI layer) · **ADR-055** (monitoring
+worker-owned, heartbeat watchdog API-owned, derived failure counting, incident-scoped alert dedupe,
+three-state uptime).
+
+**Closed the open Phase 7 decision.** `docs/DECISIONS.md`'s *"Email account scope and whether the app
+may act on mail"* is struck through and answered, following the ADR-046 precedent, and a new
+genuinely-open decision is recorded in its place for Microsoft Graph.
+
+#### The five amendments approved with the planning gate
+
+- **A — Phase 6 longevity and Phase 7 development are independent.** The seven-day refresh-token
+  longevity observation (ADR-051) remains open and is **not** claimed as passed. **Phase 7
+  development may begin**, and may run through Checkpoint 7.7. **Production deployment (7.8) may not
+  occur before the `2026-09-04T20:08:25Z` monitoring milestone completes** — so a genuine Phase 6
+  production incident can never be confounded with a Phase 7 change.
+- **B — Mail digests are global across all active connected mailboxes.** One digest per
+  `(digest_date, timezone)` covering every connection, never one per mailbox: the product question is
+  "what needs my attention today", which is not per-account.
+- **C — Worker-heartbeat monitoring belongs to the API watchdog; general monitoring stays
+  worker-owned.** A worker-hosted monitor cannot alert on its own death, so the `worker_heartbeat`
+  staleness check — the unbuilt half of `ARCHITECTURE.md`'s "alert on staleness" mandate — lives in
+  the API process. The residual blind spot (a hung or crash-looping worker behind a healthy API) is
+  documented, not papered over.
+- **D — `Retry-After` behaviour is proven by deterministic testing.** Injected responses against the
+  limiter's already-injected `now`/`sleep`/`random` seams, asserting exact millisecond values. **A
+  real Gmail 429 is NOT required for acceptance**, because provoking one would mean deliberately
+  abusing the quota.
+- **E — Digest generation and notification are separate.** Generation always occurs on schedule and
+  always persists. **Quiet hours delay the notification rather than suppressing it forever** — the
+  existing router drops a quiet-hours notification with no log row, which for a recurring digest
+  would mean silently sending nothing, permanently.
+
+#### Stale present-state documentation corrected
+
+| Correction | Was | Now |
+|---|---|---|
+| `Last verification` baseline | Checkpoint 6.6 — 2038 tests, worker 152, api 495, mobile 367 | **Re-measured first-hand: 2055 tests / 17 turbo tasks**, worker **159**, api **496**, mobile **376**, canaries 74/159 |
+| Header `Current phase` | Phase 6 closed | Phase 7, Checkpoint 7.0 complete |
+| Header `Next phase allowed` | "Checkpoint 6.7 … Phases 7/8 have not been approved or planned" | Checkpoint 7.1, on separate approval; Phase 7 approved and scoped |
+| Release-directory debt bullet | live build context `personal-os-5.7-release` | `personal-os-6.7-release`; 4.7/5.7/5.7.1 retained as rollback sources |
+| Duplicated `Remaining warnings / technical debt` heading | two identical headings; a reader could silently read half the ledger | numbered **part 1 of 2** / **part 2 of 2**, cross-referenced, entries left in their recorded order |
+| `Next action` | "The unmerged The unmerged"; claimed 6.7B "not merged to `main`" while the next paragraph said it was | duplication removed; merge state stated once, correctly |
+| `AGENTS.md` scope | "Current starting scope: Phase 0 only." | Phase 7, with `docs/STATUS.md` named as canonical |
+| `AGENTS.md` repository layout | omitted `ai-providers`, `calendar-providers`, `health-providers` | all seven packages listed |
+
+**Historical records were not rewritten.** Only present-state assertions were corrected. The
+Checkpoint 5.7 narrative still names `personal-os-5.7-release` because that was the live context when
+it was written, and every prior verification record keeps its own numbers.
+
+#### Verification actually run
+
+Integrator-owned, first-hand — not transcribed from the 6.7A record. Build **9/9** · typecheck
+**17/17** · `eslint .` **zero output (0 errors, 0 warnings)** · `prettier --check .` clean ·
+`git diff --check` clean · full suite **uncached and serial, 0 of 17 cached: 2055 tests / 17 turbo
+tasks, zero failing** (core 326 · db 21 · schema 174 · calendar-providers 74 · health-providers 311 ·
+ai-providers 25 · api-client 93 · api 496 · worker 159 · mobile 376) · `gitleaks git` **182 commits,
+no leaks** · migrations **14 / 14, no `0014`** · `packages/db/` untouched · `versionCode` unchanged
+at 7.
+
+The four files this checkpoint edited are all `.prettierignore`d and none is compiled or tested, so
+the gate measures the **unchanged application tree** — which is exactly why the re-measurement was
+expected to, and did, reproduce 6.7A's numbers.
+
+#### Deliberately NOT done
+
+No migration `0014`. No `packages/mail-providers`. No routes, jobs, queues, or `exports` edits. No
+OAuth client, no Google Cloud change, no `.env` change. No mobile UI. No new or modified test. No
+commit (commits require explicit request). No production access. Checkpoint 7.1 not begun.
 
 ## Phase 6 — Google Health Integration (plan approved 2026-08-24)
 
@@ -4177,7 +4271,22 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-**Phase 6 Checkpoints 6.0 through 6.6 are complete. Work has stopped, as planned.**
+**Phase 7 Checkpoint 7.0 (ADR gate, documentation reconciliation, repository baseline correction) is
+complete. Work has stopped, as planned.** It changed documentation only: ADR-052 (Phase 7 scope),
+ADR-053 (mail integration architecture), ADR-054 (mail retention and privacy), ADR-055 (service
+monitoring architecture); the open "email account scope / may the app act on mail" decision closed;
+and stale present-state records corrected — the `Last verification` baseline, the release-directory
+bullet, the duplicated debt heading, a duplicated clause in `Next action`, and `AGENTS.md`'s
+"Phase 0 only" scope line. **No code, migration, dependency, test, credential or production change.**
+Exactly four files changed: `docs/DECISIONS.md`, `docs/STATUS.md`, `docs/ARCHITECTURE.md` and
+`AGENTS.md`. All four are `.prettierignore`d, none is compiled or tested, and the application tree is
+byte-identical to the frozen RC `bcf11fc` before and after.
+
+**The Phase 6 record below is retained verbatim as history and was not rewritten.**
+
+---
+
+**Phase 6 Checkpoints 6.0 through 6.6 are complete. Work stopped there, as planned.**
 
 6.6 was the bounded live proof. Every lane passed against the real Google Health API on a development
 account and the local development database: backfill chunking landed on the exact three predicted
@@ -4207,7 +4316,14 @@ unchanged. `versionCode` **6**. Migrations 14 / 14. `health_observations` **0**.
 
 **Do not begin Checkpoint 6.7 without a separate explicit user approval.**
 
-## Remaining warnings / technical debt
+## Remaining warnings / technical debt (part 1 of 2)
+
+> **This list continues under a second heading, "Remaining warnings / technical debt (part 2 of 2)",
+> further down this file.** The split is historical — checkpoints appended to whichever block was
+> nearest — and the two blocks were long indistinguishable, so a reader searching the heading could
+> silently read only half the ledger. Checkpoint 7.0 numbered them rather than reordering the
+> entries, because merging would rewrite the historical order in which each item was recorded.
+> **Read both parts.**
 
 - ~~**Recurring all-day events surface ADR-042's local-noon anchor as a real clock time.**~~
   — **CLOSED by Checkpoint 5.7.1.** Both live leaks fixed, three latent spots hardened,
@@ -4220,8 +4336,9 @@ unchanged. `versionCode` **6**. Migrations 14 / 14. `health_observations` **0**.
   and `WEB_APP_ORIGIN`/compose are byte-identical to the browser-verified Phase 4 state.
 - **`/home/himallinux/personal-os` on the production host is stale Phase 3 source** (migrations
   only to 0004) but holds the real `.env`. It is a trap for anyone who builds from it by habit.
-  The live build context is `/home/himallinux/personal-os-5.7-release`; `personal-os-4.7-release`
-  is retained as a rollback source.
+  The live build context is `/home/himallinux/personal-os-6.7-release` (Checkpoint 6.7B);
+  `personal-os-4.7-release`, `personal-os-5.7-release` and `personal-os-5.7.1-release` are retained
+  as rollback sources. A Phase 7 deployment would ship into its own new `personal-os-7.8-release`.
 - **There is no DELETE endpoint for AI task routes.** Undoing the production `daily_brief`
   registration requires another upsert repointing `primary_model_id`, or direct SQL.
 - ~~**`apps/mobile/src/app/settings.tsx` renders `connection.last_sync_error` verbatim for Google
@@ -4254,7 +4371,10 @@ unchanged. `versionCode` **6**. Migrations 14 / 14. `health_observations` **0**.
 - **No UI to browse past settled reviews** (client list method exists; no screen) — intentional MVP scope.
 - **`reviews` route screens use inline Stack.Screen options rather than root-layout declarations** — conventionally inconsistent with other stack routes, functionally identical.
 
-## Remaining warnings / technical debt
+## Remaining warnings / technical debt (part 2 of 2)
+
+> Continues the list under "Remaining warnings / technical debt (part 1 of 2)" above. See the note
+> there. **Both parts are current; neither supersedes the other.**
 
 - ~~**`remind_at` cannot be set or changed through the API.**~~ — **STALE, corrected 2026-08-23.** Checkpoint 5.4 added `remind_at` to `TaskUpdateSchema` (`PATCH /tasks/:id`), and an editor exists at `apps/mobile/src/app/tasks/[id].tsx`. What remains true, and is the real residual debt: that editor is a raw ISO-8601 `TextInput` with no picker or validation, and `tasks/new.tsx` still cannot set a reminder at creation time.
 - ~~**Android captures are labelled `source: "web"`**~~ — **NOT A DEFECT; reclassified in Checkpoint 5.6.** `source` is an ENTRY-PATH vocabulary, not a platform tag, and is closed by both `CaptureSourceSchema` and the `inbox_items_source` CHECK constraint. `web` correctly denotes the in-app Quick Capture sheet on every platform. There is no native member, and adding one would require altering the CHECK constraint (a migration). The rule is now documented in `docs/ARCHITECTURE.md` and pinned by a test. See ADR note in the 5.6 entry.
@@ -4355,26 +4475,39 @@ unchanged. `versionCode` **6**. Migrations 14 / 14. `health_observations` **0**.
 
 ## Last verification
 
-**Phase 6 Checkpoint 6.6 — bounded live Google Health proof (2026-08-27).** Local development only;
-production untouched; branch `phase-6-google-health-live-proof`, HEAD `11cd3bb`, unmerged; the
-repository has no remote.
+**Phase 7 Checkpoint 7.0 — ADR gate and documentation reconciliation (2026-08-30).** Branch `main`,
+HEAD `8b7a9eb`, clean tree before the documentation edits; the repository has no remote. This
+checkpoint changed **documentation only** — `docs/DECISIONS.md`, `docs/STATUS.md`,
+`docs/ARCHITECTURE.md`, `AGENTS.md` — all of which are `.prettierignore`d and none of which is
+compiled or tested, so the gate below measures the **unchanged application tree**.
 
-Full gate: build 9/9, typecheck 17/17, lint **0 warnings**, `format:check` clean,
-`git diff --check` clean, `expo export --platform web` clean with a single `index.html`.
+Full gate, run first-hand by the integrator: build **9/9**, typecheck **17/17**, `eslint .`
+**zero output — 0 errors, 0 warnings**, `prettier --check .` *"All matched files use Prettier code
+style!"*, `git diff --check` clean.
 
-Full suite, **uncached and serial**: **2038 tests across 17 turbo tasks** (2035 → **+3**), zero
-failing. Per package — core 326 · db 21 · schema 174 · **calendar-providers 74** · health-providers
-311 · ai-providers 25 · api-client 93 · api **495** · **worker 152** · mobile 367. **No package
-decreased**, and both zero-drift canaries (`calendar-providers` 74, `worker` 152) held exactly.
+Full suite, **uncached and serial** (`turbo run test --force --concurrency=1`, 0 of 17 cached,
+56.1 s): **2055 tests across 17 turbo tasks**, zero failing. Per package — core 326 · db 21 ·
+schema 174 · **calendar-providers 74** · health-providers 311 · ai-providers 25 · api-client 93 ·
+api **496** · **worker 159** · mobile 376. Both zero-drift canaries (`calendar-providers` **74**,
+`worker` **159**) held exactly.
 
-`gitleaks git`: **153 commits, no leaks.** Working tree 79 findings, **0 in any file git would
-commit**, classified with `git check-ignore`. Migrations **14 `.sql` / 14 journal entries** with
-`packages/db/` byte-unchanged against `main`. Forbidden-area drift **zero**. `health_observations`
-**0**; `heart-rate-intraday` `sync_enabled = false` with zero sync runs ever; OAuth scopes unchanged.
-No repository process left running, all ports free, **zero advisory locks held**.
+**This corrects a stale record rather than reporting a change.** The previous `Last verification`
+section recorded Checkpoint 6.6's **2038 / worker 152 / api 495 / mobile 367** and was never updated
+for Checkpoint 6.7A, whose later run of **2055** is the tree that reached `main`. Checkpoint 7.0
+re-measured it directly rather than transcribing 6.7A's numbers, and the measurement agrees with
+6.7A exactly. That agreement is the expected result, not a coincidence: at `8b7a9eb`,
+`git diff bcf11fc HEAD` excluding documentation paths is **empty**, so `main`'s application tree is
+byte-identical to the frozen 6.7A release candidate that produced the 2055 figure. **The
+authoritative baseline for Phase 7 is therefore 2055 / 17 turbo tasks, with canaries 74 and 159.**
 
-*Previous verification — Phase 6 Checkpoint 6.5 (2026-08-25): 2035 tests across 17 turbo tasks,
-calendar-providers 74, worker 152, api 492, 14 migrations.*
+`gitleaks git`: **182 commits scanned, no leaks.** Migrations **14 `.sql` / 14 journal entries**,
+highest `0013_google_health_sync`, **no `0014`**. `packages/db/` untouched. Forbidden-area drift
+**zero** — no code, dependency, compose, `eas.json`, `app.config.ts` or test file was modified.
+`versionCode` unchanged at **7**. Production untouched; no Google Cloud, OAuth or credential action.
+
+*Previous verification — Phase 6 Checkpoint 6.7A (2026-08-28): 2055 tests across 17 turbo tasks,
+calendar-providers 74, worker 159, api 496, mobile 376, 14 migrations. Before it, Checkpoint 6.6
+(2026-08-27): 2038 tests, worker 152, api 495, mobile 367.*
 
 ## Superseded verification
 
@@ -4481,11 +4614,19 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Stopped. Checkpoint 6.7B deployed Phase 6 to production on 2026-08-30, except the Rabbit lane.**
-Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3`
-release images, the production Google Health connection is live and synchronising, and the host
-reboot-survival proof passed. Work lives on branch `phase-6-production-deployment-6-7b`
-(HEAD `f25bd0f`), **not merged to `main`**; the repository has no remote.
+**Stopped after Phase 7 Checkpoint 7.0 (documentation only). Do not begin Checkpoint 7.1 without a
+separate explicit user approval.**
+
+7.1 is contracts, migration `0014` and the Gmail provider fake: `packages/schema/src/mail-*.ts`, a
+new server-only `packages/mail-providers`, `packages/core/src/mail/` behind a new `exports` subpath,
+the six `mail_*` tables as `CREATE TABLE`-only SQL, the journal-guard allowlist entry, and both
+test-harness truncation lists. No routes, no jobs, no queues, no credentials, no Google call.
+
+**Phase 6 is closed.** Checkpoint 6.7B deployed it to production on 2026-08-29/30 — migration `0013`
+applied (production level 0000–0013 = 14), api/worker/web serving the `c0dbff3` release images, the
+production Google Health connection live and synchronising, the Rabbit on `versionCode 7`, and both
+reboot-survival proofs passed. That work was fast-forwarded into `main`, which is now at `8b7a9eb`;
+the repository has no remote.
 
 **Checkpoint 6.7B is CLOSED and Phase 6 is COMPLETE.** All lanes passed, closure actions are
 done, and the deployment branch was fast-forwarded into `main`. Remaining items are follow-ups,
@@ -4504,13 +4645,26 @@ it an effective ≈65.7 × 48.0 dp target (see the closure section). The one-off
 snapshot was **deleted after final acceptance**, restoring ADR-024 in full — Personal OS keeps
 no backup system.
 
-**Phase 7 has not been approved, planned or begun.** The unmerged The unmerged `phase-6-audit-hardening-linear`, `phase-6-google-health-sync`,
+**Phase 7 is now approved and scoped (ADR-052); Checkpoint 7.0 is complete and 7.1 has not begun.**
+The unmerged `phase-6-audit-hardening-linear`, `phase-6-google-health-sync`,
 `phase-6-google-health-ui` and `phase-6-google-health-live-proof` branches remain their own
-integration decisions; the original `phase-6-audit-hardening` is never merged.
+integration decisions; the original `phase-6-audit-hardening` is never merged. Their *content*
+reached `main` through the linear/RC chain, so before Phase 7 branches from `main` these should be
+checked by diff rather than by prose.
 
-**Carried into 6.7:**
+**Carried into Phase 7** (this list was written as "Carried into 6.7"; 6.7 is now complete, and every
+item below that did not close there carries forward unchanged):
 
-1. **MANDATORY PRE-DEPLOYMENT ACCEPTANCE GATE — the ≥7-day refresh-token observation, still
+1. ⚠️ **SUPERSEDED BY ADR-051 — retained verbatim as the record of what was believed at the time.**
+   The seven-day gate below was written while the OAuth app was in Testing. The owner amended
+   acceptance on 2026-08-28: the app was published **In production**, the immediate
+   authorization/read/refresh proof passed, the pre-deployment wait is `waived_by_owner`, and
+   seven-day longevity is `deferred_post_deployment` with a monitoring milestone of
+   `2026-09-04T20:08:25Z`. It is still **not** claimed as passed. Per ADR-052 it does **not** gate
+   Phase 7 development, but it **does** gate Phase 7 production deployment (7.8). The original text
+   follows.
+
+   **MANDATORY PRE-DEPLOYMENT ACCEPTANCE GATE — the ≥7-day refresh-token observation, still
    `blocked_time`.** Checkpoint 6.6's executable live-proof lanes are accepted and merged; this
    requirement is the one item that did not close, and it is carried forward as a **gate on
    deployment, not on the merge**.

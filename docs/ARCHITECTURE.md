@@ -84,8 +84,8 @@ The API handles HTTP and nothing else. Anything slow, scheduled, retried, or ext
 | Expand recurrence window | Nightly cron + on rule change |
 | Generate next completion-anchored occurrence | Enqueued on task completion |
 | Dispatch push notifications | Enqueued + cron sweep |
-| Email polling and digests | Cron (Phase 7) |
-| Uptime / service monitoring | Cron (Phase 7) |
+| Gmail polling and mail digests | Cron (Phase 7, ADR-052/053) |
+| Service monitoring: probes and incident lifecycle | Cron (Phase 7, ADR-055) |
 | Embedding generation | Enqueued on write (Phase 8) |
 
 **Rules for the split:**
@@ -94,7 +94,7 @@ The API handles HTTP and nothing else. Anything slow, scheduled, retried, or ext
 - **Every job must be idempotent.** pg-boss retries on failure and can deliver twice under crash conditions. Key on `client_uuid`, `inbox_id`, or `(parent_id, occurs_at)` and make a second run a no-op.
 - Both processes import `packages/db` and connect to the same Postgres. No API-to-worker HTTP calls; the database and queue are the entire interface.
 - Separate containers in the same compose file, separate health endpoints, `restart: unless-stopped` on both.
-- Worker crashes must be loud. A silently dead worker means captures sit unparsed and reminders never dispatch, and you won't notice for days. Add a heartbeat row it updates each cycle and alert on staleness.
+- Worker crashes must be loud. A silently dead worker means captures sit unparsed and reminders never dispatch, and you won't notice for days. Add a heartbeat row it updates each cycle and alert on staleness. **The heartbeat row shipped in Phase 0 and `GET /health` has reported `worker.stale` ever since, but nothing ever alerted on it. ADR-055 assigns that alerting to the *API* process, not to a worker job — a worker-hosted monitor cannot alert on its own death. All other service monitoring stays worker-owned. The residual blind spot, a hung or crash-looping worker behind a healthy API, is documented rather than papered over.**
 
 ---
 
@@ -596,7 +596,17 @@ Live on Phases 0–3 for a month before continuing. Half of what you think you w
 
 **Later — Finance.** Copilot Money has no public API — decide between scheduled CSV import, going direct to Plaid or SimpleFIN Bridge, or self-hosting Actual Budget as the ledger. Voice transaction entry drops into the same capture pipeline.
 
-**Phase 7 — Email summaries + service monitoring.** Gmail/Graph polling, LLM digest, uptime checks against your live projects with alerting through the notification router.
+**Phase 7 — Email summaries + service monitoring (refined 2026-08-30, ADR-052).** Read-only **Gmail** polling with the `gmail.metadata` scope only, a bounded LLM digest over headers and labels, uptime checks with a full incident lifecycle, and alerting through the **existing** notification router. Three refinements to the original entry, all locked by ADR-052/053/054/055:
+
+- **Gmail only; Microsoft Graph is deferred** to a later, separately approved phase. Graph needs a separate Entra ID app registration, a second consent surface and a per-folder delta cursor — a second credential lane and a different sync engine, not a variation on Gmail's.
+- **Read-only, metadata-only, and the app may never act on mail.** No message body, snippet, payload part or attachment is fetched or stored; no send, reply, delete, archive, mark-read, move, label, or autonomous task/event creation. The digest describes what mail *is* — sender, subject, labels, thread shape — not what it says.
+- **Polling, never push.** Gmail push requires Cloud Pub/Sub, and a webhook subscription requires a publicly accessible HTTPS endpoint, which ADR-018 forbids and ADR-046 already excluded permanently for the same reason. Unlike webhooks, a Pub/Sub *pull* subscription would need no public endpoint and is therefore not categorically excluded — but it is **not adopted**, because a GCP service dependency for a single-user workload needs its own approval.
+
+Unlike the Google Health API, Gmail **does** offer a real incremental primitive: `history.list` keyed on an opaque `historyId`. That cursor expires — `history.list` returns HTTP 404 once `startHistoryId` falls outside a window documented only as "at least one week and often longer" — so cursor expiry is a first-class tested state transition (`needs_full_resync` → bounded full sync → new cursor), and ADR-046's trailing-window/content-hash/35-day-staleness architecture is deliberately **not** ported.
+
+Monitoring is worker-owned, with one exception: the **`worker_heartbeat` staleness check belongs to the API process**, because a worker-hosted monitor cannot alert on its own death. That closes the unbuilt half of this document's own "Worker crashes must be loud… alert on staleness" requirement. Alert dedupe keys are **incident-scoped**, which is what makes a *second* outage notifiable — `notification_dispatch_log.dedupe_key` is a permanent primary key with no TTL.
+
+Checkpoints 7.0–7.8; see `docs/STATUS.md` for the checkpoint record and ADRs 052–055 for locked decisions.
 
 **Phase 8 — AI layer.** Semantic search over everything (pgvector), chat with tool access to all modules, proactive surfacing. This is why inbox-first matters — by now everything is uniformly structured and queryable.
 
@@ -604,7 +614,7 @@ Live on Phases 0–3 for a month before continuing. Half of what you think you w
 
 ## Open questions for later phases
 
-- Which email accounts, and is a summary enough or should the app act on mail?
+- ~~Which email accounts, and is a summary enough or should the app act on mail?~~ **Answered for Phase 7 by ADR-052/053/054: Gmail accounts only, a summary is enough, and the app may never act on mail.** Scope is exactly `gmail.metadata`, so no message body is ever read or stored. Microsoft Graph remains genuinely open and is tracked in `docs/DECISIONS.md`.
 - ~~Health: passive dashboard, or does it feed the AI layer proactively?~~ **Answered by ADR-046: passive.** Daily Brief integration is deferred to a separately approved checkpoint.
 - Finance: is Copilot the source of truth forever, or a stepping stone to owning the ledger?
 - Does the Pi 5 keep a wake-word role, or does capture become phone-only?

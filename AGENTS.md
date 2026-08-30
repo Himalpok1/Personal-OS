@@ -35,19 +35,25 @@ Key constraints:
 
 Do not silently replace or reinterpret these decisions.
 
-## Planned repository layout
+## Repository layout
+
+This is the layout as it exists today, not a plan. Three packages were added after this section was
+first written and are listed here as of Checkpoint 7.0.
 
 ```text
 apps/
-  mobile/        # Expo Router: iOS, Android, web
-  api/           # Fastify HTTP API only
-  worker/        # pg-boss workers, cron, polling
+  mobile/              # Expo Router: iOS, Android, web
+  api/                 # Fastify HTTP API only
+  worker/              # pg-boss workers, cron, polling
 
 packages/
-  schema/        # Zod schemas + inferred TypeScript types
-  db/            # Drizzle schema, migrations, DB connection factory
-  api-client/    # typed, framework-agnostic API client
-  core/          # recurrence/date math, parsing helpers, shared domain logic
+  schema/              # Zod schemas + inferred TypeScript types
+  db/                  # Drizzle schema, migrations, DB connection factory
+  api-client/          # typed, framework-agnostic API client
+  core/                # recurrence/date math, parsing helpers, shared domain logic
+  ai-providers/        # Vercel AI SDK adapters + AES-256-GCM credential crypto (Phase 1)
+  calendar-providers/  # Google Calendar + CalDAV clients (Phase 4)
+  health-providers/    # Google Health catalog, OAuth, client, sync (Phase 6)
 
 docs/
   ARCHITECTURE.md
@@ -56,6 +62,12 @@ docs/
   PHASE-0-CHECKLIST.md
   WORKFLOW.md
 ```
+
+`packages/db`, `packages/ai-providers`, `packages/calendar-providers` and `packages/health-providers`
+are **server-only** — they import `pg` or `node:crypto` and must never reach the Expo bundle.
+`packages/core` is mixed: its barrel re-exports Node-only recurrence and device-auth modules, so
+client-reachable code imports the deep subpaths its `exports` map exposes (`./timezone`,
+`./recurrence/editor`, `./health/*`), never the barrel.
 
 ## Engineering rules
 
@@ -116,8 +128,10 @@ Do not claim completion if you did not run the verification.
 
 The project is phase-gated.
 
-**Current starting scope: Phase 0 only.**
+**`docs/STATUS.md` is the canonical statement of the current phase and of what is approved next. Read it before assuming scope.** This section states the rule; it does not track the phase number.
 
-Do not start Phase 1 implementation until every blocking Phase 0 item is complete.
+As of Checkpoint 7.0 (2026-08-30): Phases 0–6 are complete and production-deployed. **Phase 7 — Email summaries + service monitoring — is approved and scoped by ADR-052**, and Checkpoint 7.0 (documentation only) is complete.
 
-If a Phase 0 task requires credentials, hardware access, Tailscale access, or another user-only action, stop at the point where user input is needed and ask for it clearly.
+Do not start the next checkpoint until the current one is complete, verified, and explicitly approved. Checkpoints marked with a stop in `docs/STATUS.md` are hard gates.
+
+If a task requires credentials, hardware access, Tailscale access, Google Cloud access, production access, or another user-only action, stop at the point where user input is needed and ask for it clearly.
