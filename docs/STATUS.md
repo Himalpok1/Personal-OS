@@ -1,7 +1,7 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0 through 6.6 plus 6.7A COMPLETE; 6.7B production deployment COMPLETE on the server side (2026-08-29), with the production Google Health connection, the Rabbit versionCode 7 install and both reboot proofs still outstanding.** **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Current phase:** Phase 6 — Google Health Integration — **Checkpoints 6.0 through 6.6 plus 6.7A COMPLETE; 6.7B production deployment COMPLETE except the Rabbit lane (2026-08-30).** Migration `0013` is applied to production, api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, and the **host reboot-survival proof passed**. The Rabbit `versionCode 7` APK is built and audited but **not installed** — the device does not enumerate on USB (`blocked_external`), so the Rabbit acceptance pass and Rabbit reboot proof are outstanding. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
 **Implementation status:** Phases 0–5 are implemented and production-deployed, and **Phase 6's server side is now deployed too (Checkpoint 6.7B, 2026-08-29)**. **Production migration level moved to 0000–0013 = 14 migrations** — `0013_google_health_sync` was applied exactly once on 2026-08-29, matching the local level of 14 `.sql` / 14 journal entries. Production api/worker/web serve the 6.7 release images built from `c0dbff3`. The production Rabbit still runs `com.himal.personalos` versionCode **6**; versionCode **7** is built and audited but **not yet installed**.
 **Next phase allowed:** **Checkpoint 6.7 (gated production deployment), on separate explicit approval only.** 6.0–6.6 are closed. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). Phases 7/8 have not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
@@ -315,6 +315,114 @@ than "the app root carries no disclosure". No policy was fabricated, the Console
 changed, and Google verification was not submitted; the application remains an unverified
 personal-use production app. This is **branding/compliance debt only** and is explicitly
 distinct from the OAuth functionality, which is verified working.
+
+#### Host reboot survival — PASSED
+
+The host was rebooted by the owner (`sudo` on `personal-os` requires their password, so the
+integrator cannot issue it). Fresh boot confirmed at `2026-08-29 22:23:11` local, `up 0 min`.
+Recovery was fully unattended.
+
+| Check | Result |
+|---|---|
+| Containers | all four auto-started, no manual repair |
+| Container IDs | **identical** to pre-reboot — api `608bf044a82e`, worker `2122152c78ce`, web `2eee2b4490e7`, postgres `404de24ef86b` |
+| Image digests | **identical** on all four |
+| Restart counts | 0 on all four |
+| Volume identity | `personal-os_postgres_data` still created `2026-08-15T17:32:00-05:00` |
+| Migration journal | still **14**, `0013` present exactly once |
+| Health tables | 7 |
+| Application data | tasks 2 · notes 3 · inbox 6 · devices 2 — unchanged |
+| Queues / schedules | all jobs `completed`; **6** schedules |
+| Worker heartbeat | fresh (43 s) |
+| Advisory locks | 0 |
+| API / web | `{"status":"ok","db":"connected"}` · web 200 |
+| Tailscale Serve | both routes **tailnet only** |
+| Bindings | api `127.0.0.1:3000`, web `127.0.0.1:8081`, **Postgres unpublished** — identical to baseline |
+
+A transient SSH timeout occurred on the first attempt immediately after the reboot; the host
+answered normally seconds later (ping 0% loss, 1.8 ms). It was the host still coming up, not a
+fault.
+
+#### Production Google Health connection — live
+
+Consent was completed interactively in the browser against the owner's existing Google
+session. **No credential was entered by the agent**; the account chooser was already signed
+in, and the unverified-app interstitial independently confirmed the developer account is the
+same one that owns the OAuth application. Google's own consent screen reported
+*"tail62a68f.ts.net already has some access — see the 3 services"*, confirming the same
+account already carries the three Health grants.
+
+| Property | Value |
+|---|---|
+| Connection | `ac3d47ad-f5fb-4732-94b9-751dcb113f79`, provider `google_health`, status **active** |
+| Identity | `health_user_id` matches the development connection's recorded identity — same account |
+| Granted scope | **exactly the three** read-only Health scopes; none added |
+| Credentials at rest | access **253 B** ciphertext · refresh **103 B** ciphertext · 12 B IV · 16 B auth tag — matching the 6.2P lengths |
+| OAuth state | single-use honoured — 1 consumed of 3 minted; the two unused states expired rather than being consumed |
+| Streams | **19 seeded, 18 enabled**; `heart-rate-intraday` **false** |
+| `last_sync_error` | null, and **not projected** by the API at all |
+| Exactly one connection row | yes |
+
+**No new OAuth application, project, client, account or credential was created, and no scope
+or callback changed.**
+
+#### Bounded production synchronization — three passes
+
+Every pass was `trigger: manual` through `POST /health-connections/:id/sync`, executed by the
+deployed worker on the existing queue. **72 Google requests in total.**
+
+| Pass | Runs | Succeeded | Inserted | Updated | Unchanged | Rejected |
+|---|---|---|---|---|---|---|
+| 1 | 24 | **24** | 137 | 0 | 0 | **0** |
+| 2 | 24 | **24** | 0 | 1 | 136 | **0** |
+| 3 | 24 | **24** | **0** | 1 | 136 | **0** |
+
+Row count settled at **137** daily-metric rows and stayed there. Only four metrics returned
+data — `steps`, `distance`, `floors`, `total-calories` — exactly the set 6.2P found on this
+account; every other stream succeeded with zero rows, which is the honest empty path rather
+than a failure. Sessions: 0. **`health_observations`: 0.** `heart-rate-intraday`: **zero sync
+runs, ever.**
+
+The single updated row in passes 2 and 3 is the current, still-accumulating civil day. That is
+the same phenomenon 6.3L and 6.6 both recorded, and it is the content-hash change detection
+working rather than a defect — an unchanged row produces no heap tuple and leaves `updated_at`
+untouched, which is why 136 of 137 rows were byte-identical each time.
+
+**A staleness observation worth recording, because it looked wrong and was not.** After pass 1
+the summary reported `days_behind: 27`, `is_stale: true` despite every run succeeding. The
+cause is that `verified_through_date` on the summary is the **minimum across enabled streams**,
+and the four chunked metrics (`sleep`, `exercise`, `heart-rate`, `total-calories` — smaller
+`maxRangeDays`, hence 2–3 runs each) were still catching up at Aug 2–4 while the other 14
+streams were already at Aug 29. Pass 2 advanced the minimum to Aug 18; pass 3 brought **every
+enabled stream to 2026-08-29**, and the summary settled to `days_behind: 0`, `is_stale: false`,
+`last_attempt_status: succeeded`. The first-pass banner was honest, not a bug, and it
+self-resolved exactly as the bounded-window design predicts.
+
+Missing-versus-zero holds in production: of 16 today tiles, 15 are `state: "unknown"` with
+`value: null` and one carries a real value for the live day. **Zero tiles carry a non-null
+value in a non-`value` state** — not one fabricated zero. A leak scan across
+`/health-summary`, `/health-connections`, `/health-metrics`, `/health-sleep` and
+`/health-workouts` returned **0 matches** for `ya29.`, `1//`, `refresh_token`, `access_token`,
+`ciphertext`, `auth_tag`, `client_secret` or a populated `last_sync_error`.
+
+No health measurement appears in this record, in any commit, or in the deployment report.
+
+#### Rabbit `versionCode 7` — install blocked_external
+
+The APK is built and fully audited (above) but **was not installed**, because the device does
+not enumerate. Diagnosed rather than assumed:
+
+- This session runs on `Himals-Mac-mini.local` — the machine the device was reported connected to.
+- `adb devices -l` is empty after `adb kill-server` / `start-server`; an *unauthorized* device
+  would still be listed, so this is not a debugging-authorization prompt.
+- `ioreg -p IOUSB` enumerates only hubs, a USB3.0 card reader, a Stream Deck Neo and the
+  `CT1000X9PROSSD9` external SSD. **No Android device is present on the USB bus at all.**
+- Wireless ADB over the tailnet was tried as a fallback: `rabbit-r1` (100.123.210.37) pings
+  fine, but `adb connect` is refused on 5555 and 37000, so wireless debugging is not listening.
+
+Likely causes are a charge-only cable, a loose or unseated connection, or the R1's USB mode set
+to charging. Production `com.himal.personalos` **versionCode 6 was never targeted** by any
+install, uninstall, clear, force-stop or data command in this checkpoint.
 
 ### Checkpoint 6.7A — Fable release audit + OAuth production transition (audit phase COMPLETE, 2026-08-28)
 
