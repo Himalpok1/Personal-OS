@@ -50,6 +50,29 @@ const EnvSchema = z.object({
   // Checkpoint 6.3 audit; the api half predates 6.3.
   GOOGLE_HEALTH_OAUTH_CLIENT_ID: optionalNonEmpty(),
   GOOGLE_HEALTH_OAUTH_CLIENT_SECRET: optionalNonEmpty(),
+
+  // Gmail OAuth (Phase 7 Checkpoint 7.3). A THIRD OAuth client, distinct from
+  // both pairs above -- a Calendar or Health token is never reused as a mail
+  // token (ADR-053).
+  //
+  // Checkpoint 7.2 added these to apps/api only, and said why: "the worker has
+  // no mail code yet, so 7.3 adds its passthrough alongside the sync engine
+  // that needs it". This is that passthrough. The worker needs them because it
+  // refreshes a mail access token INLINE from the sync pass, exactly as it does
+  // for Health -- there is no refresh-token batch job.
+  //
+  // `optionalNonEmpty`, not a bare `.optional()`, for the reason recorded
+  // above: docker-compose passes these as `${VAR:-}`, which renders an EMPTY
+  // STRING rather than omitting the variable, and `z.string().min(1).optional()`
+  // throws on "" because it only tolerates `undefined`. On a host with no mail
+  // credentials -- which is production today -- the naive shape would kill the
+  // worker at import and take capture, calendar, health, notifications and
+  // reminders down with it.
+  //
+  // The redirect-URI allowlist is deliberately absent: only apps/api mints
+  // authorization URLs and handles the callback. The worker never needs it.
+  GMAIL_OAUTH_CLIENT_ID: optionalNonEmpty(),
+  GMAIL_OAUTH_CLIENT_SECRET: optionalNonEmpty(),
 });
 
 export const env = EnvSchema.parse(process.env);

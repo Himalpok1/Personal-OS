@@ -63,7 +63,43 @@ export const CALENDAR_PUSH_EVENT_DEAD_QUEUE = "calendar.google.push-event.dead";
 // lock.
 export const HEALTH_SYNC_CONNECTION_QUEUE = "health.google.sync-connection";
 
+// Phase 7 Checkpoint 7.3 (Gmail sync). ONE shared queue, no dead-letter.
+//
+// The Health precedent is followed EXACTLY, and for the same documented
+// reason rather than by analogy: pg-boss's own dist/manager.js:1293 states
+// that under `policy: "stately"` "the retry insert can be dropped by ON
+// CONFLICT when the queue policy ... already has a non-terminal job", after
+// which the job is re-inserted as `failed` and pushed straight to the
+// dead-letter queue, SKIPPING its remaining retryLimit. With a cron and a
+// persistent fault, a merely-transient first failure could therefore land in a
+// handler meant for terminal cleanup.
+//
+// `retryLimit: 0` removes the interaction outright: no `retry` rows exist, so
+// none can be dropped, nothing is spuriously dead-lettered, and queue depth is
+// provably one `created` + one `active` per connection however fast requests
+// arrive. Mail sync is idempotent and cron-driven, so the tick IS the retry --
+// and a better one, because it re-derives the cursor from current state rather
+// than replaying a stale payload. Provider-level retries live in the limiter
+// (@personal-os/mail-providers limiter.ts), bounded, and -- unlike Health's --
+// honouring Retry-After.
+//
+// `expireInSeconds` must stay strictly greater than the limiter's passBudgetMs
+// (300s), or pg-boss would un-`active` a job whose handler is still running and
+// still holding its per-connection advisory lock, after which every subsequent
+// pass would fail to acquire and skip forever.
+export const MAIL_SYNC_CONNECTION_QUEUE = "mail.gmail.sync-connection";
+
 export const QUEUE_RETRY_OPTIONS = {
+  // Per-connection serialization AND duplicate suppression, exactly as
+  // HEALTH_SYNC_CONNECTION_QUEUE. singletonKey is `${connectionId}`, so every
+  // trigger -- cron tick, a future manual "sync now" -- collapses onto one slot
+  // per connection. "stately", not "singleton": singleton allows 1 active but
+  // UNLIMITED queued, which is serialization without duplicate suppression.
+  [MAIL_SYNC_CONNECTION_QUEUE]: {
+    policy: "stately",
+    retryLimit: 0,
+    expireInSeconds: 900,
+  },
   // Per-connection serialization AND duplicate suppression. singletonKey is
   // `${connectionId}`, so every trigger -- hourly cron, app-open, manual
   // "sync now" -- collapses onto one slot per connection, and at most one

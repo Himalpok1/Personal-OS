@@ -259,6 +259,9 @@ importers:
       '@personal-os/health-providers':
         specifier: workspace:*
         version: link:../../packages/health-providers
+      '@personal-os/mail-providers':
+        specifier: workspace:*
+        version: link:../../packages/mail-providers
       '@personal-os/schema':
         specifier: workspace:*
         version: link:../../packages/schema

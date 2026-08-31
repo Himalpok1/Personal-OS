@@ -23,6 +23,11 @@ import {
 } from "./jobs/health-sync-connection.js";
 import { createGenerateLazyOccurrenceHandler } from "./jobs/generate-lazy-occurrence.js";
 import { createGoogleHealthClient } from "@personal-os/health-providers";
+import { createGmailClient } from "@personal-os/mail-providers";
+import {
+  createMailSyncConnectionHandler,
+  enqueueMailSyncForAllActiveConnections,
+} from "./jobs/mail-sync-connection.js";
 import {
   createNotificationsDispatchDeadLetterHandler,
   createNotificationsDispatchHandler,
@@ -34,6 +39,7 @@ import {
 import { sweepOrphanAudioJob } from "./jobs/sweep-orphan-audio.js";
 import { env } from "./env.js";
 import { recordHeartbeat } from "./heartbeat.js";
+import { errorToken, log } from "./logger.js";
 import {
   CALENDAR_PUSH_EVENT_DEAD_QUEUE,
   CALENDAR_PUSH_EVENT_QUEUE,
@@ -43,6 +49,7 @@ import {
   CALENDAR_SYNC_CALENDAR_QUEUE,
   CAPTURE_PARSE_QUEUE,
   HEALTH_SYNC_CONNECTION_QUEUE,
+  MAIL_SYNC_CONNECTION_QUEUE,
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
   NOTIFICATIONS_DISPATCH_QUEUE,
   OCCURRENCES_EXPAND_WINDOW_QUEUE,
@@ -61,6 +68,8 @@ const CALENDAR_REFRESH_CRON_QUEUE = "calendar.google.refresh-cron";
 
 const HEALTH_SYNC_CRON_QUEUE = "health.google.sync-cron";
 
+const MAIL_SYNC_CRON_QUEUE = "mail.gmail.sync-cron";
+
 const SWEEP_ORPHAN_AUDIO_QUEUE = "audio.sweep-orphan";
 
 const HEARTBEAT_QUEUE = "bootstrap.heartbeat";
@@ -73,7 +82,12 @@ async function startWithRetry(boss: PgBoss): Promise<void> {
       await boss.start();
       return;
     } catch (err) {
-      console.error(`pg-boss failed to start, retrying in ${RETRY_DELAY_MS}ms`, err);
+      // `errorToken`, never the error itself: pino-style `{ err }` logging walks
+      // every enumerable property, and a `pg` DatabaseError carries `detail`.
+      log.error("worker.pgboss.start_failed", {
+        retryDelayMs: RETRY_DELAY_MS,
+        error: errorToken(err),
+      });
       await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
     }
   }
@@ -93,11 +107,11 @@ async function main(): Promise<void> {
   });
 
   boss.on("error", (err: Error) => {
-    console.error("pg-boss error", err);
+    log.error("worker.pgboss.error", { error: errorToken(err) });
   });
 
   await startWithRetry(boss);
-  console.log("pg-boss started");
+  log.info("worker.pgboss.started");
 
   await boss.createQueue(HEARTBEAT_QUEUE);
   await boss.work(HEARTBEAT_QUEUE, async () => {
@@ -248,12 +262,50 @@ async function main(): Promise<void> {
   });
   await boss.schedule(HEALTH_SYNC_CRON_QUEUE, "0 * * * *");
 
-  console.log(
-    `worker started: ${HEARTBEAT_QUEUE} scheduled every minute, ${OCCURRENCES_EXPAND_WINDOW_QUEUE} scheduled nightly, ${SWEEP_ORPHAN_AUDIO_QUEUE} scheduled hourly, ${CALENDAR_SYNC_CRON_QUEUE} scheduled every 15min, ${CALENDAR_REFRESH_CRON_QUEUE} scheduled every 5min, ${HEALTH_SYNC_CRON_QUEUE} scheduled hourly, ${CAPTURE_PARSE_QUEUE}/${OCCURRENCES_GENERATE_LAZY_QUEUE}/${PTT_TRANSCRIBE_QUEUE}/${NOTIFICATIONS_DISPATCH_QUEUE}/${CALENDAR_REFRESH_TOKEN_QUEUE}/${CALENDAR_SYNC_CALENDAR_QUEUE}/${CALENDAR_PUSH_EVENT_QUEUE}/${HEALTH_SYNC_CONNECTION_QUEUE} listening`,
+  // Phase 7 Checkpoint 7.3 (Gmail sync). ONE connection-level queue, and no
+  // dead-letter queue -- QUEUE_RETRY_OPTIONS sets retryLimit 0 for the reason
+  // recorded there and above for health: under `policy: "stately"` pg-boss can
+  // drop a retry insert on conflict and re-insert the job as failed, straight
+  // past its remaining retries. Mail sync is idempotent and cron-driven, so the
+  // tick is the retry; provider-level retries live in the limiter, which unlike
+  // health's honours Retry-After.
+  const gmailClient = createGmailClient();
+  await boss.createQueue(MAIL_SYNC_CONNECTION_QUEUE, QUEUE_RETRY_OPTIONS[MAIL_SYNC_CONNECTION_QUEUE]);
+  await boss.work(
+    MAIL_SYNC_CONNECTION_QUEUE,
+    createMailSyncConnectionHandler(db, gmailClient, boss),
   );
+
+  // Every 15 minutes, matching the calendar cadence rather than health's hourly
+  // one: mail is the input to a daily digest, but a mailbox that is four hours
+  // stale is visibly wrong in a way a four-hour-old step count is not. Each tick
+  // fans out one job per ACTIVE connection, deduped on the connection id by the
+  // queue's stately policy, so a tick landing while a pass is still running adds
+  // nothing.
+  //
+  // A deployment with no Gmail credentials still runs this; the pass reads the
+  // connection table, finds nothing active, and returns. That is deliberate --
+  // the alternative is a startup-time branch that silently stops scheduling if
+  // credentials arrive later.
+  await boss.createQueue(MAIL_SYNC_CRON_QUEUE);
+  await boss.work(MAIL_SYNC_CRON_QUEUE, async () => {
+    await enqueueMailSyncForAllActiveConnections(db, boss, MAIL_SYNC_CONNECTION_QUEUE);
+  });
+  await boss.schedule(MAIL_SYNC_CRON_QUEUE, "*/15 * * * *");
+
+  // Structured rather than a sentence: the old line was a single interpolated
+  // string listing every queue, which is unsearchable, unparseable, and grows a
+  // clause per checkpoint.
+  log.info("worker.started", {
+    queues: 9,
+    schedules: 7,
+    mailSyncCron: MAIL_SYNC_CRON_QUEUE,
+    healthSyncCron: HEALTH_SYNC_CRON_QUEUE,
+    calendarSyncCron: CALENDAR_SYNC_CRON_QUEUE,
+  });
 }
 
 main().catch((err: unknown) => {
-  console.error("worker fatal error", err);
+  log.error("worker.fatal", { error: errorToken(err) });
   process.exit(1);
 });

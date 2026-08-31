@@ -10,6 +10,7 @@ import {
   CALENDAR_SYNC_CALENDAR_QUEUE,
   CAPTURE_PARSE_QUEUE,
   HEALTH_SYNC_CONNECTION_QUEUE,
+  MAIL_SYNC_CONNECTION_QUEUE,
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
   NOTIFICATIONS_DISPATCH_QUEUE,
   OCCURRENCES_GENERATE_LAZY_QUEUE,
@@ -120,6 +121,21 @@ export async function registerBoss(app: FastifyInstance): Promise<void> {
     await boss.createQueue(
       HEALTH_SYNC_CONNECTION_QUEUE,
       QUEUE_RETRY_OPTIONS[HEALTH_SYNC_CONNECTION_QUEUE],
+    );
+    // Phase 7 Checkpoint 7.3. apps/api does NOT yet send to this queue -- the
+    // manual "sync now" route is Checkpoint 7.6's -- but it must still create it
+    // identically, because create_queue is INSERT ... ON CONFLICT DO NOTHING and
+    // WHICHEVER PROCESS STARTS FIRST WINS THE OPTIONS. An API-first boot that
+    // created it without `policy: "stately"` and `retryLimit: 0` would silently
+    // discard the worker's, losing the per-connection depth bound and
+    // re-introducing the stately retry-drop interaction those options exist to
+    // remove. queue-parity.test.ts asserts the two declarations agree.
+    //
+    // Deliberately NO dead-letter queue: retryLimit is 0, so no job can ever
+    // exhaust retries. See the long comment in queue-names.ts.
+    await boss.createQueue(
+      MAIL_SYNC_CONNECTION_QUEUE,
+      QUEUE_RETRY_OPTIONS[MAIL_SYNC_CONNECTION_QUEUE],
     );
   } else {
     app.log.error(

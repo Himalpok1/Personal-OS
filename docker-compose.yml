@@ -85,6 +85,18 @@ services:
       # credentials exist, and the worker's env schema makes both optional.
       GOOGLE_HEALTH_OAUTH_CLIENT_ID: ${GOOGLE_HEALTH_OAUTH_CLIENT_ID:-}
       GOOGLE_HEALTH_OAUTH_CLIENT_SECRET: ${GOOGLE_HEALTH_OAUTH_CLIENT_SECRET:-}
+      # Gmail OAuth (Phase 7 Checkpoint 7.3). The worker refreshes a mail access
+      # token inline from the sync pass, exactly as it does for Health, so it
+      # needs the client pair. NOT the redirect URI: only apps/api mints
+      # authorization URLs and handles the callback.
+      #
+      # `:-` for the same reason as every optional pair above -- it renders an
+      # EMPTY STRING rather than omitting the key, which apps/worker's
+      # `optionalNonEmpty()` treats as absent. A plain `z.string().min(1)
+      # .optional()` would throw on "" and kill the worker at import on a host
+      # with no mail credentials, which is production today.
+      GMAIL_OAUTH_CLIENT_ID: ${GMAIL_OAUTH_CLIENT_ID:-}
+      GMAIL_OAUTH_CLIENT_SECRET: ${GMAIL_OAUTH_CLIENT_SECRET:-}
     volumes:
       - audio_data:/data/audio
     depends_on:
