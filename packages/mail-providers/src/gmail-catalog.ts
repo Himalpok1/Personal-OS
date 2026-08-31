@@ -105,3 +105,65 @@ export const GMAIL_MAX_RESULTS_CAP = 500;
  * called a "history id" is this catalog, not the sync engine.
  */
 export const GMAIL_CURSOR_KIND = "gmail_history_id";
+
+/**
+ * The single sync scope for a Gmail mailbox.
+ *
+ * `mail_sync_cursors.scope_key` exists because Microsoft Graph's delta cursor
+ * is PER FOLDER (ADR-052), so the column had to be representable before Graph
+ * was implemented. Gmail's `historyId` is not per-label -- it is one monotonic
+ * cursor for the whole mailbox -- so Gmail uses exactly one scope, and calling
+ * it `"INBOX"` would be a lie that a later reader would reasonably act on.
+ *
+ * The value is lowercase precisely so it cannot be mistaken for a Gmail label
+ * id, which are uppercase.
+ */
+export const GMAIL_MAILBOX_SCOPE = "mailbox";
+
+/**
+ * The history event types the sync engine subscribes to.
+ *
+ * All four, deliberately. `messageAdded` and `messageDeleted` are the obvious
+ * ones; `labelAdded`/`labelRemoved` matter because `mail_messages.provider_labels`
+ * is what the digest triages on -- a message moving out of INBOX or losing
+ * UNREAD is a change we store, and omitting those two would leave stored labels
+ * permanently frozen at whatever they were when the message first arrived.
+ */
+export const GMAIL_HISTORY_TYPES: readonly string[] = [
+  "messageAdded",
+  "messageDeleted",
+  "labelAdded",
+  "labelRemoved",
+];
+
+/**
+ * Bounds on a single sync pass. Every one of them exists because
+ * `history.list`/`messages.list` return REFERENCES, so metadata costs one extra
+ * request per message -- an N+1 shape (confirmed live in Checkpoint 7.2P) that
+ * is bounded here rather than left to the provider's patience.
+ */
+export const GMAIL_SYNC_BOUNDS = {
+  /** Pages of `history.list` a single incremental pass will follow. */
+  maxHistoryPages: 10,
+  /** Pages of `messages.list` a single bounded full resync will follow. */
+  maxFullSyncPages: 5,
+  /** `maxResults` per list page. Gmail's own cap is 500. */
+  pageSize: 100,
+  /**
+   * Hard ceiling on `messages.get` calls in one pass, across every source of
+   * message ids.
+   *
+   * THE LOAD-BEARING BOUND. A mailbox that received 50,000 messages since the
+   * cursor was written would otherwise produce 50,000 metadata requests in one
+   * job.
+   *
+   * Hitting it is not an error and MUST NOT stall progress. The pass persists
+   * what it fetched and advances the cursor to the id of the last history
+   * record it processed IN FULL -- never to the response's own historyId, which
+   * would skip the untouched remainder, and never leaving the cursor unmoved,
+   * which would replay the same prefix every tick and never reach the tail. A
+   * history record's `id` IS a cursor value, so resuming from it re-delivers at
+   * most that one record, which persistence absorbs idempotently.
+   */
+  maxMessagesPerPass: 500,
+} as const;

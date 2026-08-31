@@ -4,3 +4,6 @@ export * from "./gmail-client.js";
 export * from "./gmail-client.fake.js";
 export * from "./gmail-oauth.js";
 export * from "./identity.js";
+export * from "./classify.js";
+export * from "./limiter.js";
+export * from "./translate.js";
