@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 7 — Email summaries + service monitoring — **Checkpoints 7.0 (ADR gate), 7.1 (contracts, mail provider foundation, migration `0014`) and 7.2 (Gmail OAuth + connection lifecycle) COMPLETE on the repository side (2026-08-30). Checkpoint 7.2's LIVE OAuth proof is BLOCKED AT THE USER ACTION GATE and is not claimed as passed.** Work lives on branch `phase-7-mail-monitoring`, **not merged to `main`**; the repository has no remote. **Local migration level moved 0000–0013 = 14 → 0000–0014 = 15**; `0014_mail_integration` is additive, `CREATE TABLE`-only, and applied to dev and `personalos_test` only — **production is untouched and remains at 14**. Still absent by design: no OAuth flow, no credential, no Google Cloud change, no worker job, no queue, no route, no UI, no monitoring, no production access. Phase 6 — Google Health Integration — **COMPLETE AND CLOSED (2026-08-30).** Checkpoint 6.7B deployed Phase 6 to production, all lanes passed, closure actions are done and the work is merged to `main`. Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, the Rabbit runs **`versionCode 7`** with pairing/PRIMARY/session preserved, and **both reboot-survival proofs (host and Rabbit) passed**. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Current phase:** Phase 7 — Email summaries + service monitoring — **Checkpoints 7.0 (ADR gate), 7.1 (contracts, mail provider foundation, migration `0014`) and 7.2 (Gmail OAuth + connection lifecycle) COMPLETE on the repository side (2026-08-30). The Google Cloud Console gate is SATISFIED, credentials are provisioned locally, and **Checkpoint 7.2's LIVE OAuth proof PASSED on 2026-08-31** — connect, identity, encrypted persistence, disconnect and reconnect all verified against the real Gmail API on a development account.** Work lives on branch `phase-7-mail-monitoring`, **not merged to `main`**; the repository has no remote. **Local migration level moved 0000–0013 = 14 → 0000–0014 = 15**; `0014_mail_integration` is additive, `CREATE TABLE`-only, and applied to dev and `personalos_test` only — **production is untouched and remains at 14**. Still absent by design: no worker job, no queue, no synchronisation, no message persistence, no digest, no monitoring, no UI, no production access. A Gmail OAuth client, the `gmail.metadata` scope and local credentials now exist (development only); **production `.env` is untouched and holds no `GMAIL_OAUTH_*` key.** Phase 6 — Google Health Integration — **COMPLETE AND CLOSED (2026-08-30).** Checkpoint 6.7B deployed Phase 6 to production, all lanes passed, closure actions are done and the work is merged to `main`. Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, the Rabbit runs **`versionCode 7`** with pairing/PRIMARY/session preserved, and **both reboot-survival proofs (host and Rabbit) passed**. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
 **Implementation status:** Phases 0–5 are implemented and production-deployed, and **Phase 6's server side is now deployed too (Checkpoint 6.7B, 2026-08-29)**. **Production migration level moved to 0000–0013 = 14 migrations** — `0013_google_health_sync` was applied exactly once on 2026-08-29, matching the local level of 14 `.sql` / 14 journal entries. Production api/worker/web serve the 6.7 release images built from `c0dbff3`. The production Rabbit now runs `com.himal.personalos` **versionCode 7**, installed in place with `adb install -r` on 2026-08-30 — `firstInstallTime` unchanged, pairing/PRIMARY/push token/session all preserved.
-**Next phase allowed:** **Checkpoint 7.2's live OAuth proof, once the user-only Console gate is satisfied; then Checkpoint 7.2P on separate explicit approval.** Phase 6 and every one of its checkpoints are closed; Phase 7 Checkpoints 7.0, 7.1 and 7.2's repository work are closed. Two user-only actions gate the live proof: a **third OAuth client** in the existing `personal-os-196cf` project (never a second project, ADR-051), and a **publicly reachable privacy-policy URL** — the registered one is the Fastify API root and serves HTTP 404 on a tailnet-only host Google cannot reach. Hosting the policy on a public static host adds no ingress to Personal OS and leaves ADR-018 intact. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). **Phase 7 is approved and scoped by ADR-052: Gmail-first and read-only, `gmail.metadata` only, no message bodies, no mail actions, Microsoft Graph deferred, plus a worker-owned service-monitoring engine whose worker-heartbeat watchdog is API-owned. Phase 7 development may proceed through Checkpoint 7.7; production deployment (7.8) must not begin before the `2026-09-04T20:08:25Z` Phase 6 monitoring milestone completes (ADR-051, ADR-052).** Phase 8 has not been approved or planned.
+**Next phase allowed:** **Checkpoint 7.2's live OAuth proof, once the user-only Console gate is satisfied; then Checkpoint 7.2P on separate explicit approval.** Phase 6 and every one of its checkpoints are closed; Phase 7 Checkpoints 7.0, 7.1 and 7.2's repository work are closed. Both user-only Console actions are **done (2026-08-31)**: the Gmail API is enabled, `gmail.metadata` is added, and a **third OAuth client** `Personal OS Gmail Web` exists in the existing `personal-os-196cf` project (never a second project, ADR-051), with credentials provisioned into the local `.env` by the owner through a hidden prompt. The remaining gate is the **owner's consent grant** against their live mailbox, which the agent deliberately did not perform. The **privacy-policy URL still serves HTTP 404** and remains deferred branding/compliance debt — empirically it did **not** block adding the scope, because the app is already In production and no re-publish was required. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). **Phase 7 is approved and scoped by ADR-052: Gmail-first and read-only, `gmail.metadata` only, no message bodies, no mail actions, Microsoft Graph deferred, plus a worker-owned service-monitoring engine whose worker-heartbeat watchdog is API-owned. Phase 7 development may proceed through Checkpoint 7.7; production deployment (7.8) must not begin before the `2026-09-04T20:08:25Z` Phase 6 monitoring milestone completes (ADR-051, ADR-052).** Phase 8 has not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 7 — Email summaries + service monitoring (planning gate approved 2026-08-30)
@@ -191,7 +191,7 @@ remote). No production access. **Checkpoint 7.2 not begun.**
 Local development only. **No production access, no Google Console change, no credential, no live
 OAuth call, no migration** — the level stays 15 `.sql` / 15 journal entries and there is no `0015`.
 No worker job, no queue, no synchronisation, no message persistence, no digest, no monitoring, no
-mobile UI. Branch `phase-7-mail-monitoring`, five commits from `70e2c89`.
+mobile UI. Branch `phase-7-mail-monitoring`, **seven** commits from `70e2c89` (`9f3c93e` … `3132544`).
 
 **Every deterministic repository deliverable is finished and verified. The live OAuth proof is not,
 and is not claimed to be** — see the user-action gate at the end of this section.
@@ -273,8 +273,8 @@ by adding `reset()` to the fake, with its own regression test.
 | # | Check | Result |
 |---|---|---|
 | 1 | Full gate | build **10/10** · typecheck **19/19** · `eslint .` **0 errors, 0 warnings** · `format:check` clean · `git diff --check` clean |
-| 2 | Full suite, **uncached and serial** | **2267 tests / 19 turbo tasks** (2202 → **+65**), zero failing |
-| 3 | No package decreased | api 496→**550** · api-client 93→**103** · mail-providers 57→**58** · core 339 · db 56 · schema 216 · health-providers 311 · ai-providers 25 · mobile 376 |
+| 2 | Full suite, **uncached and serial** | **2272 tests / 19 turbo tasks** (2202 → **+70**), zero failing |
+| 3 | No package decreased | api 496→**555** · api-client 93→**103** · mail-providers 57→**58** · core 339 · db 56 · schema 216 · health-providers 311 · ai-providers 25 · mobile 376 |
 | 4 | Zero-drift canaries | `calendar-providers` **74** and `worker` **159**, both held |
 | 5 | Migration invariant | **15 `.sql` / 15 journal entries, no `0015`**; `packages/db` byte-unchanged |
 | 6 | Web export | `expo export --platform web` clean, exactly one `index.html` — relevant because the schema barrel now reaches `@personal-os/core/mail/provider-strings`, which is pure and Node-free |
@@ -283,18 +283,97 @@ by adding `reset()` to the fake, with its own regression test.
 | 9 | Health invariants | `health_observations` **0** in dev and test; `heart-rate-intraday` `sync_enabled = false` with **zero runs ever** |
 | 10 | Mail state | every `mail_*` table **empty** in dev and test — no connection, no state, no message, no cursor, no run, no digest |
 
-#### Live OAuth proof — NOT performed, and not claimed
+#### Google Cloud Console gate — SATISFIED (2026-08-31)
 
-`.env` contains **zero `GMAIL_OAUTH_*` keys**, no OAuth client exists, and the privacy-policy debt is
-unchanged. The live proof is therefore blocked at the user gate rather than pretended.
+The user-only Console actions were completed interactively in the browser against the owner's own
+signed-in Google session, in the existing project `personal-os-196cf` (ADR-051 — never a second
+project). **No credential value was handled by the agent at any point.**
 
-**The privacy-policy blocker is real and unfixed.** The registered homepage/privacy URLs still point
-at `https://personal-os.tail62a68f.ts.net`, which is the Fastify API root and returns HTTP 404 on a
-tailnet-only host Google cannot reach. Nothing in 7.2 changed that, and this checkpoint did **not**
-verify it as fixed. Adding a Restricted Gmail scope re-runs the Auth Platform branding validation
-that 6.7A already hit, so it must be resolved before the Console step — by hosting the policy on a
-genuinely public static host, which adds **no ingress to Personal OS** and leaves ADR-018 untouched.
-Tailscale Funnel, public Fastify ingress, webhooks and Pub/Sub all remain excluded.
+| Action | Result |
+|---|---|
+| Gmail API | **enabled** (`gmail.googleapis.com`) — it was not enabled before, which is why `gmail.metadata` did not appear in the scope picker at all |
+| Scope | `gmail.metadata` added; restricted scopes are now **Gmail (1) + Google Health (3)**, sensitive and non-sensitive both still **empty** — no `openid`, `email`, `profile`, `gmail.readonly` or mutation scope |
+| OAuth client | **`Personal OS Gmail Web`** created, type Web application, 2 redirect URIs, **0** JavaScript origins. Six clients now exist; none was deleted or modified |
+| Verification | **not submitted.** The app stays In production / unverified under the personal-use exception; the Console reports **1 of 100** OAuth users |
+
+**Two Console traps are recorded because either would have produced a false pass.** First, the scope
+picker's **"Update" button only stages** — it closes the dialog showing the new group, but a reload
+discards it; only the page-level **Save** persists. Second, **clearing the scope filter silently
+drops the selection** (the picker paginates, 94 scopes at 10/page), so ticking a filtered row and
+then clearing the filter leaves only the previously-saved scopes checked, and saving there is a
+silent no-op that still looks successful. The reliable path is the console's own **"Manually add
+scopes"** box, followed by asserting the full selected set before pressing Save.
+
+**The privacy-policy debt did NOT block the scope addition** — an open question now answered
+empirically. It blocked *publishing* in 6.7A; the app is already In production, so no re-publish was
+required. The debt itself is **unchanged and unfixed**: the registered homepage/privacy URLs still
+point at `https://personal-os.tail62a68f.ts.net`, which is the Fastify API root and returns HTTP 404
+on a tailnet-only host Google cannot reach. Google's own consent screen corroborates it, showing
+*"Learn why you're not seeing links to Personal OS's Privacy Policy or Terms of Service"*. Tailscale
+Funnel, public Fastify ingress, webhooks and Pub/Sub all remain excluded.
+
+#### Credential provisioning — done by the user, verified by name/length/shape only
+
+The client id and secret were entered by the **user in their own terminal** through a hidden prompt,
+so no value entered chat, argv, shell history, the repository or any log — the Checkpoint 6.2 /
+6.7B silent-shell precedent. Google's new Console offers **no JSON download for Web clients**, so
+this hand-off was mandatory rather than merely preferred.
+
+Local `.env` moved **16 → 19 keys**, mode `600`, gitignored and untracked. Verified without reading
+any value: id shape `…apps.googleusercontent.com`, secret shape `GOCSPX-…`, redirect exact, no stray
+whitespace, and — the decisive check — **distinct from both the Google Health and Google Calendar
+client credentials**, proving a genuinely new client rather than a mis-paste. The 72/35 character
+lengths coincide with 6.7B's recorded Health lengths simply because Google's formats are uniform.
+`gitleaks git`: **196 commits, no leaks.**
+
+**One hazard was created and closed during provisioning.** The helper script wrote a backup to
+`.env.pre-7.2`, but `.gitignore` line 18 is literally `.env`, **not** `.env*`, so that plaintext copy
+of every secret was visible to `git add -A`. The pre-commit gitleaks hook would probably have caught
+it, but that is a net rather than a design. The backup was deleted once verification passed, matching
+6.7B's cleanup of `.env.pre-6.7b`; `.env` and `.env.example` are the only `.env*` files present.
+
+#### Live OAuth proof — PASSED (2026-08-31)
+
+Run against the **real Gmail API** on the owner's development Google account and the local
+development database. Production was never contacted; production `.env` still holds no
+`GMAIL_OAUTH_*` key. One short-lived built API (`node dist/index.js`, never `tsx watch`) served the
+routes; **no worker ran**, so no sync, no queue and no message fetch was reachable.
+
+**The first attempt failed, and that failure is the more valuable evidence.** The owner completed
+consent, Google redirected a real authorization code to the loopback callback at `20:29:22.309Z`, and
+the state had expired at `20:28:22.851Z` — so it was rejected `400 invalid_state` in 11 ms. That
+proved, against genuine provider traffic rather than a fixture:
+
+| Property | Evidence |
+|---|---|
+| Log scrubbing works on a **real** authorization code | Logged as `?state=[redacted]&iss=…&code=[redacted]&scope=…`. The Checkpoint 6.2 defect class (Fastify logs the URL at `lib/route.js:522`, before `onRequest` hooks at `:561`) is closed for the mail callback |
+| State expiry is enforced | `mailOauthError: "invalid_state"` → `400` |
+| **The code was never spent** | Validation precedes exchange by construction, so a stale or forged state cannot cause a token request |
+| A rejected attempt still burns its state | The expired state is recorded `consumed`, so it cannot be replayed |
+
+**The retry with a fresh state passed every lane.**
+
+| Lane | Result |
+|---|---|
+| Connect | `201`, connection `82d3d976-…`, status **active** |
+| Identity | Bound to the real mailbox via `users.getProfile` — **no `openid`/`email` scope was added**, exactly as ADR-053 requires |
+| Granted scope | Google echoed **exactly** `https://www.googleapis.com/auth/gmail.metadata` |
+| Credentials at rest | access **253 B** ciphertext · refresh **103 B** · 12 B IV · 16 B auth tag — **identical lengths to the 6.2P/6.7B Health record**, same AES-256-GCM path. Zero token-shaped plaintext inside either ciphertext |
+| Wire safety | `GET /mail-connections` returns no credential field at all — not filtered out, never read |
+| Disconnect | `revoked: true` (Google accepted the revocation), **all six credential columns NULL**, row/identity/scope/`created_at` retained |
+| Disconnect idempotence | Repeat call → `disconnected`, `revoked: false`, no error |
+| Reconnect | **Same row `82d3d976-…` with `created_at` still `2026-08-31T23:03:02.563Z`** — reused, not recreated; exactly one connection row throughout; all six credential columns repopulated; status back to `active` |
+| OAuth states | 3 minted, **3 consumed**, none left unused |
+| Blast radius | `mail_messages`, `mail_sync_cursors`, `mail_sync_runs`, `mail_digests` all **0** — 7.2 connects, it does not synchronise |
+| Leak scan | Whole API log: **0** matches for `GOCSPX`, `ya29.`, `1//`, `refresh_token`, `client_secret` or an authorization-code prefix; **0** error-level lines |
+
+**Deliberately NOT exercised, and reserved for 7.2P:** message enumeration, `history.list`, the `q`
+rejection under metadata scope, `format=FULL`/`RAW` rejection, label inventory, and any forced 429.
+No Gmail data request of any kind was made — only the token exchange and `users.getProfile`.
+
+The development connection is **left active** for Checkpoint 7.3, matching the Phase 6 precedent. No
+mailbox address, subject, header or message identifier appears in any commit or in this record beyond
+the account label already required to identify the connection.
 
 ## Phase 6 — Google Health Integration (plan approved 2026-08-24)
 
@@ -4478,7 +4557,7 @@ identity on `(provider, external_account_id)`. The structural divergence from He
 then identify, then look up scoped to that mailbox -- is what makes it impossible for one mailbox's
 callback to overwrite another's connection. Reconnect restores everything, and Phase 6's
 "streams stay disabled" defect class is unrepresentable here because mail has no per-mailbox enable
-flag at all. **2267 tests, +65, no package decreased, both canaries held.** One real defect found by
+flag at all. **2272 tests, +70, no package decreased, both canaries held.** One real defect found by
 the tests: the scripted fake's queues leaked between tests, which had produced a green pass for a
 code path nobody exercised.
 
@@ -4708,10 +4787,10 @@ Full gate, integrator-run: build **10/10** · typecheck **19/19** · `eslint .` 
 warnings** · `prettier --check .` clean · `git diff --check` clean · `expo export --platform web`
 clean with exactly one `index.html`.
 
-Full suite, **uncached and serial** (0 of 19 cached): **2267 tests across 19 turbo tasks**
-(2202 → **+65**), zero failing. Per package — core 339 · db 56 · schema 216 · mail-providers **58** ·
+Full suite, **uncached and serial** (0 of 19 cached): **2272 tests across 19 turbo tasks**
+(2202 → **+70**), zero failing. Per package — core 339 · db 56 · schema 216 · mail-providers **58** ·
 calendar-providers **74** · health-providers 311 · ai-providers 25 · api-client **103** · api
-**550** · worker **159** · mobile 376. **No package decreased**, and both zero-drift canaries
+**555** · worker **159** · mobile 376. **No package decreased**, and both zero-drift canaries
 (`calendar-providers` 74, `worker` 159) held exactly. Turbo task count moved 18 → 19 because
 `apps/api` now depends on `@personal-os/mail-providers`, adding its build into api's test chain.
 
@@ -4891,40 +4970,42 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Stopped after Checkpoint 7.2's repository work. The live OAuth proof is BLOCKED AT THE USER ACTION
-GATE. Do not begin Checkpoint 7.2P.**
+**Checkpoint 7.2 is COMPLETE, including its live OAuth proof. Do not begin Checkpoint 7.2P without
+separate explicit approval.**
 
-Two user-only actions unblock the live proof, in this order:
+The Console gate is satisfied, credentials are provisioned locally, and connect / identity /
+encrypted persistence / disconnect / reconnect are all verified against the real Gmail API. The
+development connection is left active for 7.3.
 
-1. **Publish a privacy policy at a genuinely public URL** and set it, with the homepage URL, on the
-   Auth Platform consent screen for project `personal-os-196cf`. The registered URLs still point at
-   `https://personal-os.tail62a68f.ts.net`, which is the Fastify API root and returns HTTP 404 on a
-   tailnet-only host Google cannot reach. A public static host (GitHub Pages or equivalent) adds
-   **no ingress to Personal OS**; Tailscale Funnel, public Fastify ingress, webhooks and Pub/Sub all
-   remain excluded under ADR-018.
-2. **Create a third OAuth client** in that same project -- never a second project (ADR-051) -- of
-   type **Web application**, named **Personal OS Gmail Web**, with authorized redirect URIs
-   `http://127.0.0.1:3000/mail-connections/gmail/callback` and
-   `https://personal-os.tail62a68f.ts.net/mail-connections/gmail/callback`, and add exactly the
-   scope `https://www.googleapis.com/auth/gmail.metadata` -- never `gmail.readonly`, never a
-   mutation scope. Then provision `GMAIL_OAUTH_CLIENT_ID`, `GMAIL_OAUTH_CLIENT_SECRET` and
-   `GMAIL_OAUTH_REDIRECT_URI` into the local `.env` by the silent-shell precedent. **No credential
-   may pass through chat.**
+**7.2P is the live capability probe** and is where the provider's real behaviour gets characterised:
+the `q` rejection under `gmail.metadata`, `format=FULL`/`RAW` rejection, label inventory,
+`history.list` and its 404 → `needs_full_resync` transition. It must remain bounded and must not be
+started implicitly by 7.3.
 
-Once satisfied, 7.2's live proof is narrow: connect -> callback -> identity -> encrypted persistence
--> disconnect/reconnect. It must NOT enumerate messages, call `history.list`, test `q`, test FULL
-format, inventory labels or force a 429 -- those belong to 7.2P.
+**Outstanding, unchanged by this checkpoint:**
 
-7.2 is Gmail OAuth and the connection lifecycle. **It is the first Phase 7 checkpoint that cannot
-proceed on repository work alone**, and two user-only actions gate it:
+- **The OAuth privacy-policy URL still serves HTTP 404** — deferred branding/compliance debt. It did
+  **not** block adding the Gmail scope, because the app is already In production and no re-publish
+  was required.
+- **`.gitignore` line 18 is literally `.env`, not `.env*`**, so any future tooling that writes
+  `.env.<suffix>` puts a plaintext secret copy in git's view. This checkpoint created and removed
+  exactly one such file (`.env.pre-7.2`).
+- **The worker has no Gmail configuration passthrough yet** — 7.3 must add it alongside the sync
+  engine, or the worker will see no credentials.
+- Phase 6's seven-day refresh-token longevity remains post-deployment monitoring (ADR-051), and
+  **production deployment (7.8) must not begin before the `2026-09-04T20:08:25Z` milestone**.
 
-1. **A third OAuth client** ("Personal OS Gmail Web") in the existing `personal-os-196cf` project —
-   never a second project, per ADR-051 — with the `gmail.metadata` scope added to the shared consent
-   screen, and its id/secret provisioned by the silent-shell precedent, never through chat.
-2. **A publicly reachable privacy-policy URL.** The registered one is the Fastify API root, which
-   returns HTTP 404 on a tailnet-only host Google cannot reach. Adding a Restricted scope re-runs the
-   Auth Platform console's branding validation that 6.7A already hit. Hosting the policy somewhere
-   genuinely public adds **no ingress to the Personal OS host**, so ADR-018 is untouched.
+7.2 is Gmail OAuth and the connection lifecycle. **It is the first Phase 7 checkpoint that could not
+proceed on repository work alone.** Both Console prerequisites are now met:
+
+1. **The third OAuth client** `Personal OS Gmail Web` exists in the existing `personal-os-196cf`
+   project — never a second project, per ADR-051 — with `gmail.metadata` added to the shared consent
+   screen and its id/secret provisioned by the silent-shell precedent, never through chat. **Done.**
+2. **The privacy-policy URL did not, in the event, block the scope addition.** It blocked
+   *publishing* in 6.7A; the app is already In production, so no re-publish was required. The URL
+   still returns HTTP 404 on a tailnet-only host and remains deferred branding/compliance debt.
+   Hosting the policy somewhere genuinely public would add **no ingress to the Personal OS host**, so
+   ADR-018 stays untouched either way.
 
 **Phase 6 is closed.** Checkpoint 6.7B deployed it to production on 2026-08-29/30 — migration `0013`
 applied (production level 0000–0013 = 14), api/worker/web serving the `c0dbff3` release images, the
