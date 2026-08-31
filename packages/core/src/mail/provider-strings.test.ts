@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractEmailDomain,
   MAIL_DOMAIN_MAX_CHARS,
+  parseAddressHeader,
   truncateProviderString,
 } from "./provider-strings.js";
 
@@ -92,5 +93,94 @@ describe("extractEmailDomain", () => {
 
   it("accepts a subdomain", () => {
     expect(extractEmailDomain("person@mail.corp.example.com")).toBe("mail.corp.example.com");
+  });
+});
+
+describe("parseAddressHeader", () => {
+  it("splits a quoted display name from an angle-addr", () => {
+    expect(parseAddressHeader('"Ada Lovelace" <ada@example.com>')).toEqual({
+      address: "ada@example.com",
+      displayName: "Ada Lovelace",
+    });
+  });
+
+  it("splits an unquoted display name from an angle-addr", () => {
+    expect(parseAddressHeader("Ada Lovelace <Ada@Example.COM>")).toEqual({
+      address: "ada@example.com",
+      displayName: "Ada Lovelace",
+    });
+  });
+
+  it("reads a bare address with no display name", () => {
+    expect(parseAddressHeader("ada@example.com")).toEqual({
+      address: "ada@example.com",
+      displayName: null,
+    });
+  });
+
+  it("reads an angle-addr carrying no phrase", () => {
+    expect(parseAddressHeader("<ada@example.com>")).toEqual({
+      address: "ada@example.com",
+      displayName: null,
+    });
+  });
+
+  it("resolves quoted-string escapes in the phrase", () => {
+    expect(parseAddressHeader('"Ada \\"The Countess\\" Lovelace" <ada@example.com>')).toEqual({
+      address: "ada@example.com",
+      displayName: 'Ada "The Countess" Lovelace',
+    });
+  });
+
+  it("does not cut a quoted phrase that contains a comma", () => {
+    // The whole point of the quote-aware scan: a naive split(",")[0] would
+    // return `"Lovelace` and lose the address entirely.
+    expect(parseAddressHeader('"Lovelace, Ada" <ada@example.com>')).toEqual({
+      address: "ada@example.com",
+      displayName: "Lovelace, Ada",
+    });
+  });
+
+  it("returns only the first mailbox of a list", () => {
+    expect(parseAddressHeader("ada@example.com, babbage@example.org")).toEqual({
+      address: "ada@example.com",
+      displayName: null,
+    });
+  });
+
+  it("leaves an RFC 2047 encoded-word encoded rather than decoding it", () => {
+    // Deliberate: decoding runs a decoder over attacker-chosen bytes to produce
+    // a string that is stored and later shown to a model (ADR-054). The token
+    // is inert and visibly encoded.
+    const header = "=?UTF-8?B?QWRhIExvdmVsYWNl?= <ada@example.com>";
+    expect(parseAddressHeader(header)).toEqual({
+      address: "ada@example.com",
+      displayName: "=?UTF-8?B?QWRhIExvdmVsYWNl?=",
+    });
+  });
+
+  it("returns a null address rather than guessing at a malformed one", () => {
+    expect(parseAddressHeader("Ada Lovelace")).toEqual({
+      address: null,
+      displayName: "Ada Lovelace",
+    });
+    expect(parseAddressHeader("not an address <no-at-sign>")).toEqual({
+      address: null,
+      displayName: "not an address",
+    });
+    expect(parseAddressHeader("<a@b@c>")).toEqual({ address: null, displayName: null });
+    expect(parseAddressHeader("<ada @example.com>")).toEqual({ address: null, displayName: null });
+  });
+
+  it("treats null, undefined and blank as absent", () => {
+    const empty = { address: null, displayName: null };
+    expect(parseAddressHeader(null)).toEqual(empty);
+    expect(parseAddressHeader(undefined)).toEqual(empty);
+    expect(parseAddressHeader("   ")).toEqual(empty);
+  });
+
+  it("pairs with extractEmailDomain to yield a grouping key", () => {
+    const parsed = parseAddressHeader('"Ada" <ada@Mail.Example.com>');
+    expect(extractEmailDomain(parsed.address)).toBe("mail.example.com");
   });
 });

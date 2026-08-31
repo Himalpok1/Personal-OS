@@ -97,3 +97,119 @@ export function extractEmailDomain(address: string | null | undefined): string |
   if (domain.startsWith(".") || domain.endsWith(".") || domain.includes("..")) return null;
   return domain;
 }
+
+/** One `From:`-style header, split into its two independently-useful halves. */
+export interface ParsedAddressHeader {
+  /** The addr-spec, lowercased. Null when none could be read with confidence. */
+  address: string | null;
+  /** The human-chosen label, unquoted. Null when the header carries none. */
+  displayName: string | null;
+}
+
+const EMPTY_ADDRESS_HEADER: ParsedAddressHeader = { address: null, displayName: null };
+
+/**
+ * Unquotes an RFC 5322 quoted-string, resolving its backslash escapes.
+ *
+ * Only the two escapes the grammar actually defines (`\"` and `\\`) are
+ * meaningful; a backslash before anything else is dropped, which is what every
+ * mail agent does in practice.
+ */
+function unquotePhrase(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.length < 2 || !trimmed.startsWith('"') || !trimmed.endsWith('"')) return trimmed;
+  const inner = trimmed.slice(1, -1);
+  let out = "";
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i]!;
+    if (ch === "\\" && i + 1 < inner.length) {
+      out += inner[i + 1]!;
+      i += 1;
+      continue;
+    }
+    out += ch;
+  }
+  return out.trim();
+}
+
+/**
+ * Splits a `From:`-style header into a display name and an address.
+ *
+ * Provider-neutral by construction: this is RFC 5322 grammar, not Gmail's. Every
+ * mail provider hands back a header some third party wrote, and every one of
+ * them needs the same two fields pulled out of it.
+ *
+ * THREE DELIBERATE NON-BEHAVIOURS, each of which a "more helpful" parser would
+ * get wrong:
+ *
+ *  1. **RFC 2047 encoded-words are NOT decoded.** `=?UTF-8?B?...?=` is left
+ *     exactly as it arrived. Decoding means running a base64/quoted-printable
+ *     decoder over bytes a stranger chose, in order to produce a string that is
+ *     then stored and later shown to a model (ADR-054). The encoded token is
+ *     inert and visibly encoded; a decoded one is neither. If a legible display
+ *     name is ever wanted, that is a decision to make explicitly, with its own
+ *     bounds, not a side effect of parsing.
+ *  2. **Only the FIRST address is returned.** A `From` header is normally a
+ *     single mailbox, but the grammar permits a list, and silently concatenating
+ *     or last-winning would make the stored sender a function of header order.
+ *  3. **An address is returned only when it is unambiguous.** Anything with
+ *     whitespace inside it, or with no `@`, yields null rather than a guess --
+ *     the same rule `extractEmailDomain` follows, and for the same reason: a
+ *     wrong sender silently mis-groups, a null one is visibly absent.
+ *
+ * Neither field is length-bounded here. Bounding is the caller's, through
+ * `truncateProviderString`, because only the caller knows which column or
+ * prompt the value is bound for.
+ */
+export function parseAddressHeader(raw: string | null | undefined): ParsedAddressHeader {
+  if (raw === null || raw === undefined) return { ...EMPTY_ADDRESS_HEADER };
+  const value = raw.trim();
+  if (value === "") return { ...EMPTY_ADDRESS_HEADER };
+
+  // Take the first mailbox. Splitting on a bare comma would cut a quoted phrase
+  // containing one ("Lovelace, Ada" <ada@example.com>), so the scan tracks
+  // whether it is inside a quoted-string or an angle-addr.
+  let inQuotes = false;
+  let inAngles = false;
+  let end = value.length;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i]!;
+    if (ch === "\\" && inQuotes) {
+      i += 1;
+      continue;
+    }
+    if (ch === '"') inQuotes = !inQuotes;
+    else if (!inQuotes && ch === "<") inAngles = true;
+    else if (!inQuotes && ch === ">") inAngles = false;
+    else if (ch === "," && !inQuotes && !inAngles) {
+      end = i;
+      break;
+    }
+  }
+  const first = value.slice(0, end).trim();
+  if (first === "") return { ...EMPTY_ADDRESS_HEADER };
+
+  const open = first.lastIndexOf("<");
+  const close = first.lastIndexOf(">");
+  if (open !== -1 && close > open) {
+    const addr = first.slice(open + 1, close).trim();
+    const phrase = unquotePhrase(first.slice(0, open));
+    return {
+      address: isPlausibleAddress(addr) ? addr.toLowerCase() : null,
+      displayName: phrase === "" ? null : phrase,
+    };
+  }
+
+  // No angle-addr: the whole thing is either a bare address or a name we
+  // cannot pair with one.
+  return isPlausibleAddress(first)
+    ? { address: first.toLowerCase(), displayName: null }
+    : { address: null, displayName: unquotePhrase(first) || null };
+}
+
+/** Exactly one "@", something on each side of it, and no internal whitespace. */
+function isPlausibleAddress(candidate: string): boolean {
+  if (candidate === "" || /\s/.test(candidate)) return false;
+  const at = candidate.indexOf("@");
+  return at > 0 && at === candidate.lastIndexOf("@") && at < candidate.length - 1;
+}
