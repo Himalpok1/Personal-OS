@@ -4,6 +4,7 @@ import { isValidTimezone } from "@personal-os/core/timezone";
 import { and, eq, sql } from "drizzle-orm";
 import { env } from "../../env.js";
 import { errorToken, log } from "../../logger.js";
+import type { MailDigestNotifier } from "./notify.js";
 import { collectMailDigestInput } from "./collect-input.js";
 import {
   MailDigestFailedError,
@@ -60,6 +61,13 @@ export interface MailDigestDeps {
   timezone?: string;
   generate?: typeof generateMailDigest;
   generateOptions?: GenerateMailDigestOptions;
+  /**
+   * Called once a digest has been PERSISTED, never before (Checkpoint 7.6).
+   *
+   * Optional so every existing caller and test is unaffected, and so a pass with
+   * no queue simply tells nobody rather than failing.
+   */
+  notify?: MailDigestNotifier;
 }
 
 /**
@@ -211,6 +219,27 @@ export async function runMailDigest(deps: MailDigestDeps): Promise<MailDigestRes
     modelRowId: generated.modelRowId,
     now,
   });
+
+  // AFTER the write, and CONTAINED (Checkpoint 7.6).
+  //
+  // Two properties are being protected here at once. The persist call above is
+  // physically unreachable from any failure path -- migration 0014's own comment
+  // demanded that by name -- and placing the notification after it in the same
+  // straight line keeps that true: nothing about telling the user can prevent
+  // the digest from existing.
+  //
+  // The catch is the other half. A push problem must never undo a persisted
+  // digest, and it must never turn a successful pass into a failed job that the
+  // cron then retries -- which would regenerate the digest, paying another model
+  // call, to fix a notification. So a failure here is logged as a token and the
+  // pass still reports success.
+  if (deps.notify) {
+    try {
+      await deps.notify({ digestDate: collected.localDate, timezone, now });
+    } catch (error) {
+      log.warn("mail.digest.notify_failed", { error: errorToken(error) });
+    }
+  }
 
   log.info("mail.digest.generated", {
     localDate: collected.localDate,

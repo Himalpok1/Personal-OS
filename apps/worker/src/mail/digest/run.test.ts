@@ -408,3 +408,92 @@ describe("runMailDigest: the happy path", () => {
     expect(await readMailDigest(db, LOCAL_DATE, "Pacific/Auckland")).toBeUndefined();
   });
 });
+
+describe("runMailDigest: notification is contained (Checkpoint 7.6)", () => {
+  it("notifies AFTER persisting, with the digest's own date and zone", async () => {
+    await seedOneMessage();
+    const stub = stubGenerator(generated("One new message."));
+    const seen: { digestDate: string; timezone: string }[] = [];
+
+    const result = await runMailDigest({
+      db,
+      now: () => NOW,
+      timezone: TZ,
+      generate: stub.fn,
+      notify: async ({ digestDate, timezone }) => {
+        // Read INSIDE the notifier: if this finds the row, the write happened
+        // first, which is the ordering the no-overwrite guarantee depends on.
+        const row = await readMailDigest(db, LOCAL_DATE, TZ);
+        expect(row).not.toBeNull();
+        seen.push({ digestDate, timezone });
+      },
+    });
+
+    expect(result.skipped).toBeNull();
+    expect(seen).toEqual([{ digestDate: LOCAL_DATE, timezone: TZ }]);
+  });
+
+  it("a FAILING notifier does not undo the digest or fail the pass", async () => {
+    // A push problem must never destroy a persisted digest, and must never turn
+    // a successful pass into a failed job -- the cron would then retry it and
+    // pay another model call to fix a notification.
+    await seedOneMessage();
+    const stub = stubGenerator(generated("One new message."));
+
+    const result = await runMailDigest({
+      db,
+      now: () => NOW,
+      timezone: TZ,
+      generate: stub.fn,
+      notify: () => Promise.reject(new Error("queue exploded")),
+    });
+
+    expect(result.skipped).toBeNull();
+    expect(result.failureClass).toBeNull();
+    const row = await readMailDigest(db, LOCAL_DATE, TZ);
+    expect(row?.content).toEqual({ text: "One new message." });
+  });
+
+  it("does NOT notify when generation failed", async () => {
+    // Nothing was persisted, so there is nothing to announce. Announcing here
+    // would tell the user a digest is ready when the previous day's is still
+    // the newest thing in the table.
+    await seedOneMessage();
+    const stub = stubGenerator(new Error("provider down"));
+    let notified = false;
+
+    const result = await runMailDigest({
+      db,
+      now: () => NOW,
+      timezone: TZ,
+      generate: stub.fn,
+      notify: () => {
+        notified = true;
+        return Promise.resolve();
+      },
+    });
+
+    expect(result.failureClass).not.toBeNull();
+    expect(notified).toBe(false);
+  });
+
+  it("does NOT notify when the pass skipped", async () => {
+    // No mailbox, no digest, nothing to say.
+    const stub = stubGenerator(generated("unreachable"));
+    let notified = false;
+
+    const result = await runMailDigest({
+      db,
+      now: () => NOW,
+      timezone: TZ,
+      generate: stub.fn,
+      notify: () => {
+        notified = true;
+        return Promise.resolve();
+      },
+    });
+
+    expect(result.skipped).toBe("no_active_mailboxes");
+    expect(notified).toBe(false);
+  });
+});

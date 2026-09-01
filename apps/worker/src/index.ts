@@ -29,6 +29,7 @@ import {
   enqueueMailSyncForAllActiveConnections,
 } from "./jobs/mail-sync-connection.js";
 import { createMailDigestHandler } from "./jobs/mail-digest.js";
+import { createMailDigestNotifier } from "./mail/digest/notify.js";
 import { createMonitorRunHandler } from "./jobs/monitor-run.js";
 import { resolveDigestTimezone } from "./mail/digest/run.js";
 import {
@@ -334,7 +335,13 @@ async function main(): Promise<void> {
     MAIL_DIGEST_GENERATE_QUEUE,
     QUEUE_RETRY_OPTIONS[MAIL_DIGEST_GENERATE_QUEUE],
   );
-  await boss.work(MAIL_DIGEST_GENERATE_QUEUE, createMailDigestHandler(db));
+  await boss.work(
+    MAIL_DIGEST_GENERATE_QUEUE,
+    // The notifier is injected rather than constructed inside the handler so a
+    // pass can be run with no queue at all -- which is how every digest test
+    // runs, and how a one-shot manual pass would run.
+    createMailDigestHandler(db, { notify: createMailDigestNotifier(db, boss) }),
+  );
 
   // Daily, at 07:00 IN THE CONFIGURED DIGEST ZONE rather than the server's.
   //
@@ -345,8 +352,11 @@ async function main(): Promise<void> {
   // named after has really begun.
   //
   // ADR-053 separates generation from notification: generation always occurs on
-  // schedule and always persists. Notification is Checkpoint 7.5's, so this
-  // writes a row and tells nobody, deliberately.
+  // schedule and always persists, and the notification is a separate, contained
+  // step that cannot undo the write. Checkpoint 7.6 added that step -- and with
+  // it amendment E's requirement that quiet hours DELAY the notification rather
+  // than suppress it, which `createMailDigestNotifier` implements by scheduling
+  // each device's job past its own quiet window instead of dropping it.
   const digestTimezone = resolveDigestTimezone();
   await boss.createQueue(MAIL_DIGEST_CRON_QUEUE);
   await boss.work(MAIL_DIGEST_CRON_QUEUE, async () => {
