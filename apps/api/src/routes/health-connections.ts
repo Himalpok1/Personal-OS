@@ -121,6 +121,38 @@ function replyForError(err: unknown): { status: number; body: { error: string } 
   return null;
 }
 
+/**
+ * The MACHINE-READABLE half of a provider failure, for the log line only.
+ *
+ * `replyForError` deliberately gives the caller a static code and nothing else,
+ * and that is right for a response. But logging only that code threw away every
+ * fact needed to diagnose a live failure -- which is the exact trap Checkpoint
+ * 6.2P recorded, where three live attempts misread a `pageSize` defect as an
+ * unsupported metric "precisely because the reason was thrown away and only the
+ * HTTP status was kept".
+ *
+ * So this returns the structured fields ONLY: an HTTP status, Google's own
+ * `status` token, and the deduped `error.details[].reason` / `.domain` tokens
+ * that `GoogleHealthApiError` already parses. **The provider's prose `message`
+ * is never included**, because it can carry a connection label, an internal id
+ * or a decryption failure naming a key -- the reason the response contract
+ * exists in the first place.
+ */
+function errorDiagnostics(err: unknown): Record<string, unknown> {
+  if (err instanceof GoogleHealthApiError) {
+    return {
+      httpStatus: err.httpStatus,
+      googleStatus: err.googleStatus ?? null,
+      errorReasons: err.errorReasons,
+      errorDomains: err.errorDomains,
+    };
+  }
+  if (err instanceof GoogleHealthOAuthError) {
+    return { googleErrorCode: err.googleErrorCode ?? null };
+  }
+  return {};
+}
+
 export default function healthConnectionsRoutes(app: FastifyInstance): void {
   // ---- authorization URL -------------------------------------------------
   app.get("/health-connections/google/authorize-url", async (request, reply) => {
@@ -192,9 +224,13 @@ export default function healthConnectionsRoutes(app: FastifyInstance): void {
       } catch (err) {
         const mapped = replyForError(err);
         if (mapped) {
-          // Log the CODE ONLY -- never the error message, which may carry
-          // provider detail, and never the query string.
-          request.log.warn({ healthOauthError: mapped.body.error }, "health oauth callback failed");
+          // The static code, plus the STRUCTURED tokens only -- never the
+          // error message, which may carry provider detail, and never the
+          // query string.
+          request.log.warn(
+            { healthOauthError: mapped.body.error, ...errorDiagnostics(err) },
+            "health oauth callback failed",
+          );
           return reply.code(mapped.status).send(mapped.body);
         }
         throw err;
