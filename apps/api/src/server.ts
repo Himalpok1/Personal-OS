@@ -15,6 +15,10 @@ import { registerDb } from "./plugins/db.js";
 import { registerGoogleCalendarClient } from "./plugins/google-calendar-client.js";
 import { registerGoogleHealthClient } from "./plugins/google-health-client.js";
 import { registerGmailClient } from "./plugins/gmail-client.js";
+import {
+  registerHeartbeatWatchdog,
+  type HeartbeatWatchdogOptions,
+} from "./plugins/heartbeat-watchdog.js";
 import { buildLoggerOptions } from "./logging/logger-options.js";
 import agendaRoutes from "./routes/agenda.js";
 import briefsRoutes from "./routes/briefs.js";
@@ -44,6 +48,15 @@ export interface BuildServerOptions {
   googleCalendarClient?: GoogleCalendarClient;
   caldavClient?: CalDavClient;
   googleHealthClient?: GoogleHealthClient;
+  /**
+   * The worker-heartbeat watchdog's interval (Checkpoint 7.5, ADR-055).
+   *
+   * ON by default, because a monitoring feature that is off unless someone
+   * remembers is a footgun. `buildTestApp` disables it: a timer firing against
+   * the shared test database during another package's suite is exactly the
+   * cross-contamination Checkpoint 6.3 traced its shifting failures to.
+   */
+  heartbeatWatchdog?: HeartbeatWatchdogOptions;
   gmailClient?: MailClient;
 }
 
@@ -58,6 +71,8 @@ export async function buildServer(options: BuildServerOptions = {}) {
   registerCalDavClient(app, options.caldavClient);
   registerGoogleHealthClient(app, options.googleHealthClient);
   registerGmailClient(app, options.gmailClient);
+  // AFTER registerDb and registerBoss: the watchdog reads app.db and app.boss.
+  registerHeartbeatWatchdog(app, options.heartbeatWatchdog ?? {});
   // Scoped to exactly the known web origins (WEB_APP_ORIGIN) -- no
   // wildcard. apps/mobile's web build is the only browser client; curl and
   // the worker never send an Origin header, so they're unaffected either

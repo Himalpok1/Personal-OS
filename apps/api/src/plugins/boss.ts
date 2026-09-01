@@ -12,6 +12,7 @@ import {
   HEALTH_SYNC_CONNECTION_QUEUE,
   MAIL_DIGEST_GENERATE_QUEUE,
   MAIL_SYNC_CONNECTION_QUEUE,
+  MONITOR_RUN_QUEUE,
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
   NOTIFICATIONS_DISPATCH_QUEUE,
   OCCURRENCES_GENERATE_LAZY_QUEUE,
@@ -145,6 +146,12 @@ export async function registerBoss(app: FastifyInstance): Promise<void> {
       MAIL_DIGEST_GENERATE_QUEUE,
       QUEUE_RETRY_OPTIONS[MAIL_DIGEST_GENERATE_QUEUE],
     );
+    // Phase 7 Checkpoint 7.5. apps/api does not send to this queue -- the sweep
+    // is worker-owned, and the API's own monitoring work (the heartbeat
+    // watchdog) runs on an interval rather than through a queue. It is created
+    // identically here for the same first-writer-wins reason as every other
+    // shared queue: create_queue is INSERT ... ON CONFLICT DO NOTHING.
+    await boss.createQueue(MONITOR_RUN_QUEUE, QUEUE_RETRY_OPTIONS[MONITOR_RUN_QUEUE]);
   } else {
     app.log.error(
       "pg-boss did not start after retries; capture/occurrence/transcription/notification jobs will not be enqueued",

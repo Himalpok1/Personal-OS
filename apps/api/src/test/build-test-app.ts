@@ -21,6 +21,9 @@ import {
   mailOauthStates,
   mailSyncCursors,
   mailSyncRuns,
+  monitorChecks,
+  monitorIncidents,
+  monitorTargets,
   notes,
   notificationDispatchLog,
   occurrences,
@@ -38,7 +41,18 @@ import { buildServer, type BuildServerOptions } from "../server.js";
 // @personal-os/calendar-providers' createFakeGoogleCalendarClient) so no
 // route test ever makes a real call to the live Google API.
 export async function buildTestApp(options: BuildServerOptions = {}): Promise<FastifyInstance> {
-  return buildServer(options);
+  return buildServer({
+    // The heartbeat watchdog's INTERVAL is off by default in tests. Every suite
+    // in this repository shares one `personalos_test` database, so a timer
+    // firing during another package's run would write monitor rows into the
+    // middle of someone else's assertions -- the exact class of shifting,
+    // meaningless failure Checkpoint 6.3 traced to concurrent database access.
+    //
+    // `app.runHeartbeatWatchdogOnce()` is still decorated, so a test that wants
+    // the watchdog drives it deterministically rather than waiting on a clock.
+    heartbeatWatchdog: { enabled: false },
+    ...options,
+  });
 }
 
 // Clears every table a Phase 2 route test can write to, in dependency
@@ -96,4 +110,11 @@ export async function truncateTestTables(app: FastifyInstance): Promise<void> {
   await app.db.delete(mailConnections);
   await app.db.delete(mailDigests);
   await app.db.delete(mailOauthStates);
+  // Phase 7 monitoring tables (migration 0015). FK order: checks and incidents
+  // both reference targets with ON DELETE CASCADE, so deleting them first is not
+  // strictly required -- but doing it explicitly keeps the truncation order
+  // readable and independent of the cascade continuing to exist.
+  await app.db.delete(monitorChecks);
+  await app.db.delete(monitorIncidents);
+  await app.db.delete(monitorTargets);
 }
