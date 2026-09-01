@@ -23,7 +23,26 @@ import tls from "node:tls";
 
 export type ProbeOutcome =
   | { status: "up"; httpStatus: number | null; latencyMs: number }
-  | { status: "down"; httpStatus: number | null; latencyMs: number; failureClass: string };
+  | {
+      status: "down";
+      httpStatus: number | null;
+      /**
+       * NULL WHEN NOTHING RESPONDED.
+       *
+       * A transport failure has no latency to report. The elapsed time until we
+       * gave up is a property of OUR timeout, not of the service -- recording it
+       * would put a fictional data point in any latency view, and a 1000ms
+       * "latency" on a target that answered nothing at all is exactly the
+       * missing-versus-measured collapse `monitor_checks` was shaped to prevent
+       * (the column is nullable for this reason, and the read-model test asserts
+       * a null latency is legal).
+       *
+       * A response that arrived and was then judged unhealthy DOES carry a real
+       * latency, because a real round trip happened.
+       */
+      latencyMs: number | null;
+      failureClass: string;
+    };
 
 export interface HttpProbeRequest {
   url: string;
@@ -124,7 +143,9 @@ export async function probeHttp(
     return {
       status: "down",
       httpStatus: null,
-      latencyMs: Math.max(0, Math.round(now() - startedAt)),
+      // Deliberately null, not the elapsed time -- see the type's note. Nothing
+      // responded, so there is no latency to record.
+      latencyMs: null,
       failureClass: classifyTransportFailure(err),
     };
   }

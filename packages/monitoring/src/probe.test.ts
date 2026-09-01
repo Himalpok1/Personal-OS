@@ -419,3 +419,77 @@ describe("TLS expiry", () => {
     }
   });
 });
+
+describe("latency is null when nothing responded (Checkpoint 7.7 live proof)", () => {
+  // Found by the live proof, not by review: a real 1000ms timeout against a real
+  // hanging server recorded `latency_ms: 1006`. That is the duration of OUR
+  // timeout, not a measurement of the service -- the service answered nothing --
+  // and it would put a fictional point in any latency view. The column is
+  // nullable precisely so this case can be expressed.
+
+  it("records NO latency for a timeout", async () => {
+    const outcome = await probeHttp(
+      {
+        url: "https://host.example/health",
+        expectedStatus: 200,
+        timeoutMs: 50,
+        expectHealthyPayload: false,
+      },
+      () => {
+        const err = new Error("aborted");
+        err.name = "TimeoutError";
+        return Promise.reject(err);
+      },
+    );
+    expect(outcome.status).toBe("down");
+    expect(outcome.latencyMs).toBeNull();
+  });
+
+  it("records NO latency for an unreachable host", async () => {
+    const outcome = await probeHttp(
+      {
+        url: "https://host.example/health",
+        expectedStatus: 200,
+        timeoutMs: 50,
+        expectHealthyPayload: false,
+      },
+      () => Promise.reject(new Error("ECONNREFUSED")),
+    );
+    expect(outcome.status).toBe("down");
+    expect(outcome.latencyMs).toBeNull();
+  });
+
+  it("STILL records latency when a response arrived but was unhealthy", async () => {
+    // The distinction that makes the null meaningful: a real round trip happened
+    // here, so there is a real number to report.
+    const outcome = await probeHttp(
+      {
+        url: "https://host.example/health",
+        expectedStatus: 200,
+        timeoutMs: 500,
+        expectHealthyPayload: false,
+      },
+      () => Promise.resolve(new Response("", { status: 503 })),
+    );
+    // Narrowed rather than asserted-through: `ProbeOutcome` is a union and the
+    // `up` variant carries no `failureClass`, so reaching for it without this
+    // guard is a type error -- one that vitest would have run straight past.
+    if (outcome.status !== "down") throw new Error("expected a down outcome");
+    expect(outcome.failureClass).toBe("http_status:503");
+    expect(typeof outcome.latencyMs).toBe("number");
+  });
+
+  it("records latency on success", async () => {
+    const outcome = await probeHttp(
+      {
+        url: "https://host.example/health",
+        expectedStatus: 200,
+        timeoutMs: 500,
+        expectHealthyPayload: false,
+      },
+      () => Promise.resolve(new Response("", { status: 200 })),
+    );
+    expect(outcome.status).toBe("up");
+    expect(typeof outcome.latencyMs).toBe("number");
+  });
+});
