@@ -451,6 +451,80 @@ carries both halves of the ADR-053a consent repair. Deployed under ADR-051a's ow
 **The three integrations are NOT yet reconnected.** That is owner-only interactive work and is the
 one remaining step; see the reconnection order below, which is load-bearing.
 
+#### Health OAuth recovery — the second project (ADR-051b), and it is WORKING
+
+The 7.8A consent repair was necessary but not sufficient. It fixed grant destruction, and Gmail and
+Calendar survived correctly — but **Google Health then refused the resulting token**, three times,
+with the same structured error each time:
+
+```
+403  PERMISSION_DENIED  DISALLOWED_OAUTH_SCOPES  health.googleapis.com
+```
+
+**Google Health rejects any token carrying scopes beyond its own.** That is not a bug in our code;
+it is almost certainly a deliberate Restricted-API rule stopping one token from bridging health data
+with mail and calendar data. The evidence is symmetric: when Health last worked its stored
+`granted_scope` was **exactly** the three Health scopes and nothing else, while Google Calendar ran
+throughout on a grant containing calendar scopes **plus** `openid`, `userinfo.email` and
+`gmail.metadata`, at 30+ successful syncs an hour. Only Health is restrictive.
+
+So the two constraints are mutually exclusive while Gmail and Health share a consent screen: `false`
+destroys the other grants, `true` produces a token Health refuses. **The owner chose the separate
+project (ADR-051b)**, which supersedes ADR-051's single-project rule for Health alone.
+
+**The diagnosis was only possible because the log was fixed first.** Two attempts produced nothing
+but the static `google_health_api_failed`, because the callback logged the response code and
+discarded `httpStatus`, `googleStatus` and `error.details[].reason` — the fields
+`GoogleHealthApiError` parses for exactly this purpose. That is the trap Checkpoint 6.2P recorded
+verbatim ("three live attempts misread a `pageSize` defect as an unsupported metric precisely
+because the reason was thrown away"). A diagnosis-only change added the structured tokens to the log
+line — never the provider's prose `message`, and the response contract is unchanged — and the third
+attempt named the cause immediately.
+
+**What was built**, in the owner's browser with the owner clicking the two consent-bearing steps:
+
+| | |
+|---|---|
+| Project | **`personal-os-health`**, number `1000412593065` |
+| Google Health API | enabled |
+| Consent screen | `Personal OS Health`, External, **In production**, unverified under the personal-use exception (0 of 100) |
+| Scopes | exactly the **three** Health `.readonly` scopes as *restricted*; sensitive and non-sensitive both empty |
+| Client | `Personal OS Health Web`, one redirect URI, **no** JavaScript origins |
+
+**`personal-os-196cf` is unchanged** and keeps Gmail and Calendar. One Google account throughout, one
+credential per integration, no token reused across integrations — ADR-051's security intent is
+preserved; only its single-project mechanism is superseded.
+
+**Verified live, and it works:**
+
+| Check | Result |
+|---|---|
+| Consent | succeeded on the first attempt against the new project |
+| `granted_scope` returned | **exactly the three Health scopes**, nothing else — the isolated grant `DISALLOWED_OAUTH_SCOPES` was demanding |
+| Connection row | **rebound, not recreated** — `created_at` still `2026-08-30T03:26:14.534Z` |
+| Credentials at rest | access **253 B** ct / refresh **103 B** ct / 12 B IV / 16 B tag — identical lengths to the 6.2P/6.7B record |
+| Credential identity | hash-compared against the previous values: **different**; project number in the client id matches `1000412593065`; **distinct** from the Calendar/Gmail client |
+| Streams | **18 of 19** enabled, `heart-rate-intraday` still `false` (F5 debt unchanged) |
+| Manual sync | **24 of 24 streams succeeded, 0 failed** |
+| Data gap | closed — daily rows 145 → **149**, newest `local_date` **2026-09-01**, **0 days behind** |
+| `health_observations` | **0**, unchanged |
+| All three integrations | health `active` · calendar `active` (33 jobs/hour, 0 failed) · mail not yet connected by design |
+| Log secret scan | `ya29.`, `GOCSPX`, `refresh_token`, `client_secret` — **0 each** |
+
+**One operator error is recorded because the guard it produced is now permanent.** The first
+credential-write command used `read -rsp`, which is bash; the owner's shell is zsh, where `-p` means
+"read from a coprocess". Both reads failed, `"$ID"` expanded to empty, and the script **substituted
+empty values and reported `id=1 secret=1`** — a replacement count read as success. Caught immediately
+by the length check (`len=0`), restored from a backup taken first, and the reissued command now
+refuses to write unless both values are non-empty and shaped like Google credentials. The lesson is
+that a substitution count is not a validity check.
+
+**Two costs accepted rather than hidden.** The privacy-policy URL debt from 6.7A is now reproduced
+in a second project and is still unfixed. And the three Health scopes granted to the OLD app during
+the failed attempts are **vestigial** — authorized but unused, since Health now authenticates through
+a different client. Removing them means revoking that app's entire grant and re-consenting Gmail and
+Calendar, which is deliberately deferred rather than done while Calendar is working.
+
 #### Release lineage
 
 | Component | Source | Image |
