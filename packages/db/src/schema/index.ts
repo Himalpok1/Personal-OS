@@ -32,3 +32,6 @@ export * from "./mail-sync-cursors.js";
 export * from "./mail-messages.js";
 export * from "./mail-digests.js";
 export * from "./mail-sync-runs.js";
+export * from "./monitor-targets.js";
+export * from "./monitor-checks.js";
+export * from "./monitor-incidents.js";
