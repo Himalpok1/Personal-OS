@@ -1,10 +1,13 @@
 import {
   connectGmail,
   disconnectMailConnection,
+  generateMailDigest,
+  getCurrentMailDigest,
   getGmailAuthorizeUrl,
   getMailConnection,
   listMailConnections,
 } from "./mail.js";
+import { acknowledgeMonitorIncident, getMonitorOverview, listMonitorIncidents } from "./monitor.js";
 import { HealthCheckResponseSchema, type HealthCheckResponse } from "@personal-os/schema";
 import {
   connectCaldavCalendar,
@@ -166,6 +169,7 @@ export type { BriefContent, DailyBriefRecord } from "./brief.js";
 export type { Task, TaskCreate, TaskListParams, TaskStatus, TaskUpdate } from "./tasks.js";
 export type { TodayResponse } from "./today.js";
 export type { AgendaParams, AgendaResponse } from "./agenda.js";
+export type { MonitorIncidentListParams } from "./monitor.js";
 
 // A flat method bag, not a nested tasks.list()/notes.list() namespace --
 // matches the shape the original single health() method already had.
@@ -260,6 +264,11 @@ export function createApiClient(baseUrl: string) {
     listMailConnections: listMailConnections.bind(null, baseUrl),
     getMailConnection: getMailConnection.bind(null, baseUrl),
     disconnectMailConnection: disconnectMailConnection.bind(null, baseUrl),
+    getCurrentMailDigest: getCurrentMailDigest.bind(null, baseUrl),
+    generateMailDigest: generateMailDigest.bind(null, baseUrl),
+    getMonitorOverview: getMonitorOverview.bind(null, baseUrl),
+    listMonitorIncidents: listMonitorIncidents.bind(null, baseUrl),
+    acknowledgeMonitorIncident: acknowledgeMonitorIncident.bind(null, baseUrl),
 
     connectGoogleCalendar: connectGoogleCalendar.bind(null, baseUrl),
     connectCaldavCalendar: connectCaldavCalendar.bind(null, baseUrl),

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   connectGmail,
   disconnectMailConnection,
+  generateMailDigest,
+  getCurrentMailDigest,
   getGmailAuthorizeUrl,
   getMailConnection,
   listMailConnections,
@@ -150,5 +152,72 @@ describe("disconnectMailConnection", () => {
     const [, init] = f.mock.calls[0] as [URL, RequestInit];
     const headers = (init.headers ?? {}) as Record<string, string>;
     expect(headers["Content-Type"]).toBeUndefined();
+  });
+});
+
+describe("getCurrentMailDigest", () => {
+  it("requests no timezone -- the zone is the server's", async () => {
+    const f = stub({ configured: true, has_active_mailbox: false, digest: null });
+    await getCurrentMailDigest(BASE);
+    expect(String(f.mock.calls[0]![0])).toBe(`${BASE}/mail-digests/current`);
+  });
+
+  it("parses a digest carrying its own date and zone", async () => {
+    stub({
+      configured: true,
+      has_active_mailbox: true,
+      digest: {
+        id: "33333333-3333-4333-8333-333333333333",
+        digest_date: "2026-09-01",
+        timezone: "UTC",
+        content: { text: "Two messages need attention." },
+        model_id: null,
+        generated_at: "2026-09-01T13:00:00Z",
+      },
+    });
+    const result = await getCurrentMailDigest(BASE);
+    expect(result.digest?.digest_date).toBe("2026-09-01");
+    expect(result.digest?.content.text).toBe("Two messages need attention.");
+  });
+
+  it("REJECTS a digest with a malformed date", async () => {
+    stub({
+      configured: true,
+      has_active_mailbox: true,
+      digest: {
+        id: "33333333-3333-4333-8333-333333333333",
+        digest_date: "2026-09-01T00:00:00Z",
+        timezone: "UTC",
+        content: { text: "x" },
+        model_id: null,
+        generated_at: "2026-09-01T13:00:00Z",
+      },
+    });
+    await expect(getCurrentMailDigest(BASE)).rejects.toThrow();
+  });
+});
+
+describe("generateMailDigest", () => {
+  it("sends NO Content-Type, because it sends no body", async () => {
+    // Route tests cannot catch this -- `.inject()` never goes through fetchJson.
+    const f = stub({ accepted: true }, 202);
+    await generateMailDigest(BASE);
+
+    const init = f.mock.calls[0]![1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
+  });
+
+  it("resolves an ACKNOWLEDGEMENT, never a digest", async () => {
+    stub({ accepted: true }, 202);
+    expect(await generateMailDigest(BASE)).toEqual({ accepted: true });
+  });
+
+  it("surfaces each 409 precondition with its own code", async () => {
+    for (const code of ["mail_not_configured", "no_active_mailboxes", "no_provider_configured"]) {
+      stub({ error: code }, 409);
+      await expect(generateMailDigest(BASE)).rejects.toMatchObject({ status: 409, code });
+    }
   });
 });

@@ -8,6 +8,10 @@ import {
   type MailConnection,
   type MailConnectionListResponse,
   type MailDisconnectResponse,
+  MailDigestCurrentResponseSchema,
+  MailDigestGenerateAcceptedSchema,
+  type MailDigestCurrentResponse,
+  type MailDigestGenerateAccepted,
 } from "@personal-os/schema";
 import { buildQuery, fetchJson } from "./client.js";
 
@@ -91,4 +95,39 @@ export async function disconnectMailConnection(
     MailDisconnectResponseSchema,
     { method: "POST" },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Mail digest (Checkpoint 7.6)
+// ---------------------------------------------------------------------------
+
+/**
+ * The current digest plus the two facts an honest empty state needs.
+ *
+ * NO `tz` ARGUMENT, DELIBERATELY. A digest's identity is `(digest_date,
+ * timezone)` where the zone is the SERVER's configuration, so a client that
+ * passed its own zone against a server configured for UTC -- the default --
+ * would find nothing and show an empty digest forever while one sat in the
+ * table. The returned row carries its own date and zone instead.
+ */
+export async function getCurrentMailDigest(baseUrl: string): Promise<MailDigestCurrentResponse> {
+  return await fetchJson(baseUrl, "/mail-digests/current", MailDigestCurrentResponseSchema);
+}
+
+/**
+ * Asks the server to generate a digest now.
+ *
+ * RESOLVES TO AN ACKNOWLEDGEMENT, NOT A DIGEST. Generation runs in the worker,
+ * so a successful call means the job was accepted and the caller must re-read
+ * `getCurrentMailDigest` to see a result. Preconditions the server can decide
+ * synchronously (no mailbox, no model route) arrive as an `ApiClientError` with
+ * a specific code rather than as silence.
+ *
+ * Sends NO BODY, so `fetchJson` omits `Content-Type` -- Fastify rejects a
+ * declared JSON body that is empty, which cost a Phase 2 debugging cycle.
+ */
+export async function generateMailDigest(baseUrl: string): Promise<MailDigestGenerateAccepted> {
+  return await fetchJson(baseUrl, "/mail-digests", MailDigestGenerateAcceptedSchema, {
+    method: "POST",
+  });
 }
