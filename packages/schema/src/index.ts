@@ -21,3 +21,4 @@ export * from "./mail-sync-errors.js";
 export * from "./mail-connections.js";
 export * from "./mail-messages.js";
 export * from "./mail-digests.js";
+export * from "./monitor.js";
