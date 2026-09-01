@@ -146,7 +146,37 @@ export function buildAuthorizeUrl(params: BuildAuthorizeUrlParams): string {
     // access at all. prompt=consent is what actually re-mints a refresh token,
     // and is sent only when one is needed.
     access_type: "offline",
-    include_granted_scopes: "false",
+    // ========================================================================
+    // `true` IS LOAD-BEARING. `false` REVOKES THE OTHER INTEGRATIONS. (ADR-053a)
+    // ========================================================================
+    //
+    // This read `false` until Checkpoint 7.8A, on the same least-privilege
+    // reasoning the Gmail client used -- and with the same inverted effect.
+    //
+    // `include_granted_scopes=false` does not merely decline to widen the new
+    // TOKEN. It makes the consent NON-ADDITIVE, so the grant it produces
+    // DEFINES what the app may do and everything the account previously
+    // granted is dropped. Google's consent model is per APP, and all three of
+    // this project's OAuth clients live in one Google Cloud project --
+    // therefore one consent screen, therefore ONE grant set. Separate clients
+    // give separate tokens; they do not give separate grants.
+    //
+    // Proven the expensive way. Checkpoint 7.2's GMAIL consent on 2026-08-31
+    // left the account granting `gmail.metadata` alone, and this Health
+    // connection failed `invalid_grant` 56 minutes later at its next refresh --
+    // `request_count = 0`, refused at the grant before any API call. The three
+    // scopes below were simply no longer granted. Health had run since Phase 6.
+    //
+    // Symmetry is the point: with Gmail additive and Health not, reauthorizing
+    // Health would revoke Gmail and Calendar -- the same incident, during the
+    // recovery meant to end it. Both must be additive, or neither helps.
+    //
+    // What Personal OS REQUESTS is unchanged and asserted by test: exactly the
+    // three PHASE_6A_SCOPES, all `.readonly`, and never the fourth
+    // (`googlehealth.settings.readonly`) that ADR-046 cut with paired-device
+    // support. Incremental authorization changes what the returned TOKEN may
+    // carry; it must never change what is asked for.
+    include_granted_scopes: "true",
     state: params.state,
   });
   if (params.forceConsent) query.set("prompt", "consent");

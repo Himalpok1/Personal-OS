@@ -140,6 +140,28 @@ describe("GET /health-connections/google/authorize-url", () => {
     expect(await mintState()).not.toBe(await mintState());
   });
 
+  // ADR-053a, asserted at the ROUTE as well as in the provider, because this is
+  // the string a real browser is actually sent. `false` here made the consent
+  // non-additive, which is what let Checkpoint 7.2's unrelated Gmail consent
+  // revoke this connection's three Health scopes.
+  it("sends an ADDITIVE consent and does not widen the requested scopes", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: `/health-connections/google/authorize-url?redirect_uri=${encodeURIComponent(REDIRECT)}`,
+    });
+    const url = new URL(res.json<{ url: string }>().url);
+    expect(url.searchParams.get("include_granted_scopes")).toBe("true");
+    expect(url.searchParams.get("access_type")).toBe("offline");
+
+    const scopes = url.searchParams.get("scope")!.split(" ");
+    expect(scopes).toHaveLength(3);
+    for (const scope of scopes) {
+      expect(scope.startsWith("https://www.googleapis.com/auth/googlehealth.")).toBe(true);
+      expect(scope.endsWith(".readonly")).toBe(true);
+    }
+    expect(url.searchParams.get("scope")).not.toContain("settings");
+  });
+
   // The endpoint must not become an open redirect against our own client.
   it("rejects a redirect_uri that is not allowlisted", async () => {
     const res = await app.inject({
