@@ -1,3 +1,4 @@
+import { confirmDestructive } from "@/components/confirm-destructive";
 import { ApiClientError } from "@personal-os/api-client";
 import type { ProjectDetailEvent, ProjectUpdate } from "@personal-os/schema";
 import { useQueryClient } from "@tanstack/react-query";
@@ -5,7 +6,6 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   ScrollView,
   Text,
@@ -302,18 +302,12 @@ export default function ProjectDetailScreen() {
             label="Archive"
             disabled={archiveProject.isPending}
             onPress={() =>
-              Alert.alert(
-                "Archive this project?",
-                "This hides it from your lists. You can restore it later from the Archived section on the Projects tab.",
-                [
-                  { text: "Cancel", style: "cancel" },
-                  {
-                    text: "Archive",
-                    style: "destructive",
-                    onPress: () => archiveProject.mutate(project.id),
-                  },
-                ],
-              )
+              confirmDestructive({
+        title: "Archive this project?",
+        message: "This hides it from your lists. You can restore it later from the Archived section on the Projects tab.",
+        confirmLabel: "Archive",
+        onConfirm: () => archiveProject.mutate(project.id),
+      })
             }
           />
         )}

@@ -30,7 +30,6 @@ import GoogleCalendarAuth from "../../modules/google-calendar-auth";
 import * as Notifications from "expo-notifications";
 import { useState } from "react";
 import {
-  Alert,
   Platform,
   Pressable,
   SafeAreaView,
@@ -398,25 +397,19 @@ function DeviceCard({
 
       <Pressable
         onPress={() =>
-          Alert.alert(
-            "Revoke this device?",
-            device.is_primary_reminder_device
+          confirmDestructive({
+        title: "Revoke this device?",
+        message: device.is_primary_reminder_device
               ? `${device.name} is the PRIMARY reminder device -- revoking it stops local reminders from firing on any device until you choose a new primary.`
               : `${device.name} will lose access immediately and will need to be paired again to reconnect.`,
-            [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: "Revoke",
-                style: "destructive",
-                onPress: () =>
+        confirmLabel: "Revoke",
+        onConfirm: () =>
                   revokeDevice.mutate(device.id, {
                     onSuccess: () => {
                       if (isThisDevice) void onThisDeviceRevoked();
                     },
                   }),
-              },
-            ],
-          )
+      })
         }
         disabled={revokeDevice.isPending || Boolean(device.revoked_at)}
         className="mt-2 min-h-[44px] justify-center rounded bg-red-100 px-3 py-2 dark:bg-red-950"
@@ -573,18 +566,12 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
 
       <Pressable
         onPress={() =>
-          Alert.alert(
-            "Disconnect Google Calendar?",
-            `Personal OS will stop syncing with ${connection.google_account_email}. Events already synced stay in Personal OS, but new changes on either side won't be shared until you reconnect.`,
-            [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: "Disconnect",
-                style: "destructive",
-                onPress: () => disconnect.mutate(connection.id),
-              },
-            ],
-          )
+          confirmDestructive({
+        title: "Disconnect Google Calendar?",
+        message: `Personal OS will stop syncing with ${connection.google_account_email}. Events already synced stay in Personal OS, but new changes on either side won't be shared until you reconnect.`,
+        confirmLabel: "Disconnect",
+        onConfirm: () => disconnect.mutate(connection.id),
+      })
         }
         disabled={disconnect.isPending}
         className="mt-2 min-h-[44px] justify-center rounded bg-red-100 px-3 py-2 dark:bg-red-950"
@@ -684,18 +671,12 @@ function CaldavCalendarConnectionCard({ connection }: { connection: CalendarConn
 
       <Pressable
         onPress={() =>
-          Alert.alert(
-            "Disconnect CalDAV?",
-            `Personal OS will stop syncing with ${connection.username} (${connection.server_url}). Events already synced stay in Personal OS, but new changes on either side won't be shared until you reconnect.`,
-            [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: "Disconnect",
-                style: "destructive",
-                onPress: () => disconnect.mutate(connection.id),
-              },
-            ],
-          )
+          confirmDestructive({
+        title: "Disconnect CalDAV?",
+        message: `Personal OS will stop syncing with ${connection.username} (${connection.server_url}). Events already synced stay in Personal OS, but new changes on either side won't be shared until you reconnect.`,
+        confirmLabel: "Disconnect",
+        onConfirm: () => disconnect.mutate(connection.id),
+      })
         }
         disabled={disconnect.isPending}
         className="mt-2 min-h-[44px] justify-center rounded bg-red-100 px-3 py-2 dark:bg-red-950"
@@ -1374,16 +1355,14 @@ export default function SettingsScreen() {
   };
 
   const confirmForgetThisDevice = () => {
-    Alert.alert(
-      "Forget this device?",
-      thisDevice?.is_primary_reminder_device
+    confirmDestructive({
+      title: "Forget this device?",
+      message: thisDevice?.is_primary_reminder_device
         ? "This wipes this device's stored credentials and stops its scheduled reminders. It is the PRIMARY reminder device, so no device will schedule reminders until you pair again and choose a new primary."
         : "This wipes this device's stored credentials and stops its scheduled reminders. You'll need to pair again to reconnect.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Forget", style: "destructive", onPress: () => void forgetThisDevice() },
-      ],
-    );
+      confirmLabel: "Forget",
+      onConfirm: () => void forgetThisDevice(),
+    });
   };
 
   // A 401 here almost always means this device's own bearer token was

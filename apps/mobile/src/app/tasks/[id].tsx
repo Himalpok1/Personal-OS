@@ -1,3 +1,4 @@
+import { confirmDestructive } from "@/components/confirm-destructive";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { usePlaceholderColor } from "@/components/placeholder-color";
@@ -14,7 +15,6 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   ScrollView,
   Text,
@@ -214,18 +214,12 @@ export default function EditTaskScreen() {
 
       <Pressable
         onPress={() =>
-          Alert.alert(
-            "Archive this task?",
-            "This hides it from your lists. There's currently no way to view or restore it from the app.",
-            [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: "Archive",
-                style: "destructive",
-                onPress: () => archiveTask.mutate(task.id, { onSuccess: () => router.back() }),
-              },
-            ],
-          )
+          confirmDestructive({
+        title: "Archive this task?",
+        message: "This hides it from your lists. There's currently no way to view or restore it from the app.",
+        confirmLabel: "Archive",
+        onConfirm: () => archiveTask.mutate(task.id, { onSuccess: () => router.back() }),
+      })
         }
         disabled={archiveTask.isPending}
         className="items-center rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"

@@ -20,22 +20,28 @@ import { Alert, Platform } from "react-native";
 // that does nothing on a real, shipped target.
 //
 // ---------------------------------------------------------------------------
-// SCOPE, STATED HONESTLY
+// SCOPE
 //
-// This helper is used by the surfaces Checkpoint 7.6 added. ELEVEN pre-existing
-// `Alert.alert` confirmations elsewhere in the app -- Settings' Revoke, the two
-// calendar Disconnects, Forget-this-device, the four Archive gates Checkpoint
-// 6.5 added, the quick-add discard, and the exact-alarm prompt -- have the same
-// problem and are NOT changed here. Rewriting eleven call sites across seven
-// files is a cross-cutting change, and this checkpoint is scoped to the mail and
-// monitoring surfaces. The finding is recorded in docs/STATUS.md rather than
-// half-fixed.
+// Introduced by Checkpoint 7.6 for the surfaces it added, and extended by
+// Checkpoint 7.7 -- the hardening checkpoint -- to every DESTRUCTIVE
+// confirmation in the app. Two `Alert.alert` call sites deliberately remain and
+// are not defects:
+//
+//   * `notifications/exact-alarm.ts` returns early unless `Platform.OS ===
+//     "android"`, so its prompt cannot run on web at all.
+//   * `components/quick-add-fab.tsx` shows a one-button INFORMATIONAL notice
+//     ("Saved offline"). Nothing is lost when it does not appear -- the capture
+//     is already queued -- and routing it through a blocking `window.confirm`
+//     would be worse than silence. It wants a toast, which is a UI addition
+//     this checkpoint is not making.
 
 export interface ConfirmDestructiveOptions {
   title: string;
   message: string;
   /** The destructive button's label, e.g. "Disconnect". */
   confirmLabel: string;
+  /** Defaults to "Cancel"; some dialogs word it as the safe choice ("Keep it"). */
+  cancelLabel?: string;
   onConfirm: () => void;
 }
 
@@ -49,7 +55,7 @@ export interface ConfirmDestructiveOptions {
  * silently does nothing.
  */
 export function confirmDestructive(options: ConfirmDestructiveOptions): void {
-  const { title, message, confirmLabel, onConfirm } = options;
+  const { title, message, confirmLabel, cancelLabel = "Cancel", onConfirm } = options;
 
   if (Platform.OS === "web") {
     // `globalThis.confirm` rather than a bare `confirm`, so this module does not
@@ -62,7 +68,7 @@ export function confirmDestructive(options: ConfirmDestructiveOptions): void {
   }
 
   Alert.alert(title, message, [
-    { text: "Cancel", style: "cancel" },
+    { text: cancelLabel, style: "cancel" },
     { text: confirmLabel, style: "destructive", onPress: onConfirm },
   ]);
 }

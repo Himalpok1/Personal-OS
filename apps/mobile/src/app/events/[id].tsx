@@ -1,3 +1,4 @@
+import { confirmDestructive } from "@/components/confirm-destructive";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { PLACEHOLDER_LIGHT, usePlaceholderColor } from "@/components/placeholder-color";
@@ -23,7 +24,6 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -579,15 +579,12 @@ export default function EditEventScreen() {
     // Confirmed like Archive on this same screen: cancelling an occurrence
     // exdates it from the series with no in-app way back, and the button sits
     // one tap from two non-destructive options in the same modal (6.7A, AY8).
-    Alert.alert(
-      "Cancel this occurrence?",
-      "This removes just this occurrence from the series. There's currently no way to restore it from the app.",
-      [
-        { text: "Keep it", style: "cancel" },
-        {
-          text: "Cancel occurrence",
-          style: "destructive",
-          onPress: () =>
+    confirmDestructive({
+        title: "Cancel this occurrence?",
+        message: "This removes just this occurrence from the series. There's currently no way to restore it from the app.",
+        cancelLabel: "Keep it",
+        confirmLabel: "Cancel occurrence",
+        onConfirm: () =>
             cancelEventOccurrence.mutate(
               {
                 id: event.id,
@@ -600,9 +597,7 @@ export default function EditEventScreen() {
                 },
               },
             ),
-        },
-      ],
-    );
+      });
   };
 
   const isSubmitting =
@@ -684,18 +679,12 @@ export default function EditEventScreen() {
   };
 
   const confirmArchive = () =>
-    Alert.alert(
-      "Archive this event?",
-      "This hides it from your lists. There's currently no way to view or restore it from the app.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Archive",
-          style: "destructive",
-          onPress: () => archiveEvent.mutate(event.id, { onSuccess: () => router.back() }),
-        },
-      ],
-    );
+    confirmDestructive({
+        title: "Archive this event?",
+        message: "This hides it from your lists. There's currently no way to view or restore it from the app.",
+        confirmLabel: "Archive",
+        onConfirm: () => archiveEvent.mutate(event.id, { onSuccess: () => router.back() }),
+      });
 
   return (
     <EditEventView
