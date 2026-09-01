@@ -451,6 +451,98 @@ carries both halves of the ADR-053a consent repair. Deployed under ADR-051a's ow
 **The three integrations are NOT yet reconnected.** That is owner-only interactive work and is the
 one remaining step; see the reconnection order below, which is load-bearing.
 
+#### All three integrations connected, monitoring seeded, digest route registered
+
+| Integration | State | Notes |
+|---|---|---|
+| **Google Health** | `active` | new project `personal-os-health`; 24/24 streams synced; **0 days behind** |
+| **Google Calendar** | `active` | never disconnected; 33 jobs/hour, 0 failures throughout |
+| **Gmail** | `active` | connected `2026-09-01T18:01:28Z`, mailbox bound, `gmail.metadata` |
+
+**Gmail credentials were copied from the proven local `.env`, not re-fetched from the Console**, and
+the reason is a finding: the Console flags that the `Personal OS Gmail Web` client carries **more
+than one client secret**, and it cannot say which one is live. The local values completed a real
+OAuth cycle in Checkpoint 7.2, so copying them removes the ambiguity entirely. Transferred by a
+silent shell pipe — never printed, never in argv, never read by a model-facing tool — the 6.7B
+precedent. Verified afterwards by name, length and shape only: id prefix `868049601968-80oihcri…`
+matches the Console client, redirect is the **production** callback, and the id is hash-distinct
+from the Health client. Production `.env` moved **14 → 18 keys**, mode `600`, no duplicates.
+
+**`MAIL_DIGEST_TIMEZONE=America/Chicago` was set**, and the worker re-registered
+`mail.digest.cron` from `0 7 * * * tz=UTC` to **`0 7 * * * tz=America/Chicago`** — confirmed in
+`pgboss.schedule` after the restart, not assumed.
+
+**Monitoring is live for the first time in the project's history.** `monitor:seed` created **five**
+targets and the cron began probing immediately: `api-internal-health`, `web-internal`,
+`worker-heartbeat`, and — the notable pair — **`api-tailnet-health` and `web-tailnet`**. First
+probes: **7 checks, all `up`, 0 incidents**, with both tailnet routes returning **HTTP 200** at
+~230–250 ms. **ADR-055's recorded blind spot is now not merely resolved but actively monitored.**
+
+Two details worth keeping. The seed script's `monitor:seed` npm script hardcodes
+`--env-file=../../.env`, which **does not exist inside the image** — correctly, since secrets are
+never baked into image layers (`docs/ARCHITECTURE.md`). It was run as
+`npx tsx src/scripts/seed-monitor-targets.ts` with the environment supplied by compose instead; the
+npm script is only usable from a working tree. And `worker-heartbeat` records **`latency_ms = null`**,
+which is exactly the missing-versus-measured distinction Checkpoint 7.7's defect fix introduced — a
+non-HTTP probe measures no round trip and must not invent one.
+
+**`mail_digest` registered** on the existing `gpt-4.1` model row
+(`313633f4-2c52-4a06-a696-4f7740a95f28`), primary-only, no fallback — the ADR-044 precedent.
+Providers and models stayed at **2 / 2**: no new connection, no new model row, **no new credential
+surface**. Production now routes `capture_parser`, `daily_brief`, `mail_digest` and
+`voice_transcribe`.
+
+#### First production Gmail sync — 500 messages, zero duplicates
+
+The `*/15` cron fired at `18:15:12Z` and ran a **full** sync, because a new connection starts with
+`needs_full_resync = true` and no cursor:
+
+| | |
+|---|---|
+| Kind / status | `full` / **succeeded** |
+| Requests / pages | **506** / 5 |
+| Rows inserted / rejected | **500** / **0** |
+| Cursor minted | 7-digit `historyId` |
+| `needs_full_resync` after | **false** |
+| Duplicate `(connection, external_id)` identities | **0** |
+
+Those numbers match Checkpoint 7.7's live proof almost exactly (500 messages in 506 requests),
+which is the N+1 shape 7.2P predicted: listing returns references only, so metadata costs one request
+per message.
+
+**A reading trap worth recording.** Mid-flight the run row reads `status = failed` with
+`request_count = 0`, and the pg-boss job is still `active`. That is not a failure — the run row is
+opened pessimistically and updated on completion, so a crashed pass is correctly left recorded as
+failed. Under the rate limiter a 500-message full sync takes minutes, and reading the row before the
+job completes will show a failure that is not one. Check `pgboss.job.state` before believing it.
+
+**Header-only is structural, not a policy.** `mail_messages` has **zero** columns matching body,
+snippet, payload or attachment content — verified against `information_schema`, not against the
+migration text.
+
+#### ⚠️ The Gmail token now carries the vestigial Health scopes
+
+The mail connection's stored `granted_scope` is **eight** scopes, not one:
+
+```
+calendar.calendarlist.readonly  calendar.events  gmail.metadata  openid  userinfo.email
+googlehealth.activity_and_fitness.readonly  googlehealth.sleep.readonly
+googlehealth.health_metrics_and_measurements.readonly
+```
+
+That is `include_granted_scopes=true` behaving exactly as ADR-053a said it would — the token
+inherits everything the *app* has been granted — and it is the "honest cost" that ADR records. It is
+harmless in practice for three reasons: `MailClient` exposes no send, reply, modify, trash or label
+method, so mail cannot act; the mail lane calls only Gmail endpoints; and Health authenticates
+through a **different** client in a different project entirely, so this token is not the one Health
+uses.
+
+But it is a real widening, and it is only this wide because the three Health scopes granted to the
+old app during the failed 7.8B attempts are still there. **Cleaning them up** — revoking the old
+app's grant and re-consenting Gmail and Calendar without Health — would reduce this token to five
+scopes. That is deliberately deferred rather than done while Calendar is working, and it is the one
+outstanding hygiene item from this checkpoint.
+
 #### Health OAuth recovery — the second project (ADR-051b), and it is WORKING
 
 The 7.8A consent repair was necessary but not sufficient. It fixed grant destruction, and Gmail and
