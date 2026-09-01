@@ -1,5 +1,5 @@
 import { encryptSecret } from "@personal-os/ai-providers";
-import { mailConnections, mailSyncCursors, type Db } from "@personal-os/db";
+import { mailConnections, mailMessages, mailSyncCursors, type Db } from "@personal-os/db";
 import { GMAIL_MAILBOX_SCOPE } from "@personal-os/mail-providers";
 import { and, eq } from "drizzle-orm";
 import { env } from "../env.js";
@@ -103,4 +103,50 @@ export async function readMailCursor(
     )
     .limit(1);
   return row;
+}
+
+export interface SeedMailMessageOptions {
+  externalId?: string;
+  threadId?: string;
+  subject?: string | null;
+  fromDisplayName?: string | null;
+  /** Defaults to INBOX + UNREAD, the ordinary shape of mail needing attention. */
+  labels?: string[];
+  internalDate?: Date;
+  deletedAt?: Date | null;
+}
+
+let messageSeq = 0;
+
+/**
+ * Seeds one `mail_messages` row.
+ *
+ * `content_hash` is a fixture value rather than a real hash: nothing in the
+ * digest lane reads it, and computing one here would couple these tests to the
+ * sync engine's hashing for no benefit.
+ */
+export async function seedMailMessage(
+  db: Db,
+  connectionId: string,
+  options: SeedMailMessageOptions = {},
+): Promise<typeof mailMessages.$inferSelect> {
+  messageSeq += 1;
+  const externalId = options.externalId ?? `msg-${messageSeq}`;
+  const [row] = await db
+    .insert(mailMessages)
+    .values({
+      connectionId,
+      externalId,
+      threadId: options.threadId ?? `thread-${externalId}`,
+      internalDate: options.internalDate ?? new Date(),
+      subject: options.subject === undefined ? `Subject ${externalId}` : options.subject,
+      fromDisplayName:
+        options.fromDisplayName === undefined ? `Sender ${externalId}` : options.fromDisplayName,
+      providerLabels: options.labels ?? ["INBOX", "UNREAD"],
+      hasAttachment: false,
+      contentHash: `fixture-hash-${externalId}`,
+      deletedAt: options.deletedAt ?? null,
+    })
+    .returning();
+  return row!;
 }

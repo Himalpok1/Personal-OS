@@ -73,6 +73,16 @@ const EnvSchema = z.object({
   // authorization URLs and handles the callback. The worker never needs it.
   GMAIL_OAUTH_CLIENT_ID: optionalNonEmpty(),
   GMAIL_OAUTH_CLIENT_SECRET: optionalNonEmpty(),
+
+  // The IANA zone a SCHEDULED mail digest is generated for (Phase 7
+  // Checkpoint 7.4). `mail_digests` is keyed on (digest_date, timezone), and a
+  // cron has no HTTP client to ask which zone the user means.
+  //
+  // Optional, defaulting to UTC in `resolveDigestTimezone()` rather than here,
+  // so an INVALID value can be logged and fall back rather than killing the
+  // worker at import -- an unusable timezone is a configuration mistake, not a
+  // reason to take capture, calendar, health and reminders down with it.
+  MAIL_DIGEST_TIMEZONE: optionalNonEmpty(),
 });
 
 export const env = EnvSchema.parse(process.env);

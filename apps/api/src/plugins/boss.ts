@@ -10,6 +10,7 @@ import {
   CALENDAR_SYNC_CALENDAR_QUEUE,
   CAPTURE_PARSE_QUEUE,
   HEALTH_SYNC_CONNECTION_QUEUE,
+  MAIL_DIGEST_GENERATE_QUEUE,
   MAIL_SYNC_CONNECTION_QUEUE,
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
   NOTIFICATIONS_DISPATCH_QUEUE,
@@ -136,6 +137,13 @@ export async function registerBoss(app: FastifyInstance): Promise<void> {
     await boss.createQueue(
       MAIL_SYNC_CONNECTION_QUEUE,
       QUEUE_RETRY_OPTIONS[MAIL_SYNC_CONNECTION_QUEUE],
+    );
+    // Phase 7 Checkpoint 7.4. apps/api does not send to this queue either --
+    // an on-demand "generate now" route is Checkpoint 7.6's -- but it must be
+    // created identically here for the same first-writer-wins reason.
+    await boss.createQueue(
+      MAIL_DIGEST_GENERATE_QUEUE,
+      QUEUE_RETRY_OPTIONS[MAIL_DIGEST_GENERATE_QUEUE],
     );
   } else {
     app.log.error(

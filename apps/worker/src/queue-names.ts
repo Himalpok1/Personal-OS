@@ -89,7 +89,29 @@ export const HEALTH_SYNC_CONNECTION_QUEUE = "health.google.sync-connection";
 // pass would fail to acquire and skip forever.
 export const MAIL_SYNC_CONNECTION_QUEUE = "mail.gmail.sync-connection";
 
+// Phase 7 Checkpoint 7.4 (mail digest). ONE queue, no dead-letter.
+//
+// Same shape and same reasoning as the mail sync queue immediately above:
+// `retryLimit: 0` because under `policy: "stately"` pg-boss can drop a retry
+// insert on conflict and re-insert the job as failed, straight past its
+// remaining retries. The daily cron tick IS the retry, and a better one -- it
+// re-collects from current state rather than replaying a stale payload.
+//
+// `singletonKey` is the digest key rather than a connection id, because the
+// digest is GLOBAL across every active mailbox (ADR-053): there is exactly one
+// digest per (date, timezone), so two overlapping generations would race to
+// upsert the same row and pay two provider calls for one answer.
+//
+// `expireInSeconds` comfortably exceeds the generation budget (45s whole-chain,
+// 30s per attempt), so pg-boss can never un-`active` a job mid-provider-call.
+export const MAIL_DIGEST_GENERATE_QUEUE = "mail.digest.generate";
+
 export const QUEUE_RETRY_OPTIONS = {
+  [MAIL_DIGEST_GENERATE_QUEUE]: {
+    policy: "stately",
+    retryLimit: 0,
+    expireInSeconds: 300,
+  },
   // Per-connection serialization AND duplicate suppression, exactly as
   // HEALTH_SYNC_CONNECTION_QUEUE. singletonKey is `${connectionId}`, so every
   // trigger -- cron tick, a future manual "sync now" -- collapses onto one slot

@@ -28,6 +28,8 @@ import {
   createMailSyncConnectionHandler,
   enqueueMailSyncForAllActiveConnections,
 } from "./jobs/mail-sync-connection.js";
+import { createMailDigestHandler } from "./jobs/mail-digest.js";
+import { resolveDigestTimezone } from "./mail/digest/run.js";
 import {
   createNotificationsDispatchDeadLetterHandler,
   createNotificationsDispatchHandler,
@@ -49,6 +51,7 @@ import {
   CALENDAR_SYNC_CALENDAR_QUEUE,
   CAPTURE_PARSE_QUEUE,
   HEALTH_SYNC_CONNECTION_QUEUE,
+  MAIL_DIGEST_GENERATE_QUEUE,
   MAIL_SYNC_CONNECTION_QUEUE,
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
   NOTIFICATIONS_DISPATCH_QUEUE,
@@ -69,6 +72,7 @@ const CALENDAR_REFRESH_CRON_QUEUE = "calendar.google.refresh-cron";
 const HEALTH_SYNC_CRON_QUEUE = "health.google.sync-cron";
 
 const MAIL_SYNC_CRON_QUEUE = "mail.gmail.sync-cron";
+const MAIL_DIGEST_CRON_QUEUE = "mail.digest.cron";
 
 const SWEEP_ORPHAN_AUDIO_QUEUE = "audio.sweep-orphan";
 
@@ -296,13 +300,43 @@ async function main(): Promise<void> {
   });
   await boss.schedule(MAIL_SYNC_CRON_QUEUE, "*/15 * * * *");
 
+  // Phase 7 Checkpoint 7.4 (mail digest). One queue, no dead-letter, for the
+  // reason recorded in queue-names.ts.
+  await boss.createQueue(
+    MAIL_DIGEST_GENERATE_QUEUE,
+    QUEUE_RETRY_OPTIONS[MAIL_DIGEST_GENERATE_QUEUE],
+  );
+  await boss.work(MAIL_DIGEST_GENERATE_QUEUE, createMailDigestHandler(db));
+
+  // Daily, at 07:00 IN THE CONFIGURED DIGEST ZONE rather than the server's.
+  //
+  // The zone is passed to pg-boss explicitly so "07:00" means the local morning
+  // the digest is about. Without it a UTC container would generate the "today"
+  // digest at whatever local hour UTC 07:00 happens to be -- which for a
+  // US-Central user is 1am, describing a window that ends before the day it is
+  // named after has really begun.
+  //
+  // ADR-053 separates generation from notification: generation always occurs on
+  // schedule and always persists. Notification is Checkpoint 7.5's, so this
+  // writes a row and tells nobody, deliberately.
+  const digestTimezone = resolveDigestTimezone();
+  await boss.createQueue(MAIL_DIGEST_CRON_QUEUE);
+  await boss.work(MAIL_DIGEST_CRON_QUEUE, async () => {
+    // A fixed singletonKey: the digest is GLOBAL, so there is exactly one job
+    // worth having in flight regardless of how many ticks or requests arrive.
+    await boss.send(MAIL_DIGEST_GENERATE_QUEUE, {}, { singletonKey: "mail-digest" });
+  });
+  await boss.schedule(MAIL_DIGEST_CRON_QUEUE, "0 7 * * *", {}, { tz: digestTimezone });
+
   // Structured rather than a sentence: the old line was a single interpolated
   // string listing every queue, which is unsearchable, unparseable, and grows a
   // clause per checkpoint.
   log.info("worker.started", {
-    queues: 9,
-    schedules: 7,
+    queues: 10,
+    schedules: 8,
     mailSyncCron: MAIL_SYNC_CRON_QUEUE,
+    mailDigestCron: MAIL_DIGEST_CRON_QUEUE,
+    digestTimezone,
     healthSyncCron: HEALTH_SYNC_CRON_QUEUE,
     calendarSyncCron: CALENDAR_SYNC_CRON_QUEUE,
   });

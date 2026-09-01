@@ -97,6 +97,11 @@ services:
       # with no mail credentials, which is production today.
       GMAIL_OAUTH_CLIENT_ID: ${GMAIL_OAUTH_CLIENT_ID:-}
       GMAIL_OAUTH_CLIENT_SECRET: ${GMAIL_OAUTH_CLIENT_SECRET:-}
+      # The IANA zone the scheduled mail digest is generated for (Phase 7
+      # Checkpoint 7.4). mail_digests is keyed on (digest_date, timezone) and a
+      # cron has nobody to ask, so the zone is configuration. Unset falls back to
+      # UTC -- a correct, boring answer rather than a guessed one.
+      MAIL_DIGEST_TIMEZONE: ${MAIL_DIGEST_TIMEZONE:-}
     volumes:
       - audio_data:/data/audio
     depends_on:
