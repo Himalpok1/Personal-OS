@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 7 — Email summaries + service monitoring — **Checkpoints 7.0 (ADR gate), 7.1 (contracts, mail provider foundation, migration `0014`), 7.2 (Gmail OAuth + connection lifecycle), 7.2P (live capability probe), 7.3 (incremental mail sync engine) and 7.4 (mail digest pipeline) COMPLETE (2026-08-31). 7.4 is local-only and added NO migration — the level stays 15: the digest pipeline is proven against a stub generator, a partial-mocked SDK and real Postgres, and NO DIGEST HAS EVER BEEN GENERATED (`mail_digests` empty everywhere, no `mail_digest` route registered, no model ever called). 7.3 is likewise local-only: the engine is proven against the scripted fake and real Postgres, has NEVER run against the live Gmail API, and synchronised nothing — `mail_messages`, `mail_sync_cursors`, `mail_sync_runs` and `mail_digests` are all empty in every database. Earlier checkpoint detail follows: 7.0/7.1/7.2 COMPLETE on the repository side (2026-08-30). The Google Cloud Console gate is SATISFIED, credentials are provisioned locally, **Checkpoint 7.2's LIVE OAuth proof PASSED on 2026-08-31** — connect, identity, encrypted persistence, disconnect and reconnect all verified against the real Gmail API on a development account — and **Checkpoint 7.2P (Gmail live capability probe) is COMPLETE**, confirming every provider assumption Phase 7 rests on with zero database mutation.** Work lives on branch `phase-7-mail-monitoring`, **not merged to `main`**; the repository has no remote. **Local migration level moved 0000–0013 = 14 → 0000–0014 = 15**; `0014_mail_integration` is additive, `CREATE TABLE`-only, and applied to dev and `personalos_test` only — **production is untouched and remains at 14**. Still absent by design: no worker job, no queue, no synchronisation, no message persistence, no digest, no monitoring, no UI, no production access. A Gmail OAuth client, the `gmail.metadata` scope and local credentials now exist (development only); **production `.env` is untouched and holds no `GMAIL_OAUTH_*` key.** Phase 6 — Google Health Integration — **COMPLETE AND CLOSED (2026-08-30).** Checkpoint 6.7B deployed Phase 6 to production, all lanes passed, closure actions are done and the work is merged to `main`. Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, the Rabbit runs **`versionCode 7`** with pairing/PRIMARY/session preserved, and **both reboot-survival proofs (host and Rabbit) passed**. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Current phase:** Phase 7 — Email summaries + service monitoring — **Checkpoints 7.0 (ADR gate), 7.1 (contracts, mail provider foundation, migration `0014`), 7.2 (Gmail OAuth + connection lifecycle), 7.2P (live capability probe), 7.3 (incremental mail sync engine), 7.4 (mail digest pipeline) and 7.5 (service monitoring engine, migration `0015`) COMPLETE (2026-08-31). 7.5 moved the LOCAL migration level 0000–0014 = 15 → 0000–0015 = 16; `0015_service_monitoring` is additive, `CREATE TABLE`-only, applied to dev and `personalos_test` only — **production is untouched and remains at 14**. 7.5 is local-only: no target has ever been seeded, no probe has ever run against a real endpoint, and `monitor_targets`/`monitor_checks`/`monitor_incidents` are empty in every database. 7.4 is local-only and added NO migration — the level stays 15: the digest pipeline is proven against a stub generator, a partial-mocked SDK and real Postgres, and NO DIGEST HAS EVER BEEN GENERATED (`mail_digests` empty everywhere, no `mail_digest` route registered, no model ever called). 7.3 is likewise local-only: the engine is proven against the scripted fake and real Postgres, has NEVER run against the live Gmail API, and synchronised nothing — `mail_messages`, `mail_sync_cursors`, `mail_sync_runs` and `mail_digests` are all empty in every database. Earlier checkpoint detail follows: 7.0/7.1/7.2 COMPLETE on the repository side (2026-08-30). The Google Cloud Console gate is SATISFIED, credentials are provisioned locally, **Checkpoint 7.2's LIVE OAuth proof PASSED on 2026-08-31** — connect, identity, encrypted persistence, disconnect and reconnect all verified against the real Gmail API on a development account — and **Checkpoint 7.2P (Gmail live capability probe) is COMPLETE**, confirming every provider assumption Phase 7 rests on with zero database mutation.** Work lives on branch `phase-7-mail-monitoring`, **not merged to `main`**; the repository has no remote. **Local migration level moved 0000–0013 = 14 → 0000–0014 = 15**; `0014_mail_integration` is additive, `CREATE TABLE`-only, and applied to dev and `personalos_test` only — **production is untouched and remains at 14**. Still absent by design: no worker job, no queue, no synchronisation, no message persistence, no digest, no monitoring, no UI, no production access. A Gmail OAuth client, the `gmail.metadata` scope and local credentials now exist (development only); **production `.env` is untouched and holds no `GMAIL_OAUTH_*` key.** Phase 6 — Google Health Integration — **COMPLETE AND CLOSED (2026-08-30).** Checkpoint 6.7B deployed Phase 6 to production, all lanes passed, closure actions are done and the work is merged to `main`. Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, the Rabbit runs **`versionCode 7`** with pairing/PRIMARY/session preserved, and **both reboot-survival proofs (host and Rabbit) passed**. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
 **Implementation status:** Phases 0–5 are implemented and production-deployed, and **Phase 6's server side is now deployed too (Checkpoint 6.7B, 2026-08-29)**. **Production migration level moved to 0000–0013 = 14 migrations** — `0013_google_health_sync` was applied exactly once on 2026-08-29, matching the local level of 14 `.sql` / 14 journal entries. Production api/worker/web serve the 6.7 release images built from `c0dbff3`. The production Rabbit now runs `com.himal.personalos` **versionCode 7**, installed in place with `adb install -r` on 2026-08-30 — `firstInstallTime` unchanged, pairing/PRIMARY/push token/session all preserved.
-**Next phase allowed:** **Checkpoint 7.5 (service monitoring + migration `0015`), on separate explicit approval only.** Checkpoints 7.0, 7.1, 7.2, 7.2P, 7.3 and 7.4 are closed. 7.4 added the digest pipeline and one queue (`mail.digest.generate`, `stately`/`retryLimit 0`/no dead-letter, verified against a real pg-boss boot) plus a daily cron in the configured zone; it registered **no** `mail_digest` AI route, dispatched **no** notification (ADR-055 assigns alerting to 7.5) and added **no** migration. 7.3 added the sync engine, the worker structured logger, the queue-parity guard and one queue (`mail.gmail.sync-connection`, `stately`/`retryLimit 0`/no dead-letter, verified against a real pg-boss boot); it added **no migration** — the level stays 15 — and made no live Gmail call. Phase 6 and every one of its checkpoints are closed; Phase 7 Checkpoints 7.0, 7.1 and 7.2's repository work are closed. Both user-only Console actions are **done (2026-08-31)**: the Gmail API is enabled, `gmail.metadata` is added, and a **third OAuth client** `Personal OS Gmail Web` exists in the existing `personal-os-196cf` project (never a second project, ADR-051), with credentials provisioned into the local `.env` by the owner through a hidden prompt. The remaining gate is the **owner's consent grant** against their live mailbox, which the agent deliberately did not perform. The **privacy-policy URL still serves HTTP 404** and remains deferred branding/compliance debt — empirically it did **not** block adding the scope, because the app is already In production and no re-publish was required. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). **Phase 7 is approved and scoped by ADR-052: Gmail-first and read-only, `gmail.metadata` only, no message bodies, no mail actions, Microsoft Graph deferred, plus a worker-owned service-monitoring engine whose worker-heartbeat watchdog is API-owned. Phase 7 development may proceed through Checkpoint 7.7; production deployment (7.8) must not begin before the `2026-09-04T20:08:25Z` Phase 6 monitoring milestone completes (ADR-051, ADR-052).** Phase 8 has not been approved or planned.
+**Next phase allowed:** **Checkpoint 7.6 (UI), on separate explicit approval only.** Checkpoints 7.0, 7.1, 7.2, 7.2P, 7.3, 7.4 and 7.5 are closed. 7.5 added migration `0015` (three tables, additive, `CREATE TABLE`-only), a new server-only `packages/monitoring`, one worker queue (`monitor.run`, `stately`/`retryLimit 0`/no dead-letter, verified against a real pg-boss boot) with a one-minute cron, and the **API-owned** worker-heartbeat watchdog; it seeded **no** target, dispatched **no** notification and made **no** production change. **Worker-to-Tailscale reachability remains UNVERIFIED (ADR-055) and is recorded as an explicit blind spot** — the two tailnet targets are opt-in and were deliberately not seeded. 7.4 added the digest pipeline and one queue (`mail.digest.generate`, `stately`/`retryLimit 0`/no dead-letter, verified against a real pg-boss boot) plus a daily cron in the configured zone; it registered **no** `mail_digest` AI route, dispatched **no** notification (ADR-055 assigns alerting to 7.5) and added **no** migration. 7.3 added the sync engine, the worker structured logger, the queue-parity guard and one queue (`mail.gmail.sync-connection`, `stately`/`retryLimit 0`/no dead-letter, verified against a real pg-boss boot); it added **no migration** — the level stays 15 — and made no live Gmail call. Phase 6 and every one of its checkpoints are closed; Phase 7 Checkpoints 7.0, 7.1 and 7.2's repository work are closed. Both user-only Console actions are **done (2026-08-31)**: the Gmail API is enabled, `gmail.metadata` is added, and a **third OAuth client** `Personal OS Gmail Web` exists in the existing `personal-os-196cf` project (never a second project, ADR-051), with credentials provisioned into the local `.env` by the owner through a hidden prompt. The remaining gate is the **owner's consent grant** against their live mailbox, which the agent deliberately did not perform. The **privacy-policy URL still serves HTTP 404** and remains deferred branding/compliance debt — empirically it did **not** block adding the scope, because the app is already In production and no re-publish was required. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). **Phase 7 is approved and scoped by ADR-052: Gmail-first and read-only, `gmail.metadata` only, no message bodies, no mail actions, Microsoft Graph deferred, plus a worker-owned service-monitoring engine whose worker-heartbeat watchdog is API-owned. Phase 7 development may proceed through Checkpoint 7.7; production deployment (7.8) must not begin before the `2026-09-04T20:08:25Z` Phase 6 monitoring milestone completes (ADR-051, ADR-052).** Phase 8 has not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 7 — Email summaries + service monitoring (planning gate approved 2026-08-30)
@@ -440,6 +440,162 @@ Evidence is HTTP statuses, key names, counts and shapes only. The one `emailAddr
 No message was persisted. No `mail_sync_runs`, `mail_sync_cursors`, `mail_messages` or `mail_digests`
 row was created. No sync logic, no cursor-advancement code, no classification of messages, no label
 storage. No ADR was modified. No scope was widened. Checkpoint 7.3 has not begun.
+
+### Checkpoint 7.5 — Service monitoring engine, migration `0015` (COMPLETE, local only, 2026-08-31)
+
+Local development only. **No production access, no deployment, no UI, no settings screen, no
+notification frontend, no Graph, and no change to any mail module.** Branch
+`phase-7-mail-monitoring`, five commits from `db1cdc5` (`2a32688` … `ba68e42`), clean tree, not
+merged to `main`; the repository has no remote.
+
+**Nothing has ever been monitored.** No target was seeded, no probe ran against a real endpoint, and
+`monitor_targets`, `monitor_checks` and `monitor_incidents` are empty in dev and test alike. The
+engine is proven against injected fetch/TLS seams, injected clocks and real Postgres.
+
+#### Migration `0015_service_monitoring`
+
+Hand-written, additive, forward-only, drizzle-kit-styled. **`CREATE TABLE` only; no existing table is
+altered**, so migrations `0000`–`0014` are byte-unchanged. **Local level moved 0000–0014 = 15 →
+0000–0015 = 16; production is untouched and remains at 14.**
+
+| Table | Shape and why |
+|---|---|
+| `monitor_targets` | What to watch and how: thresholds, interval, timeout, TLS warning window, maintenance window, mute. `kind` is CHECKed (two members, closed by design); `failure_class` is **not** CHECKed anywhere (ADR-050). The maintenance triple is all-or-nothing CHECKed and reuses the **exact shape of `devices.quiet_hours_*`**, so `isWithinQuietHours` applies unchanged and DST and overnight wraparound are already solved |
+| `monitor_checks` | One row per probe execution, `skipped` included. Recent-checks index is **ascending** — `deriveIndexProbe` requires every indexed column to match `/^[a-z_][a-z0-9_]*$/`, so a `DESC` modifier aborts `db:reconcile`; a btree scans either direction, so it costs nothing |
+| `monitor_incidents` | Durable outage state, `open`/`acknowledged`/`resolved`. **Partial unique index on `resolved_at is null`** is what enforces one active incident per target |
+
+**There is no failure-counter column, and the schema file says so in words.** ADR-055 and
+`apps/worker/src/health/breaker.ts` make the same argument: a counter is a second source of truth
+that must be reset correctly on every success path, whereas reading the last N check rows cannot
+drift. An **incident** is legitimate durable state, because it carries acknowledgement and is the
+anchor that makes a *second* outage notifiable.
+
+The partial index predicate is `resolved_at is null` rather than `status <> 'resolved'` for a
+concrete reason rather than taste: `reconcile-drizzle-tracking.ts` provably derives a probe for the
+`is null` form and cannot parse the other.
+
+#### `packages/monitoring` — a package, not code in either app
+
+The **incident state machine had to be identical in both processes**, because the worker owns every
+`http` target while the API owns the `worker_heartbeat` one — and two copies of "when does an
+incident open" would eventually disagree about the one thing every alert depends on. The plumbing
+around it (queue handles, logging, alert bodies) stays per-process, since **the API must never import
+from `apps/worker`**: they are separate processes whose only interface is Postgres and pg-boss.
+
+`thresholds.ts` (pure, derived counting) · `suppression.ts` · `probe.ts` (HTTP + health-payload
+parsing + TLS via `node:tls`) · `incidents.ts` · `targets.ts` · `heartbeat.ts`. **109 tests.**
+
+Three decisions worth recording because each had a plausible alternative:
+
+- **A `skipped` check is WRITTEN, not omitted.** "We deliberately did not look" is a fact, and it is
+  what lets the uptime read model render `not_checked`. Threshold evaluation excludes those rows **in
+  the query**, so a nightly maintenance window cannot reset a failure streak that was one check from
+  opening — otherwise an outage beginning before the window would never be reported at all. A
+  **disabled** target is the one exception and writes nothing, because a target nobody watches should
+  not accumulate rows forever.
+- **TLS is consulted only after the HTTP probe says the endpoint answered.** A certificate expiring
+  next week on a service that is currently down is not the headline, and letting the TLS result
+  overwrite a transport failure would hide the outage behind the warning. A TLS problem on a
+  *reachable* endpoint does mark the check down, because an expired certificate is an outage for
+  every client that validates — which is every client except this probe, which deliberately does not.
+- **`fetch` cannot expose a peer certificate**, so expiry needs a second `node:tls` connection. That
+  is a real cost (one extra handshake per TLS-bearing target per interval) and is why `tls_warn_days`
+  is opt-in per target rather than implied by an `https://` URL.
+
+#### The API owns the heartbeat watchdog, and the blind spots are stated
+
+`docs/ARCHITECTURE.md` has required this since Phase 0 — *"Worker crashes must be loud… add a
+heartbeat row it updates each cycle and alert on staleness."* The heartbeat row shipped then and
+`GET /health` has reported `worker.stale` ever since, but **nothing ever alerted on it**. Reporting a
+fact on an endpoint nobody polls is not alerting.
+
+It runs on an interval in the HTTP process rather than piggybacking on inbound requests: a
+single-user system behind Tailscale gets no traffic overnight, which is exactly when a worker is most
+likely to die unnoticed. The honest cost is that it competes with request handling, which is why the
+evaluation returns rather than throws on every path, the timer is `unref`'d and cleared on close, and
+an escaping error is logged and swallowed — **a monitoring feature must not cause the outage it
+exists to detect.**
+
+**Residual blind spots, documented rather than papered over:**
+
+1. **A worker that is HUNG, or crash-looping fast enough to keep writing heartbeats, looks alive.**
+   The heartbeat proves a process is running its beat cron, not that it is completing jobs. Closing
+   this needs a liveness signal derived from actual job completion — a different design, not part of
+   this checkpoint.
+2. **If the API is down, nothing evaluates the heartbeat.** Strictly better than the worker watching
+   itself, because an API outage is what the other targets exist to catch.
+3. **Worker-to-Tailscale reachability is UNVERIFIED.** ADR-055 required this be proven here and it
+   was not: the worker container sits on a plain Docker bridge network while the Serve routes
+   terminate on the host's `tailscaled`. **The two tailnet targets are therefore opt-in** (env-gated
+   in `monitor:seed`) and were deliberately not seeded. Seeding them blindly would manufacture a
+   permanent false outage and teach whoever is on call to ignore the alerts. **The Serve/TLS layer is
+   an explicit blind spot, not assumed covered.** Proving it needs production access, which 7.5 does
+   not have.
+
+A **missing** heartbeat row counts as stale with its own `worker_never_started` class. Treating
+"never recorded" as healthy would report green on a first deploy where the worker never started,
+which is the worst possible moment to be reassuring; and a deployment problem sends an operator
+somewhere different from a worker that died.
+
+#### Alerting reuses the existing router unchanged
+
+`category: "alert"` is already wired end to end, already defaults `notify_alerts = true`, and is
+already exempt from quiet hours — correct for "a service is down". **No new notification category and
+no `devices` column** (ADR-055).
+
+Dedupe keys are **incident-scoped** — `monitor:${incidentId}:opened` / `:resolved`. This is the fix
+for a real latent defect: `notification_dispatch_log.dedupe_key` is a permanent primary key with no
+TTL, and the existing `calendar-needs-reauth:${connectionId}` producer carries no discriminator, so
+once that key is `accepted` the connection can never alert again. A target-scoped key would burn
+itself on the first outage.
+
+An alert body carries the target **name** and a failure **class** and never the URL — a push renders
+on a lock screen, and a target URL may legitimately carry a token.
+
+#### Both load-bearing guards are MUTATION-PROVEN, not asserted
+
+| Mutation | Result |
+|---|---|
+| Let `skipped` rows reach threshold evaluation | **Exactly one test fails** — "a maintenance window does NOT reset a failure streak" |
+| Make dedupe keys target-scoped instead of incident-scoped | **Exactly one test fails** — "a SECOND outage can alert" |
+
+#### A pre-existing defect found and fixed in passing
+
+**The worker's startup line was reporting counts that were already wrong.** It claimed
+`queues: 10, schedules: 8` against a real boot that registers **25 and 9** — the literals had been
+bumped by hand each checkpoint and had drifted. That is worse than carrying no number: an operator
+comparing the log against `pgboss.queue` would go looking for a registration failure that never
+happened. Both are now **derived** by counting the registrations, verified against a real boot
+(`queues: 25, schedules: 9`, matching `pgboss.schedule` exactly).
+
+#### Verification actually run
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Full gate | build **11/11** · typecheck **21/21** · `eslint .` **0 errors, 0 warnings** · `prettier --check .` clean · `git diff --check` clean |
+| 2 | Full suite, **uncached and serial** | **2748 tests / 21 turbo tasks** (2559 → **+189**), 0 of 21 cached, zero failing |
+| 3 | No package decreased | db 56→**79** · schema 216→**235** · **monitoring 109 (new)** · api 555→**569** · worker 364→**388** · core 366 · mail-providers 113 · health-providers 311 · ai-providers 25 · api-client 103 · mobile 376 |
+| 4 | Zero-drift canary | `calendar-providers` **74**, held exactly |
+| 5 | Migration applied | Once each to dev and `personalos_test` as `posops_migrator`: 15 → **16** tracked rows in both |
+| 6 | Fresh lineage | A disposable database migrated **`0000` → `0015`** produced a `public` schema **byte-identical to dev** — 1308 lines, sha256 `854bfd76365ff1ae83497fb902b95b28ae0c1725d3760dd5a0f6ad58c9a3d30c` on both — then was dropped |
+| 7 | Reconcile | Against the disposable database with `0015`'s tracking row removed, `db:reconcile` **derived and confirmed 19/19 probes** without aborting on any statement class, including the partial unique index and the compound resolved-consistency CHECK |
+| 8 | DB constraints | **23 proofs** in `packages/db/test/monitor-constraints.test.ts`, including all six partial maintenance triples, the active-incident slot (`open` AND `acknowledged` both occupy it), unlimited `resolved` rows per target, cascade cleanup, and role separation (`posops_app` denied `CREATE TABLE` and denied dropping a monitor CHECK, `42501`) |
+| 9 | Queue registration | Verified against a **real pg-boss boot** on the test database: `monitor.run` persisted `stately` / `retry_limit 0` / `expire_seconds 300` / **no dead-letter**, and `monitor.cron` on `* * * * *` |
+| 10 | Commit-prefix independence | **All five prefixes** build, typecheck AND pass their focused package suite independently — the 6.5/6.7A entanglement class, checked rather than assumed |
+| 11 | Bundle safety | `expo export --platform web` clean, exactly one `index.html`; `apps/mobile` does not depend on `@personal-os/monitoring`; `packages/schema/src/monitor.ts` reaches no Node builtin |
+| 12 | Forbidden-area drift | **zero** across `apps/api/src/brief`, `apps/worker/src/{health,mail}`, `packages/{health,calendar,mail}-providers`, `packages/core/src/recurrence`, `apps/mobile`, all three compose files, `eas.json`, `app.config.ts`, and migrations `0000`–`0014` |
+| 13 | Health invariants | `health_observations` **0** in dev and test; `heart-rate-intraday` `sync_enabled = false` |
+| 14 | Mail invariants | Every `mail_*` table still empty; **no digest has ever been generated** |
+| 15 | Secret scans | `gitleaks git` **206 commits, no leaks**; working-tree scan classified with `git check-ignore` — 11 findings, **0 in any file git would commit**; pre-commit hook clean on all five commits |
+| 16 | Cleanup | No repository api/worker/Metro/Expo/watch/test process left running; ports 3000/8081/8082/5173/19000/19001 free; the disposable probe database dropped; zero failed pg-boss jobs |
+
+#### Deliberately NOT done
+
+No UI, no settings screen, no notification frontend, no api-client method, no route. No production
+access, no deployment, no migration `0016`. No target seeded and no probe run against a real
+endpoint — including no probe of the Tailscale Serve routes, which is the recorded blind spot above.
+No Microsoft Graph. No change to any mail or health module. No merge to `main`, no rebase, no push.
+**Checkpoint 7.6 has not begun.**
 
 ### Checkpoint 7.4 — Mail digest pipeline (COMPLETE, local only, 2026-08-31)
 
@@ -4930,8 +5086,40 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-**Phase 7 Checkpoints 7.0, 7.1, 7.2, 7.2P, 7.3 and 7.4 are complete. Work has stopped at the 7.4
-boundary, as planned. Checkpoint 7.5 has not begun.**
+**Phase 7 Checkpoints 7.0 through 7.5 are complete. Work has stopped at the 7.5 boundary, as
+planned. Checkpoint 7.6 has not begun.**
+
+7.5 built the service-monitoring engine: migration `0015`, a new server-only `packages/monitoring`
+holding the shared incident state machine, a worker cron sweeping every `http` target, and the
+**API-owned** worker-heartbeat watchdog — the half of `ARCHITECTURE.md`'s own "alert on staleness"
+mandate that shipped a heartbeat row in Phase 0 and then never alerted on it.
+
+**Nothing has ever been monitored.** No target was seeded and no probe ran against a real endpoint;
+all three monitor tables are empty in every database. **2748 tests, +189, no package decreased,
+`calendar-providers` held at 74.**
+
+Three things are worth carrying forward rather than burying in the section below. **There is no
+failure-counter column and there must never be one** — the count is derived from `monitor_checks`,
+because a counter is a second source of truth that must be reset correctly on every success path.
+**Alert dedupe keys are incident-scoped**, which is the fix for a real latent defect:
+`notification_dispatch_log.dedupe_key` is a permanent primary key with no TTL, so a target-scoped key
+would burn itself on the first outage and that target could never alert again. And **the residual
+blind spots are stated, not papered over** — a hung-but-still-beating worker looks alive to the
+watchdog, and **worker-to-Tailscale reachability is UNVERIFIED**, so the two tailnet targets are
+opt-in and were deliberately not seeded rather than manufacturing a permanent false outage.
+
+Both load-bearing guards are **mutation-proven**: letting `skipped` rows reach threshold evaluation
+fails exactly the maintenance-streak test, and making dedupe keys target-scoped fails exactly the
+second-outage test.
+
+One pre-existing defect was found in passing and fixed: **the worker's startup line reported counts
+that were already wrong** — 10 queues and 8 schedules against a real boot registering 25 and 9. Both
+are now derived rather than hand-bumped each checkpoint.
+
+**The historical 7.0–7.4 record below is retained verbatim and was not rewritten.**
+
+---
+
 
 7.4 built the metadata-only mail digest pipeline: a closed-allowlist input with exactly two
 attacker-controlled fields, a system prompt rewritten rather than inherited (ADR-054 requires it —
@@ -5210,6 +5398,41 @@ unchanged. `versionCode` **6**. Migrations 14 / 14. `health_observations` **0**.
 
 ## Last verification
 
+**Phase 7 Checkpoint 7.5 — service monitoring engine, migration `0015` (2026-08-31).** Branch
+`phase-7-mail-monitoring`, HEAD `ba68e42` after five commits from `db1cdc5`; clean tree; not merged to
+`main`; no remote.
+
+Full gate, integrator-run: build **11/11** · typecheck **21/21** · `eslint .` **0 errors, 0
+warnings** · `prettier --check .` clean · `git diff --check` clean · `expo export --platform web`
+clean with exactly one `index.html`.
+
+Full suite, **uncached and serial** (0 of 21 cached): **2748 tests across 21 turbo tasks**
+(2559 → **+189**), zero failing. Per package — core 366 · db **79** · schema **235** ·
+**monitoring 109 (new)** · mail-providers 113 · **calendar-providers 74** · health-providers 311 ·
+ai-providers 25 · api-client 103 · api **569** · worker **388** · mobile 376. **No package
+decreased.** The `calendar-providers` canary held at exactly **74**. Turbo task count moved 19 → 21
+because `packages/monitoring` adds its own build and test tasks.
+
+Migrations **16 `.sql` / 16 journal entries**, highest `0015_service_monitoring`, **no `0016`**;
+migrations `0000`–`0014` byte-unchanged. A disposable database migrated `0000` → `0015` produced a
+`public` schema **byte-identical to dev**, and `db:reconcile` **derived and confirmed 19/19 probes**
+for `0015` including the partial unique index. **23 constraint proofs** against a real Postgres.
+
+Queue registration verified against a **real pg-boss boot**: `monitor.run` persisted
+`stately / retry_limit 0 / expire_seconds 300 / no dead-letter`; `monitor.cron` on `* * * * *`.
+**All five commit prefixes** build, typecheck and pass their focused suite independently.
+
+`gitleaks git` **206 commits, no leaks**; working tree **0 findings in any committable file**.
+`health_observations` **0** in dev and test; `heart-rate-intraday` disabled. Every `mail_*` table
+still empty and **no digest has ever been generated**. All three `monitor_*` tables **empty in every
+database** — **no target seeded and no probe run against a real endpoint**, including none against
+the Tailscale Serve routes, which is the recorded blind spot. Forbidden-area drift **zero**.
+
+*Previous verification — Phase 7 Checkpoint 7.4 (2026-08-31): 2559 tests across 19 turbo tasks,
+calendar-providers 74, worker 364, api 555, 15 migrations.*
+
+## Superseded verification (Checkpoint 7.4)
+
 **Phase 7 Checkpoint 7.4 — mail digest pipeline (2026-08-31).** Branch
 `phase-7-mail-monitoring`, HEAD after two commits from `eb557d8`; clean tree; not merged to `main`;
 no remote.
@@ -5455,33 +5678,57 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Checkpoints 7.2 and 7.2P are COMPLETE. Do not begin Checkpoint 7.3 without separate explicit
+**Checkpoints 7.3, 7.4 and 7.5 are COMPLETE. Do not begin Checkpoint 7.6 without separate explicit
 approval.**
 
-7.2P confirmed every provider assumption Phase 7 rests on, and surfaced four things 7.3 must honour:
+*(This section was stale through 7.3 and 7.4 — it still described 7.2/7.2P as the frontier. Corrected
+here; the 7.2P findings it carried are preserved below because 7.3 was written against them and they
+remain the operative provider facts.)*
+
+**What 7.6 inherits from 7.5, and must not undo:**
+
+1. **The uptime read model is three-state.** `MonitorUptimePointSchema` refuses a `not_checked` point
+   that carries a ratio, so a window in which the monitor was not running is **inexpressible** as
+   `0%`. Any UI must render the third state rather than coercing it.
+2. **`failure_class` is a token, never prose**, and `sanitizeMonitorFailureClass` is the boundary
+   guard. A UI must not interpolate a probe error's text, and there is none to interpolate.
+3. **`url` IS projected and may be displayed**; a probe error's text is not, and never will be.
+4. **There is no failure-counter column.** Anything that looks like one must be derived from
+   `monitor_checks`.
+
+**Outstanding, unchanged:**
+
+- **Worker-to-Tailscale reachability is UNVERIFIED (ADR-055).** The two tailnet targets are opt-in
+  and were deliberately NOT seeded, so **the Serve/TLS layer is an explicit blind spot**. Proving it
+  needs production access and belongs to 7.7/7.8.
+- **No monitor target has ever been seeded and no probe has ever run against a real endpoint.**
+  `monitor:seed` exists as a CLI script; running it is an operator action, not a deployment side
+  effect.
+- **A hung or fast-crash-looping worker that still writes heartbeats looks alive** to the API
+  watchdog. Documented, not closed.
+- **The OAuth privacy-policy URL still serves HTTP 404** — deferred branding/compliance debt.
+- **`.gitignore` line 18 is literally `.env`, not `.env*`**, so any tooling writing `.env.<suffix>`
+  puts a plaintext secret copy in git's view.
+- **`Retry-After` remains proven by deterministic tests only.** No 429 was provoked and none occurred
+  naturally (ADR-053 amendment D), which is the accepted position.
+- **No live Gmail sync has ever run and no digest has ever been generated.** The engine and the
+  digest pipeline are proven against fakes and real Postgres only.
+- Phase 6's seven-day refresh-token longevity remains post-deployment monitoring (ADR-051), and
+  **production deployment (7.8) must not begin before the `2026-09-04T20:08:25Z` milestone**.
+
+**The 7.2P provider findings, still operative:**
 
 1. **Always send `format=metadata`.** Gmail's default is FULL and is rejected `403` under this scope,
    so omitting the parameter fails every message fetch. The shipped client already hardcodes it.
 2. **Do not expect a structured error `reason`.** Every Gmail failure observed returned
-   `details: []`. Classification must key on **HTTP status plus endpoint context** — the opposite of
-   the Google Health classifier 6.3 built, which must not be ported as-is.
+   `details: []`. Classification keys on **HTTP status plus endpoint context** — the opposite of the
+   Google Health classifier 6.3 built, which was deliberately not ported.
 3. **An empty history delta omits the `history` key entirely**, rather than returning an empty array.
-4. **Listing returns refs only** (`id`, `threadId`), so metadata is an N+1 second call per message.
-   Budget it against the 6,000 units/minute quota.
+4. **Listing returns refs only** (`id`, `threadId`), so metadata is an N+1 second call per message,
+   budgeted against the 6,000 units/minute quota.
 
-**Outstanding, unchanged:**
-
-- **The OAuth privacy-policy URL still serves HTTP 404** — deferred branding/compliance debt.
-- **`.gitignore` line 18 is literally `.env`, not `.env*`**, so any tooling writing `.env.<suffix>`
-  puts a plaintext secret copy in git's view.
-- **The worker has no Gmail configuration passthrough yet** — 7.3 must add it.
-- **`Retry-After` remains proven by deterministic tests only.** No 429 was provoked and none occurred
-  naturally (ADR-053 amendment D), which is the accepted position.
-- Phase 6's seven-day refresh-token longevity remains post-deployment monitoring (ADR-051), and
-  **production deployment (7.8) must not begin before the `2026-09-04T20:08:25Z` milestone**.
-
-7.2 is Gmail OAuth and the connection lifecycle. **It is the first Phase 7 checkpoint that could not
-proceed on repository work alone.** Both Console prerequisites are now met:
+**Historical, retained:** 7.2 was Gmail OAuth and the connection lifecycle, and the first Phase 7
+checkpoint that could not proceed on repository work alone. Both Console prerequisites were met:
 
 1. **The third OAuth client** `Personal OS Gmail Web` exists in the existing `personal-os-196cf`
    project — never a second project, per ADR-051 — with `gmail.metadata` added to the shared consent
@@ -5515,7 +5762,8 @@ it an effective ≈65.7 × 48.0 dp target (see the closure section). The one-off
 snapshot was **deleted after final acceptance**, restoring ADR-024 in full — Personal OS keeps
 no backup system.
 
-**Phase 7 is now approved and scoped (ADR-052); Checkpoint 7.0 is complete and 7.1 has not begun.**
+**Phase 7 is approved and scoped (ADR-052); Checkpoints 7.0 through 7.5 are complete** (the sentence
+that stood here claimed 7.1 had not begun, and was left stale by five checkpoints).
 The unmerged `phase-6-audit-hardening-linear`, `phase-6-google-health-sync`,
 `phase-6-google-health-ui` and `phase-6-google-health-live-proof` branches remain their own
 integration decisions; the original `phase-6-audit-hardening` is never merged. Their *content*
