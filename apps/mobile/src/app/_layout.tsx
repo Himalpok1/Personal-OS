@@ -118,6 +118,10 @@ function AppStack() {
       <Stack.Screen name="health/trends/[metric]" options={{ title: "Trend" }} />
       <Stack.Screen name="health/sleep" options={{ title: "Sleep" }} />
       <Stack.Screen name="health/workouts" options={{ title: "Workouts" }} />
+      {/* Phase 7 Checkpoint 7.6. Reached from a Settings card, not a sixth tab
+          -- the Rabbit R1's 480px bar already carries five labels, and the same
+          reasoning that kept Health off it applies here. */}
+      <Stack.Screen name="monitor/index" options={{ title: "Monitoring" }} />
       <Stack.Screen name="settings" options={{ title: "Settings" }} />
       <Stack.Screen name="hardware-debug" options={{ title: "Hardware spike" }} />
     </Stack>

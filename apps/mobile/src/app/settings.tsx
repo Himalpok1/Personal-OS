@@ -2,6 +2,15 @@ import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { useBusyPress } from "@/components/use-busy-press";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { calendarSyncErrorCopy } from "@/components/calendar/sync-error-copy";
+import { mailCallbackRedirectUri } from "@/components/mail/callback-redirect";
+import {
+  canConnectMail,
+  canDisconnectMail,
+  resolveMailConnectionState,
+  type MailConnectionDisplayState,
+} from "@/components/mail/connection-state";
+import { mailSyncErrorCopy } from "@/components/mail/sync-error-copy";
+import { describeMonitorSummary } from "@/components/monitor/target-state";
 import { usePlaceholderColor } from "@/components/placeholder-color";
 import {
   describeFreshness,
@@ -10,9 +19,10 @@ import {
   type HealthConnectionDisplayState,
 } from "@/components/health/connection-state";
 import { ApiClientError } from "@personal-os/api-client";
-import type { CalendarConnection, Device } from "@personal-os/schema";
+import type { CalendarConnection, Device, MailConnection } from "@personal-os/schema";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "expo-router";
+import { Link, useRouter, type Href } from "expo-router";
+import * as Linking from "expo-linking";
 import ExactAlarmStatus from "../../modules/exact-alarm-status";
 import GoogleCalendarAuth from "../../modules/google-calendar-auth";
 import * as Notifications from "expo-notifications";
@@ -46,7 +56,7 @@ import {
   useSyncCalendarConnectionNow,
   useUpdateCalendarConnectionCalendars,
 } from "@/queries/calendar-connections";
-import { api } from "@/queries/client";
+import { api, API_BASE_URL } from "@/queries/client";
 import {
   useDevices,
   useRevokeDevice,
@@ -55,6 +65,12 @@ import {
   useUpdateDevicePushToken,
 } from "@/queries/devices";
 import { useHealthSummary } from "@/queries/health";
+import {
+  useDisconnectMailConnection,
+  useGmailAuthorizeUrl,
+  useMailConnections,
+} from "@/queries/mail";
+import { useMonitorOverview } from "@/queries/monitor";
 import { formatShortDate } from "@/utils/local-date";
 
 // The exact scope set the backend's token exchange expects -- see
@@ -949,6 +965,256 @@ function ConnectedCalendarsCard() {
   );
 }
 
+
+// Gmail lives beside Connected Calendars and Health for the same reason those
+// two do: it is an external source Personal OS reads FROM, not a property of
+// this handset.
+//
+// Unlike Health (Checkpoint 6.4, deliberately status-only), this card DOES offer
+// connect and disconnect. The objection recorded there was specifically "a
+// half-built connect path that mints a grant the UI cannot then revoke" -- and
+// mail can revoke: `POST /mail-connections/:id/disconnect` exists, clears every
+// credential column, and is wired below.
+//
+// Unlike Google Calendar, this is NOT gated on Platform.OS === "android".
+// Calendar's connect path goes through a native `AuthorizationClient` module
+// that throws on web and iOS. Gmail's is a plain HTTPS consent URL, so the card
+// is universal -- CalDAV, not Google Calendar, is the right precedent.
+const MAIL_STATUS_TEXT: Record<MailConnectionDisplayState, string> = {
+  // We could not read it, so we assert nothing. Saying "not connected" here
+  // would invite the user to mint a new grant to fix a tunnel being down.
+  unavailable: "Can't reach Personal OS, so the Gmail status is unknown.",
+  not_configured: "Gmail isn't set up on this server.",
+  not_connected: "No mailbox is connected yet.",
+  needs_reconnect: "This mailbox needs to be reconnected before syncing can continue.",
+  disconnected: "Disconnected. Its history is kept, and reconnecting restores it.",
+  error: "A recent sync didn't finish. Personal OS will try again on its own.",
+  connected: "Connected to Gmail.",
+};
+
+function mailStatusToneClass(state: MailConnectionDisplayState): string {
+  switch (state) {
+    case "unavailable":
+      return "text-red-600 dark:text-red-400";
+    case "needs_reconnect":
+    case "error":
+      return "text-amber-700 dark:text-amber-300";
+    case "not_configured":
+    case "not_connected":
+    case "disconnected":
+    case "connected":
+      return "text-black dark:text-white";
+  }
+}
+
+function ConnectedMailCard() {
+  const connectionsQuery = useMailConnections();
+  const authorizeUrl = useGmailAuthorizeUrl();
+  const disconnect = useDisconnectMailConnection();
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // Mail identity is `(provider, external_account_id)` and several mailboxes are
+  // legitimate, so this is a LIST -- not health's single-connection
+  // `.limit(1)` picker. Today the card shows each one; the actions apply per
+  // mailbox.
+  const connections = connectionsQuery.data?.items ?? [];
+  const configured = connectionsQuery.data?.configured ?? false;
+  const isLoadError = connectionsQuery.isError;
+
+  const overallState = resolveMailConnectionState({
+    configured,
+    connection: connections[0] ?? null,
+    isLoadError,
+  });
+
+  const beginConnect = async (): Promise<void> => {
+    setNotice(null);
+    try {
+      // A FRESH url per attempt. The OAuth state is single-use and
+      // expiry-checked before the code is spent, and Checkpoint 7.2's first live
+      // attempt failed `400 invalid_state` because consent outlived it -- a
+      // cached URL reproduces that by construction.
+      const result = await authorizeUrl.mutateAsync(mailCallbackRedirectUri(API_BASE_URL));
+      await Linking.openURL(result.url);
+      // Honest about what happens next: the server's callback answers with a
+      // plain JSON confirmation rather than redirecting back into the app, so
+      // the user has to come back themselves. Saying so beats letting them
+      // wonder whether it worked.
+      setNotice("Approve access in the browser, then come back and tap Refresh.");
+    } catch (err) {
+      setNotice(`Couldn't start the connection. ${describeActionFailure(err)}`);
+    }
+  };
+
+  const connectPress = useBusyPress(beginConnect);
+
+  const confirmDisconnect = (connection: MailConnection): void => {
+    Alert.alert(
+      "Disconnect this mailbox?",
+      "Personal OS will stop syncing it and clear its saved credentials. The mail it has already summarised is kept, and you can reconnect later.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Disconnect",
+          style: "destructive",
+          onPress: () => {
+            setNotice(null);
+            disconnect.mutate(connection.id, {
+              // `revoked: false` still means a fully disconnected connection --
+              // it reports only whether Google accepted the revocation, so it
+              // must not be presented as a failure.
+              onSuccess: () => setNotice("Mailbox disconnected."),
+              onError: (err) => setNotice(`Couldn't disconnect. ${describeActionFailure(err)}`),
+            });
+          },
+        },
+      ],
+    );
+  };
+
+  return (
+    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
+      <Text className="mb-2 text-base font-bold text-black dark:text-white">Mail</Text>
+
+      <Text
+        className={`min-h-[20px] text-sm ${
+          connectionsQuery.isLoading ? "text-neutral-500" : mailStatusToneClass(overallState)
+        }`}
+      >
+        {connectionsQuery.isLoading ? "Loading…" : MAIL_STATUS_TEXT[overallState]}
+      </Text>
+
+      {connections.map((connection) => {
+        const state = resolveMailConnectionState({ configured, connection, isLoadError });
+        // The mailbox ADDRESS is shown deliberately: it is the user's own
+        // account and the only way to tell two mailboxes apart. ADR-054 forbids
+        // an address in a push body, a log line, a commit message or a status
+        // document -- none of which this is.
+        return (
+          <View key={connection.id} className="mt-3 border-t border-neutral-200 pt-3 dark:border-neutral-800">
+            <Text className="text-sm text-black dark:text-white">
+              {connection.external_account_id}
+            </Text>
+            <Text className={`mt-1 text-xs ${mailStatusToneClass(state)}`}>
+              {MAIL_STATUS_TEXT[state]}
+            </Text>
+            {/* A CODE from a closed enum reaches this component, never provider
+                prose -- and it is mapped to words here rather than printed, so a
+                bare token like `cursor_expired` never faces the user. */}
+            {mailSyncErrorCopy(connection.last_sync_error) === null ? null : (
+              <Text className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                {mailSyncErrorCopy(connection.last_sync_error)}
+              </Text>
+            )}
+            {canDisconnectMail(state, connection) ? (
+              <Pressable
+                onPress={() => confirmDisconnect(connection)}
+                disabled={disconnect.isPending}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: disconnect.isPending }}
+                accessibilityLabel={`Disconnect ${connection.external_account_id}`}
+                hitSlop={8}
+                className="mt-2 min-h-[44px] justify-center self-start rounded bg-red-600 px-3 py-2 active:opacity-70"
+              >
+                <Text className="text-sm font-medium text-white">
+                  {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        );
+      })}
+
+      <View className="mt-3 flex-row flex-wrap gap-2">
+        {canConnectMail(overallState) ? (
+          <Pressable
+            onPress={connectPress.onPress}
+            disabled={connectPress.busy || authorizeUrl.isPending}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: connectPress.busy || authorizeUrl.isPending }}
+            hitSlop={8}
+            className="min-h-[44px] justify-center rounded bg-blue-600 px-3 py-2 active:opacity-70"
+          >
+            <Text className="text-sm font-medium text-white">
+              {connectPress.busy
+                ? "Opening…"
+                : connections.length === 0
+                  ? "Connect Gmail"
+                  : "Reconnect Gmail"}
+            </Text>
+          </Pressable>
+        ) : null}
+
+        <Pressable
+          onPress={() => void connectionsQuery.refetch()}
+          accessibilityRole="button"
+          accessibilityLabel="Refresh mail connection status"
+          hitSlop={8}
+          className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 active:opacity-70 dark:bg-neutral-800"
+        >
+          <Text className="text-sm font-medium text-black dark:text-white">Refresh</Text>
+        </Pressable>
+      </View>
+
+      {/* `useBusyPress` swallows rejections, so the action itself writes this
+          line -- without it a failure would be completely silent. */}
+      {notice === null ? null : (
+        <Text className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">{notice}</Text>
+      )}
+    </View>
+  );
+}
+
+
+// Monitoring gets a SUMMARY card in Settings and a full screen of its own, the
+// same shape Health uses. A target list belongs on a screen with room for it;
+// what Settings owes the user is whether anything is on fire and a way through.
+//
+// The wording is constrained by ADR-055 and is not a style choice. There is no
+// "all systems operational" here, because the backend does not prove that: it
+// proves a check ran at a time with an outcome. And a target that has never been
+// checked is not up -- which is the state every environment is in today, since
+// no target has ever been seeded.
+const MONITOR_ROUTE = "/monitor" as Href;
+
+function MonitoringCard() {
+  const overview = useMonitorOverview();
+  const router = useRouter();
+
+  const summary = overview.isError
+    ? "Can't reach Personal OS, so the monitoring status is unknown."
+    : overview.data
+      ? describeMonitorSummary(overview.data.configured, overview.data.active_incident_count)
+      : "Loading…";
+
+  const tone = overview.isError
+    ? "text-red-600 dark:text-red-400"
+    : (overview.data?.active_incident_count ?? 0) > 0
+      ? "text-red-600 dark:text-red-400"
+      : "text-black dark:text-white";
+
+  return (
+    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
+      <Text className="mb-2 text-base font-bold text-black dark:text-white">Service monitoring</Text>
+      <Text className={`min-h-[20px] text-sm ${tone}`}>{summary}</Text>
+      <Text className="min-h-[16px] text-xs text-neutral-500">
+        {overview.data && overview.data.configured
+          ? `${overview.data.items.length} target${overview.data.items.length === 1 ? "" : "s"}`
+          : ""}
+      </Text>
+      <Pressable
+        onPress={() => router.push(MONITOR_ROUTE)}
+        accessibilityRole="button"
+        accessibilityLabel="View service monitoring"
+        hitSlop={8}
+        className="mt-2 min-h-[44px] justify-center self-start rounded bg-neutral-200 px-3 py-2 active:opacity-70 dark:bg-neutral-800"
+      >
+        <Text className="text-sm font-medium text-black dark:text-white">View monitoring</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 // Google Health lives next to Connected Calendars rather than among the device
 // diagnostics because it is the same kind of thing -- an external source
 // Personal OS reads from -- not a property of this handset.
@@ -1140,6 +1406,8 @@ export default function SettingsScreen() {
         <ReminderEligibilityBanner device={thisDevice} />
         <ConnectedCalendarsCard />
         <ConnectedHealthCard />
+        <ConnectedMailCard />
+        <MonitoringCard />
         <NotificationDiagnostics />
         <OutboxDiagnostics />
 

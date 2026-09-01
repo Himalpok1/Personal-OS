@@ -11,6 +11,7 @@ import { Link, useRouter, type Href } from "expo-router";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { BriefCard } from "@/components/brief/brief-card";
 import { HealthTodayCard } from "@/components/health/health-today-card";
+import { MailDigestCard } from "@/components/mail/digest-today-card";
 import { FLOATING_CLEARANCE } from "@/components/floating-layout";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import { useCompleteTask } from "@/queries/tasks";
@@ -539,6 +540,14 @@ export default function TodayScreen() {
           connection, and shows only metrics that actually have a value today,
           so a missing metric is never mistaken for a zero. */}
       <HealthTodayCard />
+
+      {/* Checkpoint 7.6 -- the ONE new Today card. Same posture as the two
+          above: it owns its own GET /mail-digests/current query, so a mail
+          outage can never make Today fail to load, and rendering Today never
+          triggers a model call. Its prose is clamped, because a model-authored
+          digest has no length bound and Today is the busiest screen on a
+          480x640 device. */}
+      <MailDigestCard />
 
       <View>
         <SectionHeader title={`Overdue · ${data.overdue.total}`} tone="red" />

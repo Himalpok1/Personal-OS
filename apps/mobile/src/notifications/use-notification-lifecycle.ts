@@ -1,5 +1,5 @@
 import * as Notifications from "expo-notifications";
-import { useRouter } from "expo-router";
+import { useRouter, type Href } from "expo-router";
 import { useEffect, useRef } from "react";
 import { Platform } from "react-native";
 import { resolveNotificationRoute } from "./resolve-notification-route";
@@ -67,7 +67,13 @@ export function handleNotificationResponse(
   // underneath it, so the tap appears to do nothing -- dismiss back to
   // the root first, then navigate.
   if (router.canDismiss()) router.dismissAll();
-  router.navigate(route);
+  // `as Href` for the same reason HEALTH_ROUTE carries it: expo-router's route
+  // union lives in `.expo/types/router.d.ts`, which is GENERATED and gitignored,
+  // so a route added in the same changeset as its first caller is absent from
+  // the union until Metro next runs. `/monitor` is declared in AppStack and the
+  // generator emits it once it runs; this is a transitional guard for a
+  // contributor whose .expo cache predates this changeset, not a permanent gap.
+  router.navigate(route as Href);
 }
 
 export function useNotificationLifecycle(): void {
