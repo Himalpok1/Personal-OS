@@ -27,6 +27,8 @@ import calendarConnectionsRoutes from "./routes/calendar-connections.js";
 import healthConnectionsRoutes from "./routes/health-connections.js";
 import healthDataRoutes from "./routes/health-data.js";
 import mailConnectionsRoutes from "./routes/mail-connections.js";
+import mailDigestsRoutes from "./routes/mail-digests.js";
+import monitorRoutes from "./routes/monitor.js";
 import captureRoutes from "./routes/capture.js";
 import devicesRoutes from "./routes/devices.js";
 import eventsRoutes from "./routes/events.js";
@@ -154,6 +156,8 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await app.register(healthConnectionsRoutes);
   await app.register(healthDataRoutes);
   await app.register(mailConnectionsRoutes);
+  await app.register(mailDigestsRoutes);
+  await app.register(monitorRoutes);
   await app.register(aiConfigRoutes);
   await app.register(devicesRoutes);
   await app.register(transcribeRoutes);
