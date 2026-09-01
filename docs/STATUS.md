@@ -443,16 +443,23 @@ storage. No ADR was modified. No scope was widened. Checkpoint 7.3 has not begun
 
 ### Checkpoint 7.8A — OAuth consent model repair (COMPLETE, local only, 2026-09-01)
 
-Repair of the defect Checkpoint 7.8's readiness review discovered. **No deployment, no production
-change, no Google Console action, no account-permission change, no migration** — the level stays 16
-`.sql` / 16 journal entries, there is no `0016`, and `packages/db` is byte-unchanged. Branch
-`phase-7-mail-monitoring`, two commits from `c779b58`.
+Repair of the defect Checkpoint 7.8's readiness review discovered, applied to **both** Google
+integrations that build an authorization URL. **No deployment, no production change, no Google
+Console action, no account reauthorization, no migration** — the level stays 16 `.sql` / 16 journal
+entries, there is no `0016`, and `packages/db` is byte-unchanged. Branch `phase-7-mail-monitoring`,
+four commits from `c779b58`.
 
-#### The change is one line, and it is mutation-proven
+#### The change is one line in each of two files, and both are mutation-proven
 
-`packages/mail-providers/src/gmail-oauth.ts` now sends **`include_granted_scopes=true`**. Nothing
-else about the authorization request changed, and a test pins the exact parameter set so a stray
-addition fails rather than ships.
+`packages/mail-providers/src/gmail-oauth.ts` and
+`packages/health-providers/src/google-health-oauth.ts` now both send
+**`include_granted_scopes=true`**. Nothing else about either authorization request changed, and a
+test in each pins the exact parameter set so a stray addition fails rather than ships.
+
+**Health was fixed in the same checkpoint because a one-sided fix is not a fix.** With Gmail
+additive and Health not, reauthorizing Health would revoke Gmail and Calendar — the same incident,
+during the recovery meant to end it. Health's fix covers **both** paths: forced consent and the
+reconnect path an unattended refresh failure actually leads to.
 
 `false` did not merely decline to widen the new TOKEN — it made the consent **non-additive**, so the
 grant it produced *defined* the app's authority and everything previously granted was dropped.
@@ -471,11 +478,24 @@ behaviour and both carried a comment arguing for it:
 The route-level assertion is kept as well as the provider-level one, because that is the string a
 real browser is actually sent.
 
-**Mutation testing.** Reverting the line to `"false"` fails **exactly one test in each layer** —
-one in `mail-providers`, one in the api route suite — and both pass again on restore. A protection
-whose removal breaks nothing is not a protection.
+**Mutation testing, both integrations.** A protection whose removal breaks nothing is not a
+protection, so each line was reverted, the suite re-run, and the line restored.
+
+| Mutation | Result |
+|---|---|
+| Gmail `include_granted_scopes` → `"false"` | 1 fails in `mail-providers`, 1 in the api route suite |
+| Health `include_granted_scopes` → `"false"` | **2** fail in `health-providers` (forced **and** non-forced paths), 1 in the api route suite |
+
+All green on restore.
 
 #### What did NOT change
+
+**Health still requests exactly ADR-046's three `.readonly` scopes** — activity_and_fitness, sleep,
+health_metrics_and_measurements — and still never the fourth, `googlehealth.settings.readonly`, that
+ADR-046 cut along with paired-device support. A test asserts all three end in `.readonly`, that
+there are exactly three, and names the forbidden neighbours individually. Health's token lifecycle
+is untouched: exchange, refresh, revoke and the `invalid_grant` → `needs_reauth` classification all
+pass unchanged.
 
 `gmail.metadata` remains the only scope requested, and a test now names every forbidden scope
 individually — `gmail.readonly`, `gmail.modify`, `gmail.compose`, `gmail.send`, `gmail.insert`,
@@ -497,43 +517,54 @@ reply, modify, trash or label method to call, so ADR-052's rule is a type rather
 because the alternative destroys two working integrations, which is a strictly larger loss of the
 user's own access.
 
-#### ⚠️ The same defect exists in Google Health, and Calendar is non-additive by default
-
-Found while auditing for other call sites, and **deliberately not fixed here** — the checkpoint
-brief says "No other OAuth behavior changes", and widening scope during a repair is not the agent's
-call.
+#### ⚠️ Google Calendar is a different case, and is deliberately NOT changed
 
 | Integration | State |
 |---|---|
 | Gmail | **fixed** — `include_granted_scopes=true` |
-| **Google Health** | `packages/health-providers/src/google-health-oauth.ts:149` still sends `include_granted_scopes: "false"` — **identical defect** |
-| **Google Calendar** | `packages/calendar-providers/src/google-oauth.ts` sets the parameter **not at all**, and Google's default is `false` — same effect |
+| Google Health | **fixed** — `include_granted_scopes=true`, forced and reconnect paths |
+| **Google Calendar** | **unchanged, and the knob does not exist to set** |
 
-**The consequence is concrete and it breaks the recovery plan.** With only Gmail fixed, the owner
-reauthorizing Health would revoke the Gmail and Calendar grants, and reauthorizing Calendar would
-revoke the other two. Whichever consent is granted last wins and the other two die — which is
-exactly the incident, repeated. **All three consents must be additive before any recovery
-reauthorization is attempted**, and until then the ordering of consents cannot rescue it.
+Calendar's Phase 4 flow is the native Play Services `AuthorizationRequest`
+(`apps/mobile/modules/google-calendar-auth`). It builds **no OAuth URL** — it calls
+`.setRequestedScopes(...).requestOfflineAccess(webClientId)` and hands back a `serverAuthCode` — so
+there is no `include_granted_scopes` parameter to change. The API has no
+`/calendar-connections/google/authorize-url` route at all; the only entry point is
+`POST /calendar-connections/google`, which accepts a code the **Rabbit** obtained.
 
-This is recorded as a blocker rather than actioned, and it needs an explicit decision.
+**Whether that flow is additive is UNVERIFIED, and the evidence does not settle it.** What the
+incident shows is that Calendar's grant can be destroyed BY another consent — not that Calendar's
+own consent destroys others. Proving or fixing it means a native-module change, therefore a new APK
+and a `versionCode` bump, which is out of scope for a consent repair.
+
+**The unknown is handled by ORDERING rather than by code**, and this is the operational rule that
+falls out of it:
+
+> **Reconnect Calendar FIRST, then Health, then Gmail.**
+
+Calendar goes first precisely because it is the unknown: if its consent turns out to be
+non-additive, whatever it drops is re-added by the two additive consents that follow. Reversed, the
+last non-additive consent wins and the others die. **Any future Calendar reconnect must be followed
+by re-consenting Health and Gmail**, until Calendar's behaviour is proven or changed.
 
 #### Verification actually run
 
 | # | Check | Result |
 |---|---|---|
 | 1 | Full gate | build **11/11** · typecheck **21/21** · `eslint .` **0 errors, 0 warnings** · `prettier --check .` clean · `git diff --check` clean |
-| 2 | Full suite, **uncached and serial** | **3004 tests / 21 turbo tasks** (3001 → **+3**), 0 of 21 cached, zero failing |
-| 3 | No package decreased | mail-providers 113→**116**; core 375 · db 79 · schema 255 · monitoring 132 · health-providers 311 · ai-providers 25 · api-client 121 · api 608 · worker 409 · mobile 499 all unchanged |
+| 2 | Full suite, **uncached and serial** | **3009 tests / 21 turbo tasks** (3001 → **+8**), 0 of 21 cached, zero failing |
+| 3 | No package decreased | mail-providers 113→**116** · health-providers 311→**315** · api 608→**609**; core 375 · db 79 · schema 255 · monitoring 132 · ai-providers 25 · api-client 121 · worker 409 · mobile 499 all unchanged |
 | 4 | Zero-drift canary | `calendar-providers` **74**, held exactly |
 | 5 | Migration invariant | **16 `.sql` / 16 journal entries**, no `0016`; `packages/db` byte-unchanged |
-| 6 | Mutation test | Reverting to `"false"` fails exactly 1 test in `mail-providers` and 1 in the api route suite; both green on restore |
-| 7 | State validation | **12** OAuth state/redirect tests pass unchanged |
-| 8 | Production | **not contacted** |
+| 6 | Mutation test | Gmail: 1 + 1 failures. Health: **2 + 1** failures. All green on restore |
+| 7 | State validation | **12** mail OAuth state/redirect tests and the full health-connections route suite (**60**) pass unchanged — single-use consumption, replay rejection, expiry, redirect binding, and "does NOT spend the authorization code when the state is bad" |
+| 8 | Token lifecycle | Health exchange / refresh / revoke and the `invalid_grant` → `needs_reauth` classification all unchanged |
+| 9 | Production | **not contacted** |
 
 #### Deliberately NOT done
 
-No production reconnect, deploy, migration, Console action or account-permission change. No fix to
-the Health or Calendar consent (above). No Graph, no new scope, no new capability.
+No production reconnect, deploy, migration, Console action or account-permission change. No change
+to the Calendar native flow (above). No Graph, no new scope, no new capability.
 
 ### Checkpoint 7.8 — Production readiness (READINESS COMPLETE; DEPLOYMENT **BLOCKED**, 2026-09-01)
 
