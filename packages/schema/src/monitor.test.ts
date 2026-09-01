@@ -4,6 +4,10 @@ import {
   MonitorTargetCreateSchema,
   MonitorUptimePointSchema,
   sanitizeMonitorFailureClass,
+  MonitorIncidentListQuerySchema,
+  MonitorLatestCheckSchema,
+  MonitorOverviewResponseSchema,
+  MonitorTargetStatusSchema,
 } from "./monitor.js";
 
 const AT = "2026-09-01T12:00:00.000Z";
@@ -202,5 +206,139 @@ describe("MonitorTargetCreateSchema", () => {
       false,
     );
     expect(MonitorTargetCreateSchema.safeParse({ ...http, timeoutMs: 5000 }).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// READ CONTRACTS (Checkpoint 7.6)
+// ---------------------------------------------------------------------------
+
+const TARGET = {
+  id: "11111111-1111-4111-8111-111111111111",
+  name: "api-internal-health",
+  kind: "http",
+  url: "http://api:3000/health",
+  expected_status: 200,
+  expect_healthy_payload: true,
+  timeout_ms: 5000,
+  interval_seconds: 60,
+  failure_threshold: 3,
+  recovery_threshold: 2,
+  tls_warn_days: null,
+  heartbeat_max_age_seconds: null,
+  enabled: true,
+  maintenance_start: null,
+  maintenance_end: null,
+  maintenance_timezone: null,
+  muted_until: null,
+};
+
+const CHECK = {
+  status: "up",
+  http_status: 200,
+  latency_ms: 12,
+  failure_class: null,
+  tls_expires_at: null,
+  tls_days_remaining: null,
+  heartbeat_age_seconds: null,
+  checked_at: "2026-09-01T12:00:00Z",
+};
+
+describe("MonitorLatestCheckSchema", () => {
+  it("accepts a healthy check", () => {
+    expect(MonitorLatestCheckSchema.safeParse(CHECK).success).toBe(true);
+  });
+
+  it("accepts a SKIPPED check -- a deliberate non-look is a real outcome", () => {
+    expect(
+      MonitorLatestCheckSchema.safeParse({
+        ...CHECK,
+        status: "skipped",
+        failure_class: "maintenance_window",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("REJECTS a failure class that is prose", () => {
+    // The boundary guard: a probe error names the URL it failed against, and a
+    // target URL may legitimately carry a token.
+    expect(
+      MonitorLatestCheckSchema.safeParse({
+        ...CHECK,
+        failure_class: "fetch failed for https://host/?token=SUPERSECRET",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("REJECTS a status outside the closed vocabulary", () => {
+    expect(MonitorLatestCheckSchema.safeParse({ ...CHECK, status: "unknown" }).success).toBe(false);
+  });
+
+  it("REJECTS a negative latency but accepts a null one", () => {
+    // Null is "we never got a response"; zero would be an impossibly fast one.
+    expect(MonitorLatestCheckSchema.safeParse({ ...CHECK, latency_ms: -1 }).success).toBe(false);
+    expect(MonitorLatestCheckSchema.safeParse({ ...CHECK, latency_ms: null }).success).toBe(true);
+  });
+});
+
+describe("MonitorTargetStatusSchema", () => {
+  it("accepts a NULL latest check -- never checked is a real state", () => {
+    expect(
+      MonitorTargetStatusSchema.safeParse({
+        target: TARGET,
+        latest_check: null,
+        active_incident: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("requires the three fields to be present, even as null", () => {
+    // An omitted `latest_check` would let a consumer read `undefined` and treat
+    // it as something other than "never checked".
+    expect(MonitorTargetStatusSchema.safeParse({ target: TARGET }).success).toBe(false);
+  });
+});
+
+describe("MonitorOverviewResponseSchema", () => {
+  it("carries `configured` separately from an empty list", () => {
+    // "Nothing is monitored" and "everything is up" are different claims.
+    const empty = MonitorOverviewResponseSchema.safeParse({
+      configured: false,
+      items: [],
+      active_incident_count: 0,
+    });
+    expect(empty.success).toBe(true);
+  });
+
+  it("REJECTS a negative incident count", () => {
+    expect(
+      MonitorOverviewResponseSchema.safeParse({
+        configured: true,
+        items: [],
+        active_incident_count: -1,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("MonitorIncidentListQuerySchema", () => {
+  it("defaults limit and offset", () => {
+    const parsed = MonitorIncidentListQuerySchema.parse({});
+    expect(parsed).toMatchObject({ limit: 50, offset: 0, active_only: false });
+  });
+
+  it("parses the STRING 'false' as false, not as truthy", () => {
+    // `z.coerce.boolean()` would make "false" true -- the repo-wide defect
+    // Checkpoint 4.2 found and `booleanQueryParam` exists to prevent.
+    expect(MonitorIncidentListQuerySchema.parse({ active_only: "false" }).active_only).toBe(false);
+    expect(MonitorIncidentListQuerySchema.parse({ active_only: "true" }).active_only).toBe(true);
+  });
+
+  it("is STRICT, so a typo fails rather than being silently ignored", () => {
+    expect(MonitorIncidentListQuerySchema.safeParse({ activeOnly: true }).success).toBe(false);
+  });
+
+  it("rejects a non-uuid target id", () => {
+    expect(MonitorIncidentListQuerySchema.safeParse({ target_id: "nope" }).success).toBe(false);
   });
 });
