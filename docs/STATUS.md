@@ -445,8 +445,8 @@ storage. No ADR was modified. No scope was widened. Checkpoint 7.3 has not begun
 
 Validation and hardening. **No redesign, no new integration, no new UI feature, no new table and
 no migration** — the level stays 16 `.sql` / 16 journal entries, there is no `0016`, and
-`packages/db` is byte-unchanged. Branch `phase-7-mail-monitoring`, five commits from `069477b`
-(`2d2c67d` … `7dec2bf`).
+`packages/db` is byte-unchanged. Branch `phase-7-mail-monitoring`, **four** commits from `069477b`
+(`1d58e33` … `6c52e2a`) after the linearization recorded below.
 
 **Production was read only, never written.** Four containers up 2 days, migration level **14**,
 unchanged before and after.
@@ -566,6 +566,28 @@ failing monitoring pass and a contained job error, then hunted for in: **worker 
 `monitor_checks` rows**, **`MonitorJobError`/`MailJobError` serialization**, **`pgboss.job.output`**
 (the table `serialize-error` writes into), and **notification payloads**. **Zero hits in all five.**
 API responses are covered by the route tests' own credential-shaped assertions.
+
+#### The history was linearized, and the repaired tree is provably the audited one
+
+The commit-prefix independence check — the discipline Checkpoints 6.5 and 6.7A established — **failed
+on the first attempt, for three of five prefixes.** The probe latency fix and the union narrowing its
+own test needs had been split across two commits, so every prefix between them failed `tsc`:
+`ProbeOutcome`'s `up` variant carries no `failureClass`, and reaching through the union without
+narrowing is a type error vitest runs straight past.
+
+That is exactly the 6.5 entanglement class, and ordering cannot fix it — the reaching-through test
+lives in the earlier commit, so only combining works. Repaired the same way 6.5 was: the original tip
+was preserved as tag `cp77-pre-linearize` (`0d8caf0`) and never rewritten, the two entangled commits
+were **committed together**, and the other three were re-applied in their original order.
+
+**The repaired tree is byte-identical to the audited one.** `git rev-parse HEAD^{tree}` at `6c52e2a`
+equals the preserved tag's tree, `15528636bb2cb153d92e4956c022c6f85269b6cb`, and
+`git diff cp77-pre-linearize 6c52e2a` is **empty** — so the 3001-test gate recorded below measures
+the same bytes either way, and this documentation paragraph is the only deliberate difference on the
+branch afterwards.
+
+All four prefixes now build and typecheck independently, and `@personal-os/monitoring`'s **132** tests
+pass at the previously-failing one.
 
 #### Two method lessons, recorded because they nearly produced false evidence
 
