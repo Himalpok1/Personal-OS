@@ -49,13 +49,79 @@ describe("buildGmailAuthorizeUrl", () => {
     expect(url.searchParams.get("redirect_uri")).toBe(base.redirectUri);
   });
 
-  it("always requests offline access and never inherits other grants", () => {
+  it("always requests offline access", () => {
     const url = new URL(buildGmailAuthorizeUrl(base));
     expect(url.searchParams.get("access_type")).toBe("offline");
-    // Inheriting would silently widen the grant using the Calendar and Health
-    // scopes already held by the same Google account.
-    expect(url.searchParams.get("include_granted_scopes")).toBe("false");
     expect(url.searchParams.get("response_type")).toBe("code");
+  });
+
+  // CORRECTED, not loosened (ADR-053a). This test previously asserted
+  // `include_granted_scopes` was "false", with a comment reasoning that
+  // inheriting "would silently widen the grant using the Calendar and Health
+  // scopes already held by the same Google account."
+  //
+  // That premise was disproved in production. `false` does not merely decline
+  // to widen the new token -- it makes the consent NON-ADDITIVE, so the grant it
+  // produces defines the app's authority and everything previously granted is
+  // DROPPED. Checkpoint 7.2's Gmail consent left the account granting
+  // `gmail.metadata` alone; Calendar broke 11 minutes later and Health 56.
+  //
+  // So the old assertion was pinning the defect as correct behaviour, and the
+  // honest fix is to assert the opposite and say why.
+  it("sends include_granted_scopes=true so consent ADDS rather than REPLACES", () => {
+    const url = new URL(buildGmailAuthorizeUrl(base));
+    expect(url.searchParams.get("include_granted_scopes")).toBe("true");
+    // Pinned as a string, because a URL carries no booleans: were this ever
+    // built from a truthy value it could render as "1" or "" and Google would
+    // read the absence as false, silently restoring the revoking behaviour.
+    expect(url.searchParams.get("include_granted_scopes")).not.toBe("false");
+  });
+
+  it("still requests NO additional and NO mutating scope, whatever the grant inherits", () => {
+    // Incremental authorization changes what the returned TOKEN may carry. It
+    // must never change what Personal OS ASKS for -- that is the least-privilege
+    // guarantee ADR-052/053 rest on, and it is the half this file controls.
+    const scope = new URL(buildGmailAuthorizeUrl(base)).searchParams.get("scope") ?? "";
+    expect(scope).toBe(GMAIL_METADATA_SCOPE);
+    expect(scope.split(" ")).toHaveLength(1);
+
+    // ADR-052: the app may never act on mail. None of these may ever appear,
+    // and naming them individually means a future edit that adds one fails
+    // here rather than at a consent screen.
+    for (const forbidden of [
+      "gmail.readonly",
+      "gmail.modify",
+      "gmail.compose",
+      "gmail.send",
+      "gmail.insert",
+      "gmail.labels",
+      "gmail.settings",
+      "mail.google.com",
+      "openid",
+      "userinfo.email",
+      "calendar",
+      "fitness",
+      "googlehealth",
+    ]) {
+      expect(scope).not.toContain(forbidden);
+    }
+  });
+
+  it("changes NOTHING else about the authorization request", () => {
+    // A regression fence around the one-line fix: every other parameter, and
+    // the exact parameter SET, is unchanged. An accidental extra parameter --
+    // a stray `prompt`, an `approval_prompt`, a `login_hint` -- fails here.
+    const url = new URL(buildGmailAuthorizeUrl(base));
+    expect([...url.searchParams.keys()].sort()).toEqual([
+      "access_type",
+      "client_id",
+      "include_granted_scopes",
+      "redirect_uri",
+      "response_type",
+      "scope",
+      "state",
+    ]);
+    expect(url.origin + url.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
   });
 
   it("sends prompt=consent ONLY when a refresh token is genuinely required", () => {

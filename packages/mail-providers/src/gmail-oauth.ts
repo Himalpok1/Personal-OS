@@ -93,8 +93,39 @@ export function buildGmailAuthorizeUrl(params: BuildAuthorizeUrlParams): string 
   url.searchParams.set("scope", (params.scopes ?? PHASE_7_MAIL_SCOPES).join(" "));
   // Always: a refresh token is what makes unattended sync possible at all.
   url.searchParams.set("access_type", "offline");
-  // Never silently widen a grant by inheriting scopes from another client.
-  url.searchParams.set("include_granted_scopes", "false");
+  // ==========================================================================
+  // `true` IS LOAD-BEARING. `false` REVOKES THE OTHER INTEGRATIONS. (ADR-053a)
+  // ==========================================================================
+  //
+  // This line previously read `false`, under the comment "Never silently widen
+  // a grant by inheriting scopes from another client." The instinct was right
+  // and the effect was the opposite of what it intended.
+  //
+  // `include_granted_scopes=false` does not merely decline to widen the new
+  // TOKEN. It makes the consent NON-ADDITIVE, so the grant it produces DEFINES
+  // what the app may do -- and everything the account previously granted is
+  // dropped. Google's consent model is per APP, and all three of this project's
+  // OAuth clients share one Google Cloud project, therefore one consent screen,
+  // therefore ONE grant set. Separate clients give separate tokens; they do not
+  // give separate grants.
+  //
+  // That is not a reading of the documentation, it is what happened. Checkpoint
+  // 7.2's Gmail consent at 2026-08-31T23:04Z left the account granting
+  // `gmail.metadata` and nothing else; Google Calendar failed `auth_expired`
+  // 11 minutes later and Google Health failed `invalid_grant` 56 minutes later,
+  // each at its next token refresh. Both had run for months.
+  //
+  // `true` selects Google's incremental authorization: the new consent is ADDED
+  // to what the account already granted, so connecting mail leaves calendar and
+  // health alone.
+  //
+  // The cost, stated rather than discovered: the token Google returns may now
+  // carry previously granted scopes too. That is accepted, because breadth of
+  // scope on a token is not capability exercised -- `MailClient` exposes no
+  // send, reply, modify, trash or label method to call -- and because the
+  // alternative destroys two working integrations. What Personal OS REQUESTS is
+  // unchanged and is asserted by test: exactly `gmail.metadata`.
+  url.searchParams.set("include_granted_scopes", "true");
   url.searchParams.set("state", params.state);
   if (params.forceConsent === true) url.searchParams.set("prompt", "consent");
   return url.toString();

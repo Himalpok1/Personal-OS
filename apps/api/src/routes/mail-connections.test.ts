@@ -124,7 +124,7 @@ describe("GET /mail-connections/gmail/authorize-url", () => {
     expect(scope!.split(" ")).toHaveLength(1);
   });
 
-  it("sends the exact redirect, offline access, and no inherited scopes", async () => {
+  it("sends the exact redirect, offline access, and an ADDITIVE consent", async () => {
     const res = await app.inject({
       method: "GET",
       url: `/mail-connections/gmail/authorize-url?redirect_uri=${encodeURIComponent(REDIRECT)}`,
@@ -134,8 +134,16 @@ describe("GET /mail-connections/gmail/authorize-url", () => {
     expect(url.searchParams.get("redirect_uri")).toBe(REDIRECT);
     expect(url.searchParams.get("access_type")).toBe("offline");
     expect(url.searchParams.get("response_type")).toBe("code");
-    // Never inherit the Calendar/Health grants held by the same account.
-    expect(url.searchParams.get("include_granted_scopes")).toBe("false");
+    // CORRECTED, not loosened (ADR-053a). This asserted "false" under the
+    // comment "Never inherit the Calendar/Health grants held by the same
+    // account" -- which pinned the defect as correct behaviour. `false` makes
+    // the consent NON-ADDITIVE, so it REPLACES the app's grant instead of
+    // adding to it, and it is what revoked the live Calendar and Health grants
+    // 11 and 56 minutes after Checkpoint 7.2's consent.
+    //
+    // Asserted at the ROUTE as well as in the provider, because this is the
+    // string a real browser is actually sent.
+    expect(url.searchParams.get("include_granted_scopes")).toBe("true");
   });
 
   it("forces consent, because no mailbox is known before consent", async () => {
