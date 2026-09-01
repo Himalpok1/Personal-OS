@@ -6243,12 +6243,12 @@ leaves the browser and so is not a CORS result. Server-side header evidence stan
 
 ## Next action
 
-**Checkpoints 7.3, 7.4 and 7.5 are COMPLETE. Do not begin Checkpoint 7.6 without separate explicit
-approval.**
+**Checkpoints 7.0 through 7.7 are COMPLETE. Do not begin Checkpoint 7.8 without separate explicit
+approval, and not before the `2026-09-04T20:08:25Z` Phase 6 monitoring milestone (ADR-052).**
 
-*(This section was stale through 7.3 and 7.4 — it still described 7.2/7.2P as the frontier. Corrected
-here; the 7.2P findings it carried are preserved below because 7.3 was written against them and they
-remain the operative provider facts.)*
+*(This section has run behind the frontier before — it described 7.2/7.2P through 7.3 and 7.4, and
+7.5 through 7.6. It is corrected here for 7.7. Earlier material is kept below rather than deleted
+because later checkpoints were written against it and the provider facts remain operative.)*
 
 **Both items Checkpoint 7.6 carried into 7.7 are now CLOSED** (see the 7.7 section):
 `Alert.alert`'s inert confirmations were swept and are guarded against regression, and the Gmail
@@ -6281,9 +6281,11 @@ callback now gives a browser a readable page while still giving API clients JSON
 
 **Outstanding, unchanged:**
 
-- **Worker-to-Tailscale reachability is UNVERIFIED (ADR-055).** The two tailnet targets are opt-in
-  and were deliberately NOT seeded, so **the Serve/TLS layer is an explicit blind spot**. Proving it
-  needs production access and belongs to 7.7/7.8.
+- ~~**Worker-to-Tailscale reachability is UNVERIFIED (ADR-055).**~~ — **CLOSED by Checkpoint 7.7.**
+  Probed read-only from inside the running production worker container: `wget` returned HTTP 200 on
+  both Serve routes, Node's own `fetch` — which is what `probeHttp` uses — returned HTTP 200, and a
+  `node:tls` handshake read the peer certificate with 73 days remaining. The two tailnet targets are
+  genuinely seedable. **Seeding them is still an operator action and belongs to 7.8.**
 - **No monitor target has ever been seeded and no probe has ever run against a real endpoint.**
   `monitor:seed` exists as a CLI script; running it is an operator action, not a deployment side
   effect.
