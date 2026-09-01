@@ -1,5 +1,6 @@
 import { isValidTimezone } from "@personal-os/core/timezone";
 import { z } from "zod";
+import { booleanQueryParam, PaginationQuerySchema, paginatedResponseSchema } from "./pagination.js";
 
 // Service monitoring contracts (ADR-055).
 //
@@ -235,3 +236,92 @@ export const MonitorIncidentSchema = z.object({
   last_failure_at: z.string().datetime({ offset: true }).nullable(),
 });
 export type MonitorIncident = z.infer<typeof MonitorIncidentSchema>;
+
+// ---------------------------------------------------------------------------
+// READ CONTRACTS (Checkpoint 7.6)
+// ---------------------------------------------------------------------------
+//
+// THE WIRE CARRIES FACTS, NOT A DISPLAY DECISION.
+//
+// There is deliberately no server-computed "status" string here. The health
+// dashboard settled this once already: `resolveHealthConnectionState` lives in
+// apps/mobile as a pure module because the ORDERING of its states is the whole
+// design and is worth pinning with tests, while the wire stays a factual record
+// of what was observed. Putting a display state on the wire would mean the
+// precedence rules live in the API, the copy lives in the client, and the two
+// can disagree about the same target.
+//
+// So a consumer receives: the target as configured, the most recent check, and
+// the active incident if there is one. Everything a screen says is derived from
+// those three facts and can be traced back to a row.
+
+/**
+ * The newest check for a target, or null when it has never been checked.
+ *
+ * `null` is a real and common answer -- a target seeded a minute ago, or one
+ * that has been disabled since creation, has no check at all. A UI must render
+ * that as "not checked yet" and never as an outage, which is the same
+ * three-state discipline `MonitorUptimePointSchema` enforces for a window.
+ */
+export const MonitorLatestCheckSchema = z.object({
+  status: MonitorCheckStatusSchema,
+  http_status: z.number().int().nullable(),
+  latency_ms: z.number().int().min(0).nullable(),
+  failure_class: MonitorFailureClassSchema.nullable(),
+  tls_expires_at: z.string().datetime({ offset: true }).nullable(),
+  tls_days_remaining: z.number().int().nullable(),
+  heartbeat_age_seconds: z.number().int().min(0).nullable(),
+  checked_at: z.string().datetime({ offset: true }),
+});
+export type MonitorLatestCheck = z.infer<typeof MonitorLatestCheckSchema>;
+
+/**
+ * One target, everything a screen needs about it, and nothing else.
+ *
+ * `active_incident` is the OPEN or ACKNOWLEDGED incident, which is why
+ * acknowledgement state needs no separate field: an acknowledged incident is
+ * still active, and its `acknowledged_at` says so. Collapsing acknowledgement
+ * into a boolean would lose when it happened, which is the only part an
+ * operator returning to a long outage actually wants.
+ */
+export const MonitorTargetStatusSchema = z.object({
+  target: MonitorTargetSchema,
+  latest_check: MonitorLatestCheckSchema.nullable(),
+  active_incident: MonitorIncidentSchema.nullable(),
+});
+export type MonitorTargetStatus = z.infer<typeof MonitorTargetStatusSchema>;
+
+/**
+ * The monitoring overview.
+ *
+ * `configured` is false when no target exists at all, and it is a distinct
+ * answer from "every target is up". A deployment that has never run
+ * `monitor:seed` is not being monitored, and a screen that renders an empty
+ * list as a clean bill of health would be making the strongest possible claim
+ * from the weakest possible evidence.
+ */
+export const MonitorOverviewResponseSchema = z.object({
+  configured: z.boolean(),
+  items: z.array(MonitorTargetStatusSchema),
+  active_incident_count: z.number().int().min(0),
+});
+export type MonitorOverviewResponse = z.infer<typeof MonitorOverviewResponseSchema>;
+
+/** An incident plus the name of the target it belongs to, for a history list. */
+export const MonitorIncidentListItemSchema = z.object({
+  incident: MonitorIncidentSchema,
+  target_name: z.string().min(1).max(120),
+});
+export type MonitorIncidentListItem = z.infer<typeof MonitorIncidentListItemSchema>;
+
+export const MonitorIncidentListResponseSchema = paginatedResponseSchema(
+  MonitorIncidentListItemSchema,
+);
+export type MonitorIncidentListResponse = z.infer<typeof MonitorIncidentListResponseSchema>;
+
+export const MonitorIncidentListQuerySchema = PaginationQuerySchema.extend({
+  target_id: z.string().uuid().optional(),
+  /** Omitted means every incident; `true` means only those still active. */
+  active_only: booleanQueryParam(false),
+}).strict();
+export type MonitorIncidentListQuery = z.infer<typeof MonitorIncidentListQuerySchema>;

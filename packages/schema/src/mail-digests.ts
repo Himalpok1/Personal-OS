@@ -48,3 +48,73 @@ export const MailDigestRecordSchema = z.object({
   generated_at: z.string().datetime({ offset: true }),
 });
 export type MailDigestRecord = z.infer<typeof MailDigestRecordSchema>;
+
+// ---------------------------------------------------------------------------
+// READ / GENERATE CONTRACTS (Checkpoint 7.6)
+// ---------------------------------------------------------------------------
+//
+// THE CLIENT DOES NOT CHOOSE THE DIGEST'S TIMEZONE, AND THAT IS THE WHOLE
+// DIFFERENCE FROM THE DAILY BRIEF.
+//
+// `BriefRequestSchema` takes a `tz` because a brief is generated synchronously,
+// per request, for whichever local day the caller is asking about. A digest is
+// not that: it is a SCHEDULED, GLOBAL artifact whose zone is server
+// configuration (`MAIL_DIGEST_TIMEZONE`), for the reason `resolveDigestTimezone`
+// records -- a cron has nobody to ask, and deriving the zone from a device would
+// make the row's IDENTITY drift as devices come and go.
+//
+// Accepting a `tz` here would therefore be actively harmful in two ways. A
+// client asking for `America/Chicago` against a server configured for UTC (the
+// default) would find no row and see an empty digest forever, even though one
+// was generated an hour ago. And letting the manual path pass a different zone
+// than the cron would produce two rows both claiming to be "today's digest",
+// with nothing to say which one a screen should show.
+//
+// So the read returns the digest the server actually has, and the row carries
+// its own `digest_date` and `timezone` so a screen can say what it covers.
+
+/**
+ * What `GET /mail-digests/current` returns.
+ *
+ * Three facts, because an honest empty state needs all three and a screen that
+ * had to guess between them would guess wrong:
+ *
+ *   `configured`          the server has Gmail OAuth credentials at all.
+ *   `has_active_mailbox`  at least one mailbox is connected and active.
+ *   `digest`              the most recently generated digest, or null.
+ *
+ * "No digest yet" means something completely different depending on the first
+ * two. Nothing connected is a setup step; connected-but-no-digest is simply
+ * waiting for the daily run. Collapsing them into one empty message would tell a
+ * user to go set something up that is already set up.
+ */
+export const MailDigestCurrentResponseSchema = z.object({
+  configured: z.boolean(),
+  has_active_mailbox: z.boolean(),
+  digest: MailDigestRecordSchema.nullable(),
+});
+export type MailDigestCurrentResponse = z.infer<typeof MailDigestCurrentResponseSchema>;
+
+/**
+ * What `POST /mail-digests` returns.
+ *
+ * GENERATION IS ASYNCHRONOUS AND THIS IS AN ACKNOWLEDGEMENT, NOT A DIGEST.
+ * The Daily Brief generates inside the API (ADR-041/043), but the digest
+ * pipeline lives in `apps/worker` and the API must never import from it -- the
+ * two processes share Postgres and pg-boss, not code (docs/ARCHITECTURE.md). So
+ * a manual request enqueues the SAME job the daily cron enqueues.
+ *
+ * The honest consequence, which a UI must respect: 202 means the work was
+ * accepted, never that a digest now exists. Every precondition that CAN be
+ * decided synchronously is decided before this is returned, so a failure the
+ * user can act on arrives immediately as a 4xx instead of as silence.
+ *
+ * There is deliberately no `digest_date` here. The API cannot know it: the zone
+ * is the worker's configuration, and inventing a date from the API's own clock
+ * would be a claim about a row that does not exist yet and may be keyed
+ * differently.
+ */
+export const MailDigestGenerateAcceptedSchema = z.object({
+  accepted: z.literal(true),
+});
+export type MailDigestGenerateAccepted = z.infer<typeof MailDigestGenerateAcceptedSchema>;

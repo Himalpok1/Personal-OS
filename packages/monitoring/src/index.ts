@@ -4,3 +4,4 @@ export * from "./probe.js";
 export * from "./incidents.js";
 export * from "./targets.js";
 export * from "./heartbeat.js";
+export * from "./read-models.js";
