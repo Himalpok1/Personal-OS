@@ -29,6 +29,7 @@ import {
   enqueueMailSyncForAllActiveConnections,
 } from "./jobs/mail-sync-connection.js";
 import { createMailDigestHandler } from "./jobs/mail-digest.js";
+import { createMonitorRunHandler } from "./jobs/monitor-run.js";
 import { resolveDigestTimezone } from "./mail/digest/run.js";
 import {
   createNotificationsDispatchDeadLetterHandler,
@@ -53,6 +54,7 @@ import {
   HEALTH_SYNC_CONNECTION_QUEUE,
   MAIL_DIGEST_GENERATE_QUEUE,
   MAIL_SYNC_CONNECTION_QUEUE,
+  MONITOR_RUN_QUEUE,
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
   NOTIFICATIONS_DISPATCH_QUEUE,
   OCCURRENCES_EXPAND_WINDOW_QUEUE,
@@ -73,6 +75,7 @@ const HEALTH_SYNC_CRON_QUEUE = "health.google.sync-cron";
 
 const MAIL_SYNC_CRON_QUEUE = "mail.gmail.sync-cron";
 const MAIL_DIGEST_CRON_QUEUE = "mail.digest.cron";
+const MONITOR_CRON_QUEUE = "monitor.cron";
 
 const SWEEP_ORPHAN_AUDIO_QUEUE = "audio.sweep-orphan";
 
@@ -116,6 +119,31 @@ async function main(): Promise<void> {
 
   await startWithRetry(boss);
   log.info("worker.pgboss.started");
+
+  // COUNTED, NOT HARDCODED.
+  //
+  // The startup line used to carry literal `queues:` and `schedules:` numbers
+  // that every checkpoint was expected to bump by hand. Checkpoint 7.5 found
+  // both were already wrong -- it claimed 10 queues and 8 schedules against a
+  // real boot that registers 25 and 9 -- so the line had been quietly lying for
+  // several checkpoints, which is worse than carrying no number at all: an
+  // operator comparing the log against `pgboss.queue` would have gone looking
+  // for a registration failure that never happened.
+  //
+  // Wrapping the two methods once is a smaller and more durable fix than
+  // correcting two literals that will drift again on the next checkpoint.
+  let queueCount = 0;
+  let scheduleCount = 0;
+  const createQueue = boss.createQueue.bind(boss);
+  const schedule = boss.schedule.bind(boss);
+  boss.createQueue = async (...args: Parameters<typeof createQueue>) => {
+    queueCount += 1;
+    return await createQueue(...args);
+  };
+  boss.schedule = async (...args: Parameters<typeof schedule>) => {
+    scheduleCount += 1;
+    return await schedule(...args);
+  };
 
   await boss.createQueue(HEARTBEAT_QUEUE);
   await boss.work(HEARTBEAT_QUEUE, async () => {
@@ -328,14 +356,37 @@ async function main(): Promise<void> {
   });
   await boss.schedule(MAIL_DIGEST_CRON_QUEUE, "0 7 * * *", {}, { tz: digestTimezone });
 
+  // Phase 7 Checkpoint 7.5 (service monitoring). ONE queue, no dead-letter, for
+  // the reason recorded in queue-names.ts.
+  //
+  // EVERY `http` TARGET IS SWEPT HERE; the `worker_heartbeat` target is
+  // deliberately NOT, and the omission is the point of ADR-055's split -- a
+  // worker-hosted monitor cannot alert on its own death, so that one check runs
+  // in the API process instead.
+  await boss.createQueue(MONITOR_RUN_QUEUE, QUEUE_RETRY_OPTIONS[MONITOR_RUN_QUEUE]);
+  await boss.work(MONITOR_RUN_QUEUE, createMonitorRunHandler(db, boss));
+
+  // Every minute. The CRON is the upper bound on responsiveness; each target's
+  // own `interval_seconds` is what actually paces it, so a one-minute tick lets
+  // a 60-second target be genuinely 60-second without forcing a five-minute one
+  // to be checked more often than configured.
+  await boss.createQueue(MONITOR_CRON_QUEUE);
+  await boss.work(MONITOR_CRON_QUEUE, async () => {
+    // A fixed singletonKey: a pass is a sweep over every target, so there is
+    // exactly one job worth having in flight however many ticks arrive.
+    await boss.send(MONITOR_RUN_QUEUE, {}, { singletonKey: "monitor-run" });
+  });
+  await boss.schedule(MONITOR_CRON_QUEUE, "* * * * *");
+
   // Structured rather than a sentence: the old line was a single interpolated
   // string listing every queue, which is unsearchable, unparseable, and grows a
   // clause per checkpoint.
   log.info("worker.started", {
-    queues: 10,
-    schedules: 8,
+    queues: queueCount,
+    schedules: scheduleCount,
     mailSyncCron: MAIL_SYNC_CRON_QUEUE,
     mailDigestCron: MAIL_DIGEST_CRON_QUEUE,
+    monitorCron: MONITOR_CRON_QUEUE,
     digestTimezone,
     healthSyncCron: HEALTH_SYNC_CRON_QUEUE,
     calendarSyncCron: CALENDAR_SYNC_CRON_QUEUE,

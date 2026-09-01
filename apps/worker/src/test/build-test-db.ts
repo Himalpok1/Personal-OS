@@ -23,6 +23,9 @@ import {
   mailOauthStates,
   mailSyncCursors,
   mailSyncRuns,
+  monitorChecks,
+  monitorIncidents,
+  monitorTargets,
   notificationDispatchLog,
   occurrences,
   tasks,
@@ -75,4 +78,10 @@ export async function truncateTestTables(db: Db): Promise<void> {
   await db.delete(mailConnections);
   await db.delete(mailDigests);
   await db.delete(mailOauthStates);
+  // Phase 7 monitoring tables (migration 0015). Checks and incidents both
+  // reference targets with ON DELETE CASCADE; deleting them explicitly keeps the
+  // order readable and independent of the cascade continuing to exist.
+  await db.delete(monitorChecks);
+  await db.delete(monitorIncidents);
+  await db.delete(monitorTargets);
 }

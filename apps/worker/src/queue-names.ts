@@ -106,7 +106,30 @@ export const MAIL_SYNC_CONNECTION_QUEUE = "mail.gmail.sync-connection";
 // 30s per attempt), so pg-boss can never un-`active` a job mid-provider-call.
 export const MAIL_DIGEST_GENERATE_QUEUE = "mail.digest.generate";
 
+// Phase 7 Checkpoint 7.5 (service monitoring). ONE queue, no dead-letter.
+//
+// Same shape and same documented reason as the two mail queues above: under
+// `policy: "stately"` pg-boss can drop a retry insert on conflict and re-insert
+// the job as failed, straight past its remaining retries
+// (pg-boss/dist/manager.js:1293). The cron tick IS the retry, and a better one
+// -- it re-reads targets and check history from current state rather than
+// replaying a stale payload.
+//
+// The singletonKey is a FIXED string rather than a target id, because a pass is
+// a sweep over every http target rather than a per-target job. Two overlapping
+// sweeps would probe everything twice and write duplicate checks, corrupting the
+// very history the failure thresholds are derived from.
+//
+// `expireInSeconds` exceeds the worst realistic sweep: a handful of targets at a
+// 10s timeout each, probed sequentially.
+export const MONITOR_RUN_QUEUE = "monitor.run";
+
 export const QUEUE_RETRY_OPTIONS = {
+  [MONITOR_RUN_QUEUE]: {
+    policy: "stately",
+    retryLimit: 0,
+    expireInSeconds: 300,
+  },
   [MAIL_DIGEST_GENERATE_QUEUE]: {
     policy: "stately",
     retryLimit: 0,
