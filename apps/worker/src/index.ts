@@ -270,7 +270,10 @@ async function main(): Promise<void> {
   // tick is the retry; provider-level retries live in the limiter, which unlike
   // health's honours Retry-After.
   const gmailClient = createGmailClient();
-  await boss.createQueue(MAIL_SYNC_CONNECTION_QUEUE, QUEUE_RETRY_OPTIONS[MAIL_SYNC_CONNECTION_QUEUE]);
+  await boss.createQueue(
+    MAIL_SYNC_CONNECTION_QUEUE,
+    QUEUE_RETRY_OPTIONS[MAIL_SYNC_CONNECTION_QUEUE],
+  );
   await boss.work(
     MAIL_SYNC_CONNECTION_QUEUE,
     createMailSyncConnectionHandler(db, gmailClient, boss),

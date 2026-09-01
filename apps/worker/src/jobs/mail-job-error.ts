@@ -39,9 +39,7 @@ export class MailJobError extends Error {
     // has already lost the context that would justify that interpretation.
     const classification = classifyMailFault(cause, "refresh_token").code;
     const code =
-      typeof cause === "object" && cause !== null && "code" in cause
-        ? String((cause as { code: unknown }).code)
-        : null;
+      typeof cause === "object" && cause !== null && "code" in cause ? String(cause.code) : null;
     // Only an all-caps/digit SQLSTATE-shaped token is echoed; anything else is
     // dropped rather than trusted.
     const sqlState = code !== null && /^[A-Z0-9]{5}$/.test(code) ? code : null;

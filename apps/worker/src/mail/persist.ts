@@ -221,10 +221,7 @@ export async function countLiveMailMessages(db: Db, connectionId: string): Promi
 }
 
 /** Tombstoned message count for a connection. Used by tests and audits. */
-export async function countTombstonedMailMessages(
-  db: Db,
-  connectionId: string,
-): Promise<number> {
+export async function countTombstonedMailMessages(db: Db, connectionId: string): Promise<number> {
   const rows = await db
     .select({ id: mailMessages.id })
     .from(mailMessages)

@@ -45,11 +45,7 @@ import { GmailOAuthError } from "./gmail-oauth.js";
 // here reads a message.
 
 export type MailOperation =
-  | "get_profile"
-  | "list_messages"
-  | "get_message"
-  | "list_history"
-  | "refresh_token";
+  "get_profile" | "list_messages" | "get_message" | "list_history" | "refresh_token";
 
 export interface MailFault {
   /** Connection-level actionable state. Closed vocabulary. */

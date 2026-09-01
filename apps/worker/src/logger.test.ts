@@ -185,7 +185,7 @@ describe("log", () => {
       log.error("mail.sync.failed", {
         connectionId: "6a51f2b6-3d0c-4a35-9a4f-3e0f5d6a7b8c",
         error: errorToken(
-          Object.assign(new Error("Unknown name \"startHistoryId\""), { code: "23505" }),
+          Object.assign(new Error('Unknown name "startHistoryId"'), { code: "23505" }),
         ),
       });
     } finally {

@@ -1,5 +1,5 @@
 import { mailSyncRuns, type Db } from "@personal-os/db";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gt, inArray } from "drizzle-orm";
 
 // The per-(connection, scope) circuit breaker.
 //
@@ -54,6 +54,15 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 // bug if it ever wrote a skipped row mid-episode; it does not, so it does not.
 
 export const MAIL_BREAKER_THRESHOLD = 5;
+
+/**
+ * The failure class an open breaker's own skipped run row carries.
+ *
+ * Named here rather than inlined at the orchestrator because this module reads
+ * it back: those rows are how "we have already announced this episode" is
+ * derived. The two uses must agree, so they share one constant.
+ */
+export const BREAKER_SKIP_CLASS = "breaker_open";
 
 /**
  * How long an open breaker waits before letting one probe through.
@@ -179,10 +188,40 @@ export async function evaluateMailBreaker(
   if (!allIdentical) return { ...CLOSED };
 
   const older = recent[MAIL_BREAKER_THRESHOLD];
-  const wasAlreadyOpen =
+  const streakIsLonger =
     older !== undefined && older.status === "failed" && older.failureClass === failureClass;
 
   const lastAt = newest.finishedAt ?? newest.startedAt;
+
+  // HAVE WE ALREADY ANNOUNCED THIS EPISODE?
+  //
+  // `streakIsLonger` alone is not enough, and its insufficiency is a real
+  // defect the tests caught rather than a subtlety. Consider a connection whose
+  // FIRST five passes all fail identically: there is no sixth row, so
+  // `streakIsLonger` is false -- and it stays false forever, because an open
+  // breaker skips instead of writing another failed run, freezing the window at
+  // exactly five. `justOpened` would then be true on every single evaluation,
+  // which is precisely the alert fatigue the edge trigger exists to prevent.
+  //
+  // The skip rows ARE the record of having announced: opening writes one, so
+  // their presence after the newest failure means a previous evaluation already
+  // reached the same conclusion. Derived, like everything else here -- no
+  // column, nothing to keep in step.
+  const [announced] = await db
+    .select({ id: mailSyncRuns.id })
+    .from(mailSyncRuns)
+    .where(
+      and(
+        eq(mailSyncRuns.connectionId, input.connectionId),
+        eq(mailSyncRuns.scopeKey, input.scopeKey),
+        eq(mailSyncRuns.status, "skipped"),
+        eq(mailSyncRuns.failureClass, BREAKER_SKIP_CLASS),
+        gt(mailSyncRuns.startedAt, newest.startedAt),
+      ),
+    )
+    .limit(1);
+
+  const wasAlreadyOpen = streakIsLonger || announced !== undefined;
   const probing = now.getTime() - lastAt.getTime() >= MAIL_BREAKER_COOLDOWN_MS;
 
   return {

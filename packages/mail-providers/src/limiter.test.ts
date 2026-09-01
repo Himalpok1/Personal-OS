@@ -45,12 +45,7 @@ function apiError(
   status: number,
   opts: { retryAfterSeconds?: number | null; gmailStatus?: string } = {},
 ): GmailApiError {
-  const err = new GmailApiError(
-    status,
-    opts.gmailStatus,
-    [],
-    opts.retryAfterSeconds ?? null,
-  );
+  const err = new GmailApiError(status, opts.gmailStatus, [], opts.retryAfterSeconds ?? null);
   return err;
 }
 
@@ -200,9 +195,9 @@ describe("createMailLimiter Retry-After handling", () => {
       cooldownFloorMs: 30_000,
     });
 
-    await expect(limiter.run(() => Promise.reject(apiError(429, { retryAfterSeconds: 45 })))).rejects.toBeInstanceOf(
-      GmailApiError,
-    );
+    await expect(
+      limiter.run(() => Promise.reject(apiError(429, { retryAfterSeconds: 45 }))),
+    ).rejects.toBeInstanceOf(GmailApiError);
     // maxAttempts 1: no retry sleep happened, but the cooldown is still armed
     // from the FINAL attempt -- the point is to stop every later request in the
     // pass firing into a provider that just said stop.
@@ -219,7 +214,7 @@ describe("createMailLimiter Retry-After handling", () => {
     // harness the clock advances during the first cooldown's wait, so the
     // second deadline is later anyway and the test would pass without the
     // guard ever being exercised.
-    let clock = 1_000_000;
+    const clock = 1_000_000;
     const limiter = createMailLimiter(
       { now: () => clock, sleep: () => Promise.resolve(), random: () => 0 },
       { qps: 0, maxAttempts: 1, cooldownFloorMs: 1000 },

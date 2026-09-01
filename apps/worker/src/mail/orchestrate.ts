@@ -16,21 +16,14 @@ import {
   type MailMessageRow,
 } from "@personal-os/mail-providers";
 import { and, eq } from "drizzle-orm";
+import type { MailSyncErrorCode } from "@personal-os/schema";
 import type { PgBoss } from "pg-boss";
 import { env } from "../env.js";
 import { errorToken, log } from "../logger.js";
-import { evaluateMailBreaker } from "./breaker.js";
+import { BREAKER_SKIP_CLASS, evaluateMailBreaker } from "./breaker.js";
 import { withMailConnectionLock } from "./lock.js";
-import {
-  tombstoneMailMessages,
-  upsertMailMessages,
-  type MailUpsertCounts,
-} from "./persist.js";
-import {
-  closeMailSyncRun,
-  openMailSyncRun,
-  type MailSyncRunKind,
-} from "./run.js";
+import { tombstoneMailMessages, upsertMailMessages, type MailUpsertCounts } from "./persist.js";
+import { closeMailSyncRun, openMailSyncRun } from "./run.js";
 import {
   clearMailConnectionError,
   createMailRefreshBudget,
@@ -437,7 +430,7 @@ async function walkHistory(
   let requests = 0;
   let truncated = false;
   let lastCompleteRecordId: string | null = null;
-  let finalHistoryId: string | null = null;
+  let finalHistoryId: string | null;
 
   for (;;) {
     let response;
@@ -481,10 +474,7 @@ async function walkHistory(
 
       // Always process at least one record, or a single record larger than the
       // cap would stall the cursor forever -- a livelock, not inefficiency.
-      if (
-        records.length > 0 &&
-        seenFetch.size + wouldAdd > GMAIL_SYNC_BOUNDS.maxMessagesPerPass
-      ) {
+      if (records.length > 0 && seenFetch.size + wouldAdd > GMAIL_SYNC_BOUNDS.maxMessagesPerPass) {
         truncated = true;
         break;
       }
@@ -632,10 +622,7 @@ export async function runMailConnectionSync(
   return outcome.result;
 }
 
-async function runLockedPass(
-  deps: MailSyncDeps,
-  data: MailSyncJobData,
-): Promise<MailPassResult> {
+async function runLockedPass(deps: MailSyncDeps, data: MailSyncJobData): Promise<MailPassResult> {
   const result: MailPassResult = { ...EMPTY_RESULT };
   const now = deps.now ? deps.now() : new Date();
 
@@ -687,14 +674,19 @@ async function runLockedPass(
     });
     await closeMailSyncRun(deps.db, runId, {
       status: "skipped",
-      failureClass: "breaker_open",
+      failureClass: BREAKER_SKIP_CLASS,
       finishedAt: now,
     });
     log.warn("mail.sync.breaker_open", {
       connectionId: connection.id,
       failureClass: breaker.failureClass,
     });
-    return { ...result, runsWritten: 1, skipped: "breaker_open", failureClass: "breaker_open" };
+    return {
+      ...result,
+      runsWritten: 1,
+      skipped: BREAKER_SKIP_CLASS,
+      failureClass: BREAKER_SKIP_CLASS,
+    };
   }
   if (breaker.probing) {
     log.info("mail.sync.breaker_probe", {
@@ -751,30 +743,14 @@ async function recordTokenFailure(
   now: Date,
   result: MailPassResult,
 ): Promise<MailPassResult> {
-  let failureClass = "auth_unresolved";
-  let skipped = "auth_unresolved";
+  // Classified first, acted on second, so every branch is total and no branch
+  // can leave a placeholder behind.
+  const { failureClass, connectionCode } = classifyTokenFailure(err);
 
-  if (err instanceof MailNotConfiguredError) {
-    failureClass = "not_configured";
-    skipped = "not_configured";
-  } else if (err instanceof MailNoRefreshTokenError) {
-    // Unattended sync is impossible and no amount of retrying changes that, so
-    // it is recorded on the connection where the user can see it.
-    failureClass = "no_refresh_token";
-    skipped = "no_refresh_token";
-    await recordMailConnectionError(deps.db, connectionId, "auth_failed", now);
-  } else if (err instanceof MailAuthPermanentError) {
-    // The connection is already marked needs_reauth by resolveFreshMailAccessToken.
-    failureClass = "auth_permanent";
-    skipped = "auth_permanent";
-  } else if (err instanceof MailRefreshBudgetExhaustedError) {
-    failureClass = "auth_rejected";
-    skipped = "auth_rejected";
-  } else {
-    const fault = classifyMailFault(err, "refresh_token");
-    failureClass = fault.failureClass;
-    skipped = fault.failureClass;
-    await recordMailConnectionError(deps.db, connectionId, fault.code, now);
+  // MailAuthPermanentError needs no write: resolveFreshMailAccessToken has
+  // already marked the connection needs_reauth, which is the stronger statement.
+  if (connectionCode !== null) {
+    await recordMailConnectionError(deps.db, connectionId, connectionCode, now);
   }
 
   const runId = await openMailSyncRun(deps.db, {
@@ -791,7 +767,38 @@ async function recordTokenFailure(
   });
   log.warn("mail.sync.token_failed", { connectionId, failureClass, error: errorToken(err) });
 
-  return { ...result, runsWritten: 1, skipped, failureClass };
+  return { ...result, runsWritten: 1, skipped: failureClass, failureClass };
+}
+
+/**
+ * Names a credential-resolution failure, and says whether it should also be
+ * recorded on the connection.
+ *
+ * `connectionCode` is null for the two cases where writing would be wrong:
+ * a deployment with no mail credentials at all (not this connection's fault,
+ * and every connection would report it), and a permanently dead grant (already
+ * recorded as `needs_reauth`, which says more than `last_sync_error` can).
+ */
+function classifyTokenFailure(err: unknown): {
+  failureClass: string;
+  connectionCode: MailSyncErrorCode | null;
+} {
+  if (err instanceof MailNotConfiguredError) {
+    return { failureClass: "not_configured", connectionCode: null };
+  }
+  if (err instanceof MailNoRefreshTokenError) {
+    // Unattended sync is impossible and no amount of retrying changes that, so
+    // it is recorded where the user can see it.
+    return { failureClass: "no_refresh_token", connectionCode: "auth_failed" };
+  }
+  if (err instanceof MailAuthPermanentError) {
+    return { failureClass: "auth_permanent", connectionCode: null };
+  }
+  if (err instanceof MailRefreshBudgetExhaustedError) {
+    return { failureClass: "auth_rejected", connectionCode: "auth_failed" };
+  }
+  const fault = classifyMailFault(err, "refresh_token");
+  return { failureClass: fault.failureClass, connectionCode: fault.code };
 }
 
 interface PassContext {
@@ -804,10 +811,7 @@ interface PassContext {
   budget?: MailRefreshBudget;
 }
 
-async function runIncrementalPass(
-  deps: MailSyncDeps,
-  ctx: PassContext,
-): Promise<MailPassResult> {
+async function runIncrementalPass(deps: MailSyncDeps, ctx: PassContext): Promise<MailPassResult> {
   const result = { ...ctx.result };
   const runId = await openMailSyncRun(deps.db, {
     connectionId: ctx.connection.id,
@@ -820,12 +824,7 @@ async function runIncrementalPass(
 
   let walk;
   try {
-    walk = await walkHistory(
-      deps.client,
-      ctx.limiter,
-      ctx.accessToken,
-      ctx.cursor.cursorValue!,
-    );
+    walk = await walkHistory(deps.client, ctx.limiter, ctx.accessToken, ctx.cursor.cursorValue!);
   } catch (err) {
     return await failRun(deps, runId, err, "list_history", ctx, result);
   }
@@ -853,6 +852,18 @@ async function runIncrementalPass(
       ...ctx,
       cursor: { ...ctx.cursor, cursorValue: null, needsFullResync: true },
       result,
+      // ONE MILLISECOND LATER, and this is not cosmetic.
+      //
+      // A pass captures ONE effectiveNow and stamps every run row with it, so
+      // an escalating pass writes two rows sharing an identical `started_at` --
+      // and `order by started_at` then falls back to a random uuid. The audit
+      // trail whose whole job is to make the cursor-expiry transition VISIBLE
+      // would report the recovery before the failure roughly half the time.
+      //
+      // The same monotonic +1ms floor apps/api applies to `projects.updated_at`
+      // for the same reason. A millisecond is immaterial to every logic that
+      // reads `now`, and it makes the sequence unambiguous.
+      now: new Date(ctx.now.getTime() + 1),
     });
     return { ...escalated, failureClass: walk.fault.failureClass };
   }

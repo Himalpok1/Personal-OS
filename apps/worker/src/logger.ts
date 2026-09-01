@@ -164,7 +164,7 @@ export function buildLogRecord(
  */
 export function errorToken(err: unknown): string {
   if (typeof err === "object" && err !== null && "code" in err) {
-    const code = String((err as { code: unknown }).code);
+    const code = String(err.code);
     if (/^[A-Z0-9]{5}$/.test(code)) return code;
   }
   if (err instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(err.name)) return err.name;
@@ -182,13 +182,13 @@ export interface LogSink {
 const consoleSink: LogSink = {
   write(level, record) {
     const line = JSON.stringify(record);
-    // eslint-disable-next-line no-console -- the single sanctioned console call
-    // in apps/worker. Everything else routes through this module; see
-    // no-raw-console.test.ts, which fails if a new one appears.
+    // THE SINGLE SANCTIONED console CALL SITE in apps/worker. Everything else
+    // routes through this module; no-raw-console.test.ts fails if a new one
+    // appears anywhere else, and fails too if this one ever disappears -- a
+    // scan that found nothing would otherwise pass while nothing was being
+    // written at all.
     if (level === "error") console.error(line);
-    // eslint-disable-next-line no-console -- as above.
     else if (level === "warn") console.warn(line);
-    // eslint-disable-next-line no-console -- as above.
     else console.log(line);
   },
 };

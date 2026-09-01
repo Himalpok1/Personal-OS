@@ -59,7 +59,11 @@ describe("translateMailMessage", () => {
 
   it("truncates a subject at the bound rather than storing it unbounded", () => {
     const row = ok(
-      fakeMessage({ id: "m1", internalDate: "1", subject: "x".repeat(MAIL_SUBJECT_MAX_CHARS + 50) }),
+      fakeMessage({
+        id: "m1",
+        internalDate: "1",
+        subject: "x".repeat(MAIL_SUBJECT_MAX_CHARS + 50),
+      }),
     );
     expect(row.subject).toHaveLength(MAIL_SUBJECT_MAX_CHARS);
   });
@@ -134,7 +138,7 @@ describe("translateMailMessage rejections", () => {
     const result = translateMailMessage({
       id: "m1",
       threadId: "t1",
-      internalDate: secret as unknown as string,
+      internalDate: secret,
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -157,10 +161,11 @@ describe("content hashing", () => {
         sizeEstimate: 10,
       }),
     );
-    const { contentHash: _hash, ...rest } = row;
     // Asserting the INPUT, not only the digest: a test comparing two digests
-    // passes just as happily when the function hashes the empty string.
-    expect(mailMessageContentInput(rest)).toEqual({
+    // passes just as happily when the function hashes the empty string. The
+    // full row is passed rather than destructuring `contentHash` away, because
+    // mailMessageContentInput reads a fixed key set and ignores the rest.
+    expect(mailMessageContentInput(row)).toEqual({
       externalId: "m1",
       threadId: "t1",
       internalDateMs: 1_788_000_000_000,
@@ -172,7 +177,7 @@ describe("content hashing", () => {
       hasAttachment: false,
       sizeEstimate: 10,
     });
-    expect(row.contentHash).toBe(contentHash(mailMessageContentInput(rest)));
+    expect(row.contentHash).toBe(contentHash(mailMessageContentInput(row)));
   });
 
   it("changes when any stored field changes", () => {

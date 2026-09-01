@@ -53,8 +53,7 @@ export interface MailTranslationRejection {
 }
 
 export type MailTranslationResult =
-  | { ok: true; row: MailMessageRow }
-  | { ok: false; rejection: MailTranslationRejection };
+  { ok: true; row: MailMessageRow } | { ok: false; rejection: MailTranslationRejection };
 
 function headerValue(headers: readonly MailHeader[] | undefined, name: string): string | null {
   if (headers === undefined) return null;
@@ -76,7 +75,9 @@ function stableStringify(value: unknown): string {
   const entries = Object.entries(value as Record<string, unknown>)
     .filter(([, v]) => v !== undefined)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return "{" + entries.map(([k, v]) => JSON.stringify(k) + ":" + stableStringify(v)).join(",") + "}";
+  return (
+    "{" + entries.map(([k, v]) => JSON.stringify(k) + ":" + stableStringify(v)).join(",") + "}"
+  );
 }
 
 /**
