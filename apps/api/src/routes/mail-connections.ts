@@ -86,6 +86,81 @@ function replyForError(err: unknown): { status: number; body: { error: string } 
   return null;
 }
 
+/**
+ * A minimal confirmation page for a browser that just completed consent.
+ *
+ * WHY THIS EXISTS. Google redirects the USER'S BROWSER to this callback, and the
+ * route answered with a raw JSON body -- so a person who tapped "Connect Gmail"
+ * finished consent and landed on a wall of JSON with no indication it had
+ * worked and no way back. The connection WAS created; the ending was simply
+ * unreadable. Checkpoint 7.6 recorded it as a rough edge; 7.7 closes it.
+ *
+ * CONTENT-NEGOTIATED, so nothing that already worked changes. Only a client
+ * that asks for `text/html` -- which is exactly what a browser sends and exactly
+ * what an API client does not -- gets the page. `.inject()` route tests, the
+ * api-client, and the manual POST fallback all continue to receive JSON.
+ *
+ * It carries NO mailbox address, NO token and NO identifier: it is a static
+ * page, so there is nothing to leak and nothing to escape.
+ */
+function consentCompletePage(): string {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Personal OS</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0;
+         display: grid; place-items: center; min-height: 100vh; padding: 24px; }
+  main { max-width: 32rem; text-align: center; }
+  h1 { font-size: 1.25rem; margin: 0 0 .5rem; }
+  p { margin: 0; opacity: .75; line-height: 1.5; }
+</style></head>
+<body><main>
+  <h1>Mailbox connected</h1>
+  <p>You can close this tab and return to Personal OS. Pull to refresh, or tap
+     Refresh on the Mail card, to see it.</p>
+</main></body></html>`;
+}
+
+/**
+ * The failure page. Carries the STATIC error code and nothing else.
+ *
+ * The code is one of a closed set this file defines, so it cannot carry provider
+ * prose -- and it is inserted into a `<code>` element with no interpolation of
+ * anything user- or provider-supplied.
+ */
+function consentFailedPage(code: string): string {
+  const safe = /^[a-z_]+$/.test(code) ? code : "error";
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Personal OS</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0;
+         display: grid; place-items: center; min-height: 100vh; padding: 24px; }
+  main { max-width: 32rem; text-align: center; }
+  h1 { font-size: 1.25rem; margin: 0 0 .5rem; }
+  p { margin: 0; opacity: .75; line-height: 1.5; }
+  code { font-size: .875rem; opacity: .6; }
+</style></head>
+<body><main>
+  <h1>Couldn&rsquo;t connect that mailbox</h1>
+  <p>Nothing was changed. Return to Personal OS and try connecting again.</p>
+  <p><code>${safe}</code></p>
+</main></body></html>`;
+}
+
+/** True when the caller is a browser rather than an API client. */
+function prefersHtml(accept: string | undefined): boolean {
+  if (accept === undefined) return false;
+  // A browser's Accept lists text/html first; an API client sends
+  // application/json or nothing. A wildcard-only Accept is NOT html -- that is
+  // what curl sends, and it must keep getting JSON.
+  return accept.split(",").some((part) => part.trim().toLowerCase().startsWith("text/html"));
+}
+
 export default function mailConnectionsRoutes(app: FastifyInstance): void {
   // ---- authorization URL -------------------------------------------------
   app.get("/mail-connections/gmail/authorize-url", async (request, reply) => {
@@ -150,13 +225,27 @@ export default function mailConnectionsRoutes(app: FastifyInstance): void {
           redirectUri,
           state,
         });
-        return reply.code(result.created ? 201 : 200).send(toConnectionResponse(result.connection));
+        const status = result.created ? 201 : 200;
+        // A BROWSER gets a page it can read; everything else gets the JSON it
+        // already expected. See consentCompletePage's note.
+        if (prefersHtml(request.headers.accept)) {
+          return reply.code(status).type("text/html; charset=utf-8").send(consentCompletePage());
+        }
+        return reply.code(status).send(toConnectionResponse(result.connection));
       } catch (err) {
         const mapped = replyForError(err);
         if (mapped) {
           // Log the CODE ONLY -- never the error message, which may carry
           // provider detail, and never the query string.
           request.log.warn({ mailOauthError: mapped.body.error }, "gmail oauth callback failed");
+          if (prefersHtml(request.headers.accept)) {
+            // The failure page names the STATIC code only -- never a provider
+            // message, and never the query string that carried the auth code.
+            return reply
+              .code(mapped.status)
+              .type("text/html; charset=utf-8")
+              .send(consentFailedPage(mapped.body.error));
+          }
           return reply.code(mapped.status).send(mapped.body);
         }
         throw err;

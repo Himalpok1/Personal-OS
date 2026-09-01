@@ -78,6 +78,8 @@ async function callback(opts: {
   historyId?: string;
   tokens?: unknown;
   tokenStatus?: number;
+  /** Lets a test present itself as a browser (Checkpoint 7.7). */
+  accept?: string;
 }) {
   stubTokenEndpoint(opts.tokens ?? TOKENS, opts.tokenStatus ?? 200);
   if (opts.email !== undefined) {
@@ -86,6 +88,7 @@ async function callback(opts: {
   return await app.inject({
     method: "GET",
     url: `/mail-connections/gmail/callback?code=${encodeURIComponent(opts.code ?? "auth-code")}&state=${encodeURIComponent(opts.state)}`,
+    ...(opts.accept === undefined ? {} : { headers: { accept: opts.accept } }),
   });
 }
 
@@ -883,5 +886,64 @@ describe("when Gmail is not configured", () => {
       const res = await app.inject({ method: "GET", url });
       expect(res.statusCode, `${url} should still work`).toBeLessThan(400);
     }
+  });
+});
+
+describe("GET /mail-connections/gmail/callback — browser landing (Checkpoint 7.7)", () => {
+  // Google redirects the USER'S BROWSER here. Before this, the route answered a
+  // raw JSON body, so a person who completed consent landed on a wall of JSON
+  // with no sign it had worked. The connection was created; the ending was
+  // unreadable.
+
+  it("gives a BROWSER a readable page", async () => {
+    const state = await mintState();
+    const res = await callback({
+      state,
+      email: "person@example.com",
+      accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.headers["content-type"]).toContain("text/html");
+    expect(res.body).toContain("Mailbox connected");
+    expect(res.body).toContain("return to Personal OS");
+  });
+
+  it("the page carries NO address, token or identifier", async () => {
+    // It is static, so there is nothing to leak and nothing to escape.
+    const state = await mintState();
+    const res = await callback({ state, email: "person@example.com", accept: "text/html" });
+    expect(res.body).not.toContain("@");
+    expect(res.body).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
+    expect(res.body).not.toContain("auth-code");
+    expect(res.body.toLowerCase()).not.toContain("token");
+  });
+
+  it("STILL gives an API client JSON — nothing that worked has changed", async () => {
+    const state = await mintState();
+    const res = await callback({ state, email: "person@example.com", accept: "application/json" });
+    expect(res.headers["content-type"]).toContain("application/json");
+    expect(res.json()).toMatchObject({ provider: "gmail", status: "active" });
+  });
+
+  it("treats a bare */* as an API client, not a browser", async () => {
+    // curl sends `*/*`. Only an explicit text/html preference gets the page.
+    const state = await mintState();
+    const res = await callback({ state, email: "person@example.com", accept: "*/*" });
+    expect(res.headers["content-type"]).toContain("application/json");
+  });
+
+  it("gives a browser a readable FAILURE page carrying only the static code", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/mail-connections/gmail/callback?code=x&state=not-a-real-state",
+      headers: { accept: "text/html" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.headers["content-type"]).toContain("text/html");
+    expect(res.body).toContain("Couldn");
+    expect(res.body).toContain("invalid_state");
+    // Nothing was changed, and the page says so rather than implying a partial
+    // connection.
+    expect(res.body).toContain("Nothing was changed");
   });
 });
