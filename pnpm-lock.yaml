@@ -65,6 +65,9 @@ importers:
       '@personal-os/mail-providers':
         specifier: workspace:*
         version: link:../../packages/mail-providers
+      '@personal-os/monitoring':
+        specifier: workspace:*
+        version: link:../../packages/monitoring
       '@personal-os/schema':
         specifier: workspace:*
         version: link:../../packages/schema
@@ -262,6 +265,9 @@ importers:
       '@personal-os/mail-providers':
         specifier: workspace:*
         version: link:../../packages/mail-providers
+      '@personal-os/monitoring':
+        specifier: workspace:*
+        version: link:../../packages/monitoring
       '@personal-os/schema':
         specifier: workspace:*
         version: link:../../packages/schema
@@ -407,6 +413,25 @@ importers:
       '@personal-os/schema':
         specifier: workspace:*
         version: link:../schema
+    devDependencies:
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.20.1)(vite@8.2.1(@types/node@22.20.1)(esbuild@0.28.2)(jiti@1.21.7)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
+
+  packages/monitoring:
+    dependencies:
+      '@personal-os/core':
+        specifier: workspace:*
+        version: link:../core
+      '@personal-os/db':
+        specifier: workspace:*
+        version: link:../db
+      '@personal-os/schema':
+        specifier: workspace:*
+        version: link:../schema
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@types/pg@8.21.0)(expo-sqlite@57.0.1(expo@57.0.13)(react-native@0.86.2(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.86.2(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(pg@8.23.0)
     devDependencies:
       vitest:
         specifier: ^4.1.10

@@ -1,0 +1,25 @@
+{
+  "name": "@personal-os/monitoring",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@personal-os/core": "workspace:*",
+    "@personal-os/db": "workspace:*",
+    "@personal-os/schema": "workspace:*",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
+  }
+}
