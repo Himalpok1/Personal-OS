@@ -4,6 +4,7 @@ import {
   canConnectMail,
   canDisconnectMail,
   resolveMailConnectionState,
+  resolveOverallMailState,
 } from "./connection-state";
 
 function connection(overrides: Partial<MailConnection> = {}): MailConnection {
@@ -143,5 +144,64 @@ describe("canDisconnectMail", () => {
 
   it("is false while unavailable, whatever is cached", () => {
     expect(canDisconnectMail("unavailable", connection())).toBe(false);
+  });
+});
+
+describe("resolveOverallMailState — corrections found by the audit", () => {
+  // The headline used to be computed from `connections[0]`, and the list is
+  // ordered by created_at -- so the OLDEST mailbox spoke for the whole card.
+
+  it("reports the WORST mailbox, not the first one", () => {
+    const healthy = connection({ id: "aaaaaaaa-1111-4111-8111-111111111111" });
+    const broken = connection({
+      id: "bbbbbbbb-2222-4222-8222-222222222222",
+      status: "needs_reauth",
+    });
+    // Healthy first, exactly as created_at ordering would deliver it.
+    expect(
+      resolveOverallMailState({ configured: true, connections: [healthy, broken] }),
+    ).toBe("needs_reconnect");
+  });
+
+  it("is order-independent", () => {
+    const healthy = connection();
+    const broken = connection({ status: "needs_reauth" });
+    expect(resolveOverallMailState({ configured: true, connections: [healthy, broken] })).toBe(
+      resolveOverallMailState({ configured: true, connections: [broken, healthy] }),
+    );
+  });
+
+  it("still says connected when every mailbox is fine", () => {
+    expect(
+      resolveOverallMailState({ configured: true, connections: [connection(), connection()] }),
+    ).toBe("connected");
+  });
+
+  it("answers the SERVER-level states before consulting any mailbox", () => {
+    // A load error or missing credentials are facts about the server, so a
+    // cached mailbox list must not override them.
+    expect(
+      resolveOverallMailState({ configured: true, connections: [connection()], isLoadError: true }),
+    ).toBe("unavailable");
+    expect(resolveOverallMailState({ configured: false, connections: [connection()] })).toBe(
+      "not_configured",
+    );
+  });
+
+  it("reports not_connected for an empty list", () => {
+    expect(resolveOverallMailState({ configured: true, connections: [] })).toBe("not_connected");
+  });
+
+  it("prefers a sync error over connected, but a reconnect over both", () => {
+    const erroring = connection({ last_sync_error: "rate_limited" });
+    expect(resolveOverallMailState({ configured: true, connections: [connection(), erroring] })).toBe(
+      "error",
+    );
+    expect(
+      resolveOverallMailState({
+        configured: true,
+        connections: [erroring, connection({ status: "needs_reauth" })],
+      }),
+    ).toBe("needs_reconnect");
   });
 });

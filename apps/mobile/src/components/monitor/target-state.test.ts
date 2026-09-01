@@ -2,6 +2,7 @@ import type { MonitorTargetStatus } from "@personal-os/schema";
 import { describe, expect, it } from "vitest";
 import {
   describeLastCheck,
+  skippedReasonText,
   describeMonitorSummary,
   monitorStateText,
   monitorStateToneClass,
@@ -108,12 +109,12 @@ describe("resolveMonitorTargetState", () => {
     ).toBe("up");
   });
 
-  it("reports maintenance when the newest check was a deliberate skip", () => {
+  it("reports skipped when the newest check was a deliberate skip", () => {
     const view = resolveMonitorTargetState(
       status({ latest_check: check({ status: "skipped", failure_class: "maintenance_window" }) }),
       NOW,
     );
-    expect(view.state).toBe("maintenance");
+    expect(view.state).toBe("skipped");
   });
 
   it("keeps ACKNOWLEDGED above open, and carries the incident id", () => {
@@ -166,7 +167,7 @@ describe("monitorStateText — the heartbeat wording is not interchangeable", ()
       "not_checked",
       "disabled",
       "muted",
-      "maintenance",
+      "skipped",
       "down",
       "incident_open",
       "incident_acknowledged",
@@ -197,7 +198,7 @@ describe("monitorStateText — the heartbeat wording is not interchangeable", ()
       "not_checked",
       "disabled",
       "muted",
-      "maintenance",
+      "skipped",
       "down",
       "incident_open",
       "incident_acknowledged",
@@ -254,5 +255,95 @@ describe("describeMonitorSummary", () => {
   it("pluralises honestly", () => {
     expect(describeMonitorSummary(true, 1)).toBe("1 open incident.");
     expect(describeMonitorSummary(true, 3)).toBe("3 open incidents.");
+  });
+});
+
+describe("corrections found by the Checkpoint 7.6 audit", () => {
+  // Each of these pins a defect the first version of this module actually had.
+
+  it("shows an OPEN INCIDENT even when the newest check was skipped", () => {
+    // The first version checked the skip branch first, so a live outage inside
+    // a maintenance window rendered in neutral copy on the very screen a user
+    // opens to look for outages. A skip cannot resolve an incident --
+    // `recentDecisiveStatuses` excludes skipped rows precisely so it cannot --
+    // so the incident is still the truth.
+    const view = resolveMonitorTargetState(
+      status({
+        latest_check: check({ status: "skipped", failure_class: "maintenance_window" }),
+        active_incident: incident(),
+      }),
+      NOW,
+    );
+    expect(view.state).toBe("incident_open");
+    expect(view.incidentId).not.toBeNull();
+  });
+
+  it("shows an open incident even while the target is MUTED", () => {
+    // Muting pauses alerts. It does not resolve an outage, and it must not hide
+    // one on a screen the user deliberately opened.
+    const view = resolveMonitorTargetState(
+      status({
+        target: target({ muted_until: new Date(NOW + 600_000).toISOString() }),
+        active_incident: incident(),
+      }),
+      NOW,
+    );
+    expect(view.state).toBe("incident_open");
+  });
+
+  it("still lets DISABLED outrank an incident", () => {
+    // The one suppression that legitimately wins: a disabled target is not
+    // checked and never will be, so its incident cannot progress either way.
+    const view = resolveMonitorTargetState(
+      status({ target: target({ enabled: false }), active_incident: incident() }),
+      NOW,
+    );
+    expect(view.state).toBe("disabled");
+  });
+
+  it("does NOT claim checks continue during a mute", () => {
+    // A muted target is not probed at all: the pass writes a skipped row and
+    // returns before issuing any request. The first version of this sentence
+    // said checks were still running.
+    const text = monitorStateText("muted", "http");
+    expect(text).not.toMatch(/still running/i);
+    expect(text).toMatch(/isn't being checked/i);
+  });
+
+  it("does NOT assert a maintenance window is currently open", () => {
+    // The check row records that a check WAS skipped. Whether a window is open
+    // right now is a different question the row cannot answer -- and the row may
+    // be a leftover from a mute that has since expired.
+    const text = monitorStateText("skipped", "http");
+    expect(text).not.toMatch(/in a maintenance window/i);
+    expect(text).toMatch(/was skipped/i);
+  });
+});
+
+describe("skippedReasonText", () => {
+  it("names the reason the row actually carries, in the past tense", () => {
+    expect(
+      skippedReasonText(
+        status({ latest_check: check({ status: "skipped", failure_class: "maintenance_window" }) }),
+      ),
+    ).toBe("It was inside a maintenance window.");
+    expect(
+      skippedReasonText(
+        status({ latest_check: check({ status: "skipped", failure_class: "muted" }) }),
+      ),
+    ).toBe("It was muted at the time.");
+  });
+
+  it("returns null rather than guessing at an unfamiliar reason", () => {
+    expect(
+      skippedReasonText(
+        status({ latest_check: check({ status: "skipped", failure_class: "something_new" }) }),
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null when the newest check is not a skip", () => {
+    expect(skippedReasonText(status({ latest_check: check() }))).toBeNull();
+    expect(skippedReasonText(status())).toBeNull();
   });
 });

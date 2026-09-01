@@ -114,6 +114,8 @@ function mockQuery(overrides: Record<string, unknown> = {}) {
 function mockGenerate(overrides: Record<string, unknown> = {}) {
   vi.mocked(useGenerateMailDigest).mockReturnValue({
     isPending: false,
+    isSuccess: false,
+    submittedAt: 0,
     error: null,
     mutate: vi.fn(),
     ...overrides,
@@ -276,5 +278,52 @@ describe("ClampedDigestText", () => {
     (instance as any).setState = (next: unknown) => applied.push(next);
     instance.componentDidUpdate({ text: "different", textClassName: "" });
     expect(applied).toEqual([{ expanded: false, isClamped: false }]);
+  });
+});
+
+describe("requested — a 202 is not a digest", () => {
+  it("keeps saying the work is queued after the request succeeds", () => {
+    // `isPending` ends at the 202, so without this the "preparing" copy would
+    // flash for the length of an HTTP round trip and then vanish while the
+    // worker had not started -- which reads as "nothing happened".
+    mockGenerate({ isSuccess: true, submittedAt: Date.parse("2026-09-01T14:00:00Z") });
+    const text = getTextContent(render());
+    expect(text).toContain("Requested");
+    expect(text).toContain("when it's ready");
+  });
+
+  it("disables the control while the request is outstanding", () => {
+    mockGenerate({ isSuccess: true, submittedAt: Date.parse("2026-09-01T14:00:00Z") });
+    const buttons = findButtons(render());
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].props.disabled).toBe(true);
+  });
+
+  it("returns to present once a digest NEWER than the request lands", () => {
+    // DIGEST was generated at 13:00; a request submitted at 12:00 is superseded.
+    mockQuery({ data: { configured: true, has_active_mailbox: true, digest: DIGEST } });
+    mockGenerate({ isSuccess: true, submittedAt: Date.parse("2026-09-01T12:00:00Z") });
+    const text = getTextContent(render());
+    expect(text).toContain("Three messages need attention");
+    expect(text).toContain("Regenerate");
+    expect(text).not.toContain("Requested");
+  });
+
+  it("still says requested when the only digest is OLDER than the request", () => {
+    mockQuery({ data: { configured: true, has_active_mailbox: true, digest: DIGEST } });
+    mockGenerate({ isSuccess: true, submittedAt: Date.parse("2026-09-01T14:00:00Z") });
+    const text = getTextContent(render());
+    expect(text).toContain("Requested");
+    // ...and the previous digest stays visible rather than the card blanking.
+    expect(text).toContain("Three messages need attention");
+  });
+});
+
+describe("unavailable is not a dead end", () => {
+  it("offers a Retry, because generating is the wrong action when we could not read", () => {
+    mockQuery({ data: undefined, isError: true });
+    const tree = render();
+    expect(getTextContent(tree)).toContain("Retry");
+    expect(findButtons(tree)).toHaveLength(1);
   });
 });

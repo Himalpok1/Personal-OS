@@ -1,10 +1,13 @@
 import type { MonitorIncident, MonitorTargetStatus } from "@personal-os/schema";
-import { Alert, Pressable, ScrollView, Text, View } from "react-native";
+import { useState } from "react";
+import { Pressable, ScrollView, Text, View } from "react-native";
+import { confirmDestructive } from "@/components/confirm-destructive";
 import { FLOATING_CLEARANCE } from "@/components/floating-layout";
 import {
   describeLastCheck,
   describeMonitorSummary,
   monitorStateText,
+  skippedReasonText,
   monitorStateToneClass,
   resolveMonitorTargetState,
 } from "@/components/monitor/target-state";
@@ -49,6 +52,23 @@ function SectionHeader({ title }: { title: string }) {
   );
 }
 
+/**
+ * Fixed copy for an acknowledge failure. Never the thrown error's text.
+ *
+ * `incident_already_resolved` is not the user's mistake -- the outage ended
+ * between the list rendering and the tap -- so it gets its own sentence rather
+ * than a generic apology.
+ */
+function describeAcknowledgeFailure(err: unknown): string {
+  const code =
+    typeof err === "object" && err !== null && "code" in err
+      ? (err as { code?: unknown }).code
+      : undefined;
+  if (code === "incident_already_resolved") return "That incident already resolved on its own.";
+  if (code === "not_found") return "That incident no longer exists.";
+  return "Couldn't acknowledge that incident. Try again.";
+}
+
 function formatOpenedAt(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
     month: "short",
@@ -82,6 +102,14 @@ function TargetCard({
       <Text className={`mt-1 text-sm ${monitorStateToneClass(view.state)}`}>
         {monitorStateText(view.state, status.target.kind)}
       </Text>
+
+      {/* Names WHICH reason the skip row carries, in the past tense the row
+          supports -- the card never asserts a maintenance window is open now. */}
+      {skippedReasonText(status) === null ? null : (
+        <Text className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+          {skippedReasonText(status)}
+        </Text>
+      )}
 
       {/* Reserved height so the card cannot jump between "checked" and not. */}
       <Text className="min-h-[16px] text-xs text-neutral-500 dark:text-neutral-400">
@@ -165,20 +193,28 @@ export default function MonitorScreen() {
   const overview = useMonitorOverview();
   const incidents = useMonitorIncidents(false);
   const acknowledge = useAcknowledgeMonitorIncident();
+  const [ackError, setAckError] = useState<string | null>(null);
   const now = Date.now();
 
   const confirmAcknowledge = (incidentId: string, targetName: string): void => {
-    Alert.alert(
-      "Acknowledge this incident?",
+    confirmDestructive({
+      title: "Acknowledge this incident?",
       // Says plainly what acknowledgement does NOT do. Treating an Ack button as
       // "make it go away" is how an outage stops being tracked while it is still
       // happening.
-      `This records that you've seen it. ${targetName} stays marked as down until it recovers on its own.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Acknowledge", onPress: () => acknowledge.mutate(incidentId) },
-      ],
-    );
+      message: `This records that you've seen it. ${targetName} stays marked as down until it recovers on its own.`,
+      confirmLabel: "Acknowledge",
+      onConfirm: () => {
+        setAckError(null);
+        acknowledge.mutate(incidentId, {
+          // WITHOUT THIS THE FAILURE IS SILENT. The mutation defines only
+          // onSuccess and there is no global mutation error handler, so a failed
+          // acknowledge would leave the card unchanged and say nothing -- the
+          // user would reasonably believe it worked.
+          onError: (err) => setAckError(describeAcknowledgeFailure(err)),
+        });
+      },
+    });
   };
 
   if (overview.isError) {
@@ -229,6 +265,11 @@ export default function MonitorScreen() {
         >
           {describeMonitorSummary(configured, active_incident_count)}
         </Text>
+        {/* Latched until the next attempt. Without it an acknowledge failure is
+            completely silent and the user believes it worked. */}
+        {ackError === null ? null : (
+          <Text className="mt-2 text-sm text-red-600 dark:text-red-400">{ackError}</Text>
+        )}
       </View>
 
       {!configured ? (
@@ -271,7 +312,17 @@ export default function MonitorScreen() {
             <Text className="text-sm font-medium text-white">Retry</Text>
           </Pressable>
         </View>
-      ) : (incidents.data?.items.length ?? 0) === 0 ? (
+      ) : incidents.isLoading || !incidents.data ? (
+        // NOT "no incidents". `incidents.data` is undefined during the first
+        // fetch and through TanStack's retry backoff, and rendering that as
+        // "none recorded" turns an absence of data into a positive claim -- the
+        // exact failure this screen's empty states exist to avoid.
+        <View className={CARD_CLASS}>
+          <Text className="text-sm text-neutral-500 dark:text-neutral-400">
+            Loading incidents…
+          </Text>
+        </View>
+      ) : incidents.data.items.length === 0 ? (
         <View className={CARD_CLASS}>
           <Text className="text-sm text-neutral-500 dark:text-neutral-400">
             {configured

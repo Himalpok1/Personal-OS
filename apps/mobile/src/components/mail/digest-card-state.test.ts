@@ -202,3 +202,47 @@ describe("digestFailureText", () => {
     }
   });
 });
+
+describe("the requested state — a 202 is not a digest", () => {
+  // `isGenerating` is the mutation's isPending, which ends at the route's 202
+  // -- an HTTP round trip. Without a separate state the "preparing" message
+  // would flash for a few hundred milliseconds while the worker had not started.
+
+  it("reports requested after a 202 with no newer digest", () => {
+    expect(resolveDigestCardState(base({ hasPendingRequest: true }))).toEqual({
+      kind: "requested",
+      previousText: null,
+    });
+  });
+
+  it("keeps the cached prose visible while requested", () => {
+    expect(
+      resolveDigestCardState(
+        base({ hasPendingRequest: true, data: response({ digest: DIGEST }) }),
+      ),
+    ).toEqual({ kind: "requested", previousText: "Two messages need attention." });
+  });
+
+  it("is outranked by an in-flight request and by a failure", () => {
+    expect(
+      resolveDigestCardState(base({ hasPendingRequest: true, isGenerating: true })).kind,
+    ).toBe("generating");
+    expect(
+      resolveDigestCardState(
+        base({ hasPendingRequest: true, generateError: apiError(409, "no_provider_configured") }),
+      ).kind,
+    ).toBe("failed");
+  });
+
+  it("offers no button while requested -- the work is already queued", () => {
+    expect(canGenerateDigest({ kind: "requested", previousText: null })).toBe(false);
+  });
+
+  it("falls through to present once the request is no longer pending", () => {
+    expect(
+      resolveDigestCardState(
+        base({ hasPendingRequest: false, data: response({ digest: DIGEST }) }),
+      ).kind,
+    ).toBe("present");
+  });
+});

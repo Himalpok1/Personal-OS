@@ -168,15 +168,28 @@ export function MailDigestCard() {
   const digestQuery = useCurrentMailDigest();
   const generate = useGenerateMailDigest();
 
+  // A 202 means ACCEPTED, not done. `generate.isPending` ends at that 202 -- an
+  // HTTP round trip -- so on its own the "preparing" message would flash for a
+  // few hundred milliseconds while the worker had not started. This compares the
+  // request's own timestamp against the digest's, so the card keeps saying
+  // "requested" until a digest generated AFTER the request actually lands.
+  const digest = digestQuery.data?.digest ?? null;
+  const hasPendingRequest =
+    generate.isSuccess &&
+    generate.submittedAt > 0 &&
+    (digest === null || Date.parse(digest.generated_at) < generate.submittedAt);
+
   const state = resolveDigestCardState({
     isLoading: digestQuery.isLoading,
     data: digestQuery.data,
     isLoadError: digestQuery.isError,
     isGenerating: generate.isPending,
     generateError: generate.error,
+    hasPendingRequest,
   });
 
   const onGenerate = () => generate.mutate();
+  const onRetry = () => void digestQuery.refetch();
   const showAction = canGenerateDigest(state);
 
   if (state.kind === "loading") {
@@ -192,9 +205,14 @@ export function MailDigestCard() {
       <View className={CARD_CLASS}>
         <Title />
         {/* We could not read it, so we claim nothing about the mail itself. */}
-        <Text className="text-sm text-neutral-500 dark:text-neutral-400">
+        <Text className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
           {"Can't reach Personal OS, so the mail digest is unavailable."}
         </Text>
+        {/* RETRY, NOT GENERATE. Generating is the wrong action when the problem
+            is that we could not read -- but offering nothing at all would make
+            this a dead end, the P1 class Checkpoint 6.5 fixed on three detail
+            screens. */}
+        <ActionButton label="Retry" onPress={onRetry} />
       </View>
     );
   }
@@ -223,6 +241,27 @@ export function MailDigestCard() {
           {"No digest yet. One is generated automatically each day."}
         </Text>
         {showAction ? <ActionButton label="Generate now" onPress={onGenerate} /> : null}
+      </View>
+    );
+  }
+
+  if (state.kind === "requested") {
+    return (
+      <View className={CARD_CLASS}>
+        <Title />
+        {state.previousText ? (
+          <ClampedDigestText
+            text={state.previousText}
+            textClassName={PROSE_CLASS}
+            containerClassName="mb-3"
+          />
+        ) : null}
+        {/* Persists until a digest newer than the request lands. Says plainly
+            that the work is queued, and never that a digest is ready. */}
+        <Text className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
+          {"Requested. Personal OS is preparing it, and it'll appear here when it's ready."}
+        </Text>
+        <ActionButton label="Requested" onPress={onGenerate} disabled />
       </View>
     );
   }

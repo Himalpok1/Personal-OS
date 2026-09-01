@@ -2,11 +2,13 @@ import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { useBusyPress } from "@/components/use-busy-press";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { calendarSyncErrorCopy } from "@/components/calendar/sync-error-copy";
+import { confirmDestructive } from "@/components/confirm-destructive";
 import { mailCallbackRedirectUri } from "@/components/mail/callback-redirect";
 import {
   canConnectMail,
   canDisconnectMail,
   resolveMailConnectionState,
+  resolveOverallMailState,
   type MailConnectionDisplayState,
 } from "@/components/mail/connection-state";
 import { mailSyncErrorCopy } from "@/components/mail/sync-error-copy";
@@ -1012,6 +1014,10 @@ function ConnectedMailCard() {
   const authorizeUrl = useGmailAuthorizeUrl();
   const disconnect = useDisconnectMailConnection();
   const [notice, setNotice] = useState<string | null>(null);
+  // WHICH mailbox is disconnecting, not merely THAT one is. A single card-level
+  // `isPending` made every row's button read "Disconnecting..." at once, so a
+  // second mailbox claimed work that was not happening to it.
+  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
 
   // Mail identity is `(provider, external_account_id)` and several mailboxes are
   // legitimate, so this is a LIST -- not health's single-connection
@@ -1021,11 +1027,10 @@ function ConnectedMailCard() {
   const configured = connectionsQuery.data?.configured ?? false;
   const isLoadError = connectionsQuery.isError;
 
-  const overallState = resolveMailConnectionState({
-    configured,
-    connection: connections[0] ?? null,
-    isLoadError,
-  });
+  // Across EVERY mailbox, not `connections[0]`. The list is ordered by
+  // created_at, so taking the first would let the OLDEST mailbox speak for a
+  // card that may also contain a broken one.
+  const overallState = resolveOverallMailState({ configured, connections, isLoadError });
 
   const beginConnect = async (): Promise<void> => {
     setNotice(null);
@@ -1049,27 +1054,24 @@ function ConnectedMailCard() {
   const connectPress = useBusyPress(beginConnect);
 
   const confirmDisconnect = (connection: MailConnection): void => {
-    Alert.alert(
-      "Disconnect this mailbox?",
-      "Personal OS will stop syncing it and clear its saved credentials. The mail it has already summarised is kept, and you can reconnect later.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Disconnect",
-          style: "destructive",
-          onPress: () => {
-            setNotice(null);
-            disconnect.mutate(connection.id, {
-              // `revoked: false` still means a fully disconnected connection --
-              // it reports only whether Google accepted the revocation, so it
-              // must not be presented as a failure.
-              onSuccess: () => setNotice("Mailbox disconnected."),
-              onError: (err) => setNotice(`Couldn't disconnect. ${describeActionFailure(err)}`),
-            });
-          },
-        },
-      ],
-    );
+    confirmDestructive({
+      title: "Disconnect this mailbox?",
+      message:
+        "Personal OS will stop syncing it and clear its saved credentials. The mail it has already summarised is kept, and you can reconnect later.",
+      confirmLabel: "Disconnect",
+      onConfirm: () => {
+        setNotice(null);
+        setDisconnectingId(connection.id);
+        disconnect.mutate(connection.id, {
+          // `revoked: false` still means a fully disconnected connection -- it
+          // reports only whether Google accepted the revocation, so it must not
+          // be presented as a failure.
+          onSuccess: () => setNotice("Mailbox disconnected."),
+          onError: (err) => setNotice(`Couldn't disconnect. ${describeActionFailure(err)}`),
+          onSettled: () => setDisconnectingId(null),
+        });
+      },
+    });
   };
 
   return (
@@ -1109,15 +1111,15 @@ function ConnectedMailCard() {
             {canDisconnectMail(state, connection) ? (
               <Pressable
                 onPress={() => confirmDisconnect(connection)}
-                disabled={disconnect.isPending}
+                disabled={disconnectingId !== null}
                 accessibilityRole="button"
-                accessibilityState={{ disabled: disconnect.isPending }}
+                accessibilityState={{ disabled: disconnectingId !== null }}
                 accessibilityLabel={`Disconnect ${connection.external_account_id}`}
                 hitSlop={8}
                 className="mt-2 min-h-[44px] justify-center self-start rounded bg-red-600 px-3 py-2 active:opacity-70"
               >
                 <Text className="text-sm font-medium text-white">
-                  {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
+                  {disconnectingId === connection.id ? "Disconnecting…" : "Disconnect"}
                 </Text>
               </Pressable>
             ) : null}

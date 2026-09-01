@@ -25,6 +25,7 @@ export type DigestCardState =
   | { kind: "empty" }
   | { kind: "present"; text: string; digestDate: string; timezone: string; generatedAt: string }
   | { kind: "generating"; previousText: string | null }
+  | { kind: "requested"; previousText: string | null }
   | { kind: "failed"; reason: DigestFailureReason; previousText: string | null };
 
 /**
@@ -47,6 +48,22 @@ export interface ResolveDigestCardStateParams {
   isLoadError: boolean;
   isGenerating: boolean;
   generateError: unknown;
+  /**
+   * A generation request has been ACCEPTED (202) and not yet superseded.
+   *
+   * WITHOUT THIS THE "generating" STATE IS ALMOST INVISIBLE. `isGenerating` is
+   * the mutation's `isPending`, which ends when the route's 202 arrives -- not
+   * when the worker finishes. Since the route only enqueues, that is an HTTP
+   * round trip: a few hundred milliseconds. The card would flash "preparing a
+   * digest" and revert to the previous state while the work had not started,
+   * which reads as "nothing happened".
+   *
+   * Derived by the caller from the mutation's own `isSuccess`/`submittedAt`
+   * against the digest's `generated_at`, so it needs no component state -- which
+   * matters, because the render tests call the component with no React
+   * dispatcher and an extra hook would throw.
+   */
+  hasPendingRequest?: boolean;
 }
 
 /**
@@ -101,7 +118,8 @@ function classifyGenerateError(error: unknown): DigestFailureReason | null {
  *   6. otherwise the specific empty state the server's two booleans name.
  */
 export function resolveDigestCardState(params: ResolveDigestCardStateParams): DigestCardState {
-  const { isLoading, data, isLoadError, isGenerating, generateError } = params;
+  const { isLoading, data, isLoadError, isGenerating, generateError, hasPendingRequest } =
+    params;
 
   if (isLoading) return { kind: "loading" };
 
@@ -111,6 +129,11 @@ export function resolveDigestCardState(params: ResolveDigestCardStateParams): Di
 
   const reason = classifyGenerateError(generateError);
   if (reason !== null) return { kind: "failed", reason, previousText };
+
+  // Accepted, but the worker has not produced a digest yet. Distinct from
+  // `generating` (the request is still in flight) and from `present` (a digest
+  // newer than the request exists).
+  if (hasPendingRequest === true) return { kind: "requested", previousText };
 
   if (isLoadError) return { kind: "unavailable" };
   if (!data) return { kind: "loading" };
@@ -135,6 +158,9 @@ export function canGenerateDigest(state: DigestCardState): boolean {
   switch (state.kind) {
     case "loading":
     case "generating":
+    // The request is already accepted; asking again would enqueue a duplicate
+    // that the queue's singletonKey would collapse anyway.
+    case "requested":
     case "unavailable":
     // No credentials and no mailbox are both setup steps the button cannot
     // advance -- it could only ever return the same 409 again.

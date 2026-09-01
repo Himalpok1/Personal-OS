@@ -87,3 +87,50 @@ export function canDisconnectMail(
   if (connection === null) return false;
   return state === "connected" || state === "error" || state === "needs_reconnect";
 }
+
+/**
+ * The most blocking state across EVERY connected mailbox.
+ *
+ * The card's headline used to be computed from `connections[0]`, and
+ * `GET /mail-connections` orders by `created_at` ascending -- so a card listing
+ * two mailboxes, one healthy and one needing reauth, was headed "Connected to
+ * Gmail." purely because the healthy one was created first. A summary taken from
+ * an arbitrary row is not a summary.
+ *
+ * The ordering below is the same precedence `resolveMailConnectionState` applies
+ * within one mailbox, which is what makes the headline and the row it is
+ * describing agree.
+ */
+const SEVERITY: MailConnectionDisplayState[] = [
+  "unavailable",
+  "not_configured",
+  "not_connected",
+  "needs_reconnect",
+  "disconnected",
+  "error",
+  "connected",
+];
+
+export function resolveOverallMailState(
+  input: Omit<ResolveMailConnectionStateInput, "connection"> & {
+    connections: MailConnection[];
+  },
+): MailConnectionDisplayState {
+  const { configured, connections, isLoadError } = input;
+
+  // These two are properties of the SERVER, not of any mailbox, so they are
+  // answered before the list is consulted at all.
+  if (isLoadError === true) return "unavailable";
+  if (!configured) return "not_configured";
+  if (connections.length === 0) return "not_connected";
+
+  const states = connections.map((connection) =>
+    resolveMailConnectionState({ configured, connection, isLoadError }),
+  );
+  // The worst one wins: a card that says "Connected" while one of its mailboxes
+  // has stopped syncing is the failure this replaces.
+  for (const candidate of SEVERITY) {
+    if (states.includes(candidate)) return candidate;
+  }
+  return "connected";
+}

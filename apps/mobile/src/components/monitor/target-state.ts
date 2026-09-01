@@ -21,8 +21,8 @@ import type { MonitorTargetStatus } from "@personal-os/schema";
 export type MonitorTargetDisplayState =
   | "not_checked" // configured, but no check has ever run
   | "disabled" // switched off; nothing is being checked and that is intended
-  | "muted" // temporarily silenced by an operator
-  | "maintenance" // inside a maintenance window; the last check was a deliberate skip
+  | "muted" // silenced by an operator -- and NOT probed while muted
+  | "skipped" // the last check was a deliberate skip (maintenance window, or a mute that has since expired)
   | "down" // the newest check failed
   | "incident_open" // failing long enough to have opened an incident
   | "incident_acknowledged" // an open incident somebody has seen
@@ -37,12 +37,22 @@ export interface MonitorTargetRowView {
 /**
  * Frozen precedence, most-blocking first:
  *
- *   disabled -> muted -> maintenance -> incident_acknowledged -> incident_open
+ *   disabled -> incident_acknowledged -> incident_open -> muted -> skipped
  *   -> down -> not_checked -> up
  *
- * `disabled` and `muted` outrank everything because they describe why nothing
- * useful is being observed; showing "down" for a target nobody is checking would
- * be a claim about a service from evidence that stopped being collected.
+ * AN OPEN INCIDENT OUTRANKS MUTING AND MAINTENANCE, and that ordering is the
+ * correction of a real defect rather than a preference. Muting pauses ALERTS; it
+ * does not resolve anything, and neither does a maintenance window --
+ * `recentDecisiveStatuses` excludes `skipped` rows precisely so a window cannot
+ * close an incident. So a suppressed target with an open incident still HAS an
+ * unresolved outage, and putting the suppression first rendered that outage in
+ * neutral copy on a screen the user deliberately opened to look for it. The
+ * first version of this file did exactly that.
+ *
+ * `disabled` is the one suppression that still outranks an incident, because a
+ * disabled target is not being checked and never will be until someone turns it
+ * back on: its incident cannot progress in either direction, and the operator
+ * switched it off deliberately.
  *
  * `incident_acknowledged` outranks `incident_open` because the acknowledgement
  * is the newer fact and the more useful one -- "someone is on this" is what a
@@ -70,17 +80,24 @@ export function resolveMonitorTargetState(
   const { target, latest_check, active_incident } = status;
 
   if (!target.enabled) return { state: "disabled", incidentId: null };
-  if (target.muted_until !== null && Date.parse(target.muted_until) > now) {
-    return { state: "muted", incidentId: active_incident?.id ?? null };
-  }
-  if (latest_check?.status === "skipped") {
-    return { state: "maintenance", incidentId: active_incident?.id ?? null };
-  }
+
   if (active_incident !== null) {
     return {
       state: active_incident.status === "acknowledged" ? "incident_acknowledged" : "incident_open",
       incidentId: active_incident.id,
     };
+  }
+
+  if (target.muted_until !== null && Date.parse(target.muted_until) > now) {
+    return { state: "muted", incidentId: null };
+  }
+  // `skipped`, NOT "in a maintenance window". The check row records only that we
+  // deliberately did not look; whether a window is open RIGHT NOW is a different
+  // question this row cannot answer, and the row may also be a leftover from a
+  // mute that has since expired. `skippedReasonText` below says which reason the
+  // row actually carries, in the past tense the evidence supports.
+  if (latest_check?.status === "skipped") {
+    return { state: "skipped", incidentId: null };
   }
   if (latest_check === null) return { state: "not_checked", incidentId: null };
   if (latest_check.status === "down") return { state: "down", incidentId: null };
@@ -108,9 +125,14 @@ export function monitorStateText(
     case "disabled":
       return "Checks are turned off for this target.";
     case "muted":
-      return "Muted, so alerts are paused. Checks are still running.";
-    case "maintenance":
-      return "In a maintenance window, so checks are skipped rather than failed.";
+      // NOT "checks are still running". A muted target is not probed at all:
+      // `suppressionReason` returns "muted", the pass writes a `skipped` row and
+      // returns before issuing any request. The first version of this sentence
+      // said checks continued, which would have told an operator that a service
+      // was being watched through a mute window when nothing was looking at it.
+      return "Muted, so it isn't being checked and alerts are paused.";
+    case "skipped":
+      return "The last check was skipped deliberately.";
     case "incident_acknowledged":
       return heartbeat
         ? "No heartbeat received. Someone has acknowledged this."
@@ -128,6 +150,28 @@ export function monitorStateText(
   }
 }
 
+/**
+ * Why the last check was skipped, from the row's own `failure_class`.
+ *
+ * Past tense on purpose. The row records that a check WAS skipped and why; it
+ * cannot say whether a maintenance window is open right now, and it may be a
+ * leftover from a mute that has since expired -- the next real check is only due
+ * after `interval_seconds`, so a stale skip can be the newest row for minutes.
+ * Returning null rather than a guess keeps the caller from inventing a
+ * present-tense claim.
+ */
+export function skippedReasonText(status: MonitorTargetStatus): string | null {
+  if (status.latest_check?.status !== "skipped") return null;
+  switch (status.latest_check.failure_class) {
+    case "maintenance_window":
+      return "It was inside a maintenance window.";
+    case "muted":
+      return "It was muted at the time.";
+    default:
+      return null;
+  }
+}
+
 /** Neutral for intended states, amber for degraded, red for a live outage. */
 export function monitorStateToneClass(state: MonitorTargetDisplayState): string {
   switch (state) {
@@ -138,7 +182,7 @@ export function monitorStateToneClass(state: MonitorTargetDisplayState): string 
       return "text-amber-700 dark:text-amber-300";
     case "disabled":
     case "muted":
-    case "maintenance":
+    case "skipped":
     case "not_checked":
     case "up":
       return "text-black dark:text-white";
