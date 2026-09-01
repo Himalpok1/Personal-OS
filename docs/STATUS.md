@@ -441,6 +441,100 @@ No message was persisted. No `mail_sync_runs`, `mail_sync_cursors`, `mail_messag
 row was created. No sync logic, no cursor-advancement code, no classification of messages, no label
 storage. No ADR was modified. No scope was widened. Checkpoint 7.3 has not begun.
 
+### Checkpoint 7.8A — OAuth consent model repair (COMPLETE, local only, 2026-09-01)
+
+Repair of the defect Checkpoint 7.8's readiness review discovered. **No deployment, no production
+change, no Google Console action, no account-permission change, no migration** — the level stays 16
+`.sql` / 16 journal entries, there is no `0016`, and `packages/db` is byte-unchanged. Branch
+`phase-7-mail-monitoring`, two commits from `c779b58`.
+
+#### The change is one line, and it is mutation-proven
+
+`packages/mail-providers/src/gmail-oauth.ts` now sends **`include_granted_scopes=true`**. Nothing
+else about the authorization request changed, and a test pins the exact parameter set so a stray
+addition fails rather than ships.
+
+`false` did not merely decline to widen the new TOKEN — it made the consent **non-additive**, so the
+grant it produced *defined* the app's authority and everything previously granted was dropped.
+Consent in Google's linked-app model is per **app**, and all three of this project's OAuth clients
+share one Google Cloud project, therefore one consent screen, therefore **one grant set**. Separate
+clients give separate tokens; they do not give separate grants.
+
+**Two tests were CORRECTED rather than loosened**, because both pinned the defect as correct
+behaviour and both carried a comment arguing for it:
+
+| File | Was |
+|---|---|
+| `packages/mail-providers/src/gmail-oauth.test.ts` | `expect(…).toBe("false")` under *"Inheriting would silently widen the grant using the Calendar and Health scopes already held by the same Google account."* |
+| `apps/api/src/routes/mail-connections.test.ts` | `expect(…).toBe("false")` under *"Never inherit the Calendar/Health grants held by the same account."* |
+
+The route-level assertion is kept as well as the provider-level one, because that is the string a
+real browser is actually sent.
+
+**Mutation testing.** Reverting the line to `"false"` fails **exactly one test in each layer** —
+one in `mail-providers`, one in the api route suite — and both pass again on restore. A protection
+whose removal breaks nothing is not a protection.
+
+#### What did NOT change
+
+`gmail.metadata` remains the only scope requested, and a test now names every forbidden scope
+individually — `gmail.readonly`, `gmail.modify`, `gmail.compose`, `gmail.send`, `gmail.insert`,
+`gmail.labels`, `gmail.settings`, `mail.google.com`, `openid`, `userinfo.email`, `calendar`,
+`fitness`, `googlehealth` — so a future edit that adds one fails in the suite rather than at a
+consent screen. Token storage, AES-256-GCM encryption, the hash-only single-use OAuth state, its
+expiry and its constant-time redirect binding are all untouched: **twelve** state-validation tests
+still pass unchanged, including single-use consumption, replay rejection, expiry, the
+different-redirect rejection, and *"does NOT spend the authorization code when the state is bad"*.
+
+No Graph. No mutation capability. No route, schema, migration or storage change.
+
+#### The honest cost, stated rather than discovered
+
+The access token Google returns may now carry previously granted scopes as well, so **Checkpoint
+7.2's assertion that Google echoed *exactly* `gmail.metadata` no longer holds.** That is accepted
+because breadth of scope on a token is not capability exercised — `MailClient` exposes no send,
+reply, modify, trash or label method to call, so ADR-052's rule is a type rather than a policy — and
+because the alternative destroys two working integrations, which is a strictly larger loss of the
+user's own access.
+
+#### ⚠️ The same defect exists in Google Health, and Calendar is non-additive by default
+
+Found while auditing for other call sites, and **deliberately not fixed here** — the checkpoint
+brief says "No other OAuth behavior changes", and widening scope during a repair is not the agent's
+call.
+
+| Integration | State |
+|---|---|
+| Gmail | **fixed** — `include_granted_scopes=true` |
+| **Google Health** | `packages/health-providers/src/google-health-oauth.ts:149` still sends `include_granted_scopes: "false"` — **identical defect** |
+| **Google Calendar** | `packages/calendar-providers/src/google-oauth.ts` sets the parameter **not at all**, and Google's default is `false` — same effect |
+
+**The consequence is concrete and it breaks the recovery plan.** With only Gmail fixed, the owner
+reauthorizing Health would revoke the Gmail and Calendar grants, and reauthorizing Calendar would
+revoke the other two. Whichever consent is granted last wins and the other two die — which is
+exactly the incident, repeated. **All three consents must be additive before any recovery
+reauthorization is attempted**, and until then the ordering of consents cannot rescue it.
+
+This is recorded as a blocker rather than actioned, and it needs an explicit decision.
+
+#### Verification actually run
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Full gate | build **11/11** · typecheck **21/21** · `eslint .` **0 errors, 0 warnings** · `prettier --check .` clean · `git diff --check` clean |
+| 2 | Full suite, **uncached and serial** | **3004 tests / 21 turbo tasks** (3001 → **+3**), 0 of 21 cached, zero failing |
+| 3 | No package decreased | mail-providers 113→**116**; core 375 · db 79 · schema 255 · monitoring 132 · health-providers 311 · ai-providers 25 · api-client 121 · api 608 · worker 409 · mobile 499 all unchanged |
+| 4 | Zero-drift canary | `calendar-providers` **74**, held exactly |
+| 5 | Migration invariant | **16 `.sql` / 16 journal entries**, no `0016`; `packages/db` byte-unchanged |
+| 6 | Mutation test | Reverting to `"false"` fails exactly 1 test in `mail-providers` and 1 in the api route suite; both green on restore |
+| 7 | State validation | **12** OAuth state/redirect tests pass unchanged |
+| 8 | Production | **not contacted** |
+
+#### Deliberately NOT done
+
+No production reconnect, deploy, migration, Console action or account-permission change. No fix to
+the Health or Calendar consent (above). No Graph, no new scope, no new capability.
+
 ### Checkpoint 7.8 — Production readiness (READINESS COMPLETE; DEPLOYMENT **BLOCKED**, 2026-09-01)
 
 Read-only throughout. **No production write of any kind**: no migration, no image build, no rollout,
