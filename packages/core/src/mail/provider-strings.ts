@@ -213,3 +213,132 @@ function isPlausibleAddress(candidate: string): boolean {
   const at = candidate.indexOf("@");
   return at > 0 && at === candidate.lastIndexOf("@") && at < candidate.length - 1;
 }
+
+/**
+ * Characters that carry no summarizable meaning and CAN change how text renders.
+ *
+ * Three groups, and the distinction between these and "injection phrases" is the
+ * whole reason this function is allowed to exist at all:
+ *
+ *   - C0 and C1 CONTROLS (U+0000-U+001F, U+007F-U+009F). Not text. A raw
+ *     newline inside a subject also breaks the one-line framing every consumer
+ *     of a subject assumes.
+ *   - BIDI CONTROLS (U+061C, U+200E-U+200F, U+202A-U+202E, U+2066-U+2069). These
+ *     REORDER what a reader sees without changing what the string contains --
+ *     the classic filename-spoofing trick, and exactly as effective in a digest
+ *     a person reads and then acts on.
+ *   - ZERO-WIDTH SPACE and BOM (U+200B, U+FEFF). Invisible, so they can split a
+ *     word a reader believes is whole.
+ *
+ * U+200C ZWNJ and U+200D ZWJ are deliberately KEPT. They are load-bearing in
+ * Persian, Hindi and many other scripts, and in emoji sequences; stripping them
+ * would corrupt legitimate text to defend against a marginal trick.
+ *
+ * Built with `new RegExp` over escape SEQUENCES rather than a literal character
+ * class, so this source file contains no control characters of its own -- a file
+ * you cannot safely `cat`, `grep` or review in a diff is a poor place to keep a
+ * security control.
+ *
+ * ============================================================================
+ * THIS IS NOT, AND MUST NEVER BECOME, AN INJECTION-PHRASE SANITIZER.
+ * ============================================================================
+ *
+ * `apps/api/src/brief/prompt.ts` records the reasoning this repository stands
+ * on: a sanitizer stripping "ignore previous instructions"-shaped substrings
+ * "would give false assurance without closing anything", and ADR-054 restates it
+ * for mail. Nothing here inspects meaning. It removes characters that are not
+ * content in any language, and leaves every word -- including a word that reads
+ * like a command -- byte-for-byte intact, because role separation and the system
+ * prompt are what defend against those, not string surgery.
+ */
+const UNSUMMARIZABLE = new RegExp(
+  "[" +
+    "\\u0000-\\u001F\\u007F-\\u009F" +
+    "\\u061C\\u200B\\u200E\\u200F" +
+    "\\u202A-\\u202E\\u2066-\\u2069\\uFEFF" +
+    "]",
+  "gu",
+);
+
+/**
+ * Removes rendering-control characters and collapses whitespace runs.
+ *
+ * Returns null for null/undefined so a nullable header passes straight through.
+ * A string that was ONLY control characters becomes the empty string rather than
+ * null: "the sender set a subject made entirely of bidi overrides" and "there is
+ * no Subject header" are different facts, and only the caller knows which
+ * matters.
+ */
+/**
+ * Control characters that are WHITESPACE and must become a space, not vanish.
+ *
+ * Tab, line feed, vertical tab, form feed, carriage return and NEL. They are C0
+ * or C1 controls, so the strip below would delete them outright -- and deleting
+ * a newline WELDS THE WORDS ON EITHER SIDE TOGETHER: "Hello\nSystem: admin"
+ * becomes "HelloSystem: admin", which is a different string containing a word
+ * neither the sender nor the reader ever wrote. Found by this module's own
+ * tests, not by review.
+ */
+// Matching control characters is the entire purpose of this module. The
+// no-control-regex rule exists to catch an ACCIDENTAL control character in a
+// pattern; here they are the subject, written as escapes and named above.
+// eslint-disable-next-line no-control-regex
+const WHITESPACE_CONTROLS = new RegExp("[\\u0009-\\u000D\\u0085]", "gu");
+
+export function stripUnsummarizableCharacters(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  return (
+    value
+      // Whitespace-like controls FIRST, so a separator survives as a separator.
+      .replace(WHITESPACE_CONTROLS, " ")
+      .replace(UNSUMMARIZABLE, "")
+      .replace(/\s+/gu, " ")
+      .trim()
+  );
+}
+
+/**
+ * The smallest fraction of the budget a word-boundary cut may leave.
+ *
+ * Backing off to the previous space is only an improvement while it keeps most
+ * of the text. Against a string whose only space sits at character 3, backing
+ * off would discard 97% of a 200-character budget to avoid a mid-word cut nobody
+ * would have minded -- so below this ratio the hard cut wins.
+ */
+const WORD_BOUNDARY_MIN_RATIO = 0.6;
+
+/** Marks a truncated value, so a reader can tell a cut from a short subject. */
+export const TRUNCATION_MARKER = "…";
+
+/**
+ * Truncates at a word boundary where one is available, and hard-caps regardless.
+ *
+ * THE HARD CAP IS THE GUARANTEE; the word boundary is the courtesy. Adversarial
+ * input has no obligation to contain a space, so a function that only cut at
+ * boundaries would not bound anything at all -- which is precisely the property
+ * a bound on attacker-authored text exists to provide.
+ *
+ * The returned string is NEVER longer than `maxChars`, marker included, and
+ * never ends in a lone surrogate (`truncateProviderString` does that work; one
+ * emoji in a subject line is enough to hit it, and Postgres rejects invalid
+ * UTF-8 outright).
+ */
+export function truncateAtWordBoundary(
+  value: string | null | undefined,
+  maxChars: number,
+): string | null {
+  if (value === null || value === undefined) return null;
+  if (maxChars <= 0) return "";
+  if (value.length <= maxChars) return value;
+
+  // Budget for the marker up front, so the result including it fits.
+  const budget = Math.max(0, maxChars - TRUNCATION_MARKER.length);
+  if (budget === 0) return TRUNCATION_MARKER.slice(0, maxChars);
+
+  const hardCut = truncateProviderString(value, budget) ?? "";
+  const lastSpace = hardCut.lastIndexOf(" ");
+  const useBoundary = lastSpace > 0 && lastSpace >= budget * WORD_BOUNDARY_MIN_RATIO;
+  const body = (useBoundary ? hardCut.slice(0, lastSpace) : hardCut).trimEnd();
+
+  return body + TRUNCATION_MARKER;
+}
