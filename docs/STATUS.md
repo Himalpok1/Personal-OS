@@ -547,6 +547,48 @@ non-additive, whatever it drops is re-added by the two additive consents that fo
 last non-additive consent wins and the others die. **Any future Calendar reconnect must be followed
 by re-consenting Health and Gmail**, until Calendar's behaviour is proven or changed.
 
+#### Owner decisions recorded (2026-09-01, ADR-051a)
+
+Both were taken after the OAuth root cause was established, not before it.
+
+| Decision | Ruling | Effect |
+|---|---|---|
+| Production snapshot | **NO** | ADR-024 stays Locked and unamended. Refused on the merits: `0014`/`0015` are `CREATE TABLE`-only and alter no existing table, so the serving images stay forward-compatible and rollback is image-only — a dump protects against nothing a rollback does not already cover |
+| `2026-09-04T20:08:25Z` milestone | **`waived_by_owner`** | ADR-052's gate existed so a Phase 6 incident could never be confounded with a Phase 7 change. That purpose is **discharged rather than skipped**: the incident occurred, was isolated in the owner's own Google Account, traced to one parameter, remediated and mutation-proven, with no data lost. Precedent: ADR-051's own pre-deployment wait was waived the same way in 6.7A |
+
+**The waiver removes the waiting period and nothing else.** Every technical gate stands unchanged —
+the consent repair must be verified before deployment, migrations still run from the newly built api
+image with `--no-deps`, rollback images are still tagged by resolved digest first, and
+`docs/ARCHITECTURE.md`'s frozen deployment order is untouched.
+
+#### ⚠️ The owner's post-fix reconnection order must be reversed
+
+The approving instruction lists the recovery as **Health → Calendar → Gmail**. That order can still
+end with Health dead, and the reason is the one thing this checkpoint could not fix in code.
+
+Calendar's additivity is **unverified** — its native Play Services flow exposes no
+`include_granted_scopes` equivalent — so it must be treated as possibly non-additive. Walking the
+owner's order from today's actual account state (`gmail.metadata` only):
+
+| Step | Consent | Resulting grant |
+|---|---|---|
+| 1 | Health (additive) | `gmail.metadata` + health ✅ |
+| 2 | **Calendar (unknown)** | if non-additive → **calendar only** — health destroyed ❌ |
+| 3 | Gmail (additive) | calendar + gmail — **health still missing** ❌ |
+
+Reversed, the unknown goes first and every later consent only adds:
+
+| Step | Consent | Resulting grant |
+|---|---|---|
+| 1 | **Calendar (unknown)** | calendar (whatever it drops is not yet needed) |
+| 2 | Health (additive) | calendar + health ✅ |
+| 3 | Gmail (additive) | calendar + health + gmail ✅ |
+
+**Reconnect Calendar FIRST, then Health, then Gmail.** This is not a preference; it is the only
+ordering that is correct under the unverified case, and it costs nothing if Calendar turns out to be
+additive after all. The same rule binds every future Calendar reconnect until that flow is proven or
+changed.
+
 #### Verification actually run
 
 | # | Check | Result |
