@@ -441,6 +441,99 @@ No message was persisted. No `mail_sync_runs`, `mail_sync_cursors`, `mail_messag
 row was created. No sync logic, no cursor-advancement code, no classification of messages, no label
 storage. No ADR was modified. No scope was widened. Checkpoint 7.3 has not begun.
 
+### Checkpoint 7.8B — Production deployment (SERVER SIDE COMPLETE, 2026-09-01)
+
+Phase 7 is deployed. **Production migration level moved 0000–0013 = 14 → 0000–0015 = 16** for the
+first time since Phase 6, and api/worker/web now serve images built from `a5bbc48` — the commit that
+carries both halves of the ADR-053a consent repair. Deployed under ADR-051a's owner waiver of the
+`2026-09-04T20:08:25Z` milestone, with **no snapshot taken** (ADR-024 unamended).
+
+**The three integrations are NOT yet reconnected.** That is owner-only interactive work and is the
+one remaining step; see the reconnection order below, which is load-bearing.
+
+#### Release lineage
+
+| Component | Source | Image |
+|---|---|---|
+| api | `a5bbc48` | `sha256:08f1e395b32401a1…` |
+| worker | `a5bbc48` | `sha256:79c18373dfbe529f…` |
+| web | `a5bbc48` | `sha256:3215679bc0b9d658…` |
+| postgres | unchanged | `sha256:d4bb0a8c1b7bb2e2…` |
+
+Rollback tags `personal-os-{api,worker,web}:pre-phase7` were created **by digest resolved
+server-side into a variable** before any build — never `docker commit`, never a transcribed digest
+(the 6.7B transposition lesson) — and each was re-inspected to confirm it still resolves to the
+original: api `da08f150cd43…`, worker `5e3318a0a41d…`, web `36153ab10ed1…`.
+
+Shipped as `git archive` of `a5bbc48` into a **new** `/home/himallinux/personal-os-7.8-release`; the
+4.7, 5.7, 5.7.1 and 6.7 trees are all retained. Archive sha256
+`d446b7d025f071937b245a5795b3f4f3619a8f3eb7a5971f8fb08541506f0b35`, **byte-identical on both ends**,
+840 tracked files, containing **zero** `.env`, `google-services.json`, `node_modules`, `.git` or
+keystore entries.
+
+#### The 5.7 silent-no-op trap was cleared explicitly, not assumed
+
+The migration runs **from the api image**, so the release image was built first and its contents
+inspected before the migration was trusted: **16 `.sql` / 16 journal entries** inside the image, with
+`0014` hashing `0a4213ff8ad47d30…` and `0015` hashing `a7ea1d38667da79a…` — identical to the local
+files and to the release tree. The OAuth repair was verified **inside the built images** too: api
+carries `include_granted_scopes "true"` for both Gmail and Health, and worker for Gmail.
+
+**One real obstacle, and it is worth recording.** The first migrate attempt failed with
+`url: ''` — compose passes `DATABASE_URL` to the api service but **not** `MIGRATIONS_DATABASE_URL`,
+so drizzle-kit had no migrator DSN. Nothing was applied and the level stayed 14; the failure was
+before any connection. Resolved by sourcing the production `.env` server-side and passing the
+variable through with `-e`, never printing it — the 6.7B pattern. Worth knowing because the failure
+message names the config file rather than the missing variable.
+
+#### Migration result
+
+| Check | Result |
+|---|---|
+| Tracked rows | 14 → **16** |
+| New rows | `15` = `0a4213ff…` @ `1788120327047`, `16` = `a7ea1d38…` @ `1788236141589` — the **journal `when` values, not wall-clock** |
+| Replay of 0000–0013 | none |
+| Public tables | 28 → **37**; all nine `mail_*` / `monitor_*` present |
+| Existing data | byte-identical to baseline — tasks 2 · notes 3 · inbox 6 · devices 2 · health_daily 145 · health_observations **0** |
+
+**The Checkpoint 4.7 Gate C incident did not recur.** Postgres kept container `404de24ef86b`, image
+`d4bb0a8c1b7b…`, `restarts=0` and start time `2026-08-30T03:23:21` across the migration and the
+rollout; `personal-os_postgres_data` kept its `2026-08-15T17:32:00-05:00` creation timestamp. Every
+command pinned `-p personal-os`, the production env file and both compose files, carried `--no-deps`,
+and **never named `postgres`**.
+
+#### Rollout and smoke
+
+`up -d --no-deps --no-build --force-recreate api worker web`. All three recreated onto the new
+digests with `restarts=0`; postgres untouched.
+
+| Check | Result |
+|---|---|
+| API health | `{"status":"ok","db":"connected","worker":{"stale":false}}` |
+| Phase 7 routes | `/mail-connections`, `/mail-digests/current`, `/monitor/targets`, `/monitor/incidents` all **200**, each honestly reporting `configured: false` |
+| Phase 5/6 regression | `/today` 200 · `/health-summary` 200 · web 200 |
+| Queues / schedules | 20 → **26** / 6 → **9**. `mail.gmail.sync-connection`, `mail.digest.generate` and `monitor.run` all persisted **`stately` / `retry_limit 0`** |
+| Crons | `mail.gmail.sync-cron` `*/15`, `monitor.cron` `* * * * *`, `mail.digest.cron` `0 7 * * *` **tz=UTC** — see the note below |
+| Heartbeat | fresh |
+| Log secret scan | `ya29.`, `1//`, `refresh_token`, `client_secret`, `GOCSPX`, `access_token`, `ciphertext`, `auth_tag`, `Failing row contains` — **0 each** |
+| Error-level lines | api **0**, worker **0** |
+| Bindings / Serve | api `127.0.0.1:3000`, web `127.0.0.1:8081`, **Postgres unpublished**, both Serve routes **tailnet only**, no Funnel — identical to baseline |
+
+**The consent repair is proven LIVE, not merely shipped.** The production Health authorize URL now
+emits `include_granted_scopes=true`, `access_type=offline`, `prompt=consent` (forced, because the
+connection is `needs_reauth`) and **exactly** the three `.readonly` Health scopes.
+
+**`mail.digest.cron` is registered at 07:00 UTC**, because `MAIL_DIGEST_TIMEZONE` is not yet set.
+Setting it requires a worker restart to re-register the schedule.
+
+#### Still outstanding — all owner-interactive
+
+No `GMAIL_OAUTH_*` credentials in production `.env` yet (0 keys), so mail routes correctly report
+`configured: false`. No monitor target seeded, so monitoring reports **"No services are being
+monitored yet"** rather than a clean bill of health. No `mail_digest` AI route registered. The Health
+and Calendar connections remain `needs_reauth`. **No digest has ever been generated by a real
+model.**
+
 ### Checkpoint 7.8A — OAuth consent model repair (COMPLETE, local only, 2026-09-01)
 
 Repair of the defect Checkpoint 7.8's readiness review discovered, applied to **both** Google
