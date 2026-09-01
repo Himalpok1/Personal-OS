@@ -1,9 +1,9 @@
 # Project Status
 
 **Project:** Personal OS
-**Current phase:** Phase 7 — Email summaries + service monitoring — **Checkpoints 7.0 (ADR gate), 7.1 (contracts, mail provider foundation, migration `0014`), 7.2 (Gmail OAuth + connection lifecycle), 7.2P (live capability probe), 7.3 (incremental mail sync engine), 7.4 (mail digest pipeline) and 7.5 (service monitoring engine, migration `0015`) COMPLETE (2026-08-31). 7.5 moved the LOCAL migration level 0000–0014 = 15 → 0000–0015 = 16; `0015_service_monitoring` is additive, `CREATE TABLE`-only, applied to dev and `personalos_test` only — **production is untouched and remains at 14**. 7.5 is local-only: no target has ever been seeded, no probe has ever run against a real endpoint, and `monitor_targets`/`monitor_checks`/`monitor_incidents` are empty in every database. 7.4 is local-only and added NO migration — the level stays 15: the digest pipeline is proven against a stub generator, a partial-mocked SDK and real Postgres, and NO DIGEST HAS EVER BEEN GENERATED (`mail_digests` empty everywhere, no `mail_digest` route registered, no model ever called). 7.3 is likewise local-only: the engine is proven against the scripted fake and real Postgres, has NEVER run against the live Gmail API, and synchronised nothing — `mail_messages`, `mail_sync_cursors`, `mail_sync_runs` and `mail_digests` are all empty in every database. Earlier checkpoint detail follows: 7.0/7.1/7.2 COMPLETE on the repository side (2026-08-30). The Google Cloud Console gate is SATISFIED, credentials are provisioned locally, **Checkpoint 7.2's LIVE OAuth proof PASSED on 2026-08-31** — connect, identity, encrypted persistence, disconnect and reconnect all verified against the real Gmail API on a development account — and **Checkpoint 7.2P (Gmail live capability probe) is COMPLETE**, confirming every provider assumption Phase 7 rests on with zero database mutation.** Work lives on branch `phase-7-mail-monitoring`, **not merged to `main`**; the repository has no remote. **Local migration level moved 0000–0013 = 14 → 0000–0014 = 15**; `0014_mail_integration` is additive, `CREATE TABLE`-only, and applied to dev and `personalos_test` only — **production is untouched and remains at 14**. Still absent by design: no worker job, no queue, no synchronisation, no message persistence, no digest, no monitoring, no UI, no production access. A Gmail OAuth client, the `gmail.metadata` scope and local credentials now exist (development only); **production `.env` is untouched and holds no `GMAIL_OAUTH_*` key.** Phase 6 — Google Health Integration — **COMPLETE AND CLOSED (2026-08-30).** Checkpoint 6.7B deployed Phase 6 to production, all lanes passed, closure actions are done and the work is merged to `main`. Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, the Rabbit runs **`versionCode 7`** with pairing/PRIMARY/session preserved, and **both reboot-survival proofs (host and Rabbit) passed**. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
+**Current phase:** Phase 7 — Email summaries + service monitoring — **Checkpoints 7.0 (ADR gate), 7.1 (contracts, mail provider foundation, migration `0014`), 7.2 (Gmail OAuth + connection lifecycle), 7.2P (live capability probe), 7.3 (incremental mail sync engine), 7.4 (mail digest pipeline), 7.5 (service monitoring engine, migration `0015`) and 7.6 (UI + notification integration) COMPLETE (7.6 on 2026-09-01). 7.6 added the mail, digest and monitoring surfaces plus the digest notification, and added **NO migration** — the level stays 16. It is local-only: no monitor target has ever been seeded, no probe has run against a real endpoint, and **no digest has ever been generated**. 7.5 moved the LOCAL migration level 0000–0014 = 15 → 0000–0015 = 16; `0015_service_monitoring` is additive, `CREATE TABLE`-only, applied to dev and `personalos_test` only — **production is untouched and remains at 14**. 7.5 is local-only: no target has ever been seeded, no probe has ever run against a real endpoint, and `monitor_targets`/`monitor_checks`/`monitor_incidents` are empty in every database. 7.4 is local-only and added NO migration — the level stays 15: the digest pipeline is proven against a stub generator, a partial-mocked SDK and real Postgres, and NO DIGEST HAS EVER BEEN GENERATED (`mail_digests` empty everywhere, no `mail_digest` route registered, no model ever called). 7.3 is likewise local-only: the engine is proven against the scripted fake and real Postgres, has NEVER run against the live Gmail API, and synchronised nothing — `mail_messages`, `mail_sync_cursors`, `mail_sync_runs` and `mail_digests` are all empty in every database. Earlier checkpoint detail follows: 7.0/7.1/7.2 COMPLETE on the repository side (2026-08-30). The Google Cloud Console gate is SATISFIED, credentials are provisioned locally, **Checkpoint 7.2's LIVE OAuth proof PASSED on 2026-08-31** — connect, identity, encrypted persistence, disconnect and reconnect all verified against the real Gmail API on a development account — and **Checkpoint 7.2P (Gmail live capability probe) is COMPLETE**, confirming every provider assumption Phase 7 rests on with zero database mutation.** Work lives on branch `phase-7-mail-monitoring`, **not merged to `main`**; the repository has no remote. **Local migration level moved 0000–0013 = 14 → 0000–0014 = 15**; `0014_mail_integration` is additive, `CREATE TABLE`-only, and applied to dev and `personalos_test` only — **production is untouched and remains at 14**. Still absent by design: no worker job, no queue, no synchronisation, no message persistence, no digest, no monitoring, no UI, no production access. A Gmail OAuth client, the `gmail.metadata` scope and local credentials now exist (development only); **production `.env` is untouched and holds no `GMAIL_OAUTH_*` key.** Phase 6 — Google Health Integration — **COMPLETE AND CLOSED (2026-08-30).** Checkpoint 6.7B deployed Phase 6 to production, all lanes passed, closure actions are done and the work is merged to `main`. Migration `0013` is applied (production level 0000–0013 = 14), api/worker/web serve the `c0dbff3` release images, the **production Google Health connection is live and synchronising**, the Rabbit runs **`versionCode 7`** with pairing/PRIMARY/session preserved, and **both reboot-survival proofs (host and Rabbit) passed**. **6.7B applied migration `0013` to production and rolled out api/worker/web from `c0dbff3`.** **Checkpoints 6.0, 6.1, 6.2, 6.2P, 6.3, 6.3L, 6.4, 6.5 and 6.6 COMPLETE (6.3/6.3L/6.4/6.5/6.6 local only; 6.6 on 2026-08-27).** **6.6 ran the bounded live proof — backfill chunking, cross-pass resume, cancellation, incremental sync, strict two-cycle idempotency and a real disconnect/reconnect — on branch `phase-6-google-health-live-proof` (unmerged), and fixed one real defect it found.** **6.5 ran the full-product audit, fixed the Google Calendar raw-error path, and completed the deferred physical Rabbit pass, on branch `phase-6-audit-hardening` (unmerged).** 6.2P closed as **core OAuth and capability proof PASSED; raw-heart-rate reconciliation stability (F5) DEFERRED ACCEPTANCE DEBT** by explicit user decision. **6.3 built the sync engine on branch `phase-6-google-health-sync`; 6.4 built the dashboard on branch `phase-6-google-health-ui`; 6.6 ran the live proof on branch `phase-6-google-health-live-proof`. None of them is merged to `main`.** Phase 5 — Daily Command Center + Projects — **COMPLETE** (Steps 0–1 and Checkpoints 5.1–5.7 all complete; **Checkpoint 5.7 deployed Phase 5 to production on 2026-08-24** and passed both reboot-survival tests physically). Phases 0–5 are now COMPLETE, production-deployed, and physically verified.
 **Implementation status:** Phases 0–5 are implemented and production-deployed, and **Phase 6's server side is now deployed too (Checkpoint 6.7B, 2026-08-29)**. **Production migration level moved to 0000–0013 = 14 migrations** — `0013_google_health_sync` was applied exactly once on 2026-08-29, matching the local level of 14 `.sql` / 14 journal entries. Production api/worker/web serve the 6.7 release images built from `c0dbff3`. The production Rabbit now runs `com.himal.personalos` **versionCode 7**, installed in place with `adb install -r` on 2026-08-30 — `firstInstallTime` unchanged, pairing/PRIMARY/push token/session all preserved.
-**Next phase allowed:** **Checkpoint 7.6 (UI), on separate explicit approval only.** Checkpoints 7.0, 7.1, 7.2, 7.2P, 7.3, 7.4 and 7.5 are closed. 7.5 added migration `0015` (three tables, additive, `CREATE TABLE`-only), a new server-only `packages/monitoring`, one worker queue (`monitor.run`, `stately`/`retryLimit 0`/no dead-letter, verified against a real pg-boss boot) with a one-minute cron, and the **API-owned** worker-heartbeat watchdog; it seeded **no** target, dispatched **no** notification and made **no** production change. **Worker-to-Tailscale reachability remains UNVERIFIED (ADR-055) and is recorded as an explicit blind spot** — the two tailnet targets are opt-in and were deliberately not seeded. 7.4 added the digest pipeline and one queue (`mail.digest.generate`, `stately`/`retryLimit 0`/no dead-letter, verified against a real pg-boss boot) plus a daily cron in the configured zone; it registered **no** `mail_digest` AI route, dispatched **no** notification (ADR-055 assigns alerting to 7.5) and added **no** migration. 7.3 added the sync engine, the worker structured logger, the queue-parity guard and one queue (`mail.gmail.sync-connection`, `stately`/`retryLimit 0`/no dead-letter, verified against a real pg-boss boot); it added **no migration** — the level stays 15 — and made no live Gmail call. Phase 6 and every one of its checkpoints are closed; Phase 7 Checkpoints 7.0, 7.1 and 7.2's repository work are closed. Both user-only Console actions are **done (2026-08-31)**: the Gmail API is enabled, `gmail.metadata` is added, and a **third OAuth client** `Personal OS Gmail Web` exists in the existing `personal-os-196cf` project (never a second project, ADR-051), with credentials provisioned into the local `.env` by the owner through a hidden prompt. The remaining gate is the **owner's consent grant** against their live mailbox, which the agent deliberately did not perform. The **privacy-policy URL still serves HTTP 404** and remains deferred branding/compliance debt — empirically it did **not** block adding the scope, because the app is already In production and no re-publish was required. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). **Phase 7 is approved and scoped by ADR-052: Gmail-first and read-only, `gmail.metadata` only, no message bodies, no mail actions, Microsoft Graph deferred, plus a worker-owned service-monitoring engine whose worker-heartbeat watchdog is API-owned. Phase 7 development may proceed through Checkpoint 7.7; production deployment (7.8) must not begin before the `2026-09-04T20:08:25Z` Phase 6 monitoring milestone completes (ADR-051, ADR-052).** Phase 8 has not been approved or planned.
+**Next phase allowed:** **Checkpoint 7.7 (hardening + live proof), on separate explicit approval only.** Checkpoints 7.0 through 7.6 are closed. 7.6 added five API routes, five api-client methods, six pure mobile modules, the `/monitor` screen, one new Today card and the mail digest notification; it added **no migration, no dependency, no notification category, no device column and no navigation tab**. The digest notification now **delays past quiet hours** rather than being silently dropped forever (ADR-053 amendment E), with `notifications-dispatch.ts` byte-untouched. 7.5 added migration `0015` (three tables, additive, `CREATE TABLE`-only), a new server-only `packages/monitoring`, one worker queue (`monitor.run`, `stately`/`retryLimit 0`/no dead-letter, verified against a real pg-boss boot) with a one-minute cron, and the **API-owned** worker-heartbeat watchdog; it seeded **no** target, dispatched **no** notification and made **no** production change. **Worker-to-Tailscale reachability remains UNVERIFIED (ADR-055) and is recorded as an explicit blind spot** — the two tailnet targets are opt-in and were deliberately not seeded. 7.4 added the digest pipeline and one queue (`mail.digest.generate`, `stately`/`retryLimit 0`/no dead-letter, verified against a real pg-boss boot) plus a daily cron in the configured zone; it registered **no** `mail_digest` AI route, dispatched **no** notification (ADR-055 assigns alerting to 7.5) and added **no** migration. 7.3 added the sync engine, the worker structured logger, the queue-parity guard and one queue (`mail.gmail.sync-connection`, `stately`/`retryLimit 0`/no dead-letter, verified against a real pg-boss boot); it added **no migration** — the level stays 15 — and made no live Gmail call. Phase 6 and every one of its checkpoints are closed; Phase 7 Checkpoints 7.0, 7.1 and 7.2's repository work are closed. Both user-only Console actions are **done (2026-08-31)**: the Gmail API is enabled, `gmail.metadata` is added, and a **third OAuth client** `Personal OS Gmail Web` exists in the existing `personal-os-196cf` project (never a second project, ADR-051), with credentials provisioned into the local `.env` by the owner through a hidden prompt. The remaining gate is the **owner's consent grant** against their live mailbox, which the agent deliberately did not perform. The **privacy-policy URL still serves HTTP 404** and remains deferred branding/compliance debt — empirically it did **not** block adding the scope, because the app is already In production and no re-publish was required. 6.5 closed the physical-device gap 6.4 left open: the Rabbit pass ran on the real R1 through the side-by-side `com.himal.personalos.dev` UI-test identity, and production `com.himal.personalos` versionCode **6** was never targeted and is byte-identical before and after. Raw intraday heart-rate ingestion **remains excluded** (see the F5 deferral below) and `heart-rate-intraday` stays `sync_enabled = false`; `health_observations` is still empty by design. The OAuth app is now **In production** (published 2026-08-28 under Checkpoint 6.7A); the connection was reauthorized post-publishing at **2026-08-28T20:08:25Z**, superseding the Testing-mode lineage and its seven-day expiry. **The former ≥7-day refresh-token gate was superseded by an owner decision on 2026-08-28 (see the 6.7A section): the OAuth app is now In production, the immediate post-publishing authorization/sync/refresh proof passed, and seven-day longevity is deferred to post-deployment monitoring — never to be reported as passed.** Phase 6 is **Google Health cloud integration** (ADR-046), which **supersedes** the original HealthKit / Health Connect entry — that native scope is removed entirely. Finance remains deferred (ADR-038). **Phase 7 is approved and scoped by ADR-052: Gmail-first and read-only, `gmail.metadata` only, no message bodies, no mail actions, Microsoft Graph deferred, plus a worker-owned service-monitoring engine whose worker-heartbeat watchdog is API-owned. Phase 7 development may proceed through Checkpoint 7.7; production deployment (7.8) must not begin before the `2026-09-04T20:08:25Z` Phase 6 monitoring milestone completes (ADR-051, ADR-052).** Phase 8 has not been approved or planned.
 **Canonical architecture:** `docs/ARCHITECTURE.md`. **Canonical Phase 6 plan:** `/Users/himalpokhrel/.claude/plans/you-are-the-lead-crispy-deer.md` (not part of this repo — a local Claude Code plan file, revision 3 **plus a normative Appendix A that supersedes conflicting body passages**, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 4 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-dreamy-ladybug.md` (not part of this repo — a local Claude Code plan file, revision 2, user-approved; the summary below is the durable, repo-tracked record). **Canonical Phase 3 plan:** `/Users/himalpokhrel/.claude/plans/personal-os-begin-unified-cook.md`. **Canonical Phase 2 plan:** `/Users/himalpokhrel/.claude/plans/zesty-twirling-piglet.md`.
 
 ## Phase 7 — Email summaries + service monitoring (planning gate approved 2026-08-30)
@@ -440,6 +440,224 @@ Evidence is HTTP statuses, key names, counts and shapes only. The one `emailAddr
 No message was persisted. No `mail_sync_runs`, `mail_sync_cursors`, `mail_messages` or `mail_digests`
 row was created. No sync logic, no cursor-advancement code, no classification of messages, no label
 storage. No ADR was modified. No scope was widened. Checkpoint 7.3 has not begun.
+
+### Checkpoint 7.6 — UI + notification integration (COMPLETE, local only, 2026-09-01)
+
+Local development only. **No production access, no deployment, no migration** — the level stays
+16 `.sql` / 16 journal entries, there is no `0016`, and `packages/db` is byte-unchanged. No Graph,
+no new mail capability, no hardening pass, no adversarial-testing checkpoint work. Branch
+`phase-7-mail-monitoring`, six commits from `986521d` (`184c6f5` … `3a74241`).
+
+**Nothing has been monitored and no digest has been generated.** `monitor_targets`,
+`monitor_checks`, `monitor_incidents` and `mail_digests` are empty in every database; the only mail
+row anywhere is the development connection 7.2 deliberately left active. Every surface below is
+proven against fixtures, injected clocks and real Postgres.
+
+#### What shipped
+
+| Surface | What it does |
+|---|---|
+| Settings → **Mail** | connection state, the mailbox address, connect/reconnect, disconnect, refresh |
+| Settings → **Service monitoring** | a summary line and a way through to the screen |
+| **`/monitor`** | every target with its newest check, plus incident history and acknowledgement |
+| **Today** | ONE new card: the mail digest |
+| **Notifications** | monitoring alerts already dispatched (7.5); the digest notification is new |
+
+Five API routes, five api-client methods, two query-hook files, six pure modules. **No new tab, no
+new notification category, no new device column, no new dependency** — `apps/mobile` still declares
+exactly three `@personal-os/*` dependencies, which is the only thing keeping
+`@personal-os/monitoring` (and its `node:tls` import) out of the web bundle.
+
+#### The three things the UI is not allowed to say
+
+Each is enforced by a test rather than by a review note.
+
+- **"worker healthy" appears nowhere.** A test asserts the word *healthy* is absent from every
+  heartbeat state, and the web bundle was grepped for the phrase. The heartbeat proves a process
+  wrote a row on its beat cron; ADR-055 records that a hung or fast-crash-looping worker still looks
+  alive to the watchdog. The wording is **"Heartbeat received."**
+- **There is no uptime percentage.** The honest version of that number has three states, which is
+  exactly why `MonitorUptimePointSchema` carries a refine making `not_checked` with a ratio
+  unrepresentable. Shipping a percentage before a read model can express the third state would walk
+  into the `0%`-for-a-gap failure that schema exists to prevent. A never-checked target reports
+  *"No check has run yet"* — not up, not down.
+- **No provider text reaches a screen.** `last_sync_error` arrives as a closed enum and is mapped to
+  words by `mailSyncErrorCopy`; a test asserts the copy for every member never contains the raw
+  code, so a bare token like `cursor_expired` cannot face the user.
+
+`configured: false` renders as *"No services are being monitored yet"*, never as a clean bill of
+health — and that is not an edge case. **No target has ever been seeded in any environment**, so it
+is the state every reader sees today.
+
+A load error reports *"Can't reach Personal OS"* rather than *"not connected"*, for both mail and
+monitoring. Falling through to "not connected" would tell someone their Gmail link is gone when the
+tunnel is down, inviting them to mint a new grant to fix a network problem.
+
+#### Quiet hours now DELAY the digest notification instead of dropping it
+
+ADR-053 amendment E names a defect that was live. `notifications.dispatch` drops a non-`alert`
+notification for any device inside its quiet hours, and the drop is total: the device never enters
+`targets`, so `claimTarget` is never called, so **no `notification_dispatch_log` row is written** —
+and the handler then returns normally, so pg-boss marks the job completed and never retries. For a
+capture confirmation that is survivable. For a digest generated by a fixed-hour cron it means a user
+whose quiet hours span that hour is **never told, every day, permanently, with no row and no log
+line**.
+
+The fix is scheduling, not exemption. A new `nextQuietHoursEnd` in `packages/core` answers when a
+device's window ends, and each device's job is enqueued with pg-boss's `startAfter` set to that
+instant — so it simply *arrives* later and the router's own unchanged check passes.
+**`notifications-dispatch.ts` is byte-untouched**; its quiet-hours test becomes a safety net rather
+than the dropper. Exempting digests was rejected because quiet hours exist precisely so a 07:00
+digest does not wake someone at 03:00 in their own zone; a `deferred` column was rejected as a
+schema change to solve a scheduling problem the queue already solves.
+
+**The no-loop property was proven exhaustively, not argued.** A scratch harness ran
+`nextQuietHoursEnd` over **53,372 deferral instants** — 9 timezones including half-hour and
+45-minute offsets and Lord Howe's 30-minute DST, 6 window shapes, 40 days spanning both DST
+transitions — asserting that the returned instant is never itself inside quiet hours, never in the
+past, and never null while inside. **All three bug classes: zero.** The only outliers were 7 waits
+longer than 24 hours, every one a 23h59m quiet window on a 25-hour fall-back day, which is the
+correct answer rather than a defect.
+
+**Digest pushes are opt-in and need no new column.** `devices.notify_digests` already defaults to
+`false` and already has a Settings toggle, so a digest notification reaches only devices where the
+user turned Digests on — which matches `ARCHITECTURE.md`'s routing table exactly.
+
+The dedupe key is `mail-digest:${digestDate}:${timezone}`. The date is load-bearing:
+`notification_dispatch_log.dedupe_key` is a permanent primary key with no TTL and no cleanup job, so
+a key without a per-occurrence discriminator burns itself on its first success and the digest can
+never notify again — the defect the pre-existing `calendar-needs-reauth` producer has. The push body
+is a fixed literal plus the date and carries **no** subject, sender, address or URL (ADR-054): the
+digest text is model prose derived from attacker-authored subject lines, and a push renders on a
+lock screen.
+
+#### Two decisions worth recording because the obvious choice was wrong
+
+**The digest read takes no `tz`.** A digest's identity is `(digest_date, timezone)` where the zone is
+the *worker's* configuration, for the reason `resolveDigestTimezone` records: a cron has nobody to
+ask. A client passing its own zone against a server configured for UTC — the default — would find no
+row and see an empty digest forever while one sat in the table, generated an hour earlier under a
+different key. The route returns the digest the server actually has, and the row carries its own
+date and zone so the card can say what it covers.
+
+**`POST /mail-digests` enqueues and returns 202; it does not generate.** The Daily Brief generates
+synchronously in the API, but the digest pipeline lives in `apps/worker` and the API must never
+import from it. So the manual path enqueues the same job the cron enqueues — and a 202 means the
+work was accepted, **never** that a digest exists, which the card's copy says in as many words. What
+keeps that honest is that every synchronously-decidable precondition is checked first, in
+most-fundamental-first order: telling someone "no AI provider" when the real problem is that no
+mailbox is connected sends them to configure the wrong thing.
+
+#### The acknowledge route exists because the naive one would be wrong
+
+`acknowledgeIncident` is idempotent **by exclusion** — its WHERE carries `ne(status,
+"acknowledged")` and `isNull(resolvedAt)` — so it returns `undefined` for three genuinely different
+situations: the incident does not exist, it is already acknowledged, or it already resolved. Mapping
+all three to 404 would 404 on a double-tap of a button that had just succeeded, which is the most
+likely thing a user does. The row is read first, an already-resolved incident gets its own `409
+incident_already_resolved`, and a repeat acknowledge succeeds with the original timestamp preserved.
+
+Acknowledgement is presented as what it is: the confirmation says the target stays marked down until
+it recovers on its own. Treating an Ack button as "make it go away" is how an outage stops being
+tracked while it is still happening.
+
+#### Two real defects, both found by a test rather than by review
+
+1. **`nextQuietHoursEnd` skipped a calendar date across a spring-forward.** The first version
+   advanced to "tomorrow" by adding 24 hours of elapsed time. From 23:00 on the day before a
+   spring-forward that lands at 00:00 the day *after* the intended one, because the intervening local
+   day is only 23 hours long. It now advances by calendar date and resolves back through the zone, so
+   a 06:00 boundary stays 06:00 local whether the day is 23, 24 or 25 hours.
+2. **`resolveMonitorTargetState` read `Date.now()` internally**, making a pure module
+   non-deterministic and its mute-expiry boundary untestable — the test failed against the real
+   clock. `now` is injected, matching `describeLastCheck` beside it and every dated helper in
+   `packages/core`.
+
+A third, smaller correction is worth recording because of *how* it was missed: several
+`resolveMonitorTargetState` call sites in the test file still passed one argument after that change,
+and **vitest was green** — vitest does not typecheck. `tsc` caught it. The gate is the gate.
+
+#### An adversarial audit, its findings, and what it could not finish
+
+Six independent read-only lenses were run over the 7.6 diff, each followed by a
+skeptic whose job was to REFUTE its findings. **The verification half never
+ran** — three of the six lenses and every one of the skeptics died on a session
+usage limit. So the workflow's `confirmed: []` is **not** evidence of
+correctness; it is evidence that nothing was verified. The three lanes that did
+finish (bundle safety, honesty, interaction) returned **eleven candidate
+findings**, which the integrator then verified by hand rather than trusting or
+dismissing.
+
+**Eight were real and are fixed** (see the `fix(mobile)` commit). The most
+consequential was not a 7.6 defect at all:
+
+> **`Alert.alert` is an empty no-op on react-native-web.** The installed
+> `react-native-web@0.21.2` ships `class Alert { static alert() {} }`. It accepts
+> the arguments and does nothing, so the confirm callback never fires and the
+> guarded action silently does not happen. On the web target such a button is not
+> "unconfirmed" — it is **inert**.
+>
+> This app ships web, and there are **thirteen** `Alert.alert` call sites.
+> Checkpoint 7.6 added two of them and routes both through a new
+> `confirmDestructive` helper. **The other eleven are pre-existing and are NOT
+> fixed here**: Settings' Revoke, both calendar Disconnects, Forget-this-device,
+> the four Archive gates Checkpoint 6.5 added, the quick-add discard and the
+> exact-alarm prompt. Rewriting eleven call sites across seven files is a
+> cross-cutting change and this checkpoint is scoped to mail and monitoring, so
+> the finding is recorded rather than half-fixed. **It is carried into 7.7.**
+
+The other seven, each with a concrete failure: an open incident rendered as
+neutral maintenance copy on the screen a user opens to find outages; "Checks are
+still running" claimed for a muted target that is not probed at all; "In a
+maintenance window" asserted from any stale skip row, including one left by an
+expired mute; "No incidents have been recorded" rendered while the query was
+still loading; the mail card's headline taken from `connections[0]`, so the
+oldest mailbox spoke for a card that might also contain a broken one;
+acknowledge failures completely silent; and the digest's "generating" state
+lasting only the HTTP round trip, because `isPending` ends at the 202 rather than
+when the worker finishes.
+
+**Three were judged not defects** and are recorded rather than actioned: the
+digest `unavailable` state having no action (fixed anyway — it was a dead end),
+and two overlapping reports of the same `connections[0]` problem.
+
+#### Verification actually run
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Full gate | build **11/11** · typecheck **21/21** · `eslint .` **0 errors, 0 warnings** · `prettier --check .` clean · `git diff --check` clean |
+| 2 | Full suite, **uncached and serial** | **2987 tests / 21 turbo tasks** (2748 → **+239**), 0 of 21 cached, zero failing |
+| 3 | No package decreased | core 366→**375** · schema 235→**255** · monitoring 109→**128** · api-client 103→**121** · api 569→**603** · worker 388→**409** · mobile 376→**494** · db 79 · mail-providers 113 · health-providers 311 · ai-providers 25 |
+| 4 | Zero-drift canary | `calendar-providers` **74**, held exactly |
+| 5 | Migration invariant | **16 `.sql` / 16 journal entries**, highest `0015_service_monitoring`, **no `0016`**; `packages/db` diff vs `986521d` **empty** |
+| 6 | Bundle safety | `expo export --platform web` clean, exactly one `index.html`; `node:tls`, `monitor_checks`, `monitor_targets`, `probeHttp`, `probeTls`, `connectForTlsCertificate`, `gmail.googleapis.com`, `sanitizeDigestText`, `mail_digests`, `drizzle-orm`, `pg-boss` and **"worker healthy"** all **absent**; `apps/mobile` still declares exactly three `@personal-os/*` deps |
+| 7 | Quiet-hours deferral | **53,372 instants**, 9 zones, 6 window shapes, both DST transitions: **0** still-inside, **0** in-the-past, **0** null-while-inside |
+| 8 | Router untouched | `apps/worker/src/jobs/notifications-dispatch.ts` byte-unchanged; queue-parity **6/6**; no new category, no `devices` column |
+| 9 | Forbidden-area drift | **zero** across `apps/api/src/brief`, `apps/worker/src/{health,monitor}`, `packages/{health,calendar,mail}-providers`, `packages/core/src/recurrence`, all three compose files, `eas.json`, `app.config.ts` |
+| 10 | Routes hygiene | no test file under `apps/mobile/src/app`; guard test green |
+| 11 | Health invariants | `health_observations` **0** in dev and test |
+| 12 | Monitor / digest state | all three `monitor_*` tables **empty** in every database; `mail_digests` **empty** — **no digest has ever been generated** |
+| 13 | Secret scans | `gitleaks git` **218 commits, no leaks** |
+| 14 | Dependencies | **zero new packages**; `pnpm-lock.yaml` unchanged |
+| 15 | Expo SDK | `expo-linking`'s SDK 57 `openURL` signature checked against the versioned docs, per `apps/mobile/AGENTS.md` |
+
+#### Deliberately NOT done, and one rough edge recorded
+
+No migration, no `0016`. No production access, no deployment. No live Gmail call and **no digest
+generated** — the pipeline still has no `mail_digest` AI route registered anywhere. No monitor target
+seeded: `monitor:seed` is an operator action, not a deployment side effect, and the two tailnet
+targets remain opt-in because worker-to-Tailscale reachability is still **UNVERIFIED** (ADR-055).
+No hardening or adversarial-testing pass (7.7's). No Microsoft Graph. No new mail capability — in
+particular no "sync now" control, which the brief did not ask for. No merge to `main`, no push.
+
+**Two rough edges, recorded rather than hidden.** First, `Alert.alert` is inert on web at eleven
+pre-existing call sites (above) — the two this checkpoint added are fixed, the rest are 7.7's.
+Second, the Gmail OAuth callback answers with a plain JSON
+confirmation instead of redirecting back into the app, so a user who taps Connect completes consent
+and lands on a raw JSON body in their browser. The connection *is* created and the card's copy says
+exactly what to do ("Approve access in the browser, then come back and tap Refresh"), but it is an
+unpolished ending to the most important flow on the card. Closing it means either an HTML response or
+a deep-link redirect from the callback, which is a route change rather than a UI one.
 
 ### Checkpoint 7.5 — Service monitoring engine, migration `0015` (COMPLETE, local only, 2026-08-31)
 
@@ -5086,8 +5304,43 @@ Pre-reboot state recorded (container IDs/images/start times, `unless-stopped` po
 
 ## Current work
 
-**Phase 7 Checkpoints 7.0 through 7.5 are complete. Work has stopped at the 7.5 boundary, as
-planned. Checkpoint 7.6 has not begun.**
+**Phase 7 Checkpoints 7.0 through 7.6 are complete. Work has stopped at the 7.6 boundary, as
+planned. Checkpoint 7.7 has not begun.**
+
+7.6 built the user-facing surfaces: a Settings mail card, a Settings monitoring summary, a
+`/monitor` screen, ONE new Today card for the mail digest, and the digest notification. Five API
+routes, five api-client methods, six pure mobile modules. **No new tab, no new notification
+category, no new device column, no new dependency, no migration.**
+
+**Nothing has been monitored and no digest has been generated.** All three `monitor_*` tables and
+`mail_digests` are empty everywhere. **2987 tests, +239, no package decreased,
+`calendar-providers` held at 74.**
+
+Three things are worth carrying forward. **The UI does not claim more than the backend proves** — a
+never-checked target reads "No check has run yet" rather than up, an unseeded deployment reads "No
+services are being monitored yet" rather than a clean bill of health, there is no uptime percentage,
+and the heartbeat says **"Heartbeat received"** and never "worker healthy", which a test enforces by
+asserting the word *healthy* is absent from every heartbeat state. **Quiet hours now delay the digest
+notification rather than dropping it forever** — the fix is pg-boss `startAfter`, so
+`notifications-dispatch.ts` is byte-untouched and its own check becomes a safety net. And **no
+provider text reaches a screen**: `last_sync_error` arrives as a closed enum and is mapped to words,
+never interpolated.
+
+The no-loop property of the deferral was proven exhaustively rather than argued: **53,372 deferral
+instants** across 9 timezones, 6 window shapes and both DST transitions, with **zero** instants that
+were still inside quiet hours, in the past, or null-while-inside.
+
+Two real defects were found by tests rather than by review: `nextQuietHoursEnd` skipped a calendar
+date across a spring-forward because it added 24 hours of elapsed time to a 23-hour day, and
+`resolveMonitorTargetState` read `Date.now()` internally, which made a pure module
+non-deterministic. A third correction is worth recording for how it was missed — several updated
+call sites still passed one argument and **vitest was green, because vitest does not typecheck**;
+`tsc` caught it.
+
+**The historical 7.0–7.5 record below is retained verbatim and was not rewritten.**
+
+---
+
 
 7.5 built the service-monitoring engine: migration `0015`, a new server-only `packages/monitoring`
 holding the shared incident state machine, a worker cron sweeping every `http` target, and the
@@ -5398,6 +5651,41 @@ unchanged. `versionCode` **6**. Migrations 14 / 14. `health_observations` **0**.
 
 ## Last verification
 
+**Phase 7 Checkpoint 7.6 — UI + notification integration (2026-09-01).** Branch
+`phase-7-mail-monitoring`, six commits from `986521d`; clean tree; not merged to `main`; no remote.
+
+Full gate, integrator-run: build **11/11** · typecheck **21/21** · `eslint .` **0 errors, 0
+warnings** · `prettier --check .` clean · `git diff --check` clean · `expo export --platform web`
+clean with exactly one `index.html`.
+
+Full suite, **uncached and serial** (0 of 21 cached): **2987 tests across 21 turbo tasks**
+(2748 → **+239**), zero failing. Per package — core **375** · db 79 · schema **255** ·
+**monitoring 128** · mail-providers 113 · **calendar-providers 74** · health-providers 311 ·
+ai-providers 25 · api-client **121** · api **603** · worker **409** · mobile **494**. **No package
+decreased.** The `calendar-providers` canary held at exactly **74**.
+
+Migrations **16 `.sql` / 16 journal entries**, highest `0015_service_monitoring`, **no `0016`**;
+`packages/db` diff vs `986521d` **empty**. Zero new dependencies; `pnpm-lock.yaml` unchanged, and
+`apps/mobile` still declares exactly three `@personal-os/*` deps.
+
+Bundle safety: `node:tls`, `monitor_checks`, `monitor_targets`, `probeHttp`, `probeTls`,
+`connectForTlsCertificate`, `gmail.googleapis.com`, `sanitizeDigestText`, `mail_digests`,
+`drizzle-orm`, `pg-boss` and the phrase **"worker healthy"** are all **absent** from the web export.
+
+Quiet-hours deferral proven over **53,372 instants** (9 zones, 6 window shapes, both DST
+transitions): **0** still-inside, **0** in-the-past, **0** null-while-inside.
+`notifications-dispatch.ts` byte-unchanged; queue-parity **6/6**.
+
+`gitleaks git` **218 commits, no leaks**. `health_observations` **0** in dev and test. All three
+`monitor_*` tables **empty in every database** and `mail_digests` **empty** — **no target has ever
+been seeded, no probe has run against a real endpoint, and no digest has ever been generated**.
+Forbidden-area drift **zero**.
+
+*Previous verification — Phase 7 Checkpoint 7.5 (2026-08-31): 2748 tests across 21 turbo tasks,
+calendar-providers 74, worker 388, api 569, mobile 376, 16 migrations.*
+
+## Superseded verification (Checkpoint 7.5)
+
 **Phase 7 Checkpoint 7.5 — service monitoring engine, migration `0015` (2026-08-31).** Branch
 `phase-7-mail-monitoring`, HEAD `ba68e42` after five commits from `db1cdc5`; clean tree; not merged to
 `main`; no remote.
@@ -5684,6 +5972,17 @@ approval.**
 *(This section was stale through 7.3 and 7.4 — it still described 7.2/7.2P as the frontier. Corrected
 here; the 7.2P findings it carried are preserved below because 7.3 was written against them and they
 remain the operative provider facts.)*
+
+**Carried INTO 7.7 by Checkpoint 7.6's audit:**
+
+- **`Alert.alert` is an empty no-op on react-native-web**, so ELEVEN pre-existing confirmation
+  dialogs are inert on the web target — the destructive action silently does not happen. 7.6 fixed
+  the two it added via `confirmDestructive`; the rest (Settings' Revoke, both calendar Disconnects,
+  Forget-this-device, the four 6.5 Archive gates, the quick-add discard, the exact-alarm prompt)
+  are untouched and should be swept in 7.7.
+- **The Gmail OAuth callback answers with JSON rather than returning to the app**, so Connect ends
+  on a raw JSON body in the browser. The connection IS created and the card says what to do, but
+  closing it properly means an HTML response or a deep-link redirect — a route change, not a UI one.
 
 **What 7.6 inherits from 7.5, and must not undo:**
 
