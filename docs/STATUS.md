@@ -96,7 +96,55 @@ ADR-046 are explicitly preserved unchanged.
 
 **Lane B — documentation / context compaction (COMPLETE).** See *Context compaction* below.
 
-**Lane C — ADR / ledger reconciliation (IN PROGRESS).**
+**Lane C — ADR / ledger reconciliation (COMPLETE).** An independent read-only audit checked every
+ADR making a verifiable claim about the *current* system. Three inaccuracies were suspected; **eight
+were found**. `ADR-057` records all eight with evidence, and each affected ADR now carries an inline
+`**[Present state corrected by ADR-057.]**` pointer. **No decision was reversed and no historical
+rationale was rewritten** — editing a Locked cell's text would itself be a change to a Locked
+decision, so the originals stand and the correction lives beside them.
+
+| # | ADR | Claim | Reality |
+|---|---|---|---|
+| 1 | ADR-047 | "only operational metadata (`health_sync_runs`, expired OAuth states) is swept" | **Neither is swept.** Both sweep functions exist, are exported, and have **zero production callers**. OAuth states are *consumed*, never deleted, so both state tables grow monotonically. The one deletion that *does* run — the hourly orphan-audio file sweep — is not named by the clause. ADR-047's health-data prohibition is unaffected and stands. |
+| 2 | ADR-054 | a mail prune is "permitted and required", window "recorded in `docs/STATUS.md`" | **No prune, no queue, no cron, no window, nothing recorded.** The decision stands; the present state does not match it. |
+| 3 | ADR-054 | email is "the first attacker-authored input to reach the AI layer" | **False as capability, true as occurrence.** Calendar `title`/`description`/`location` arrive verbatim from Google and CalDAV, are stored **unbounded** (no Zod `.max()`, no truncation at write), and reach the Brief prompt — a path shipped at Checkpoint 5.5, a week before ADR-054 was written. It has **never been exercised**: `events` is 0 and only an empty test calendar is sync-enabled. |
+| 4 | ADR-055 | alert dedupe keys are "incident-scoped" | **True for the 3 monitoring producers, false for both integration producers.** See below — one of them is a live, currently-armed silent failure. |
+| 5 | ADR-034 | Firebase/FCM and Groq are "local development only. Production has neither" | **Stale since Phase 3 Checkpoint 6.** Both are provisioned in production. |
+| 6 | ADR-055 | worker-to-Tailscale reachability "must be proven in Checkpoint 7.5" | **Not proven in 7.5; proven in 7.7** from inside the running production worker. |
+| 7 | ADR-051 | "No second … project … exists or may be used" | **Superseded for Health only by ADR-051b**; `personal-os-health` is live. ADR-051's own text was never updated. |
+| 8 | ADR-052 | deployment gated on `2026-09-04T20:08:25Z` | **Waived by ADR-051a**; Phase 7 deployment completed at 7.8B. |
+
+#### ⚠️ A live, currently-armed silent failure found by this lane
+
+Finding 4 is not only a documentation defect. There are five `category: "alert"` producers. The
+three monitoring ones are correctly incident-scoped. The two integration ones are not:
+
+- `calendar-needs-reauth:<connectionId>` (`apps/worker/src/jobs/calendar-refresh-token.ts:144`) —
+  **no discriminator at all.** Already burned on 2026-08-25, which is why the 2026-08-31 calendar
+  failure notified nobody. Known.
+- `health-sync-alert:<connectionId>:<reason>` (`apps/worker/src/health/orchestrate.ts:819`) —
+  **newly identified at Checkpoint 8.0.** Scoped only by a failure class from the closed set
+  `breaker:<metric>`, `auth_permanent`, `all_streams_failed`. Against a permanent PRIMARY KEY with
+  no TTL, written with `onConflictDoNothing`, each connection-plus-reason pair burns permanently on
+  first use. That key **was dispatched and accepted for `auth_permanent` on 2026-09-01**, and
+  ADR-051b records that the recovery **rebound the same connection row with `created_at`
+  preserved** — so the connection id is unchanged and **the next `auth_permanent` failure on the
+  production Health connection will alert nobody.**
+
+Earlier records framed Health as the *safe counter-example* to Calendar. That is accurate only about
+the first occurrence. **Both keys need re-arming, and that is Checkpoint 8.1 work.**
+
+#### Deferred by this lane — nothing was implemented to satisfy any correction
+
+| Item | State | Assigned to |
+|---|---|---|
+| Re-arm the Calendar and Health alert dedupe keys | Not implemented; both burned | **8.1** |
+| Clean up the obsolete burned `notification_dispatch_log` rows | Not done; **deliberately not done in 8.0** | After 8.1 deploys corrected producers and new occurrence-scoped keys are verified, then **owner-approved** |
+| Backport the output filter, corrected prompt premise and bounded event text to the Brief lane | Not implemented | **8.1** — and a precondition for **8.2** |
+| Wire the two OAuth-state sweep functions (or delete them) | Not implemented; dead exported code | Later checkpoint, with retention |
+| Mail prune job and its window | Not implemented; window unset | Later checkpoint; **window is an owner decision** (ADR-024 makes deletion irreversible) |
+
+Wiring any of these in 8.0 would have been implementing missing jobs, which this checkpoint forbids.
 
 **Lane D — source durability (IN PROGRESS).**
 
