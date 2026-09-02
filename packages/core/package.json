@@ -10,7 +10,8 @@
     "./timezone": "./dist/timezone.js",
     "./recurrence/editor": "./dist/recurrence/editor.js",
     "./health/*": "./dist/health/*.js",
-    "./mail/*": "./dist/mail/*.js"
+    "./mail/*": "./dist/mail/*.js",
+    "./ai/*": "./dist/ai/*.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

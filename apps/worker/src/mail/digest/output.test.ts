@@ -66,14 +66,31 @@ describe("sanitizeDigestText: link-shaped content", () => {
     expect(containsLinkShapedContent(result.text)).toBe(false);
   });
 
-  it("leaves a bare domain with no scheme and no path -- the STATED residual", () => {
-    // Not an oversight. A bare domain is not clickable as plain text, and the
-    // false-positive rate of stripping it from ordinary prose is real. The
-    // residual is narrow by construction: the input carries no domain, so
-    // nothing legitimate should produce one.
+  it("REMOVES a bare domain -- the residual this test used to pin as accepted", () => {
+    // INVERTED AT CHECKPOINT 8.1, and the inversion is the point. This test
+    // previously asserted that a bare domain SURVIVED, on the reasoning that
+    // "the residual is narrow by construction: the input carries no domain, so
+    // nothing legitimate should produce one".
+    //
+    // Production falsified that on 2026-09-02: `from_display_name` is in the
+    // model's input allowlist and a sender can simply make it a domain, so the
+    // scheduled digest emitted one. The premise was false, which means the test
+    // was pinning a defect rather than a decision.
     const result = sanitizeDigestText("Three messages arrived from github.com today.");
-    expect(result.text).toContain("github.com");
-    expect(result.linksRemoved).toBe(0);
+    expect(result.text).not.toContain("github.com");
+    expect(result.linksRemoved).toBe(1);
+    expect(containsLinkShapedContent(result.text)).toBe(false);
+  });
+
+  it("removes an echoed domain whose suffix the syntactic layer excludes", () => {
+    // The exact production shape: the display name IS the domain, and its
+    // suffix (`.it`) is one the syntactic layer deliberately excludes because
+    // it is also an English word. Provenance is what closes it.
+    const untrusted = ["notify.it"];
+    expect(sanitizeDigestText("A message from notify.it arrived.").text).toContain("notify.it");
+    const result = sanitizeDigestText("A message from notify.it arrived.", untrusted);
+    expect(result.text).not.toContain("notify.it");
+    expect(containsLinkShapedContent(result.text, untrusted)).toBe(false);
   });
 
   it("leaves ordinary prose completely alone", () => {

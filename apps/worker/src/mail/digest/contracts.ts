@@ -198,3 +198,36 @@ export class MailDigestFailedError extends Error {
     this.name = "MailDigestFailedError";
   }
 }
+
+// ---------------------------------------------------------------------------
+// Provenance
+// ---------------------------------------------------------------------------
+
+/**
+ * Every attacker-authored string this payload carries.
+ *
+ * This is the provenance half of the shared output filter's bare-domain defence
+ * (layer 2 in `@personal-os/core/ai/output-safety`): the filter removes a
+ * host-shaped token from the model's OUTPUT when that token echoes one of these
+ * values, whatever public suffix it carries.
+ *
+ * IT LIVES HERE, NEXT TO THE TYPE, ON PURPOSE. ADR-054's claim that exactly two
+ * fields are attacker-chosen is a property of `MailDigestInput`'s shape, so the
+ * list of those fields belongs with the shape rather than in the generator. If a
+ * future field carries sender-authored text, the type and this function change
+ * together in one diff, and the reviewer sees both.
+ *
+ * `senders[].display_name` is the same untrusted class as
+ * `highlights[].from_display_name` -- both are the `From` header's phrase.
+ */
+export function collectUntrustedDigestInputs(input: MailDigestInput): string[] {
+  const values: string[] = [];
+  for (const sender of input.senders.items) {
+    if (sender.display_name !== null) values.push(sender.display_name);
+  }
+  for (const message of input.highlights.items) {
+    if (message.subject !== null) values.push(message.subject);
+    if (message.from_display_name !== null) values.push(message.from_display_name);
+  }
+  return values;
+}
