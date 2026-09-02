@@ -15,9 +15,13 @@ web-build/
 apps/mobile/.expo/
 
 # Environment
+# `.env` alone leaves `.env.production`, `.env.backup`, `.env.pre-<checkpoint>` and every other
+# suffixed form fully visible to `git add -A`. Checkpoint 7.2 created exactly such a file
+# (`.env.pre-7.2`, a plaintext copy of every secret) and deleted it manually afterwards. That gap
+# costs nothing while there is no remote; adding a remote is precisely the event that arms it.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Logs
 *.log

@@ -146,7 +146,43 @@ the first occurrence. **Both keys need re-arming, and that is Checkpoint 8.1 wor
 
 Wiring any of these in 8.0 would have been implementing missing jobs, which this checkpoint forbids.
 
-**Lane D — source durability (IN PROGRESS).**
+**Lane D — source durability (PREPARED; owner action required).** Design and prerequisites are
+complete in **`docs/SOURCE-DURABILITY.md`**; the actions that would actually create a second copy
+are owner-only and were **not** performed.
+
+The risk, measured first-hand: **zero git remotes**, **no CI** (`.github/` does not exist), 244
+commits, and the commit production is serving (`a5bbc48`) is contained by **exactly one branch**
+(`phase-7-mail-monitoring`, 57 ahead of `main`) on **one external USB SSD**. Production holds no
+second copy — releases ship as `git archive` of tracked files, which by design contains no `.git`,
+so the host has a flat file tree of that commit and not the commit itself.
+
+**Closed in this checkpoint (agent-doable, and it had to precede any remote):** `.gitignore`
+line 18 was literally `.env`, which left `.env.production`, `.env.backup` and
+`.env.pre-<checkpoint>` **fully visible to `git add -A`** — and Checkpoint 7.2 created exactly such
+a file, a plaintext copy of every secret, and deleted it by hand afterwards. Both root and
+`apps/mobile` ignore files now cover `.env.*` with `!.env.example`, proven by `git check-ignore`
+before and after, with both example files confirmed still tracked. Without a remote such a mistake
+is local and removable; **with one it is published permanently and forces credential rotation**, so
+this gap had to close first. Separately, `apps/mobile/.env` — which holds an `EXPO_TOKEN` absent
+from its `.env.example` — was mode 644 while the root `.env` was 600; it is now 600.
+
+**The sharpest durability risk is not the repository.** `CREDENTIALS_ENCRYPTION_KEY` protects every
+stored OAuth credential across four tables and five integrations, with **no key version, no KDF and
+no rotation path anywhere in the codebase**, and it exists on exactly two hosts. Losing the drive
+costs history; losing that key makes every stored credential permanently undecryptable and forces
+re-consenting three Google integrations across two Cloud projects.
+
+**Verified while assessing a hosted remote:** `gitleaks git --log-opts=--all` scans all 244 commits
+clean — no credential, keystore or `google-services.json` has ever been committed on any branch.
+The open question for a hosted remote is therefore **disclosure, not secrets**: `docs/history/` now
+carries the full operational record, which collectively maps the tailnet, the production host
+account and the Google project. That is an owner judgement call and is documented rather than
+decided.
+
+**ADR-024 and ADR-018 are both untouched.** ADR-024 governs a *database backup system*; a git
+remote replicates already-plaintext source, and an encrypted config file is provisioning material.
+ADR-018 governs *ingress to the production host*; `git push` is egress from a development machine.
+Neither option opens a port or adds a listener.
 
 ### Context compaction — measured before and after
 
