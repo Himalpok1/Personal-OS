@@ -1,8 +1,55 @@
 # Source durability — design and owner actions
 
-> **Status: DESIGN ONLY. Not executed.** Checkpoint 8.0 prepared this; every step that would
-> actually create a second copy requires the owner. No secret value was read, printed, or handled
-> by an agent while producing this document.
+> **Status: PARTIALLY EXECUTED (2026-09-02).** Option A — a **private** hosted remote — was chosen
+> by the owner and is **DONE**. Option 2, the encrypted configuration copy, is **still open and is
+> now the sharpest remaining risk.** No secret value was read, printed, or handled by an agent at
+> any point, before or during execution.
+
+## Executed — Option A, private hosted remote (2026-09-02)
+
+The owner closed the hosted-remote question and approved a **private** GitHub repository.
+
+| | |
+|---|---|
+| `origin` | `https://github.com/Himalpok1/Personal-OS` |
+| Visibility | **PRIVATE**, verified via the GitHub API immediately before *and* after the push |
+| Refs pushed | `main` (`8b7a9eb`) and `phase-8-consolidation` (`907cae3`) — nothing else |
+| Tags pushed | **none** |
+| Access | owner only · 0 repository secrets · Pages not configured |
+| Actions | default-on at the repo setting, but **no workflow file exists in any of the 249 commits**, so nothing can execute. Not enabled, not configured, not used. |
+
+**Verified after the push rather than inferred from its exit code:** remote **commit hash and tree
+hash both match local exactly** on both branches; the remote commit count for
+`phase-8-consolidation` read back from the GitHub API (217) equals `git rev-list --count`;
+`git ls-remote` returns exactly two refs and no tags; the working tree is clean.
+
+**Pre-push secret audit.** `gitleaks` with no custom config (so no allowlist could suppress a
+finding): **249 commits across all refs, no leaks, exit 0**; scoped to the pushed refs, 240 commits,
+no leaks. Corroborated independently rather than trusted: all **836** distinct paths that have ever
+existed were enumerated, and the only secret-shaped filenames ever committed are the two intentional
+`.env.example` files, both containing only `changeme_*` placeholders. A raw-content scan of every
+blob reachable from the pushed refs found **zero** real credential values. The `.env.pre-7.2` file
+Checkpoint 7.2 created — a plaintext copy of every secret — was stageable at the time but **was
+never staged**, confirmed across all 249 commits.
+
+**Ignore hardening committed first** (`907cae3`), on Checkpoint 8.0's own reasoning that a gap
+"costs nothing while there is no remote; adding a remote is precisely the event that arms it":
+key material and signing artifacts (`*.keystore`, `*.jks`, `*.p12`, `*.pfx`, `*.pem`, `*.p8`,
+`key.txt`, `*.agekey`, `secrets/`), SSH keys and credential JSON, and nested `.claude/` directories.
+Note the first of these matters directly for step 2 below — `*.age` covered age-*encrypted* files,
+but an age **private** key is conventionally `key.txt` or `*.agekey` and was uncovered, which is
+exactly the artifact the SOPS + age step produces.
+
+**Branches deliberately not pushed.** Eleven of thirteen have zero commits not already reachable
+from `phase-8-consolidation`. The two that do — `phase-6-audit-hardening` (19) and
+`phase-6-production-readiness-6-7a` (9) — are pre-linearization originals whose trees are
+*byte-identical* to commits that ARE in the push set, so their content is fully retrievable from the
+pushed history; only pre-linearization commit topology is unreplicated. The sole tag
+`cp77-pre-linearize` is tree-identical to a pushed commit while being reachable from no branch, so
+pushing it would add 5 dead commits and restore a known-broken bisect point.
+
+**Option B (bare repo on the production host) remains available and is not superseded** — it is an
+additional copy, not a substitute for the off-site private remote.
 
 ## The risk, measured
 
@@ -105,7 +152,7 @@ strictly weaker B.
 Everything below requires the owner. An agent must not create accounts, generate private keys, or
 read secret values.
 
-### 1. Second copy of history — pick B, or A, or both
+### 1. Second copy of history — pick B, or A, or both · **DONE via A on 2026-09-02; B still optional**
 
 **Option B**, on the production host over Tailscale (adjust the path; keep it outside the deploy
 tree):
@@ -133,7 +180,7 @@ git bundle create "/Volumes/<second-disk>/personal-os-$(date +%Y%m%d).bundle" --
 git bundle verify "/Volumes/<second-disk>/personal-os-$(date +%Y%m%d).bundle"
 ```
 
-### 2. Encrypted configuration copy — design, and why it is not yet executable
+### 2. Encrypted configuration copy — **STILL OPEN, and now the sharpest remaining risk**
 
 Neither `sops` nor `age` is installed on this machine, and no age key exists. The design:
 
