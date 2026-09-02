@@ -13,6 +13,7 @@
 // never disagree about "now".
 
 import { captureEffectiveNow, truncateField } from "@personal-os/core";
+import { stripUnsummarizableCharacters } from "@personal-os/core/mail/provider-strings";
 import type { Db } from "@personal-os/db";
 import type {
   TodayEventItem,
@@ -42,8 +43,26 @@ import {
   type BriefUpcomingItem,
 } from "./contracts.js";
 
+/**
+ * Bound a free-text field for the prompt, stripping rendering-control
+ * characters first.
+ *
+ * CHECKPOINT 8.1 added the strip. Truncation alone bounds SIZE; it does nothing
+ * about a bidi override or a zero-width joiner, and calendar text is written by
+ * whoever created the invitation (ADR-057 finding #3). A right-to-left override
+ * inside an event title makes the stored snapshot render as something other than
+ * what it is, which defeats reading the payload to see what the model was told.
+ *
+ * Stripping BEFORE truncating is deliberate: control characters consume budget,
+ * so stripping afterwards would let an adversarial title spend its 120
+ * characters on invisible codepoints and push the real text out.
+ *
+ * `stripUnsummarizableCharacters` returns null only for null/undefined input,
+ * which cannot occur here.
+ */
 function truncated(value: string, maxChars: number): string {
-  return truncateField(value, maxChars).text;
+  const stripped = stripUnsummarizableCharacters(value) ?? "";
+  return truncateField(stripped, maxChars).text;
 }
 
 // recurring = the Today item carries a non-null rrule (the series template)

@@ -124,6 +124,18 @@ export const BRIEF_ATTEMPT_TIMEOUT_MS = 30_000;
 export const BRIEF_TOTAL_BUDGET_MS = 45_000;
 export const BRIEF_MAX_OUTPUT_TOKENS = 800;
 
+/**
+ * Hard ceiling on the PERSISTED brief text, applied by the shared output filter.
+ *
+ * The prompt asks for 120-220 words and `BRIEF_MAX_OUTPUT_TOKENS` bounds the
+ * model, but neither is a guarantee about what reaches the column -- a token cap
+ * is the provider's promise, not ours. Matches the mail digest's own ceiling for
+ * the same reason: a text column with no server-side bound is how an unbounded
+ * value gets stored, and the two lanes should not disagree about a number
+ * neither has a lane-specific reason to differ on.
+ */
+export const BRIEF_MAX_TEXT_CHARS = 4000;
+
 // ---------------------------------------------------------------------------
 // Error taxonomy
 // ---------------------------------------------------------------------------
@@ -157,3 +169,37 @@ export class BriefGenerationFailedError extends Error {
 // ai_task_routes.task_name this feature routes through. Not configured in
 // production during Checkpoint 5.5 -- that is 5.7.
 export const DAILY_BRIEF_TASK_NAME = "daily_brief";
+
+// ---------------------------------------------------------------------------
+// Provenance
+// ---------------------------------------------------------------------------
+
+/**
+ * Every externally-authored string this payload can carry.
+ *
+ * ADR-057 finding #3: calendar event text is written by WHOEVER CREATED THE
+ * EVENT, which for an invited meeting is a third party, and it has had an
+ * unfiltered path into this prompt since Checkpoint 5.5. `event.summary` and
+ * `location` arrive verbatim from Google and CalDAV and are stored in plain
+ * `text` columns with no `.max()` and no truncation at write.
+ *
+ * Tasks, notes, projects and inbox snippets are the user's OWN capture and are
+ * first-party. They are deliberately excluded: provenance-based filtering only
+ * removes host-shaped echoes, so including them would buy nothing and would
+ * blur the distinction this function exists to record.
+ *
+ * `upcoming` is a mixed list; only its `kind === "event"` members are calendar-
+ * derived. Including a task title here would be harmless but wrong, and the
+ * next reader deserves the honest boundary.
+ */
+export function collectUntrustedBriefInputs(input: BriefInput): string[] {
+  const values: string[] = [];
+  for (const event of input.events_today.items) {
+    values.push(event.title);
+    if (event.location !== null) values.push(event.location);
+  }
+  for (const item of input.upcoming.items) {
+    if (item.kind === "event") values.push(item.title);
+  }
+  return values;
+}

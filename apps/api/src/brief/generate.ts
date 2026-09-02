@@ -29,7 +29,9 @@ import {
   BriefGenerationTimeoutError,
   DAILY_BRIEF_TASK_NAME,
   type BriefInput,
+  collectUntrustedBriefInputs,
 } from "./contracts.js";
+import { containsLinkShapedContent, sanitizeBriefText } from "./output.js";
 import { buildBriefSystemPrompt, buildBriefUserPrompt } from "./prompt.js";
 
 export interface GeneratedBrief {
@@ -106,6 +108,11 @@ export async function generateDailyBrief(
 
   const systemPrompt = buildBriefSystemPrompt();
   const userPrompt = buildBriefUserPrompt(input);
+  // The externally-authored half of THIS payload, computed once and reused by
+  // both the filter and its post-condition so the two can never disagree about
+  // what was untrusted. See collectUntrustedBriefInputs for why calendar text
+  // is the only untrusted class here.
+  const untrustedInputs = collectUntrustedBriefInputs(input);
   const startedAt = performance.now();
 
   try {
@@ -137,11 +144,25 @@ export async function generateDailyBrief(
         abortSignal,
       });
 
-      const text = generated.text.trim();
+      // THE OUTPUT FILTER RUNS INSIDE THE ATTEMPT, before anything is
+      // returned, so no unfiltered text can reach a caller even transiently.
+      // Before Checkpoint 8.1 this was a bare `.trim()` and the Brief lane had
+      // no output constraint at all -- see output.ts for why that was a real
+      // gap rather than a theoretical one.
+      const sanitized = sanitizeBriefText(generated.text, untrustedInputs);
+      const text = sanitized.text;
       if (text.length === 0) {
         // An empty brief is a failure, not a success -- the frozen
         // no-overwrite invariant means this must never displace a good
         // cached brief with an empty one.
+        throw new BriefGenerationFailedError();
+      }
+
+      // Post-condition, asserted rather than assumed. If link-shaped content
+      // survives the filter, the filter has a hole, and a persisted brief
+      // carrying a live link is exactly what ADR-054's reasoning forbids -- so
+      // the brief is refused rather than stored with a warning nobody reads.
+      if (containsLinkShapedContent(text, untrustedInputs)) {
         throw new BriefGenerationFailedError();
       }
 
