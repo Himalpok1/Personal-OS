@@ -86,7 +86,7 @@ The API handles HTTP and nothing else. Anything slow, scheduled, retried, or ext
 | Dispatch push notifications | Enqueued + cron sweep |
 | Gmail polling and mail digests | Cron (Phase 7, ADR-052/053) |
 | Service monitoring: probes and incident lifecycle | Cron (Phase 7, ADR-055) |
-| Embedding generation | Enqueued on write (Phase 8) |
+| Embedding generation | **Deferred — not Phase 8 (ADR-056).** No embeddings layer is approved; revisit only if measured corpus size justifies it |
 
 **Rules for the split:**
 
@@ -608,7 +608,9 @@ Monitoring is worker-owned, with one exception: the **`worker_heartbeat` stalene
 
 Checkpoints 7.0–7.8; see `docs/STATUS.md` for the checkpoint record and ADRs 052–055 for locked decisions.
 
-**Phase 8 — AI layer.** Semantic search over everything (pgvector), chat with tool access to all modules, proactive surfacing. This is why inbox-first matters — by now everything is uniformly structured and queryable.
+**Phase 8 — Consolidation & adoption (redefined 2026-09-02, ADR-056).** The original Phase 8 entry — *"AI layer. Semantic search over everything (pgvector), chat with tool access to all modules, proactive surfacing"* — is **superseded**. It assumed that by Phase 8 everything would be "uniformly structured and queryable". Everything is indeed uniformly structured; almost nothing is in it. Measured at Checkpoint 8.0: production holds 2 tasks, 3 notes, 6 inbox items, 0 projects and 0 events, while health, mail, calendar and monitoring all sync daily — and the repository is eighteen days old, having skipped this document's own instruction to live on Phases 0–3 for a month by zero days.
+
+Phase 8 as approved: **make Personal OS a daily driver.** Make failures visible, reduce capture friction, make stored content findable, make project and source state durable, reduce agent context overhead, then run an instrumented adoption soak whose deliverable is evidence rather than a feature. **No semantic search, no embeddings, no retrieval layer and no write-capable agent** — read-only intelligence precedes write-capable intelligence, and at the observed corpus size the whole first-party corpus fits in a single model call. **pgvector is excluded from Phase 8 and the Postgres image stays frozen**; it is not permanently forbidden, but reconsidering it requires its own infrastructure ADR and explicit owner approval. Checkpoints 8.0–8.6; see `docs/STATUS.md` for the checkpoint record and ADR-056 for the locked decision.
 
 ---
 
