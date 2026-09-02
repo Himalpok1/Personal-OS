@@ -9,7 +9,8 @@ Both agents must follow:
 - `AGENTS.md`
 - `docs/ARCHITECTURE.md`
 - `docs/DECISIONS.md`
-- `docs/STATUS.md`
+- `docs/STATUS.md` — **present state only.** Closed-phase history is in `docs/history/phase-N.md`,
+  verbatim and not auto-loaded; open a phase file only when you need its detail.
 
 Claude additionally reads `CLAUDE.md`.
 
@@ -47,7 +48,7 @@ git branch --show-current
 git log --oneline -10
 ```
 
-Read `docs/STATUS.md`.
+Read `docs/STATUS.md` (present state). Consult `docs/history/` only if you need closed-phase detail.
 
 ### 2. Define scope
 

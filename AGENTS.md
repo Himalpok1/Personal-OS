@@ -9,10 +9,15 @@ Read these files in this order:
 1. `docs/ARCHITECTURE.md`
 2. `docs/DECISIONS.md`
 3. `docs/STATUS.md`
-4. `docs/PHASE-0-CHECKLIST.md`
-5. `docs/WORKFLOW.md`
+4. `docs/WORKFLOW.md`
 
 Do not begin implementation until you understand the locked decisions and current phase.
+
+**`docs/STATUS.md` is present state only.** As of Checkpoint 8.0 it no longer contains the
+checkpoint history — that lives in `docs/history/phase-0.md` … `phase-7.md`, verbatim and
+unaltered. Read a phase file only when you need the detail behind a completed checkpoint; do not
+load them by default. `docs/PHASE-0-CHECKLIST.md` is a closed Phase 0 artifact and is no longer
+required reading.
 
 ## Locked architecture
 
@@ -37,8 +42,8 @@ Do not silently replace or reinterpret these decisions.
 
 ## Repository layout
 
-This is the layout as it exists today, not a plan. Three packages were added after this section was
-first written and are listed here as of Checkpoint 7.0.
+This is the layout as it exists today, not a plan. Five packages were added after this section was
+first written and are listed here as of Checkpoint 8.0.
 
 ```text
 apps/
@@ -54,13 +59,18 @@ packages/
   ai-providers/        # Vercel AI SDK adapters + AES-256-GCM credential crypto (Phase 1)
   calendar-providers/  # Google Calendar + CalDAV clients (Phase 4)
   health-providers/    # Google Health catalog, OAuth, client, sync (Phase 6)
+  mail-providers/      # Gmail catalog, OAuth, metadata-only client (Phase 7)
+  monitoring/          # probes, thresholds, incident state machine (Phase 7)
 
 docs/
-  ARCHITECTURE.md
-  DECISIONS.md
-  STATUS.md
-  PHASE-0-CHECKLIST.md
+  ARCHITECTURE.md          # canonical architecture
+  DECISIONS.md             # ADR log
+  STATUS.md                # PRESENT STATE ONLY (see history/)
   WORKFLOW.md
+  PHASE-0-CHECKLIST.md     # closed Phase 0 artifact
+  history/                 # closed-phase records, verbatim, not auto-loaded
+    phase-0.md … phase-7.md
+    superseded-present-state.md
 ```
 
 `packages/db`, `packages/ai-providers`, `packages/calendar-providers` and `packages/health-providers`
@@ -109,7 +119,9 @@ Follow `docs/ARCHITECTURE.md` exactly:
 - One agent may implement while another reviews.
 - If asked only to review, do not edit files.
 - If architecture appears inconsistent, stop and report it instead of improvising a new architecture.
-- Update `docs/STATUS.md` after meaningful work.
+- Update `docs/STATUS.md` after meaningful work — it is **present state only**. Append the
+  checkpoint's own record there while the phase is open; closed-phase detail is archived to
+  `docs/history/` when the phase closes. Never edit a file under `docs/history/`.
 
 ## Verification before declaring work complete
 
@@ -130,8 +142,16 @@ The project is phase-gated.
 
 **`docs/STATUS.md` is the canonical statement of the current phase and of what is approved next. Read it before assuming scope.** This section states the rule; it does not track the phase number.
 
-As of Checkpoint 7.0 (2026-08-30): Phases 0–6 are complete and production-deployed. **Phase 7 — Email summaries + service monitoring — is approved and scoped by ADR-052**, and Checkpoint 7.0 (documentation only) is complete.
+As of Checkpoint 8.0 (2026-09-02): Phases 0–7 are complete and production-deployed at migration
+level 16. **Phase 8 — Consolidation & adoption — is approved and scoped by ADR-056**: make Personal
+OS a daily driver. It is explicitly **not** an AI capability phase — no semantic search, no
+embeddings, no retrieval layer, no write-capable agent, and no new external integration. Checkpoint
+8.0 (documentation, source durability and record maintenance only) is the current work.
 
-Do not start the next checkpoint until the current one is complete, verified, and explicitly approved. Checkpoints marked with a stop in `docs/STATUS.md` are hard gates.
+**Checkpoint 7.9 is still OPEN** and is a Phase 7 closure requirement. No Phase 8 runtime, API,
+worker or mobile deployment may occur before it is formally closed.
+
+Do not start the next checkpoint until the current one is complete, verified, and explicitly approved. Checkpoints marked with a stop are hard gates; for closed phases those markers are in the relevant
+`docs/history/phase-N.md`.
 
 If a task requires credentials, hardware access, Tailscale access, Google Cloud access, production access, or another user-only action, stop at the point where user input is needed and ask for it clearly.

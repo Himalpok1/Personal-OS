@@ -45,7 +45,8 @@ packages/
 docs/
   ARCHITECTURE.md
   DECISIONS.md
-  STATUS.md
+  STATUS.md            # present state only
+  history/             # closed-phase records, verbatim
   PHASE-0-CHECKLIST.md
   WORKFLOW.md
 ```
