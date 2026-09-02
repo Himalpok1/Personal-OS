@@ -3,9 +3,8 @@
 **Project:** Personal OS — single-user, self-hosted life dashboard.
 **Current phase:** **Phase 8 — Consolidation & adoption (ADR-056, approved 2026-09-02).** Checkpoint **8.0 — Foundation / Discovery Gate closure** is **COMPLETE**.
 **Phase 7 is CLOSED** — Checkpoint 7.9 completed 2026-09-02; its record is in `docs/history/phase-7.md`.
-**Next checkpoint allowed:** **8.1.** Its gate — the formal closure of Checkpoint 7.9 — is now
-discharged, so Phase 8 runtime work is unblocked. **8.1 has not begun and must not begin without
-explicit approval.**
+**Checkpoint 8.1 — Failure visibility + AI input/output hardening — is COMPLETE and DEPLOYED.**
+**Next checkpoint allowed:** **8.2**, on explicit approval only. It has not begun.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -39,14 +38,14 @@ what is true *now*, it is in this file.
 | | |
 |---|---|
 | Migration level | **16** (`0000`–`0015`); local and production agree |
-| Serving commit | `a5bbc48` — api/worker/web images built from it |
+| Serving commit | api/worker **`dc3983d`** (Checkpoint 8.1) · web `a5bbc48` |
 | Integrations | Google Health **active** · Google Calendar **active** · Gmail **active** |
 | Monitoring | 5 targets seeded, including both Tailscale Serve routes |
 | AI task routes | `capture_parser`, `daily_brief`, `mail_digest`, `voice_transcribe` — all on the existing `gpt-4.1` row |
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
 | Backups | **None, by design** (ADR-024) |
 | Source durability | **`origin` = `https://github.com/Himalpok1/Personal-OS` — PRIVATE, established 2026-09-02.** `main` + `phase-8-consolidation` pushed and hash-verified. No CI, no Actions workflow, no repository secret. |
-| Test baseline | **3,009 tests / 21 turbo tasks** (see *Last verification*) |
+| Test baseline | **3,075 tests / 21 turbo tasks** (see *Last verification*) |
 
 ---
 
@@ -313,6 +312,73 @@ both the development machine and the production server.
 
 ---
 
+### Checkpoint 8.1 — Failure visibility + AI I/O hardening (COMPLETE, deployed 2026-09-02)
+
+First Phase 8 runtime checkpoint. **No migration** — level stays 16, `packages/db` byte-unchanged.
+
+**Alert dedupe is now occurrence-scoped (ADR-058).** `notification_dispatch_log.dedupe_key` is a
+permanent PRIMARY KEY with no TTL, so the two integration producers ADR-057 flagged fired once and
+were then permanently dead. Both are fixed and Gmail — which had **no alert producer at all** —
+gains one:
+
+| Producer | Key | Discriminator |
+|---|---|---|
+| Calendar | `calendar-needs-reauth:<connId>:<updated_at ISO>` | transition instant, from a `status='active'`-conditional UPDATE |
+| Health `auth_permanent` | `health-sync-alert:<connId>:auth_permanent:<ISO>` | `last_sync_error_at`, episode-exact |
+| Health breaker / all-failed | `…:<reason>:<UTC date>` | date bucket — these change nothing durable, so a per-pass key would alert hourly |
+| Gmail | `mail-needs-reauth:<connId>:<ISO>` | `last_sync_error_at` |
+
+Two companion fixes make that real: both calendar dead-letter handlers are now
+`status='active'`-guarded (unguarded they could move `updated_at` mid-episode), and a **silent,
+permanent alert loss** is closed — a retry after a committed transition used to hit a bare
+`continue` and complete with nobody told. The calendar alert body no longer carries
+`googleAccountEmail`.
+
+**AI output safety is shared and the proven bare-domain leak is closed (ADR-058).** The filter moved
+to `packages/core/src/ai/output-safety.ts` (`./ai/*` subpath) so `apps/api` can use it without
+importing `apps/worker`. Bare domains are now removed by two structural layers — a syntactic
+public-suffix set that excludes English-word suffixes, and a **provenance** layer that strips any
+host-shaped echo of the untrusted input. **The Brief lane had no output filter at all** and asserted
+the false premise ADR-054 required be rewritten; both fixed, with a regression test asserting the
+premise's absence.
+
+**Reliability:** alerts now use `priority: high` on the `reminders` channel (the only channel that
+exists on the device — a dedicated one needs an APK); revoking a device clears
+`is_primary_reminder_device` without auto-promoting; the API container has a healthcheck reusing
+`GET /health` that asserts the body (it always returns 200) and deliberately ignores `worker.stale`.
+
+**Two mechanical guards** added, both structural: a pg-boss containment ratchet that resolves each
+handler factory to its definition, and a mobile bundle-boundary scan (living in `apps/worker`
+because `apps/mobile` has no Node types — the boundary it enforces).
+
+**AI usage accounting** (`ai.usage`) is emitted on the mail digest lane through the worker's guarded
+logger. The Brief lane is deliberately **not** instrumented: `apps/api` has no equivalent guarded
+logger, and adding one was out of scope.
+
+**Deployment.** Rolled out per the frozen order to `personal-os-8.1-release`; rollback images tagged
+by digest as `:rollback-pre-8.1`. **api and worker were recreated in SEPARATE `up` invocations** —
+verified first-hand that `apps/api` omits `schedule: false`, so pg-boss defaults it to `true` and
+BOTH processes run a timekeeper; recreating them together would leave a window with none.
+Post-deploy: all containers `restarts=0`, API reports `(healthy)`, `/health` ok, all three
+integrations `active`, migration level 16, `digestTimezone` correctly preserved. Monitoring recorded
+exactly **one** `down` check during the API recreation and correctly opened **no incident**
+(threshold is 3 consecutive; `incidents_ever = 0`).
+
+**⚠️ OWNER ACTION REQUIRED — obsolete burned dispatch rows.** Two rows remain from the old
+under-scoped keys:
+
+- `calendar-needs-reauth:a0cc5563…:c6c0b43d…` — accepted 2026-08-25
+- `health-sync-alert:ac3d47ad…:auth_permanent:c6c0b43d…` — accepted 2026-09-01
+
+They are now **inert**: the corrected producers emit strictly longer keys, so neither burned row can
+collide with a future alert. Deleting them is hygiene, not a fix, and it is an irreversible
+production write — so it is **not performed** and requires explicit owner approval.
+
+**Not proven in production:** the new keys have not been *emitted* live, because that requires a
+genuine integration failure and no safe deterministic trigger exists that does not break a real
+Google grant. What IS verified first-hand is that the **running containers** carry the new key
+expressions, the new Gmail alert module, the shared filter and the corrected Brief prompt.
+
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
 **Phase 7 is closed.** Checkpoints 7.0–7.8B and the full Checkpoint 7.9 record — the open
@@ -402,7 +468,7 @@ an intentionally-logged field — are recorded in the ledger below.
 
 - ~~**`remind_at` cannot be set or changed through the API.**~~ — **STALE, corrected 2026-08-23.** Checkpoint 5.4 added `remind_at` to `TaskUpdateSchema` (`PATCH /tasks/:id`), and an editor exists at `apps/mobile/src/app/tasks/[id].tsx`. What remains true, and is the real residual debt: that editor is a raw ISO-8601 `TextInput` with no picker or validation, and `tasks/new.tsx` still cannot set a reminder at creation time.
 - ~~**Android captures are labelled `source: "web"`**~~ — **NOT A DEFECT; reclassified in Checkpoint 5.6.** `source` is an ENTRY-PATH vocabulary, not a platform tag, and is closed by both `CaptureSourceSchema` and the `inbox_items_source` CHECK constraint. `web` correctly denotes the in-app Quick Capture sheet on every platform. There is no native member, and adding one would require altering the CHECK constraint (a migration). The rule is now documented in `docs/ARCHITECTURE.md` and pinned by a test. See ADR note in the 5.6 entry.
-- **Revoking a device does not clear its `is_primary_reminder_device` flag**, so a revoked row can keep holding primary and no device schedules reminders until primary is reassigned.
+- ~~**Revoking a device does not clear its `is_primary_reminder_device` flag**~~ — **CLOSED by Checkpoint 8.1.** Revoke now clears the flag without auto-promoting (ADR-019/036 stand), which also unblocks the partial unique index that previously prevented promoting a real device.
 - **The exact-alarm grant does not survive reinstall.** Every rebuild silently returns the app to inexact reminders until the user re-grants "Alarms & reminders".
 - **Duplicate-alarm repair is covered by unit tests only.**
 - **Runtime images aren't pruned of devDependencies.**
@@ -497,8 +563,10 @@ an intentionally-logged field — are recorded in the ledger below.
   up from the port-3000 listener finds only the one currently serving; a surviving supervisor will
   notice the next edit and respawn a child that reclaims the port.
 
-- **The mail digest launders a bare domain out of an attacker-controlled `from_display_name`
-  (found at Checkpoint 7.9 closure, 2026-09-02).** The 2026-09-02 digest contains one bare-domain
+- ~~**The mail digest launders a bare domain out of an attacker-controlled `from_display_name`**~~
+  — **CLOSED by Checkpoint 8.1 (ADR-058).** Fixed structurally in the shared filter by a provenance
+  layer plus a syntactic public-suffix layer, and the false `output.ts` justification is replaced
+  with the evidence that disproved it. Original finding: The 2026-09-02 digest contains one bare-domain
   token that equals no stored `from_domain` and appears in no stored `subject`, but is a substring
   of one stored display name; 6 stored display names are domain-shaped. Two things are wrong. The
   model violated two explicit prompt rules (`prompt.ts:48`, `:50` — *"Never output … a domain
@@ -532,17 +600,35 @@ an intentionally-logged field — are recorded in the ledger below.
   public address. **This is the concrete reason the repository must never be made public without a
   separate deliberate decision.**
 
+- **Alerts share the `reminders` notification channel (8.1).** It is the only Android channel the app
+  creates, so a channelId Android does not know would be silently ignored. The consequence is real:
+  muting Reminders also mutes integration alerts. A dedicated `alerts` channel needs a mobile change,
+  therefore an APK and a `versionCode` bump.
+- **The Brief lane emits no `ai.usage` event (8.1).** `apps/api` has no guarded structured logger —
+  only Fastify's pino — and the worker's `LogFields`/denylist protection has no counterpart there.
+  Instrumenting it through an unguarded path was refused; adding a guarded logger to `apps/api` is
+  the real fix and was out of scope.
+- **Two obsolete burned `notification_dispatch_log` rows remain (8.1).** Inert — the corrected
+  producers emit strictly longer keys that cannot collide — but their deletion is an irreversible
+  production write and is **owner-gated**.
+- **The new occurrence-scoped keys have not been emitted in production (8.1).** Proving them live
+  needs a genuine integration failure, and no safe deterministic trigger exists that does not break a
+  real Google grant. The running containers are verified to carry the new code.
+
 
 ---
 
 ## Current objective
 
-**Checkpoint 8.0 is COMPLETE**, **Checkpoint 7.9 is COMPLETE**, and **Phase 7 is CLOSED.** Source
-durability is **ESTABLISHED** — the approved private GitHub remote holds `main` and
-`phase-8-consolidation`, hash-verified.
+**Checkpoint 8.1 is COMPLETE and DEPLOYED.** Phase 7 is closed, source durability is established,
+and the first Phase 8 runtime checkpoint has shipped: integration failure is now reportable
+(occurrence-scoped alert dedupe on Calendar, Health and a new Gmail producer), and both live AI
+lanes filter their output through one shared, structurally-hardened control.
 
-Both gates on Phase 8 runtime work are therefore discharged. **Checkpoint 8.1 has not begun and must
-not begin without explicit approval.**
+**One owner action is outstanding** — approving deletion of the two obsolete burned dispatch rows.
+It is hygiene, not a fix; the corrected producers are already un-burned by construction.
+
+**Checkpoint 8.2 has not begun and must not begin without explicit approval.**
 
 ## Completed
 
@@ -584,11 +670,19 @@ same-date digest regeneration that proved the upsert.
 `phase-7-mail-monitoring` at `533601c`. The application tree is byte-unchanged by this checkpoint,
 so this measurement is a *reproduction* baseline, not a new one.
 
-Measured first-hand, uncached and serial (`turbo run test --force --concurrency=1`, **0 of 21
-cached**): **3,009 tests across 21 turbo tasks**, zero failing. Per package — api **609** ·
-mobile **499** · worker **409** · core 375 · health-providers 315 · schema 255 · monitoring 132 ·
-api-client 121 · mail-providers 116 · db 79 · **calendar-providers 74** (zero-drift canary, held
-exactly) · ai-providers 25. Build **11/11**, typecheck **21/21**.
+**Superseded by Checkpoint 8.1 (2026-09-02).** Measured first-hand, uncached and serial
+(`turbo run test --force --concurrency=1`, **0 of 21 cached**): **3,075 tests across 21 turbo
+tasks**, zero failing — up from 3,009, with **no package decreasing**. Per package — api **625**
+(+16) · mobile 499 · worker **427** (+18) · core **407** (+32) · health-providers 315 · schema 255 ·
+monitoring 132 · api-client 121 · mail-providers 116 · db 79 · **calendar-providers 74** (zero-drift
+canary, held exactly) · ai-providers 25. Build **11/11**, typecheck **21/21**, `eslint .` clean,
+`prettier --check .` clean, `git diff --check` clean, gitleaks clean.
+
+**Mutation tests — 8 of 8 killed and restored**, covering every new load-bearing guard: the shared
+filter's bare-domain layers (from the core suite AND, after a rebuild, from the mail lane's own
+adversarial corpus — the first attempt SURVIVED because the worker consumes `packages/core/dist`,
+which is a finding about the harness, not the guard); the Brief output filter; the Calendar, Health
+and Gmail occurrence discriminators; and both mechanical guards.
 
 > **This corrects a stale record.** The previous *Last verification* section reported Checkpoint
 > 7.7's **3,001** tests, but Checkpoint 7.8A had already moved the baseline to **3,009** without
