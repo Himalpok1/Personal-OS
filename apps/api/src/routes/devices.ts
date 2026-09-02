@@ -203,12 +203,37 @@ export default function devicesRoutes(app: FastifyInstance): void {
     // Idempotent: revoking an already-revoked device is a no-op, not an
     // error. Does NOT auto-promote a new primary -- no automatic promotion
     // in the MVP, per docs/ARCHITECTURE.md.
+    //
+    // ===================================================================
+    // REVOKING CLEARS is_primary_reminder_device (Checkpoint 8.1, Lane F).
+    // ===================================================================
+    //
+    // It did not before, and `docs/STATUS.md` carried the consequence as debt:
+    // "Revoking a device does not clear its `is_primary_reminder_device` flag,
+    // so a revoked row can keep holding primary and no device schedules
+    // reminders until primary is reassigned."
+    //
+    // That was a genuinely silent failure. Reminders are scheduled LOCALLY on
+    // the primary device only (ADR-020), and a revoked device is not running
+    // the app -- so primary stranded on a revoked row means NOTHING schedules
+    // anything, with no error anywhere. Worse, the partial unique index
+    // `one_primary_device ... WHERE is_primary_reminder_device` meant that
+    // stranded flag also BLOCKED promoting a real device until it was cleared.
+    //
+    // CLEARING IS NOT PROMOTING. ADR-019 and ADR-036 forbid automatic
+    // promotion, and this deliberately leaves the system with NO primary rather
+    // than choosing one. That is the honest state, and Settings already names
+    // it: ADR-036 surfaces "no primary reminder device" as a blocking reason
+    // instead of silently scheduling nothing.
     authed.post<{ Params: { id: string } }>("/devices/:id/revoke", async (request, reply) => {
       const existing = await findDevice(app, request.params.id);
       if (!existing) return reply.code(404).send({ error: "not_found" });
       const [row] = await app.db
         .update(devices)
-        .set({ revokedAt: existing.revokedAt ?? new Date() })
+        .set({
+          revokedAt: existing.revokedAt ?? new Date(),
+          isPrimaryReminderDevice: false,
+        })
         .where(eq(devices.id, request.params.id))
         .returning();
       if (!row) throw new Error("update on devices returned no row for an id that was just found");

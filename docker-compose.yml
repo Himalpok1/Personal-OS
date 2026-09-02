@@ -66,6 +66,36 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Checkpoint 8.1, Lane F. Reuses the EXISTING GET /health -- no new endpoint.
+    #
+    # Asserts the BODY, not the status code, and the distinction is load-bearing:
+    # /health always replies 200 (apps/api/src/server.ts), reporting trouble as
+    # `status: "degraded"` in the payload. A `curl -f`-style check would
+    # therefore pass while the API could not reach Postgres at all.
+    #
+    # It deliberately IGNORES `worker.stale`. A dead worker is a real problem,
+    # but it is not THIS container's problem, and marking the API unhealthy for
+    # it would let Docker restart a perfectly good API while changing nothing
+    # about the worker. ADR-055 already assigns worker-staleness alerting to the
+    # API process itself, which is the mechanism that actually reports it.
+    #
+    # `node -e` rather than curl or wget: the runtime image is node:22-alpine,
+    # which ships neither curl nor a wget that can parse JSON. Node is already
+    # PID 1 here, so this adds no dependency.
+    # start_period covers boot; nothing depends_on api, so this changes no
+    # startup ordering.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health').then(r=>r.json()).then(b=>process.exit(b.status==='ok'?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     networks:
       - personalos
 

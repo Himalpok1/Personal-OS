@@ -44,6 +44,19 @@ const NOTIFY_COLUMN_BY_CATEGORY = {
 // Check this set against Expo's current documented ticket errors at
 // implementation-review time; it reflects what's documented as of this
 // pass, not a guaranteed-exhaustive enumeration.
+/**
+ * The Android notification channel alerts are delivered on.
+ *
+ * MUST MATCH `REMINDERS_CHANNEL_ID` in apps/mobile/src/notifications/channel.ts.
+ * It is duplicated rather than imported because apps/worker cannot depend on
+ * apps/mobile, and a shared package for one string literal would be worse than
+ * this comment. A mismatch is not a crash: Android silently ignores an unknown
+ * channelId and falls back to the default channel, which is precisely the
+ * failure mode this constant exists to avoid -- so it is asserted in
+ * notifications-dispatch.test.ts against the mobile source.
+ */
+const ANDROID_ALERT_CHANNEL_ID = "reminders";
+
 const PERMANENT_TICKET_ERRORS = new Set([
   "DeviceNotRegistered",
   "MessageTooBig",
@@ -146,6 +159,31 @@ export function createNotificationsDispatchHandler(db: Db) {
         title: data.title,
         body: data.body,
         data: data.data,
+        // ANDROID DELIVERY FOR ALERTS (Checkpoint 8.1, Lane F).
+        //
+        // The payload previously set neither, so every push landed on the app's
+        // implicit default channel at default importance -- which on Android
+        // means no heads-up display and eligibility for batching. For a
+        // "your integration has stopped" alert that is the wrong delivery, and
+        // it silently undercut the only channel this system has for telling the
+        // user something needs them.
+        //
+        // `reminders` is used rather than a new `alerts` channel BECAUSE IT IS
+        // THE ONLY CHANNEL THAT EXISTS ON THE DEVICE. apps/mobile creates
+        // exactly one (`ensureReminderChannel`, id "reminders",
+        // AndroidImportance.MAX), and a channelId Android does not know is
+        // ignored -- so inventing "alerts" here would have been a no-op that
+        // read like a fix. A dedicated channel needs a mobile change, therefore
+        // a new APK and a versionCode bump, which is out of this checkpoint's
+        // scope; the tradeoff is that muting Reminders also mutes alerts, and
+        // that is recorded as debt rather than hidden.
+        //
+        // Applied to ALERTS ONLY. A digest or a capture confirmation arriving
+        // with high priority on a MAX-importance channel would be exactly the
+        // over-notification this project has avoided so far.
+        ...(data.category === "alert"
+          ? { channelId: ANDROID_ALERT_CHANNEL_ID, priority: "high" as const }
+          : {}),
       }));
 
       let tickets: ExpoPushTicket[];
