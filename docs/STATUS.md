@@ -364,15 +364,28 @@ integrations `active`, migration level 16, `digestTimezone` correctly preserved.
 exactly **one** `down` check during the API recreation and correctly opened **no incident**
 (threshold is 3 consecutive; `incidents_ever = 0`).
 
-**⚠️ OWNER ACTION REQUIRED — obsolete burned dispatch rows.** Two rows remain from the old
-under-scoped keys:
+**Obsolete burned dispatch rows — CLEANED UP (owner-approved, 2026-09-02).** The two rows left by
+the old under-scoped keys are deleted:
 
 - `calendar-needs-reauth:a0cc5563…:c6c0b43d…` — accepted 2026-08-25
 - `health-sync-alert:ac3d47ad…:auth_permanent:c6c0b43d…` — accepted 2026-09-01
 
-They are now **inert**: the corrected producers emit strictly longer keys, so neither burned row can
-collide with a future alert. Deleting them is hygiene, not a fix, and it is an irreversible
-production write — so it is **not performed** and requires explicit owner approval.
+Both referenced the **live** connections — the Health row being exactly the one ADR-051b describes
+being rebound with `created_at` preserved, which is why that key stayed burned.
+
+**Deleted by EXACT full-key equality, never a prefix.** A `LIKE 'calendar-needs-reauth:%'` would have
+matched the legacy row today *and every future occurrence-scoped key* — correct now, destructive
+later. The statement was wrapped in a `ROW_COUNT` guard that raises (rolling the whole thing back)
+unless exactly 2 rows are affected, so a surprise could not be half-applied.
+
+Verified: **9 → 7 rows**, 0 legacy rows remaining, and the checksum over the 7 survivors is
+**byte-identical before and after** (`5e00278a…`), proving no other row's key, status or timestamp
+changed. The protected namespaces were untouched — 2 digest, 2 confirmation, 2 test and 1 legacy
+smoke row all remain. No container restarted, no deployment, migration level unchanged at 16.
+
+**This was hygiene, not a fix.** The corrected producers emit strictly longer keys, so they were
+never blocked by these rows; removing them prevents a future reader mistaking a burned key for an
+active one.
 
 **Not proven in production:** the new keys have not been *emitted* live, because that requires a
 genuine integration failure and no safe deterministic trigger exists that does not break a real
@@ -608,9 +621,9 @@ an intentionally-logged field — are recorded in the ledger below.
   only Fastify's pino — and the worker's `LogFields`/denylist protection has no counterpart there.
   Instrumenting it through an unguarded path was refused; adding a guarded logger to `apps/api` is
   the real fix and was out of scope.
-- **Two obsolete burned `notification_dispatch_log` rows remain (8.1).** Inert — the corrected
-  producers emit strictly longer keys that cannot collide — but their deletion is an irreversible
-  production write and is **owner-gated**.
+- ~~**Two obsolete burned `notification_dispatch_log` rows remain (8.1).**~~ — **CLOSED
+  2026-09-02, owner-approved.** Deleted by exact full-key equality under a `ROW_COUNT` guard;
+  9 → 7 rows with the survivor checksum byte-identical before and after.
 - **The new occurrence-scoped keys have not been emitted in production (8.1).** Proving them live
   needs a genuine integration failure, and no safe deterministic trigger exists that does not break a
   real Google grant. The running containers are verified to carry the new code.
@@ -625,10 +638,11 @@ and the first Phase 8 runtime checkpoint has shipped: integration failure is now
 (occurrence-scoped alert dedupe on Calendar, Health and a new Gmail producer), and both live AI
 lanes filter their output through one shared, structurally-hardened control.
 
-**One owner action is outstanding** — approving deletion of the two obsolete burned dispatch rows.
-It is hygiene, not a fix; the corrected producers are already un-burned by construction.
+The owner-gated cleanup of the two obsolete burned dispatch rows is **done** (2026-09-02): a
+narrow, guarded DELETE of exactly 2 rows, with the 7 survivors proven byte-identical.
 
-**Checkpoint 8.2 has not begun and must not begin without explicit approval.**
+**No outstanding actions for 8.1. Checkpoint 8.2 has not begun and must not begin without explicit
+approval.**
 
 ## Completed
 
