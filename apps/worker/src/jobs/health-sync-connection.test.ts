@@ -970,7 +970,92 @@ describe("health.google.sync-connection", () => {
 
       const alerts = boss.sent.filter((s) => s.queue === NOTIFICATIONS_DISPATCH_QUEUE);
       expect(alerts).toHaveLength(1);
-      expect(alerts[0]!.data["dedupeKey"]).toBe(`health-sync-alert:${connectionId}:auth_permanent`);
+      // OCCURRENCE-SCOPED as of Checkpoint 8.1. The old key stopped at the
+      // failure CLASS, so once `auth_permanent` was accepted for a connection it
+      // could never alert again -- and production burned exactly this key on
+      // 2026-09-01 (ADR-057 finding #4). The discriminator is
+      // `health_connections.last_sync_error_at`, the instant this needs-reauth
+      // episode began, so a reconnect-then-refail mints a genuinely new key.
+      expect(connection!.lastSyncErrorAt).not.toBeNull();
+      expect(alerts[0]!.data["dedupeKey"]).toBe(
+        `health-sync-alert:${connectionId}:auth_permanent:${connection!.lastSyncErrorAt!.toISOString()}`,
+      );
+    });
+
+    it("re-auth alerts are OCCURRENCE-scoped: A, retry A, recovery, B", async () => {
+      // The contract this lane exists to establish. The old key stopped at the
+      // failure CLASS (`health-sync-alert:<id>:auth_permanent`), and production
+      // ACCEPTED exactly that key on 2026-09-01. ADR-051b then records that the
+      // recovery rebound the SAME connection row with `created_at` preserved --
+      // so the connection id was unchanged and the next auth_permanent failure
+      // would have alerted nobody (ADR-057 finding #4).
+      const connectionId = await insertConnection({
+        accessTokenExpiresAt: new Date(NOW.getTime() - 60_000),
+      });
+      await insertStream(connectionId, "steps");
+      await insertAlertDevice();
+
+      const failing = {
+        refresh: () =>
+          Promise.reject(
+            new GoogleHealthOAuthError("Token has been expired or revoked.", 400, "invalid_grant"),
+          ),
+      };
+
+      // `at` is threaded through because the discriminator IS the instant the
+      // episode began. The rest of the suite freezes the clock at NOW, which
+      // would make two genuinely separate episodes share a millisecond and
+      // collide -- an artifact of a frozen clock, not of the design, since a
+      // reconnect between two grant losses takes human time. Passing real
+      // elapsed time is what models production.
+      async function keysAfterPass(at: Date): Promise<string[]> {
+        const boss = fakeBoss();
+        await runPass(
+          createFakeGoogleHealthClient(),
+          { connectionId, trigger: "manual" },
+          { boss: boss.boss, now: () => at, ...failing },
+        );
+        return boss.sent
+          .filter((sent) => sent.queue === NOTIFICATIONS_DISPATCH_QUEUE)
+          .map((sent) => String(sent.data["dedupeKey"]));
+      }
+
+      async function episodeStamp(): Promise<string> {
+        const [row] = await db
+          .select()
+          .from(healthConnections)
+          .where(eq(healthConnections.id, connectionId));
+        return row!.lastSyncErrorAt!.toISOString();
+      }
+
+      // ---- occurrence A ---------------------------------------------------
+      const a = await keysAfterPass(NOW);
+      expect(a).toHaveLength(1);
+      const keyA = a[0]!;
+      expect(keyA).toBe(`health-sync-alert:${connectionId}:auth_permanent:${await episodeStamp()}`);
+
+      // ---- retry of A -----------------------------------------------------
+      // The connection is now needs_reauth, so the pass is refused before any
+      // alert can fire. Zero new keys is the correct anti-spam outcome, and the
+      // durable state is already surfaced in Settings.
+      const retry = await keysAfterPass(new Date(NOW.getTime() + 60_000));
+      expect(retry).toHaveLength(0);
+
+      // ---- recovery -------------------------------------------------------
+      // What a reconnect does: status back to active and the episode marker
+      // CLEARED. Clearing it is what re-arms the key.
+      await db
+        .update(healthConnections)
+        .set({ status: "active", lastSyncError: null, lastSyncErrorAt: null })
+        .where(eq(healthConnections.id, connectionId));
+
+      // ---- occurrence B ---------------------------------------------------
+      const b = await keysAfterPass(new Date(NOW.getTime() + 3_600_000));
+      expect(b).toHaveLength(1);
+      const keyB = b[0]!;
+      expect(keyB).toBe(`health-sync-alert:${connectionId}:auth_permanent:${await episodeStamp()}`);
+      // THE WHOLE POINT: a second, independent grant loss is notifiable.
+      expect(keyB).not.toBe(keyA);
     });
 
     it("leaves the connection ACTIVE when the token endpoint returns a 5xx", async () => {
@@ -1084,7 +1169,13 @@ describe("health.google.sync-connection", () => {
 
       const alerts = boss.sent.filter((s) => s.queue === NOTIFICATIONS_DISPATCH_QUEUE);
       expect(alerts).toHaveLength(1);
-      expect(alerts[0]!.data["dedupeKey"]).toBe(`health-sync-alert:${connectionId}:breaker:steps`);
+      // OCCURRENCE-SCOPED as of Checkpoint 8.1: a UTC date bucket. A breaker
+      // trip is self-limiting (it disables the stream), so re-tripping the same
+      // metric on the same day needs a manual re-enable plus five more failing
+      // runs; the bucket re-arms daily rather than never.
+      expect(alerts[0]!.data["dedupeKey"]).toBe(
+        `health-sync-alert:${connectionId}:breaker:steps:${NOW.toISOString().slice(0, 10)}`,
+      );
     });
 
     it("does not trip on repeated RETRYABLE failures", async () => {

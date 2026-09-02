@@ -1075,7 +1075,18 @@ export function createCalendarSyncCalendarDeadLetterHandler(
           lastSyncError: "retries_exhausted" satisfies CalendarSyncErrorCode,
           updatedAt: new Date(),
         })
-        .where(eq(calendarConnections.id, job.data.connectionId));
+        // `status = 'active'`-GUARDED as of Checkpoint 8.1, for the same reason
+        // as the twin handler in calendar-refresh-token.ts: `updated_at` is the
+        // episode discriminator in the needs-reauth alert key, so an unguarded
+        // write here could move it mid-episode and mint a second key for one
+        // failure. It also stops a specific classification being downgraded to
+        // the generic `retries_exhausted` after the connection already failed.
+        .where(
+          and(
+            eq(calendarConnections.id, job.data.connectionId),
+            eq(calendarConnections.status, "active"),
+          ),
+        );
     }
   };
 }

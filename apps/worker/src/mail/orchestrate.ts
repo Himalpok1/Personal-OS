@@ -20,6 +20,7 @@ import type { MailSyncErrorCode } from "@personal-os/schema";
 import type { PgBoss } from "pg-boss";
 import { env } from "../env.js";
 import { errorToken, log } from "../logger.js";
+import { enqueueMailNeedsReauthAlert } from "./alerts.js";
 import { BREAKER_SKIP_CLASS, evaluateMailBreaker } from "./breaker.js";
 import { withMailConnectionLock } from "./lock.js";
 import { tombstoneMailMessages, upsertMailMessages, type MailUpsertCounts } from "./persist.js";
@@ -752,6 +753,15 @@ async function recordTokenFailure(
   if (connectionCode !== null) {
     await recordMailConnectionError(deps.db, connectionId, connectionCode, now);
   }
+
+  // Checkpoint 8.1, Lane C. The alert is enqueued from HERE rather than from
+  // markMailConnectionNeedsReauth, because token.ts has no queue and should not
+  // grow one -- `MailSyncDeps.boss` has existed since 7.3 reserved for exactly
+  // this. It is called unconditionally and decides for itself whether an episode
+  // is live, so a pass that reaches this function for a transient reason while
+  // the connection happens to be needs_reauth still re-enqueues the SAME
+  // episode key rather than a new one.
+  await enqueueMailNeedsReauthAlert(deps.db, deps.boss, connectionId, now);
 
   const runId = await openMailSyncRun(deps.db, {
     connectionId,

@@ -212,7 +212,7 @@ interface PassContext {
   /** Resolved once per pass, reused by every stream. */
   accessToken: string | null;
   /** Dedupes alerts within one pass. */
-  alertedReasons: Set<string>;
+  alertedKeys: Set<string>;
   runsWritten: number;
 }
 
@@ -787,11 +787,17 @@ async function syncChunk(ctx: PassContext, params: ChunkParams): Promise<ChunkOu
 async function alertOnce(
   ctx: PassContext,
   reason: string,
+  discriminator: string,
   title: string,
   body: string,
 ): Promise<void> {
-  if (ctx.alertedReasons.has(reason)) return;
-  ctx.alertedReasons.add(reason);
+  // The full key, not just `reason`, so the per-pass guard matches the durable
+  // one exactly. Keying this on `reason` alone while the dedupe key carried a
+  // discriminator would let one pass raise two alerts that the log then
+  // collapsed -- a difference nobody would see until it mattered.
+  const dedupeKey = `health-sync-alert:${ctx.connection.id}:${reason}:${discriminator}`;
+  if (ctx.alertedKeys.has(dedupeKey)) return;
+  ctx.alertedKeys.add(dedupeKey);
   if (!ctx.boss) return;
 
   const eligible = await ctx.db
@@ -816,10 +822,57 @@ async function alertOnce(
       // Settings", not to report data.
       body,
       data: { healthConnectionId: ctx.connection.id },
-      dedupeKey: `health-sync-alert:${ctx.connection.id}:${reason}`,
+      dedupeKey,
       deviceId: device.id,
     });
   }
+}
+
+/**
+ * The UTC calendar date, used as the occurrence discriminator for the two
+ * reasons that have no durable state transition to key on.
+ *
+ * A DATE BUCKET RATHER THAN THE PASS INSTANT, and the difference is the whole
+ * point for `all_streams_failed`. That reason changes NOTHING durable -- the
+ * connection stays active, every stream stays enabled -- so a per-pass
+ * discriminator would put a lock-screen alert on the user's phone every hour
+ * for the entire duration of a rate-limit or transport outage. A UTC date gives
+ * exactly one alert per day per connection and re-arms the next day, which is
+ * the correct cadence for an ongoing-degradation signal.
+ *
+ * ADR-056 blesses this shape explicitly: "a per-occurrence dedupe discriminator
+ * -- a date, an incident id, or an occurrence id".
+ */
+function utcDateDiscriminator(now: Date): string {
+  return now.toISOString().slice(0, 10);
+}
+
+/**
+ * The instant this connection entered its current needs-reauth episode.
+ *
+ * `health_connections.last_sync_error_at` is an EPISODE-EXACT marker, which is
+ * what makes it the right discriminator and why Calendar (which has no such
+ * column) had to use `updated_at` instead. It is written by exactly two paths,
+ * both of which are the needs-reauth transition itself
+ * (`apps/worker/src/health/token.ts` and `apps/api/src/services/health-connection.ts`),
+ * and cleared to null on reconnect. So a reconnect-then-refail -- which
+ * ADR-051b records happening within hours on 2026-09-01 -- mints a genuinely
+ * new key, which is precisely the case the old failure-class-only key made
+ * permanently silent.
+ *
+ * The column is nullable. Null here would mean the connection reported
+ * `auth_permanent` without any path having marked it, which no current code
+ * does; falling back to the pass date keeps the alert firing rather than
+ * throwing on an unreachable state.
+ */
+async function authEpisodeDiscriminator(ctx: PassContext): Promise<string> {
+  const [row] = await ctx.db
+    .select({ lastSyncErrorAt: healthConnections.lastSyncErrorAt })
+    .from(healthConnections)
+    .where(eq(healthConnections.id, ctx.connection.id));
+  // NOT `ctx.connection`: that is the PRE-failure snapshot taken at the top of
+  // the pass, so it still holds the PREVIOUS episode's value (or null).
+  return row?.lastSyncErrorAt?.toISOString() ?? utcDateDiscriminator(ctx.now);
 }
 
 // ---------------------------------------------------------------------------
@@ -941,7 +994,7 @@ async function runLockedPass(
     now,
     refresh: deps.refresh,
     accessToken: null,
-    alertedReasons: new Set<string>(),
+    alertedKeys: new Set<string>(),
     runsWritten: 0,
   };
 
@@ -991,6 +1044,10 @@ async function runLockedPass(
           await alertOnce(
             ctx,
             `breaker:${stream.metric}`,
+            // A trip is self-limiting: breaker.ts sets `sync_enabled = false`,
+            // so re-tripping the same metric on the same UTC day would require
+            // a manual re-enable plus five more failing runs.
+            utcDateDiscriminator(ctx.now),
             "Health sync disabled a metric",
             `Personal OS stopped syncing "${stream.metric}" after repeated failures. Re-enable it in Settings.`,
           );
@@ -1023,6 +1080,7 @@ async function runLockedPass(
     await alertOnce(
       ctx,
       "auth_permanent",
+      await authEpisodeDiscriminator(ctx),
       "Google Health needs reconnecting",
       "Personal OS can no longer sync your Google Health data. Reconnect it in Settings.",
     );
@@ -1030,6 +1088,7 @@ async function runLockedPass(
     await alertOnce(
       ctx,
       "all_streams_failed",
+      utcDateDiscriminator(ctx.now),
       "Google Health sync is failing",
       "Every Google Health metric failed to sync on the last attempt.",
     );

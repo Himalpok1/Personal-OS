@@ -140,6 +140,14 @@ export async function markMailConnectionNeedsReauth(
   reason: MailSyncErrorCode,
   now: Date = new Date(),
 ): Promise<void> {
+  // CONDITIONAL ON `status = 'active'` as of Checkpoint 8.1, and that predicate
+  // is what makes the alert key episode-scoped: on a retry of a job that already
+  // transitioned this matches ZERO rows, so `last_sync_error_at` is not
+  // re-stamped and every retry derives the identical dedupe key.
+  //
+  // `eq(status, 'active')` rather than "not already needs_reauth": the latter
+  // would also match a row a concurrent disconnect just set to 'disconnected'
+  // and flip it back, resurrecting a connection the user removed.
   await db
     .update(mailConnections)
     .set({
@@ -148,7 +156,7 @@ export async function markMailConnectionNeedsReauth(
       lastSyncErrorAt: now,
       updatedAt: now,
     })
-    .where(eq(mailConnections.id, connectionId));
+    .where(and(eq(mailConnections.id, connectionId), eq(mailConnections.status, "active")));
 }
 
 /** Records a non-fatal sync failure without changing the connection's status. */

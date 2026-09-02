@@ -43,7 +43,23 @@ function createCalendarRefreshTokenHandlerUncontained(
         .select()
         .from(calendarConnections)
         .where(eq(calendarConnections.id, job.data.connectionId));
-      if (!connection || connection.status !== "active") continue; // no-op
+      if (!connection) continue;
+      if (connection.status === "needs_reauth") {
+        // Reachable only via a pg-boss RETRY of a job that already
+        // transitioned this connection: the cron enqueues `status = 'active'`
+        // connections only (see enqueueCalendarRefreshForActiveConnections).
+        //
+        // THIS IS THE FIX FOR A SILENT, PERMANENT ALERT LOSS. Before Checkpoint
+        // 8.1 this was a bare `continue`: if anything between the committed
+        // status UPDATE and `boss.send` threw -- the device SELECT, the queue --
+        // the retry landed here, returned normally, and pg-boss marked the job
+        // COMPLETED. The connection was correctly `needs_reauth` and nobody was
+        // ever told. Re-enqueueing is free because the key is episode-scoped:
+        // it is the SAME string, so notification_dispatch_log dedupes it.
+        await enqueueNeedsReauthAlert(db, boss, connection.id);
+        continue;
+      }
+      if (connection.status !== "active") continue; // no-op
 
       const expiresAt = connection.accessTokenExpiresAt;
       const isFresh = expiresAt && expiresAt.getTime() - Date.now() > REFRESH_MARGIN_MS;
@@ -112,11 +128,76 @@ async function markNeedsReauth(
   connectionId: string,
   reason: CalendarSyncErrorCode,
 ): Promise<void> {
-  const [updated] = await db
+  // CONDITIONAL ON `status = 'active'`, and that predicate is what makes the
+  // alert key episode-scoped (Checkpoint 8.1).
+  //
+  // On a pg-boss retry of a job that already transitioned, this matches ZERO
+  // rows and therefore does NOT re-stamp `updated_at` -- so the episode's
+  // identity is frozen at the instant of the transition and every retry derives
+  // the identical dedupe key.
+  //
+  // `eq(status, 'active')` rather than `ne(status, 'needs_reauth')`: the latter
+  // also matches a row a concurrent disconnect just set to 'disconnected' and
+  // would flip it back to needs_reauth, resurrecting a connection the user
+  // deliberately removed.
+  await db
     .update(calendarConnections)
     .set({ status: "needs_reauth", lastSyncError: reason, updatedAt: new Date() })
-    .where(eq(calendarConnections.id, connectionId))
-    .returning({ googleAccountEmail: calendarConnections.googleAccountEmail });
+    .where(and(eq(calendarConnections.id, connectionId), eq(calendarConnections.status, "active")));
+
+  await enqueueNeedsReauthAlert(db, boss, connectionId);
+}
+
+/**
+ * Fans the needs-reauth alert out to every eligible device, keyed to THIS
+ * failure episode.
+ *
+ * ===========================================================================
+ * WHY THE KEY CARRIES A TIMESTAMP -- AND WHY THAT IS NOT "TIMESTAMP RANDOMNESS"
+ * ===========================================================================
+ *
+ * `notification_dispatch_log.dedupe_key` is a permanent PRIMARY KEY with no TTL
+ * and no sweep, claimed with `onConflictDoNothing`. The old key was
+ * `calendar-needs-reauth:${connectionId}` -- scoped to an identity that outlives
+ * every failure -- so it burned itself on the FIRST outage and could never alert
+ * again. It did: the key was accepted on 2026-08-25, which is why the real
+ * calendar failure of 2026-08-31 notified nobody (ADR-057 finding #4).
+ *
+ * The discriminator is `updated_at` READ BACK FROM THE ROW after the conditional
+ * transition above -- not a `new Date()` captured in JS. It is the durable
+ * record of WHEN THIS EPISODE BEGAN, so it is the episode's identity rather than
+ * a clock reading:
+ *
+ *   - same episode, retried  -> the UPDATE matched nothing, `updated_at` is
+ *                               unchanged, the key is byte-identical, deduped.
+ *   - reconnect, then fail   -> the reconnect stamped a new `updated_at` and the
+ *                               next failure stamps another, so the key differs
+ *                               and the alert fires again. This is the whole
+ *                               point.
+ *   - two jobs racing        -> both read the SAME post-transition `updated_at`,
+ *                               so both produce the same key and at most one
+ *                               dispatch is claimed.
+ *
+ * That property depends on `updated_at` not moving DURING an episode, which is
+ * why both dead-letter handlers in this file and in calendar-sync-calendar.ts
+ * are now `status = 'active'`-guarded.
+ *
+ * Idempotent on purpose, and called on the retry path too.
+ */
+async function enqueueNeedsReauthAlert(db: Db, boss: PgBoss, connectionId: string): Promise<void> {
+  const [row] = await db
+    .select({
+      status: calendarConnections.status,
+      updatedAt: calendarConnections.updatedAt,
+    })
+    .from(calendarConnections)
+    .where(eq(calendarConnections.id, connectionId));
+  // Reconnected or disconnected in between -- there is no live episode to
+  // alert about, and inventing a key here would burn one for an episode that
+  // has already ended.
+  if (!row || row.status !== "needs_reauth") return;
+
+  const dedupeKey = `calendar-needs-reauth:${connectionId}:${row.updatedAt.toISOString()}`;
 
   // Alert every eligible device -- matches devices.ts's own
   // test-notification enqueue shape. Best-effort: if pg-boss/notification
@@ -137,11 +218,16 @@ async function markNeedsReauth(
     await boss.send(NOTIFICATIONS_DISPATCH_QUEUE, {
       category: "alert",
       title: "Google Calendar needs reconnecting",
-      body: updated
-        ? `Sync for ${updated.googleAccountEmail} has stopped. Reconnect it in Settings.`
-        : "A Google Calendar connection needs to be reconnected.",
+      // NO ACCOUNT EMAIL. This body used to interpolate
+      // `connection.googleAccountEmail`, which made it the only alert in the
+      // system carrying a personal identifier -- rendered on a lock screen,
+      // the least private surface there is. monitor/alerts.ts states the rule
+      // this now follows: an alert says "look at this", it does not report
+      // details. There is exactly one Google Calendar connection, so the
+      // address added nothing a user needed.
+      body: "Calendar sync has stopped. Reconnect it in Settings.",
       data: { calendarConnectionId: connectionId },
-      dedupeKey: `calendar-needs-reauth:${connectionId}`,
+      dedupeKey,
       deviceId: device.id,
     });
   }
@@ -163,7 +249,21 @@ export function createCalendarRefreshTokenDeadLetterHandler(
           lastSyncError: "retries_exhausted" satisfies CalendarSyncErrorCode,
           updatedAt: new Date(),
         })
-        .where(eq(calendarConnections.id, job.data.connectionId));
+        // `status = 'active'`-GUARDED as of Checkpoint 8.1. Two things depend on
+        // it. First, this handler's own comment above already asserts the
+        // invariant -- "a transient failure never changed status in the first
+        // place" -- which the unguarded UPDATE did not enforce. Second, and
+        // load-bearing: `updated_at` is the discriminator in the needs-reauth
+        // alert key, so an unguarded write here could move it mid-episode and
+        // mint a second key for one failure. It also stops the specific
+        // classification (`auth_expired`) being downgraded to the generic
+        // `retries_exhausted` after the fact.
+        .where(
+          and(
+            eq(calendarConnections.id, job.data.connectionId),
+            eq(calendarConnections.status, "active"),
+          ),
+        );
     }
   };
 }
