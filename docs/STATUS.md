@@ -1,7 +1,7 @@
 # Project Status
 
 **Project:** Personal OS — single-user, self-hosted life dashboard.
-**Current phase:** **Phase 8 — Consolidation & adoption (ADR-056, approved 2026-09-02).** Checkpoint **8.0 — Foundation / Discovery Gate closure** is the current work.
+**Current phase:** **Phase 8 — Consolidation & adoption (ADR-056, approved 2026-09-02).** Checkpoint **8.0 — Foundation / Discovery Gate closure** is **COMPLETE**.
 **Next checkpoint allowed:** **8.1**, and only after Checkpoint **7.9 is formally closed**. No Phase 8 runtime, API, worker or mobile deployment may occur before then.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
@@ -77,7 +77,7 @@ Taken first-hand at Checkpoint 8.0, not inferred:
 The near-empty core is therefore treated as the **forecast consequence of a skipped soak**, not as a
 falsified product thesis. Phase 8 reinstates the soak rather than building over the emptiness.
 
-### Checkpoint 8.0 — Foundation / Discovery Gate closure (IN PROGRESS, 2026-09-02)
+### Checkpoint 8.0 — Foundation / Discovery Gate closure (COMPLETE, 2026-09-02)
 
 Documentation, source durability and project-record maintenance **only**. No application code, no
 test, no migration, no queue, no deploy, no production write, no mobile build. Branch
@@ -197,6 +197,33 @@ size of Phase 7 would have pushed the auto-loaded set past 250k tokens.
 and hashed against the original, producing an identical SHA-256
 (`ada88b04cbc897e77c1c6eee919872d75cda527f8c73c3fb852d31751d0d920c`). Zero gaps, zero overlaps, zero
 loss.
+
+### Verification actually run
+
+Measured first-hand, not transcribed. The application tree is byte-unchanged by this checkpoint, so
+reproducing the baseline exactly **is** the evidence that nothing moved.
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Full gate | build **11/11** · typecheck **21/21** · `eslint .` **zero output** · `prettier --check .` clean · `git diff --check` clean · overall **exit 0** |
+| 2 | Full suite, **uncached and serial** | **3,009 tests / 21 turbo tasks, 0 of 21 cached**, zero failing — reproducing the pre-checkpoint baseline exactly |
+| 3 | No package decreased | api 609 · mobile 499 · worker 409 · core 375 · health-providers 315 · schema 255 · monitoring 132 · api-client 121 · mail-providers 116 · db 79 · **calendar-providers 74** · ai-providers 25 |
+| 4 | Zero-drift canary | `calendar-providers` **74**, held exactly |
+| 5 | Migration invariant | **16 `.sql` / 16 journal entries**, highest `0015_service_monitoring`, **no `0016`**; `packages/db` diff vs `533601c` **empty** |
+| 6 | Runtime tree drift | `packages/` **0 files** · compose/Dockerfiles **0** · `eas.json`/`app.config.ts` **0** · `package.json`/lockfile **0**. The only file under `apps/` is `apps/mobile/.gitignore` — an ignore rule, not runtime code |
+| 7 | Archival conservation | All **7,284** lines reassembled from the output files and hashed against the original. Sole difference across the whole file: a final newline added to a file that did not end with one |
+| 8 | Secret scan | `gitleaks` clean on all four commits; `gitleaks git --log-opts=--all` clean across all **244** commits |
+| 9 | Production | **Not contacted.** No SSH, no Docker, no psql, no OAuth, no `.env` change |
+
+**Documentation auto-load, measured before and after:**
+
+| | Bytes | ≈ tokens |
+|---|---|---|
+| Before | 795,997 | ~199k |
+| After | 169,578 | ~42k |
+| **Reduction** | **626,419** | **78.7%** |
+
+`docs/history/` holds 674,050 bytes across 9 files and is **not** auto-loaded.
 
 ---
 
@@ -521,13 +548,12 @@ Migration level **16**, all four containers `restarts=0`, both Serve routes tail
 
 ## Current objective
 
-**Phase 8 Checkpoint 8.0 — Foundation / Discovery Gate closure.** Documentation, source durability
-and project-record maintenance only. Four lanes: ADR-056 and the Phase 8 definition; documentation
-and context compaction; ADR/ledger reconciliation; source durability.
+**Checkpoint 8.0 is COMPLETE.** All four lanes closed: ADR-056 and the Phase 8 definition;
+documentation and context compaction; ADR/ledger reconciliation (ADR-057); source durability
+prepared. Nothing in it changed application behaviour, and the standing gate reproduced
+**3,009 tests / 21 turbo tasks** exactly.
 
-Nothing in Checkpoint 8.0 changes application behaviour. The application tree is byte-unchanged and
-the standing gate must reproduce **3,009 tests / 21 turbo tasks** exactly — reproducing that number
-is the evidence that nothing moved.
+**Checkpoint 8.1 has not begun and must not begin until Checkpoint 7.9 is formally closed.**
 
 ## Completed
 
@@ -551,7 +577,8 @@ routes.
 
 ## Current work
 
-**Checkpoint 8.0 is in progress.** See the Phase 8 section above for the lane-by-lane record.
+**Checkpoint 8.0 is complete.** See the Phase 8 section above for the lane-by-lane record and the
+verification table.
 
 Phase 7 is complete except for **Checkpoint 7.9**, whose scheduled mail-digest cron validation is
 reproduced verbatim above. That observation is a Phase 7 closure requirement and **gates every
