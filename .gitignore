@@ -46,3 +46,40 @@ coverage/
 *.age
 secrets.*.yaml
 !secrets.*.example.yaml
+
+# Key material and signing artifacts. None of these exist in the repo today and none ever should.
+# The rule is preventive, for the same reason the `.env.*` rule above is: `*.age` covers age-
+# ENCRYPTED files, but an age PRIVATE key is conventionally `key.txt` or `*.agekey` and matches
+# none of the patterns above -- and the documented next step for configuration durability is
+# exactly a SOPS + age keypair. A keystore or private key is unrecoverable once published.
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+*.p8
+*.mobileprovision
+key.txt
+*.agekey
+secrets/
+
+# Mobile build artifacts. `apps/mobile/.gitignore` ignores `/android`, which covers the Gradle
+# output tree; these catch a build copied anywhere else in the workspace.
+*.apk
+*.aab
+
+# SSH keys and credential JSON. The API and worker subtrees hold the OAuth client secrets and the
+# AES key, and nothing above covers a file dropped there under one of these conventional names.
+id_rsa
+id_ecdsa
+id_ed25519
+credentials.json
+client_secret*.json
+*service-account*.json
+
+# Agent tool state. The `/.claude/` rule above is ANCHORED, so a nested `.claude/` is not covered --
+# and `.credentials.json` is the filename Claude Code uses for its own OAuth credential store. The
+# CONTENTS are ignored rather than the directory, because a rule excluding the directory itself
+# could not be negated for the one settings file this repo deliberately tracks.
+**/.claude/*
+!apps/mobile/.claude/settings.json
