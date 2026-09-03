@@ -175,7 +175,8 @@ Rabbit versionCode; branch and remote durability.
 
 | Day | Date | Result |
 |---|---|---|
-| Day 0 (baseline) | 2026-09-03 | All green. Recorded above. |
+| Day 0 (baseline) | 2026-09-03 15:07 CDT | All green. Recorded above. |
+| Day 0 spot check | 2026-09-03 18:22 CDT | **All green, zero deltas.** Every content, capture, job and integration figure identical to baseline; migration 16; all containers `restarts=0`; 0 incidents; heartbeat 38 s. Monitoring advanced 7,576 → 8,063 up checks, as expected. `/search` held at 4 and `/export` at 1 in the same log epoch, confirming the counter is stable. **No adoption inference drawn from a 3h15m window.** |
 
 ---
 
