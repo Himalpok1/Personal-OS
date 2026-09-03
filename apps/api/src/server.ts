@@ -32,8 +32,10 @@ import monitorRoutes from "./routes/monitor.js";
 import captureRoutes from "./routes/capture.js";
 import devicesRoutes from "./routes/devices.js";
 import eventsRoutes from "./routes/events.js";
+import exportRoutes from "./routes/export.js";
 import inboxRoutes from "./routes/inbox.js";
 import notesRoutes from "./routes/notes.js";
+import searchRoutes from "./routes/search.js";
 import occurrencesRoutes from "./routes/occurrences.js";
 import projectsRoutes from "./routes/projects.js";
 import reviewsRoutes from "./routes/reviews.js";
@@ -161,6 +163,8 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await app.register(aiConfigRoutes);
   await app.register(devicesRoutes);
   await app.register(transcribeRoutes);
+  await app.register(searchRoutes);
+  await app.register(exportRoutes);
 
   return app;
 }

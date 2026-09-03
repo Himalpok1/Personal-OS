@@ -92,6 +92,8 @@ import {
   updateTask,
 } from "./tasks.js";
 import { getAgenda } from "./agenda.js";
+import { search } from "./search.js";
+import { getExport } from "./export.js";
 import { getToday } from "./today.js";
 import { transcribe } from "./transcribe.js";
 
@@ -170,6 +172,8 @@ export type { Task, TaskCreate, TaskListParams, TaskStatus, TaskUpdate } from ".
 export type { TodayResponse } from "./today.js";
 export type { AgendaParams, AgendaResponse } from "./agenda.js";
 export type { MonitorIncidentListParams } from "./monitor.js";
+export type { SearchParams, SearchResponse } from "./search.js";
+export type { ExportResponse } from "./export.js";
 
 // A flat method bag, not a nested tasks.list()/notes.list() namespace --
 // matches the shape the original single health() method already had.
@@ -228,6 +232,9 @@ export function createApiClient(baseUrl: string) {
 
     getToday: getToday.bind(null, baseUrl),
     getAgenda: getAgenda.bind(null, baseUrl),
+
+    search: search.bind(null, baseUrl),
+    getExport: getExport.bind(null, baseUrl),
 
     listOccurrences: listOccurrences.bind(null, baseUrl),
     completeOccurrence: completeOccurrence.bind(null, baseUrl),
