@@ -8,7 +8,7 @@
 **Checkpoint 8.3 — Find what you stored (search + export) — is COMPLETE (2026-09-03).**
 **Checkpoint 8.4 — Low-friction capture — is COMPLETE (2026-09-03).** Its mandatory Lane 0
 reliability gate (the `capture.parse` confirm failure) passed; Lane 3 is deferred on evidence.
-API, web and the Rabbit R1 APK (**versionCode 9**) are all deployed and physically accepted.
+API, web and the Rabbit R1 APK (**versionCode 10**) are all deployed and physically accepted.
 **Next checkpoint allowed:** **8.5**, on explicit approval only. It has not begun.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
@@ -44,7 +44,7 @@ what is true *now*, it is in this file.
 |---|---|
 | Migration level | **16** (`0000`–`0015`); local and production agree |
 | Serving commit | api **`7b7acca`** · web **`7b7acca`** (Checkpoint 8.4) · worker **`c0cf4a1`** (8.4 Lane 0; not rebuilt for Lanes 1–6 — runtime unchanged) |
-| Rabbit R1 | `com.himal.personalos` **versionCode 9**, built from `7b7acca`, installed in place 2026-09-03 |
+| Rabbit R1 | `com.himal.personalos` **versionCode 10**, built from `6788b8d`, installed in place 2026-09-03 |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · **Android share sheet (8.4)** · **launcher shortcut (8.4)**. Notification-shade capture **deferred** — see 8.4 Lane 3. |
 | Integrations | Google Health **active** · Google Calendar **active** · Gmail **active** |
 | Calendar sync | **2 of 5 calendars enabled** — the owner's real primary (enabled at 8.2) and the dedicated test calendar. **98 events** ingested, all from the primary. |
@@ -53,7 +53,7 @@ what is true *now*, it is in this file.
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
 | Backups | **None, by design** (ADR-024) |
 | Source durability | **`origin` = `https://github.com/Himalpok1/Personal-OS` — PRIVATE, established 2026-09-02.** `main` + `phase-8-consolidation` pushed and hash-verified. No CI, no Actions workflow, no repository secret. |
-| Test baseline | **3,320 tests / 21 turbo tasks** (see *Last verification*) |
+| Test baseline | **3,322 tests / 21 turbo tasks** (see *Last verification*) |
 | Search / export | `GET /search` and `GET /export` live, perimeter-only, no migration (ADR-059) |
 | Confirm contract | An uncommittable confirm is refused **409** before enqueueing; corrections are validated and stored in the shape the worker reads (8.4) |
 
@@ -749,7 +749,8 @@ refusal and no longer offers a button that cannot succeed.
   replay with the same `client_uuid` returned the **same** `inbox_id`. Totals unchanged.
 - **Log scan.** 17 needles (every stored `raw_text`, task/note title, and every `unclear` reason)
   matched binary-safely against both container logs: **0 found**, with positive controls proving the
-  scanner works.
+  scanner works. Repeated at closure across the whole checkpoint's activity with **420 needles**
+  (adding every mail subject and sender display name) against 529 log lines: **0 found**.
 
 The smoke task was **archived** afterwards (Today is clean, active tasks back to 2). Its inbox row
 remains as lineage, matching the Gate H smoke-note precedent.
@@ -827,6 +828,89 @@ notification with a stable id would **swallow every reply after the first**.
   Settings. Renders **nothing** when reminders will fire. **Informational only**: never promotes a
   device, never flips a setting. ADR-019 and ADR-036 stand.
 
+
+#### Physical acceptance on the Rabbit R1 (480x640)
+
+**Signing proof — three-way, before installing anything.** The installed v8 APK was pulled from the
+device and its certificate compared with the new one. Both are
+`4601e3a2c4ecfe791b0bf6d960871c017fe1f3bc56087389f7ccc3a3f6cc23ea` / SHA-1 `7eac1aa4…`, equal to the
+recorded production identity.
+
+> This machine has no JVM, so `apksigner` is unavailable and the fingerprint came from a
+> purpose-written APK-Signing-Block parser — the same constraint Checkpoint 8.3 hit. Following that
+> checkpoint's own lesson, the parser was **validated against the installed v8 first** and only
+> trusted on the new APK after reproducing the known-good value exactly.
+
+**Verified in the shipped APK before install:** `package com.himal.personalos` (not `.dev`),
+`versionCode 9`, the `SEND`/`text/plain` intent filter, the `android.app.shortcuts` meta-data, and
+the compiled `xml/shortcuts` resource carrying action `com.himal.personalos.action.CAPTURE` with
+`targetClass com.himal.personalos.MainActivity`. Bundle markers: all five 8.4 strings present;
+`localhost:3000` absent; the production tailnet URL present; `EXPO_PUBLIC_UI_TEST_MODE` absent. The
+one `personalos.dev` hit is the isolation guard naming what it forbids, as at 8.3.
+
+**TWO builds were needed.** versionCode **9** (`7b7acca`) shipped the defect below; versionCode
+**10** (`6788b8d`) fixed it. EAS incremented the code itself both times — it was read from the build,
+never assumed. Both used remote keystore **`Build Credentials 91FWKRpxFX`**, the same named
+credential as 6.7B and 8.3, and the EAS `production` environment supplied only
+`EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID` and the secret file var
+`GOOGLE_SERVICES_JSON` — `EXPO_PUBLIC_UI_TEST_MODE` absent, as required.
+
+**Install and preservation** — `adb install -r` only; no uninstall, no `-d`, no data clear.
+
+| Check | Before | After |
+|---|---|---|
+| versionCode | 8 | **10** (via 9) |
+| `firstInstallTime` | 2026-08-19 16:26:10 | **unchanged** |
+| `dataDir` | `/data/user/0/com.himal.personalos` | unchanged |
+| Packages | production only | production only |
+| appop `SCHEDULE_EXACT_ALARM` | `allow` | **`allow` — preserved** |
+| Device row | `c6c0b43d…` PRIMARY, push md5 `d0a7fdbf4119` | **same row**, PRIMARY, same token |
+| Pairing codes consumed | 2 | **2 — no re-pairing** |
+
+**No pairing screen on cold launch** — the SecureStore credential survived the update.
+
+**Front doors, exercised on the device:**
+
+- **Share sheet.** Personal OS is a registered `SEND`/`text/plain` target. **Warm** (`onNewIntent`)
+  and **cold** (force-stopped, launched by the share) both opened Quick Capture pre-filled, wrapping
+  cleanly with no overflow. Submitting produced the **first `source: "share"` row in this system**,
+  auto-parsed.
+- **Consume-once, proven on the real device.** After the cold share was captured, force-stopping and
+  relaunching normally showed a clean Today with **no composer** — the sticky launch intent did not
+  resurrect — and the inbox still held **exactly one** share row.
+- **Launcher shortcut.** Registered as a manifest shortcut (`id=capture`, label "Capture") and fires
+  the custom action. **Warm and cold** both open the composer **empty**, correct for `kind:
+  "compose"`.
+- **Five tabs unchanged**, header search + settings actions intact, no layout regression.
+- **Date/time pickers** (on versionCode 10). Tapping "Due date" opens a real Material 3 calendar
+  dialog, which hands off to a 24-hour clock dialog; the field then reads **"Sep 14, 2026, 2:12 AM"**
+  — proving `combineDateAndTime` takes the date from one dialog and the wall clock from the other. A
+  **Clear** control appears only when a value is set and returns the field to "Not set". Both dialogs
+  fit 480x640 with no clipping.
+- **Reminder round-trip, device to database.** A task created on the device with the reminder picker
+  showing "Sep 19, 2026, 2:13 AM" is stored as **`2026-09-19T07:13:00.000Z`** — 02:13 CDT is 07:13
+  UTC, so the offset the picker serialized is exactly right — with `due_at` independently null. Task
+  archived afterwards; active tasks back to 2.
+- **Today shows no reminder banner**, which is correct: this device is PRIMARY, notifications are
+  enabled, it is not revoked, and the exact-alarm appop is `allow`, so reminders will fire.
+
+#### A real defect found by physical acceptance, and only by it
+
+The first v9 build shipped date/time fields that **did nothing when tapped**. No crash, no error, no
+failing test — the only evidence anywhere was one logcat line:
+
+> `ExpoComposeView: MissingHostException: A Jetpack Compose view "DatePickerDialogView" must be
+> rendered as a direct child of a <Host> component.`
+
+`@expo/ui`'s Compose views require `<Host>` as their **direct** parent; the field's own `<View>`
+between them breaks the Compose composition boundary. Fixed by hosting both dialogs in a zero-size,
+absolutely-positioned `Host` (they are dialogs — they overlay the screen and must take no layout
+space in the form), and **`compose-host.test.ts` now enforces the rule mechanically** for every
+`@expo/ui/jetpack-compose` view in the app, walking back from each usage to the nearest enclosing JSX
+tag. Mutation-verified against the exact defect that shipped.
+
+Recorded because the failure mode is the point: a native view that silently renders nothing is
+invisible to every check that does not run on a device.
 
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
@@ -1230,8 +1314,8 @@ live check was a `GET` or a refused `POST`.
 
 Baseline **re-measured first-hand, not assumed**: `turbo run test --force --concurrency=1`
 reproduced **3,226 tests / 21 tasks, 0 of 21 cached** exactly, matching the recorded 8.3 figure
-per-package. After the checkpoint, the same uncached serial run gives **3,320 tests across 21 turbo
-tasks, zero failing** — api **686** (+13) · mobile **580** (+51) · worker **439** (+8) · core
+per-package. After the checkpoint, the same uncached serial run gives **3,322 tests across 21 turbo
+tasks, zero failing** — api **686** (+13) · mobile **582** (+53) · worker **439** (+8) · core
 **447** (+8) · health-providers 315 · schema **294** (+14) · monitoring 132 · api-client 133 ·
 mail-providers 116 · db 79 · **calendar-providers 74** (zero-drift canary, held exactly) ·
 ai-providers 25. **No package decreased.**
@@ -1239,13 +1323,19 @@ ai-providers 25. **No package decreased.**
 Build **23/23**, typecheck **23/23**, `eslint .` clean, `prettier --check .` clean,
 `git diff --check` clean, gitleaks clean on every commit.
 
-**Mutation tests — 20 of 20 killed and restored**, covering every load-bearing guard added:
+**Mutation tests — 21 of 21 killed and restored**, covering every load-bearing guard added:
 the committability guard, the correction storage shape, the unreadable-parse guard, the worker's
 permanent-vs-retryable split, the confirm idempotency guard, failure classification, the client's
 refusal surface, `isCommittableToolCall`, `readStoredParseResult`, the `corrected_tool_call` type,
 share-intent dedupe, control-strip-before-truncate ordering, the length bound, the Kotlin/TS action
 pairing, the warm-path intent source, the sticky-intent neutering, picker date/time combination,
-offset serialization, the Today notice's silence when healthy, and `remind_at` on create.
+offset serialization, the Today notice's silence when healthy, `remind_at` on create, and the
+Compose `<Host>` rule — that last one verified against the exact defect that reached the device.
+
+**A process mistake worth recording**: the mutation harness restores each mutated file with
+`git checkout --`, which silently reverted an **uncommitted** fix to a file it had just mutated. It
+was caught on the next `git status`, reapplied and committed before the rebuild. The rule is to
+commit before mutating the same file.
 
 **Two failures were found by the suite rather than by review**, and both were real:
 `worker#build` rejected an index-signature property access that `typecheck` had allowed (different
