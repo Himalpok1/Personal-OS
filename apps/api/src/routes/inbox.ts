@@ -3,6 +3,9 @@ import {
   InboxConfirmRequestSchema,
   InboxItemSchema,
   InboxListQuerySchema,
+  isCommittableToolCall,
+  readStoredParseResult,
+  type StoredParseResult,
 } from "@personal-os/schema";
 import { count, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -88,10 +91,42 @@ export default function inboxRoutes(app: FastifyInstance): void {
         return reply.code(409).send({ error: "not_awaiting_confirmation", status: row.status });
       }
 
+      // Decide the tool call the worker will actually try to commit -- the
+      // caller's correction when supplied, otherwise whatever the parser
+      // stored -- and refuse here if committing it is impossible.
+      //
+      // Checkpoint 8.4 exists because this check did not. `unclear` is a
+      // valid stored parse result but has no entity to create, so confirming
+      // one returned 202, enqueued a job that threw on every one of its five
+      // attempts, and left the item exactly as it was. The user saw a button
+      // return to its idle state and nothing else. Refusing before the
+      // enqueue is what makes the 202 mean "a commit will be attempted".
+      const stored = readStoredParseResult(row.parseResult);
+      const effectiveToolCall = body.corrected_tool_call ?? stored?.toolCall;
+      if (!effectiveToolCall) {
+        return reply.code(409).send({ error: "parse_result_unreadable" });
+      }
+      if (!isCommittableToolCall(effectiveToolCall)) {
+        // `tool` is a closed enum member, never model prose -- the `unclear`
+        // tool's own `reason` argument is derived from the capture text and
+        // is deliberately not echoed.
+        return reply
+          .code(409)
+          .send({ error: "parse_result_not_committable", tool: effectiveToolCall.tool });
+      }
+
       if (body.corrected_tool_call !== undefined) {
+        // Write the shape the worker reads (`parse_result.toolCall`). This
+        // previously stored the bare tool call, so a correction made the row
+        // UNREADABLE to runConfirm and turned the documented escape hatch
+        // from an unclear parse into a second silent failure.
+        const corrected: StoredParseResult = {
+          toolCall: body.corrected_tool_call,
+          confidenceFlags: stored?.confidenceFlags ?? [],
+        };
         await app.db
           .update(inboxItems)
-          .set({ parseResult: body.corrected_tool_call })
+          .set({ parseResult: corrected })
           .where(eq(inboxItems.id, row.id));
       }
 

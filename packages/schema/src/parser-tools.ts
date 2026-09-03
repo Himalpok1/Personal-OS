@@ -59,3 +59,21 @@ export const ParserToolCallSchema = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("unclear"), args: UnclearToolSchema }),
 ]);
 export type ParserToolCall = z.infer<typeof ParserToolCallSchema>;
+
+// Whether a parsed tool call can become a real task/note/event row.
+//
+// `unclear` is a legitimate parser OUTCOME -- it is one of the four tools the
+// model may call, and Checkpoint 8.4 found it stored in production on two
+// inbox items. It is NOT, however, a committable one: the parser is saying it
+// could not classify the capture, so there is no entity to create. The commit
+// switch in apps/worker/src/commit-parsed-entity.ts has always thrown on it.
+//
+// Before 8.4 nothing consulted that fact BEFORE enqueueing a commit, so
+// confirming an `unclear` item enqueued a job that could only ever throw,
+// burned all five retries, and left the item untouched with the user told
+// nothing. This predicate is the single shared answer to "will a commit of
+// this tool call be attempted, or is it structurally impossible?", so the API
+// can refuse up front instead of accepting doomed work.
+export function isCommittableToolCall(call: ParserToolCall): boolean {
+  return call.tool !== "unclear";
+}

@@ -13,15 +13,19 @@ import {
   CreateEventToolSchema,
   CreateNoteToolSchema,
   CreateTaskToolSchema,
+  isCommittableToolCall,
   ParserToolCallSchema,
+  readStoredParseResult,
   UnclearToolSchema,
   type ParserToolCall,
+  type StoredParseResult,
 } from "@personal-os/schema";
 import { generateText, tool, type LanguageModel } from "ai";
 import { eq } from "drizzle-orm";
 import type { Job, PgBoss } from "pg-boss";
 import { commitParsedEntity, hasKnownProject } from "../commit-parsed-entity.js";
 import { env } from "../env.js";
+import { errorToken, log } from "../logger.js";
 import { CAPTURE_PARSE_QUEUE, NOTIFICATIONS_DISPATCH_QUEUE } from "../queue-names.js";
 import { withAiJobErrorContainment } from "./ai-job-error.js";
 import type { NotificationsDispatchJobData } from "./notifications-dispatch.js";
@@ -127,11 +131,6 @@ function projectNameOf(call: ParserToolCall): string | undefined {
   return call.tool === "create_task" || call.tool === "create_note" ? call.args.project : undefined;
 }
 
-interface StoredParseResult {
-  toolCall: ParserToolCall;
-  confidenceFlags: string[];
-}
-
 async function commitAndUpdate(
   db: Db,
   inboxId: string,
@@ -216,13 +215,26 @@ async function runAutoParse(db: Db, row: typeof inboxItems.$inferSelect): Promis
   return true;
 }
 
-async function runConfirm(db: Db, row: typeof inboxItems.$inferSelect): Promise<void> {
-  const stored = row.parseResult as StoredParseResult | null;
-  if (!stored?.toolCall) {
-    throw new Error(`inbox_items ${row.id} has no parse_result to confirm`);
-  }
-  const toolCall = ParserToolCallSchema.parse(stored.toolCall);
-  await commitAndUpdate(db, row.id, toolCall, row.timezone, "confirmed");
+/**
+ * Outcome of a confirm-mode job. `not_committable` and `unreadable` are
+ * PERMANENT: they are properties of the stored row, so every retry recomputes
+ * the same answer. Returning them instead of throwing is the difference
+ * between one classified log line and five identical failures followed by a
+ * dead job nobody reads.
+ */
+type ConfirmOutcome = "committed" | "not_committable" | "unreadable";
+
+async function runConfirm(db: Db, row: typeof inboxItems.$inferSelect): Promise<ConfirmOutcome> {
+  const stored = readStoredParseResult(row.parseResult);
+  if (!stored) return "unreadable";
+  // Defence in depth. POST /inbox/:id/confirm refuses an uncommittable tool
+  // call before enqueueing, so reaching this branch means a job queued before
+  // that guard existed, or a direct enqueue. Either way retrying cannot help:
+  // commitParsedEntity throws unconditionally on `unclear`, which is exactly
+  // how two production confirms burned five attempts each and changed nothing.
+  if (!isCommittableToolCall(stored.toolCall)) return "not_committable";
+  await commitAndUpdate(db, row.id, stored.toolCall, row.timezone, "confirmed");
+  return "committed";
 }
 
 export interface CaptureParseJobData {
@@ -255,30 +267,62 @@ export function createCaptureParseHandler(db: Db, boss: PgBoss) {
     async function handleCaptureParse(jobs: Job<CaptureParseJobData>[]): Promise<void> {
       for (const job of jobs) {
         const { inboxId, mode } = job.data;
-        const [row] = await db.select().from(inboxItems).where(eq(inboxItems.id, inboxId));
-        if (!row) {
-          console.warn(`capture.parse: inbox_items ${inboxId} not found, skipping`);
-          continue;
-        }
-
-        if (mode === "confirm") {
-          // Idempotency guard: a duplicate delivery of an already-confirmed
-          // job is a no-op, not an error.
-          if (row.status !== "needs_confirm") continue;
-          await runConfirm(db, row);
-        } else {
-          // A prior attempt may have committed needs_confirm and then failed
-          // before enqueueing its push. Re-enqueue from durable row state;
-          // notifications.dispatch's per-device dedupe prevents duplicates.
-          if (row.status === "needs_confirm") {
-            await enqueueConfirmationPush(boss, row);
+        // Which step was running when something threw. AiJobError deliberately
+        // retains only the queue name and the cause's class name, so before
+        // 8.4 a provider outage, a Postgres failure and a commit-invariant
+        // violation all persisted as the identical string
+        // "capture.parse failed (Error)" -- and NOTHING was logged at all.
+        // This is a closed set of step names, never a message.
+        let stage: "load_row" | "confirm_commit" | "auto_parse" | "confirmation_push" = "load_row";
+        try {
+          const [row] = await db.select().from(inboxItems).where(eq(inboxItems.id, inboxId));
+          if (!row) {
+            console.warn(`capture.parse: inbox_items ${inboxId} not found, skipping`);
             continue;
           }
-          // Idempotency guard: a duplicate delivery of an already-processed
-          // capture is a no-op.
-          if (row.status !== "pending") continue;
-          const needsConfirmation = await runAutoParse(db, row);
-          if (needsConfirmation) await enqueueConfirmationPush(boss, row);
+
+          if (mode === "confirm") {
+            // Idempotency guard: a duplicate delivery of an already-confirmed
+            // job is a no-op, not an error.
+            if (row.status !== "needs_confirm") continue;
+            stage = "confirm_commit";
+            const outcome = await runConfirm(db, row);
+            if (outcome !== "committed") {
+              // Permanent and non-retryable. Logged rather than thrown so the
+              // condition is visible without burning four more attempts on an
+              // answer that cannot change.
+              log.warn("capture.parse.confirm_refused", { mode: "confirm", reason: outcome });
+            }
+          } else {
+            // A prior attempt may have committed needs_confirm and then failed
+            // before enqueueing its push. Re-enqueue from durable row state;
+            // notifications.dispatch's per-device dedupe prevents duplicates.
+            if (row.status === "needs_confirm") {
+              stage = "confirmation_push";
+              await enqueueConfirmationPush(boss, row);
+              continue;
+            }
+            // Idempotency guard: a duplicate delivery of an already-processed
+            // capture is a no-op.
+            if (row.status !== "pending") continue;
+            stage = "auto_parse";
+            const needsConfirmation = await runAutoParse(db, row);
+            if (needsConfirmation) {
+              stage = "confirmation_push";
+              await enqueueConfirmationPush(boss, row);
+            }
+          }
+        } catch (err) {
+          // Classify, then rethrow unchanged so pg-boss retry semantics are
+          // untouched. `errorToken` is the only sanctioned route from a thrown
+          // value to a log line: it emits a SQLSTATE or a class name and can
+          // carry neither provider prose nor the user's capture text.
+          log.warn("capture.parse.failed", {
+            stage,
+            mode: mode ?? "auto",
+            error: errorToken(err),
+          });
+          throw err;
         }
       }
     },

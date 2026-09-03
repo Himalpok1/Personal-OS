@@ -26,6 +26,7 @@ import {
   monitorChecks,
   monitorIncidents,
   monitorTargets,
+  notes,
   notificationDispatchLog,
   occurrences,
   tasks,
@@ -50,6 +51,10 @@ export async function truncateTestTables(db: Db): Promise<void> {
   await db.delete(calendarConnections);
   await db.delete(events);
   await db.delete(tasks);
+  // `notes` was missing here until Checkpoint 8.4, so every note
+  // commit-parsed-entity created in a worker test accumulated in the shared
+  // `personalos_test` database and leaked into later suites' counts.
+  await db.delete(notes);
   await db.delete(inboxItems);
   await db.delete(devices);
   await db.delete(notificationDispatchLog);

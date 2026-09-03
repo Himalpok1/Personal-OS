@@ -1,5 +1,6 @@
 import type { InboxItem } from "@personal-os/schema";
 import { FLOATING_CLEARANCE } from "@/components/floating-layout";
+import { canConfirmInboxItem, confirmErrorMessage } from "@/components/inbox/confirm-state";
 import { useConfirmInboxItem, useInbox } from "@/queries/inbox";
 import { FlatList, Pressable, SafeAreaView, Text, View } from "react-native";
 
@@ -13,6 +14,7 @@ const STATUS_LABEL: Record<InboxItem["status"], string> = {
 
 function InboxRow({ item }: { item: InboxItem }) {
   const confirm = useConfirmInboxItem();
+  const canConfirm = canConfirmInboxItem(item);
 
   return (
     <View className="border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
@@ -28,10 +30,12 @@ function InboxRow({ item }: { item: InboxItem }) {
           {STATUS_LABEL[item.status]}
           {item.entity_type ? ` -> ${item.entity_type}` : ""}
         </Text>
-        {item.status === "needs_confirm" ? (
+        {canConfirm ? (
           <Pressable
             onPress={() => confirm.mutate({ id: item.id })}
             hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Confirm this capture as parsed"
             className="min-h-[44px] items-center justify-center rounded bg-blue-100 px-2 dark:bg-blue-950"
             disabled={confirm.isPending}
           >
@@ -40,7 +44,15 @@ function InboxRow({ item }: { item: InboxItem }) {
             </Text>
           </Pressable>
         ) : null}
+        {item.status === "needs_confirm" && !canConfirm ? (
+          <Text className="text-xs text-amber-700 dark:text-amber-500">Can&apos;t be filed</Text>
+        ) : null}
       </View>
+      {confirm.isError ? (
+        <Text className="mt-1 text-xs text-red-600 dark:text-red-400">
+          {confirmErrorMessage(confirm.error)}
+        </Text>
+      ) : null}
       {item.parse_result != null ? (
         <Text className="mt-1 text-xs text-neutral-500 dark:text-neutral-400" numberOfLines={2}>
           {JSON.stringify(item.parse_result)}

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CaptureSourceSchema } from "./capture.js";
+import { ParserToolCallSchema } from "./parser-tools.js";
 
 export const InboxItemStatusSchema = z.enum([
   "pending",
@@ -37,14 +38,51 @@ export const InboxItemSchema = z.object({
 
 export type InboxItem = z.infer<typeof InboxItemSchema>;
 
+// The shape capture.parse persists into inbox_items.parse_result. It was
+// previously an interface private to apps/worker, which is why the API's
+// confirm route could write a DIFFERENT shape into the same column (it stored
+// a bare tool call where the worker reads `.toolCall`) -- a correction was
+// therefore unreadable by the only code that consumes it. Declaring it here
+// makes API and worker agree by construction.
+export const StoredParseResultSchema = z.object({
+  toolCall: ParserToolCallSchema,
+  confidenceFlags: z.array(z.string()),
+});
+export type StoredParseResult = z.infer<typeof StoredParseResultSchema>;
+
+// inbox_items.parse_result is `jsonb` and is `unknown` on the wire, so every
+// reader must narrow it defensively rather than casting. Returns null for the
+// legacy `{error}` shape written on the no-provider path, for a correction
+// stored before 8.4 fixed the shape, and for anything else unrecognised.
+export function readStoredParseResult(value: unknown): StoredParseResult | null {
+  const parsed = StoredParseResultSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 // Accepted by POST /inbox/:id/confirm to let the caller supply a corrected
 // tool-call payload when the parser's own guess was wrong; omitted entirely
 // means "the parser's needs_confirm guess was right, just commit it."
+//
+// Typed as ParserToolCallSchema rather than the previous `z.unknown()`: the
+// worker parses this value against exactly that union before committing, so
+// accepting anything looser only moved the rejection from a 400 the caller
+// can read into a job failure nobody sees.
 export const InboxConfirmRequestSchema = z.object({
-  corrected_tool_call: z.unknown().optional(),
+  corrected_tool_call: ParserToolCallSchema.optional(),
 });
 
 export type InboxConfirmRequest = z.infer<typeof InboxConfirmRequestSchema>;
+
+// Why a confirm was refused. Closed, because the mobile client maps each
+// member to its own copy -- an open string would render as a blank error.
+export const InboxConfirmRefusalSchema = z.enum([
+  // The stored (or supplied) tool call is `unclear`: the parser could not
+  // classify the capture, so there is no entity to create. Needs a correction.
+  "parse_result_not_committable",
+  // No parse result at all, or one written in a shape no reader understands.
+  "parse_result_unreadable",
+]);
+export type InboxConfirmRefusal = z.infer<typeof InboxConfirmRefusalSchema>;
 
 export const InboxListQuerySchema = z.object({
   status: InboxItemStatusSchema.optional(),
