@@ -9,7 +9,10 @@
 **Checkpoint 8.4 — Low-friction capture — is COMPLETE (2026-09-03).** Its mandatory Lane 0
 reliability gate (the `capture.parse` confirm failure) passed; Lane 3 is deferred on evidence.
 API, web and the Rabbit R1 APK (**versionCode 10**) are all deployed and physically accepted.
-**Next checkpoint allowed:** **8.5**, on explicit approval only. It has not begun.
+**Checkpoint 8.5 — Instrumented daily-driver soak — is OPEN and RUNNING.** Started
+**2026-09-03 15:07 CDT**; minimum close **2026-09-24**, preferred **2026-10-01**. **Hard feature
+freeze in force.** Working record and observation ledger: **`docs/SOAK-8.5.md`**.
+**Next checkpoint allowed:** **8.6**, on explicit approval only, and not before 8.5 closes.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -912,6 +915,52 @@ tag. Mutation-verified against the exact defect that shipped.
 Recorded because the failure mode is the point: a native view that silently renders nothing is
 invisible to every check that does not run on a device.
 
+### Checkpoint 8.5 — Instrumented daily-driver soak (OPEN, started 2026-09-03)
+
+A 3–4 week **feature freeze** whose deliverable is evidence, not features. It answers one question:
+does Personal OS become genuinely useful when development stops? The Rabbit R1 is the owner's
+primary daily driver for the duration.
+
+**The full record — window, baseline, health-check readings and the observation ledger — is
+`docs/SOAK-8.5.md`.** Only the summary lives here, deliberately, so this file does not grow the way
+it did through Phase 7.
+
+| | |
+|---|---|
+| SOAK_START | **2026-09-03 15:07 CDT** (`2026-09-03T20:07:40Z`), recorded first-hand |
+| Milestones | DAY_7 2026-09-10 · DAY_14 2026-09-17 · **DAY_21 2026-09-24 (minimum close)** · DAY_28 2026-10-01 (preferred) |
+| Entry state | HEAD `9538f66`, tree clean, local ≡ `origin`, migration **16**, Rabbit **versionCode 10** |
+
+**Baseline at 2026-09-03T20:07Z**, collected from existing observability only — no analytics code
+added, no telemetry introduced, no user-authored content read:
+
+- **Core:** 0 projects · 5 tasks (2 active) · 4 notes · 8 inbox items · 98 events · 1 occurrence · 1 review
+- **Capture by source:** `web` 4 · `ptt` 3 · `share` 1. Parser 5 completed, 2 failed (the known 8.4 `unclear` pair)
+- **Reminders:** 3 tasks carry `remind_at` but **0 are live and future**; 0 alarms scheduled, correctly
+- **Integrations:** Calendar `active` (2 of 5 calendars, 98 events) · Gmail `active` (567 messages, 200/200 syncs, 0 cursor expirations, 3 digests) · Health `active` (19 streams, 161 daily rows, 1,854 succeeded / 1 known failure)
+- **Monitoring:** 5 targets · 7,577 checks, 7,576 up · **0 incidents ever**
+- **System:** migration 16 · all containers `restarts=0` · API `(healthy)` · Postgres publishes no host port · 3 non-completed pg-boss jobs all time, all known
+
+**Two measurability limits are stated rather than engineered around.** Launcher-shortcut captures are
+indistinguishable from Quick Capture — both are `source: "web"`, and splitting them needs a
+CHECK-constraint migration the freeze forbids; **share is measurable, launcher is not.** Search
+frequency *is* countable from the request log without retaining query text, but the count resets on
+any API recreation, so it is per-log-epoch and each check records the container start time.
+
+**Two alarming baseline readings were checked and cleared**, recorded so they are not
+re-investigated: `notify_reminders = false` on the primary device does not block local scheduling
+(the column is intentionally unwired), and the archived 8.4 smoke task's open past-dated occurrence
+does **not** surface on Today (`overdue_total = 0`).
+
+**One real friction item is deferred, not fixed:** Today permanently shows `inbox_attention_total = 2`
+from the two captures that can never be confirmed in-app. A counter that never clears trains the
+owner to ignore it and will bias the soak; the owner can clear it with a `corrected_tool_call`, and
+there is no in-app route. P2 — recorded, not absorbed.
+
+**Freeze exceptions so far: 0.**
+
+---
+
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
 **Phase 7 is closed.** Checkpoints 7.0–7.8B and the full Checkpoint 7.9 record — the open
@@ -1261,6 +1310,23 @@ an intentionally-logged field — are recorded in the ledger below.
 
 ## Current objective
 
+**Run the Checkpoint 8.5 soak.** The build stops here. From 2026-09-03 the owner uses Personal OS
+naturally on the Rabbit R1 — share sheet when something is worth keeping, launcher Capture when a
+thought occurs, tasks and reminders when actually useful, Today and Agenda, search when something
+needs finding, Calendar and the Gmail digest and Health consumed as they arrive. **No artificial
+quotas, and no records manufactured to make adoption look real.**
+
+The freeze holds until 2026-09-24 at the earliest. The only permitted interruptions are P0
+security/privacy exposure, P0 data loss, P1 a core flow broken, and P1 a severe silent failure.
+Everything else is recorded in `docs/SOAK-8.5.md` and deferred — including friction that is merely
+annoying, which is the category most likely to tempt a fix.
+
+**Interim reports at DAY_7 (2026-09-10) and DAY_14 (2026-09-17); the full A–H review at DAY_21
+(2026-09-24).** If the Day-21 evidence is weak the soak continues to DAY_28 rather than closing on
+a good uptime number.
+
+---
+
 **Checkpoint 8.4 is COMPLETE.** Capture on the Rabbit R1 now takes one or two gestures from
 anywhere: the system share sheet accepts text from any app, and a launcher long-press opens the
 composer directly. Dates and reminders are picked, not typed, and a reminder can be set when the
@@ -1299,7 +1365,16 @@ routes.
 
 ## Current work
 
-**None in progress.** Checkpoint 8.4 closed 2026-09-03. Four commits: the capture.parse reliability
+**Checkpoint 8.5 soak is running** (started 2026-09-03 15:07 CDT). No code work is in progress and
+none is permitted while the freeze holds. Activity is limited to read-only health checks at
+DAY_7/14/21/28 and to appending observations to `docs/SOAK-8.5.md`.
+
+**Production writes made by 8.5 so far: none.** The baseline was collected entirely with `GET`s and
+read-only SQL; nothing was created, modified or deleted, and no user-authored content was read.
+
+---
+
+**Checkpoint 8.4 closed 2026-09-03.** Four commits: the capture.parse reliability
 fix, the share-sheet + launcher front doors, the pickers/reminders/eligibility work, and this record.
 Two production deployments (api + worker for Lane 0; api + web for Lanes 4–6 — **worker deliberately
 not rebuilt the second time**, its runtime being unchanged) and one in-place APK install.
@@ -1352,28 +1427,41 @@ production tracking table **16** before and after both deployments.
 
 ## Next action
 
-**Stop at readiness. Checkpoint 8.5 must not begin without explicit approval.**
+**Use the system. The soak is the work.** Checkpoint 8.5 is open and the feature freeze holds until
+**2026-09-24** at the earliest. Checkpoint 8.6 must not begin until 8.5 closes with a report.
 
-Nothing blocks it. The items below are open work, not gates:
+Scheduled during the soak:
 
-1. **Run the adoption soak (8.5) with the front doors that now exist.** This is the point of the
-   whole phase, and 8.4 removed the friction it was waiting on. The soak's deliverable is evidence,
-   not a feature.
-2. **Configuration / key durability remains the sharpest systemic risk.**
+1. **DAY_7 — 2026-09-10.** Read-only health check plus an interim report: baseline→current content
+   deltas, capture source deltas, reminder usage, search evidence, integration reliability,
+   recurring friction, freeze exceptions, emerging Phase 9 signals.
+2. **DAY_14 — 2026-09-17.** The same.
+3. **DAY_21 — 2026-09-24.** Full A–H review: adoption, capture, retrieval, planning, integrations,
+   reliability, friction, missing capability. **Continue to DAY_28 (2026-10-01) if the evidence is
+   weak.**
+
+Open work that is **not** a gate on the soak and is **not** started during it:
+
+4. **Configuration / key durability remains the sharpest systemic risk.**
    `CREDENTIALS_ENCRYPTION_KEY` has no key version, no KDF and no rotation path and exists on exactly
    two hosts. Intended direction: SOPS + age with the private key held off both machines. **Nothing
    secret goes in GitHub.** ADR-024 is unchanged.
-3. **Retention windows remain an owner decision** and gate the mail prune ADR-054 requires.
-4. **Optional GitHub hardening:** Actions is default-on although no workflow exists in history.
-5. **Local hygiene:** delete `apps/mobile/.expo/dev/logs/export.log`, which holds a plaintext
+5. **Retention windows remain an owner decision** and gate the mail prune ADR-054 requires.
+6. **Optional GitHub hardening:** Actions is default-on although no workflow exists in history.
+7. **Local hygiene:** delete `apps/mobile/.expo/dev/logs/export.log`, which holds a plaintext
    `EXPO_TOKEN` at mode 644.
 
-Deliberately **not** started: Checkpoint 8.5, a dead-letter queue for `capture.parse`, notification
+**Owner decision available at any time, and deliberately not taken for them:** the two `unclear`
+captures keep Today's attention counter permanently at 2. They can be cleared with a
+`corrected_tool_call` confirm, or left alone. Either is fine; leaving them is itself soak evidence
+about how a never-clearing badge is treated.
+
+Deliberately **not** started: Checkpoint 8.6, a dead-letter queue for `capture.parse`, notification
 capture (deferred on evidence — see 8.4 Lane 3), pickers on the event screen, adding `events` or
 `projects` to search, bounding event text at write, any notification-producer change, any Brief
 prompt or output-filter change, enabling any further calendar, and migration `0016`.
 
-The 8.2/8.3 findings this checkpoint deliberately did **not** absorb remain open and unchanged: the
-calendar `summary` display-name bug, the zero-length all-day event, Today multi-day event bucketing,
-`done` occurrence presentation, `/search` query logging, events/projects search, export UI, and
-calendar write-side bounds.
+The 8.2/8.3 findings earlier checkpoints deliberately did **not** absorb remain open and unchanged:
+the calendar `summary` display-name bug, the zero-length all-day event, Today multi-day event
+bucketing, `done` occurrence presentation, `/search` query logging, events/projects search, export
+UI, and calendar write-side bounds.
