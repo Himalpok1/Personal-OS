@@ -5,7 +5,9 @@
 **Phase 7 is CLOSED** — Checkpoint 7.9 completed 2026-09-02; its record is in `docs/history/phase-7.md`.
 **Checkpoint 8.1 — Failure visibility + AI input/output hardening — is COMPLETE and DEPLOYED.**
 **Checkpoint 8.2 — Enable the real Google Calendar — is COMPLETE (2026-09-03). No code, no migration.**
-**Next checkpoint allowed:** **8.3**, on explicit approval only. It has not begun.
+**Checkpoint 8.3 — Find what you stored (search + export) — API and web are COMPLETE and DEPLOYED (2026-09-03).
+Its mobile lane is BLOCKED on owner-only actions; see the 8.3 section.**
+**Next checkpoint allowed:** **8.4**, on explicit approval only, and not before 8.3's mobile lane closes.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -39,7 +41,7 @@ what is true *now*, it is in this file.
 | | |
 |---|---|
 | Migration level | **16** (`0000`–`0015`); local and production agree |
-| Serving commit | api/worker **`dc3983d`** (Checkpoint 8.1) · web `a5bbc48` |
+| Serving commit | api **`b06b0ca`** · web **`b06b0ca`** (both Checkpoint 8.3) · worker **`dc3983d`** (8.1 — deliberately not rebuilt; its runtime is unchanged) |
 | Integrations | Google Health **active** · Google Calendar **active** · Gmail **active** |
 | Calendar sync | **2 of 5 calendars enabled** — the owner's real primary (enabled at 8.2) and the dedicated test calendar. **98 events** ingested, all from the primary. |
 | Monitoring | 5 targets seeded, including both Tailscale Serve routes |
@@ -47,7 +49,8 @@ what is true *now*, it is in this file.
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
 | Backups | **None, by design** (ADR-024) |
 | Source durability | **`origin` = `https://github.com/Himalpok1/Personal-OS` — PRIVATE, established 2026-09-02.** `main` + `phase-8-consolidation` pushed and hash-verified. No CI, no Actions workflow, no repository secret. |
-| Test baseline | **3,075 tests / 21 turbo tasks** (see *Last verification*) |
+| Test baseline | **3,226 tests / 21 turbo tasks** (see *Last verification*) |
+| Search / export | `GET /search` and `GET /export` live, perimeter-only, no migration (ADR-059) |
 
 ---
 
@@ -493,6 +496,127 @@ containers `restarts=0`, API `(healthy)`; migration level 16; worker heartbeat f
 incidents and 0 open. Every pg-boss job created since the change completed — the only failed job in
 the system remains the pre-deployment `calendar.google.sync-calendar` of 2026-08-31.
 
+### Checkpoint 8.3 — Find what you stored: search + export (2026-09-03)
+
+**API and web COMPLETE and DEPLOYED. Mobile lane BLOCKED on owner-only actions — see below.**
+**No migration** — level stays 16, `packages/db` byte-unchanged, `0016` absent. Locked by **ADR-059**.
+
+**Search contract.** `GET /search?q=&limit=&include_archived=` over exactly four entities —
+`tasks` (title, body), `notes` (title, body), `inbox_items` (raw_text), `mail_messages` (subject,
+from_display_name). Every other table is excluded by decision, `events` included: 8.2 put real
+third-party text there and it is still unbounded at write. Each result member is a `.strict()` Zod
+object, so a column not named in the contract is a parse failure rather than a leak. Mail results
+carry a display name only — never `from_address` or `from_domain`.
+
+**`limit` is PER TYPE (default 20, max 50), not per response.** ADR-054's anti-eviction rule applied
+to a new surface: with one shared budget, 549 mail rows would decide how many of the owner's 3 notes
+come back. Proven live — a query matching **298** mail rows still returned the single matching note,
+with mail capped at 20. Order is `task, note, inbox_item, mail_message`, then recency desc, then
+`id` asc.
+
+**Wildcard escaping is the load-bearing control, and it is not SQL injection.** Every value already
+binds as `$n` and there is no `sql.raw` anywhere — but a bound parameter is still read as a LIKE
+*pattern*, so `%` would mean "match every row", silently and never as an error. Escaping is a single
+pass over `\ % _`, and the predicate is written as `ilike $1 escape $2` rather than via drizzle's
+`ilike()` helper, which emits no ESCAPE clause. **Proven in production: `%%` returns 0 results
+against 549 mail rows.**
+
+**Performance — measured, not assumed.** At **26,000 seeded rows** (~50x production) worst observed
+p95 was **37 ms** (a pathological 128-char query) and typical p95 **16–19 ms**, over 8 query shapes
+x 25 runs. Live production latency 18–35 ms. No index exists and none can: `reconcile-drizzle-tracking.ts`
+aborts on any non-btree method and any non-identifier index column, so GIN, trigram and
+`lower(title)` all fail **by the same code path that would reject HNSW**, and `posops_app` holds
+USAGE not CREATE so `pg_trgm` is unavailable anyway.
+
+**Export.** `GET /export`, no parameters, user-authored core only: `projects`, `tasks`, `notes`,
+`inbox_items`. Calendar, mail and health are excluded by decision. Three of four shapes reuse the
+already-audited frozen entity schemas; inbox items are narrowed to drop `client_uuid`, `confidence`
+and `parse_result`. Archived rows are always included. **Not a backup — ADR-024 untouched:** it reads
+four tables and returns JSON, creating no file and having no schedule. No CSV (four column sets
+cannot share one flat table without an archive format). **No mobile download affordance** — saving a
+file on device needs new native surface; the endpoint is reachable by `curl` or a browser from any
+tailnet machine.
+
+**Mobile.** Search is a **header action on every tab, not a sixth tab** — the 480px bar already
+carries five labels, the same reasoning that put Health and Monitoring behind Settings cards.
+Composing two header actions is new (Settings was the only one); the minimal divergence is a
+flex-row wrapper. Navigation is derived from `type` + uuid only — the API returns **no href**, so a
+subject that looks like a path cannot become one. A mail result has no destination and renders as a
+plain `View`, not a dead `Pressable`.
+
+**Search results are deliberately NOT put through `sanitizeModelText`.** That filter is for a
+*model's* prose; a search result is the owner's own stored text quoted back on request. Rewriting a
+note they wrote into "renew at [link removed]" would be lying about their content in the one feature
+whose purpose is finding it. What defends the path is the renderer, and a new mechanical guard
+(`apps/worker/src/mobile-inert-rendering.test.ts`) now enforces app-wide that nothing interprets its
+input — no WebView, no markdown renderer, no `dataDetectorTypes`, and `Linking.openURL` from exactly
+one justified file.
+
+#### Verification actually run
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Full gate | build **23/23** · typecheck **23/23** · `eslint .` clean · `prettier --check .` clean · `git diff --check` clean |
+| 2 | Full suite, uncached and serial | **3,226 tests / 21 turbo tasks, 0 of 21 cached**, zero failing (baseline was **3,075**, re-measured first-hand, not assumed) |
+| 3 | No package decreased | api **673** (+48) · mobile **529** (+30) · worker **431** (+4) · core **439** (+32) · health-providers 315 · schema **280** (+25) · monitoring 132 · api-client **133** (+12) · mail-providers 116 · db 79 · **calendar-providers 74** (zero-drift canary, held exactly) · ai-providers 25 |
+| 4 | Mutation tests | **8 of 8 killed and restored** — per-type cap, LIKE escaping, query min-length, search result allowlist, export inbox narrowing, archived exclusion, mail tombstone exclusion, inert-rendering guard |
+| 5 | Migration invariant | **16 `.sql` / 16 journal entries**, `0016` absent; `packages/db` diff vs `26cf910` **empty**; production tracking table **16** |
+| 6 | Local performance | 26,000 seeded rows, 8 query shapes x 25 runs, worst p95 **37 ms**; seed data removed afterwards |
+| 7 | Live search | 4 entity classes in one response; caps, `truncated`, ordering and all 5 validation 400s verified over real Tailscale HTTPS |
+| 8 | Live export | 4,285 bytes, 9 top-level keys, `scope=user_authored_core`, counts matching production exactly, **0 of 22 forbidden substrings**; temp copies deleted |
+| 9 | Log leak scan | **1,798 needles** pulled from the DB (mail subjects/display names/addresses, event titles/locations/descriptions, task/note titles, note bodies, inbox text), matched binary-safely against 40 min of api + worker logs: **0 found**, with a positive control proving the scanner works |
+| 10 | Production health | 3 integrations `active` · migration 16 · restarts **0** · monitoring 5 targets, **0 incidents ever**, 0 down in 20 min · heartbeat 3 s old · 124 jobs in 20 min, all `completed` · no new failed jobs · Postgres publishes no host port |
+
+**A test weakness was found by mutation testing, not by review.** Disabling `escapeLikePattern`
+entirely left the literal-`%` test *passing*: with only one relevant row, the unescaped pattern
+`%50%%` still matched exactly one row. A decoy row containing `50` but no percent sign was added; the
+mutation is now killed. Recorded because the failure mode — a test that pins nothing while appearing
+to pin a security control — is the one worth remembering.
+
+**One incidental fix to the decision log.** Checkpoint 8.1 appended ADR-058 onto the END of
+ADR-057's line (`… | Locked || ADR-058 | …`), so ADR-058 never rendered as its own table row — it
+showed as trailing text inside ADR-057's last cell. A newline was inserted. The change is
+**whitespace-only and proven so**: the SHA-256 of the file's entire non-whitespace content is
+byte-identical before and after, so no Locked decision's text was altered. All 64 ADR rows now
+render.
+
+#### Deployment
+
+Frozen order followed to `/home/himallinux/personal-os-8.3-release` (766 tracked files via
+`git archive`; no `.env`, no `google-services.json`). Rollback images tagged **by resolved digest**
+as `:rollback-pre-8.3` for api, web **and** worker. New api image verified to contain 16 migrations,
+no `0016`, and the compiled search/export code before anything running was touched. Migration ran
+from the new image with `--no-deps` and **applied nothing**, as expected.
+
+**`api` and `web` recreated; `worker` deliberately NOT.** Its runtime is unchanged — the only worker
+source change is a test file that no entrypoint imports — so rebuilding it would have been a
+gratuitous restart. Verified after: the worker's serving image digest is byte-identical to before
+(`012f981f…`), while api and web moved to new digests. All four containers `restarts=0`, API
+`(healthy)` in 11 s, and monitoring recorded **zero** `down` checks through the recreation.
+
+#### What is NOT done, and why
+
+**The mobile lane is blocked on owner-only actions, and the block is architectural rather than a
+missing step.**
+
+- **`expo-updates` is not a dependency**, so there is no OTA channel: new JS reaches the Rabbit R1
+  **only** via a new APK. Proven first-hand rather than assumed.
+- **No Android device is reachable** — `adb devices` is empty.
+- **`eas-cli` is not a declared dependency anywhere** and no EAS build was triggered. Building an
+  APK that cannot be installed or verified in the same session would burn a `versionCode`
+  (`autoIncrement: true`) and hand over an unverified artifact for the owner's daily-driver device.
+- A **locally-built** APK is not an option: ADR-037 requires the EAS-managed signing key and a match
+  against the recorded production certificate SHA-256, so a debug-signed build would fail
+  `adb install -r` with a signature mismatch and could only proceed by uninstalling — which
+  destroys pairing, SecureStore, primary-device state and the exact-alarm grant.
+
+**The deployed web bundle IS verified to carry the search screen** — the served 2.55 MB bundle
+contains the placeholder copy, the `search-result-` testIDs and the idle-state copy — but it was
+**not visually rendered**: the sandboxed browser pane fails with `ERR_BLOCKED_BY_CLIENT` on
+`/_expo/static/*` at `:8443`, the documented Phase 2 limitation. `curl` proves the server serves
+those exact assets in 0.3 s. **No physical-device or visual claim is made.**
+
+
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
 **Phase 7 is closed.** Checkpoints 7.0–7.8B and the full Checkpoint 7.9 record — the open
@@ -771,23 +895,43 @@ an intentionally-logged field — are recorded in the ledger below.
 
 ---
 
+- **The API logs the search query string (8.3).** Fastify's request logger records `req.url`, so
+  `/search?q=<term>` puts the owner's own search text in the container log. It is first-party text
+  on a single-user system, not third-party content — the 1,798-needle scan found no stored content
+  in the logs — but it is user content in a log and is recorded rather than glossed. Closing it
+  would mean a route-specific log redaction the API has no mechanism for today.
+- **Search does not cover `events` or `projects` (8.3, deliberate).** Events are excluded because
+  8.2 put real third-party text there and it is **still unbounded at write**; projects were left out
+  because production holds zero of them and adding an entity is a contract change (ADR-059). Both
+  are cheap to add once the write-side bound exists.
+- **Mail search does not filter on connection status (8.3, deliberate).** The digest requires an
+  active connection; search does not, because a disconnected mailbox's rows are still stored and no
+  prune job exists (ADR-057 finding #2). Hiding rows demonstrably in the table would be the
+  dishonest option, but it means a disconnected mailbox stays searchable.
+- **There is no export affordance in the client (8.3).** `GET /export` is reachable by `curl` or a
+  browser from any tailnet machine; saving a file from the app would need new native file-system and
+  sharing surface, which this checkpoint did not open.
+- **The Rabbit R1 cannot receive search without a new APK (8.3).** `expo-updates` is not a
+  dependency, so there is no OTA channel. This is a standing property of the architecture, not an
+  8.3 regression, and it gates every future client-side checkpoint the same way.
+
 ## Current objective
 
-**Checkpoints 8.1 and 8.2 are COMPLETE.** Phase 7 is closed, source durability is established,
-integration failure is reportable (occurrence-scoped alert dedupe on Calendar, Health and a new Gmail
-producer), both live AI lanes filter output through one shared hardened control — and as of
-2026-09-03 the owner's **real primary Google Calendar is syncing**, putting 98 real events into a
-core that previously held none.
+**Checkpoint 8.3's server side is COMPLETE and DEPLOYED.** `GET /search` and `GET /export` are live
+over Tailscale, the web bundle carries the search screen, and the whole thing shipped with **no
+migration** — level 16, `packages/db` byte-unchanged.
 
-8.2 changed exactly one boolean through the supported API and produced **no runtime code commit and
-no migration**. Two natural sync cycles proved first ingest and then a true row-level no-op replay.
+Stored content is findable for the first time: a single query returns matching tasks, notes, inbox
+captures and mail metadata together, with each type capped independently so 549 mail rows cannot
+evict the owner's 3 notes.
 
-**The honest gap 8.2 leaves:** every ingested event is in the past, so Today is legitimately empty
-and the calendar→Brief path has still never been traversed by live third-party text. It is verified
-structurally, not by traffic.
+**The honest gap 8.3 leaves is the physical device.** There is no OTA channel, no Android device is
+reachable, and `eas-cli` is not installed — so the Rabbit R1 is still running the 8.1-era APK and has
+no search affordance. No physical-device claim is made, and no visual render was obtained either: the
+sandboxed browser blocks `/_expo/static/*` at `:8443`, the documented Phase 2 limitation. The mobile
+code is verified by 30 unit tests and by the deployed bundle's contents, not by a screenshot.
 
-**No outstanding actions for 8.2. Checkpoint 8.3 has not begun and must not begin without explicit
-approval.**
+**8.3 is therefore NOT closed.** Its remaining lane needs owner action (below).
 
 ## Completed
 
@@ -811,87 +955,63 @@ routes.
 
 ## Current work
 
-**None in progress.** Checkpoint 8.2 completed 2026-09-03; see its section above. Earlier, two
-closure tasks completed on 2026-09-02, both outside Checkpoint 8.1:
-
-1. **Checkpoint 7.9 closed**, discharging the gate on Phase 8 runtime work. The scheduled
-   mail-digest cron was proven to have fired by a structural discriminator rather than by timing,
-   and same-key upsert was proven at the storage layer. Full record in `docs/history/phase-7.md`.
-2. **Source durability established** — see *Source durability* above.
-
-The only application-tree change in either task is `.gitignore` (`907cae3`). No runtime code, no
-migration, no queue change, no deployment, no mobile build, no production configuration change and
-no OAuth grant change was made. Exactly one production write occurred: the explicitly-authorized
-same-date digest regeneration that proved the upsert.
+**None in progress.** Checkpoint 8.3's server lane completed and deployed 2026-09-03; its mobile
+lane is open and owner-gated. Five commits: contracts, API, mobile, the inert-rendering guard, and a
+mutation-driven test fix. One production deployment (api + web; worker deliberately untouched). No
+production data was written — every live check was a `GET`.
 
 ## Last verification
 
-**Phase 8 Checkpoint 8.0 (2026-09-02).** Branch `phase-8-consolidation`, cut from
-`phase-7-mail-monitoring` at `533601c`. The application tree is byte-unchanged by this checkpoint,
-so this measurement is a *reproduction* baseline, not a new one.
+**Phase 8 Checkpoint 8.3 (2026-09-03).** Branch `phase-8-consolidation`, from `26cf910`.
 
-**Superseded by Checkpoint 8.1 (2026-09-02).** Measured first-hand, uncached and serial
-(`turbo run test --force --concurrency=1`, **0 of 21 cached**): **3,075 tests across 21 turbo
-tasks**, zero failing — up from 3,009, with **no package decreasing**. Per package — api **625**
-(+16) · mobile 499 · worker **427** (+18) · core **407** (+32) · health-providers 315 · schema 255 ·
-monitoring 132 · api-client 121 · mail-providers 116 · db 79 · **calendar-providers 74** (zero-drift
-canary, held exactly) · ai-providers 25. Build **11/11**, typecheck **21/21**, `eslint .` clean,
-`prettier --check .` clean, `git diff --check` clean, gitleaks clean.
+Baseline **re-measured first-hand rather than assumed**: `turbo run test --force --concurrency=1`
+reproduced **3,075 tests / 21 tasks, 0 of 21 cached** exactly, matching the recorded 8.1 figure
+per-package. After the checkpoint, the same uncached serial run gives **3,226 tests across 21 turbo
+tasks, zero failing** — api **673** · mobile **529** · worker **431** · core **439** ·
+health-providers 315 · schema **280** · monitoring 132 · api-client **133** · mail-providers 116 ·
+db 79 · **calendar-providers 74** (zero-drift canary, held exactly) · ai-providers 25. **No package
+decreased.**
 
-**Mutation tests — 8 of 8 killed and restored**, covering every new load-bearing guard: the shared
-filter's bare-domain layers (from the core suite AND, after a rebuild, from the mail lane's own
-adversarial corpus — the first attempt SURVIVED because the worker consumes `packages/core/dist`,
-which is a finding about the harness, not the guard); the Brief output filter; the Calendar, Health
-and Gmail occurrence discriminators; and both mechanical guards.
+Build **23/23**, typecheck **23/23**, `eslint .` clean, `prettier --check .` clean,
+`git diff --check` clean, gitleaks clean on every commit.
 
-> **This corrects a stale record.** The previous *Last verification* section reported Checkpoint
-> 7.7's **3,001** tests, but Checkpoint 7.8A had already moved the baseline to **3,009** without
-> that section being updated. The 7.7 text is retained verbatim in `docs/history/phase-7.md`.
+**Mutation tests — 8 of 8 killed and restored**, covering every load-bearing guard: the per-type
+result cap, LIKE wildcard escaping, query minimum-length validation, the search result allowlist,
+the export inbox narrowing, the archived-row exclusion, the mail tombstone exclusion, and the
+inert-rendering guard. One of them (escaping) **survived on the first attempt** and exposed a real
+weakness in the test rather than in the control; the test was strengthened with a decoy row.
 
-Migration invariant: **16 `.sql` / 16 journal entries**, no `0016`; `packages/db` byte-unchanged.
-
-**Checkpoint 8.2 ran no test suite, deliberately.** It changed no application code — `git status` is
-clean apart from this file — so the 8.1 baseline stands unchanged and re-running it would prove
-nothing. 8.2's verification is production evidence instead: two natural sync cycles, row-level
-idempotency, ADR-042 invariant checks over all 98 ingested rows, a live Brief generation, a
-192-needle log leak scan, and a post-change production health pass. Migration level confirmed **16**
-in production and locally, with `0016` absent.
+Migration invariant: **16 `.sql` / 16 journal entries**, `0016` absent, `packages/db` byte-unchanged,
+production tracking table **16**.
 
 ## Next action
 
-**Stop at readiness.** Checkpoint 8.3 is unblocked but **must not begin without explicit
-approval.**
+**Stop at readiness. Checkpoint 8.4 must not begin without explicit approval, and 8.3's mobile lane
+should close first.**
 
-Gates now discharged:
+**Owner-only, to finish 8.3:**
 
-1. ~~Checkpoint 7.9 must be formally closed~~ — **CLOSED 2026-09-02.**
-2. ~~Source durability requires owner action~~ — **ESTABLISHED 2026-09-02**, private GitHub remote.
-3. ~~Checkpoint 8.1 (failure visibility + AI I/O hardening) is a precondition for 8.2~~ —
-   **COMPLETE and DEPLOYED 2026-09-02**; 8.2 verified its hardening inside the running containers
-   before enabling the calendar.
+1. **Build and install the 8.3 APK.** Requires EAS auth and a reachable device. The pipeline is
+   `eas build --profile production-internal --platform android` (which owns `versionCode` via
+   `appVersionSource: "remote"` and `autoIncrement: true`), then **`adb install -r` only — never
+   uninstall**, since uninstalling destroys pairing, SecureStore, the primary-reminder-device flag,
+   the push token and the exact-alarm grant. Verify Android `firstInstallTime` is preserved
+   before/after.
+2. **Physical Rabbit R1 acceptance**, once installed: the header search action is reachable from
+   every tab, the field focuses on open, results render at 480x640 without overflow, and tapping a
+   task/note/inbox result navigates.
 
-Remaining owner-only work, none of it blocking 8.1:
+**Owner-only, still open from earlier checkpoints and unchanged by 8.3:**
 
-1. **Configuration / key durability is still open and is the sharpest risk in the system.**
-   `CREDENTIALS_ENCRYPTION_KEY` has no key version, no KDF and no rotation path, and exists on
-   exactly two hosts; losing it makes every stored OAuth credential permanently undecryptable across
-   four tables and five integrations. Intended direction: SOPS + age, with the age private key held
-   off both the development machine and the production server, and the encrypted configuration
-   backup stored independently. **Nothing secret goes in GitHub.** ADR-024 is unchanged — this is
-   not approval for a database backup system.
-2. **Retention windows remain an owner decision** (ADR-024 makes deletion irreversible) and are a
-   prerequisite for the mail prune ADR-054 requires and ADR-057 records as unimplemented.
-3. **Optional GitHub hardening:** Actions is default-on at the repository setting although no
-   workflow exists anywhere in history; disabling it is a one-click defence-in-depth step.
-4. **Local hygiene:** delete `apps/mobile/.expo/dev/logs/export.log`, which holds a plaintext
+3. **Configuration / key durability remains the sharpest risk in the system.**
+   `CREDENTIALS_ENCRYPTION_KEY` has no key version, no KDF and no rotation path and exists on exactly
+   two hosts. Intended direction: SOPS + age with the private key held off both machines. **Nothing
+   secret goes in GitHub.** ADR-024 is unchanged.
+4. **Retention windows remain an owner decision** and gate the mail prune ADR-054 requires.
+5. **Optional GitHub hardening:** Actions is default-on although no workflow exists in history.
+6. **Local hygiene:** delete `apps/mobile/.expo/dev/logs/export.log`, which holds a plaintext
    `EXPO_TOKEN` at mode 644.
 
-Deliberately **not** started: Checkpoint 8.3, search or export, mobile capture changes, any
-notification-producer change, any Brief prompt/output-filter change, enabling any *further* calendar
-(the three still-disabled ones, including two shared/group calendars, need their own approval), any
-Phase 8 runtime deployment, and migration `0016`.
-
-Newly surfaced by 8.2 and deliberately deferred: bounding event text at write, a guard against
-`end_date < start_date` on ingest, backfilling `calendar_connection_calendars.summary` with real
-display names, and the two latent Today/Agenda presentation defects. All are recorded in the debt
-ledger; none blocks 8.3.
+Deliberately **not** started: Checkpoint 8.4 and any capture-front-door work, adding `events` or
+`projects` to search, bounding event text at write, any notification-producer change, any Brief
+prompt or output-filter change, enabling any further calendar, and migration `0016`.
