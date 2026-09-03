@@ -197,6 +197,7 @@ Severity: P0 · P1 · P2 · P3 · OBSERVATION. Action: FIX_NOW · DEFER · WATCH
 | 2026-09-03 | reliability | Search-usage counting resets on any API container recreation, so counts are per-log-epoch. Container start time is recorded at each check so a reset is visible. | OBSERVATION | WATCH |
 | 2026-09-03 | reliability | Checked and cleared: `notify_reminders = false` on the primary device does not block local scheduling — the column is intentionally unwired. Negative result recorded so it is not re-investigated. | OBSERVATION | NO_ACTION |
 | 2026-09-03 | data_quality | Checked and cleared: the archived 8.4 smoke task's open past-dated occurrence does **not** surface on Today (`overdue_total = 0`). Read model filters archived parents correctly. | OBSERVATION | NO_ACTION |
+| 2026-09-03 | reliability | The auto-loaded doc set has grown 169,578 → **255,675 bytes** (~64k tokens) since 8.0's compaction, +51%, almost all of it `docs/STATUS.md` (86k → 114k). Four more soak reports are due. **Mitigation adopted now rather than after it hurts:** every Day-7/14/21/28 reading and every ledger row goes in this file, which `CLAUDE.md` does **not** import; `docs/STATUS.md` gets a summary only. | OBSERVATION | WATCH |
 
 ---
 
