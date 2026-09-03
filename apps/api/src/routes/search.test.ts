@@ -259,11 +259,15 @@ describe("GET /search", () => {
 
   it("treats a literal % as text, not as a match-everything wildcard", async () => {
     await app.db.insert(tasks).values({ title: "50% off coupon", timezone: TZ });
+    // The DECOY is what gives this test teeth, and mutation testing is what
+    // proved it was needed: with only an unrelated second row, the unescaped
+    // pattern "%50%%" still matched exactly one row and the test passed while
+    // escaping was disabled. This row contains "50" but no percent sign, so it
+    // matches the unescaped pattern and not the escaped one.
+    await app.db.insert(tasks).values({ title: "50 percent off, spelled out", timezone: TZ });
     await app.db.insert(tasks).values({ title: "nothing relevant here", timezone: TZ });
 
     const body = await search({ q: "50%" });
-    // Two tasks exist. An unescaped "%50%%" would match both; only one contains
-    // a literal percent sign.
     expect(body.counts.task).toEqual({ returned: 1, total: 1 });
     expect(body.results[0]!.title).toBe("50% off coupon");
   });
