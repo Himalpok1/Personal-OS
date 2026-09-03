@@ -143,3 +143,36 @@ export function toWallClockComponents(instant: Date, timezone: string): WallCloc
     second: get("second"),
   };
 }
+
+// Serializes an instant as ISO-8601 carrying the OFFSET that the given zone
+// was actually at for that instant -- e.g.
+// "2026-09-04T15:30:00-05:00" for America/Chicago.
+//
+// Added by Checkpoint 8.4 for the mobile date/time pickers. A picker yields
+// an instant, but the contracts it feeds (TaskCreateSchema.due_at,
+// TaskUpdateSchema.remind_at) accept an offset-less datetime and would then
+// resolve it against the capture's timezone -- so emitting a bare local
+// string makes the value silently ambiguous. Emitting UTC instead would be
+// unambiguous but throws away the wall clock the user actually chose, which
+// docs/ARCHITECTURE.md names as the invariant.
+//
+// The offset is DERIVED from the zone's own rendering of the instant rather
+// than read from any Date getter, so it is correct across DST without the
+// host's own timezone entering into it at all.
+export function formatInstantWithOffset(instant: Date, timezone: string): string {
+  const components = toWallClockComponents(instant, timezone);
+  const asUtcMillis = Date.UTC(
+    components.year,
+    components.month - 1,
+    components.day,
+    components.hour,
+    components.minute,
+    components.second,
+  );
+  // Whole minutes: every IANA offset in use is a whole number of minutes.
+  const offsetMinutes = Math.round((asUtcMillis - instant.getTime()) / 60_000);
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const absolute = Math.abs(offsetMinutes);
+  const offset = `${sign}${pad(Math.floor(absolute / 60))}:${pad(absolute % 60)}`;
+  return `${formatWallClockIso(components)}${offset}`;
+}

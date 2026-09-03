@@ -12,6 +12,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import { BriefCard } from "@/components/brief/brief-card";
 import { HealthTodayCard } from "@/components/health/health-today-card";
 import { MailDigestCard } from "@/components/mail/digest-today-card";
+import { ReminderNoticeCard } from "@/components/reminder-notice-card";
 import { FLOATING_CLEARANCE } from "@/components/floating-layout";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import { useCompleteTask } from "@/queries/tasks";
@@ -528,6 +529,13 @@ export default function TodayScreen() {
           info={data.reviews.weekly}
         />
       </View>
+
+      {/* Checkpoint 8.4 Lane 6. Renders NOTHING unless reminders genuinely
+          cannot fire on this device. Informational only -- it never promotes
+          a device or flips a setting (ADR-019/036); it names the reason and
+          points at the screen that can fix it. Placed above the Brief because
+          "your reminders are not running" outranks anything below it. */}
+      <ReminderNoticeCard />
 
       {/* Checkpoint 5.5: manual/on-demand Daily Brief (ADR-041). The card
           owns its own GET /briefs/current query -- Today only carries brief

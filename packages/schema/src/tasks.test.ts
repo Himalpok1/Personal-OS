@@ -98,13 +98,39 @@ describe("Task schemas", () => {
       expect(result.success).toBe(false);
     });
 
-    it("still rejects remind_at -- creation stays capture-only this checkpoint", () => {
+    // Reversed by Checkpoint 8.4 Lane 5. This test previously read "still
+    // rejects remind_at -- creation stays capture-only this checkpoint", and
+    // that WAS the contract: remind_at was writable only by AI capture and by
+    // PATCH, so setting a reminder on a new task meant create-then-patch. The
+    // tasks.remind_at column has existed since Phase 1, so opening creation
+    // needed no migration.
+    it("accepts remind_at at creation time", () => {
       const result = TaskCreateSchema.safeParse({
         title: "New task",
         timezone: "America/Chicago",
         remind_at: "2026-09-01T15:00:00-05:00",
       });
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts an offset-less remind_at, which the route resolves against the request timezone", () => {
+      expect(
+        TaskCreateSchema.safeParse({
+          title: "New task",
+          timezone: "America/Chicago",
+          remind_at: "2026-09-01T15:00:00",
+        }).success,
+      ).toBe(true);
+    });
+
+    it("rejects a remind_at that is not a datetime at all", () => {
+      expect(
+        TaskCreateSchema.safeParse({
+          title: "New task",
+          timezone: "America/Chicago",
+          remind_at: "next tuesday-ish",
+        }).success,
+      ).toBe(false);
     });
   });
 

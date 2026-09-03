@@ -43,6 +43,12 @@ export const TaskCreateSchema = z
     title: z.string().min(1),
     body: z.string().optional(),
     due_at: FlexibleDatetimeSchema.optional(),
+    // Creation-time reminders. TaskUpdateSchema has carried remind_at since
+    // Checkpoint 5.4, and the tasks.remind_at column has existed since Phase
+    // 1, but creation never accepted it -- so the only way to set a reminder
+    // on a new task was to create it and then PATCH it. Checkpoint 8.4 closes
+    // that; no migration, the column is already there.
+    remind_at: FlexibleDatetimeSchema.optional(),
     priority: z.number().int().optional(),
     project_id: z.string().uuid().optional(),
     timezone: z.string().refine(isValidTimezone, { message: "unknown IANA timezone" }),

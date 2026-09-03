@@ -113,6 +113,9 @@ export default function tasksRoutes(app: FastifyInstance): void {
     const effectiveNow = new Date();
 
     const dueAt = body.due_at ? parseFlexibleDatetime(body.due_at, body.timezone) : null;
+    // Same resolution as due_at: an offset-less value is resolved against the
+    // request's own timezone, never the server's.
+    const remindAt = body.remind_at ? parseFlexibleDatetime(body.remind_at, body.timezone) : null;
     const recurrenceTimezone = body.rrule ? (body.recurrence_timezone ?? body.timezone) : null;
     const recurrenceAnchor = body.rrule ? (body.recurrence_anchor ?? "due_date") : null;
     const recurrenceUntil =
@@ -130,6 +133,7 @@ export default function tasksRoutes(app: FastifyInstance): void {
           body: body.body,
           status: "active",
           dueAt,
+          remindAt,
           timezone: body.timezone,
           priority: body.priority,
           projectId: body.project_id,

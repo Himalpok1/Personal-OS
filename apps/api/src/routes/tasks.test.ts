@@ -882,3 +882,95 @@ describe("tasks routes", () => {
     });
   });
 });
+
+// Checkpoint 8.4 Lane 5. remind_at has been settable via PATCH since 5.4 and
+// the column has existed since Phase 1, but creation never accepted it -- the
+// only way to set a reminder on a new task was create-then-patch.
+describe("POST /tasks remind_at", () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    app = await buildTestApp();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(async () => {
+    await truncateTestTables(app);
+  });
+
+  it("stores a reminder supplied at creation time", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/tasks",
+      payload: {
+        title: "Call the insurer",
+        remind_at: "2026-09-15T14:00:00-05:00",
+        timezone: "America/Chicago",
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json<Task>().remind_at).toBe("2026-09-15T19:00:00.000Z");
+  });
+
+  it("resolves an offset-less reminder against the REQUEST's timezone, not the server's", () => {
+    return app
+      .inject({
+        method: "POST",
+        url: "/tasks",
+        payload: {
+          title: "Standup",
+          remind_at: "2026-09-15T09:00:00",
+          timezone: "Pacific/Auckland",
+        },
+      })
+      .then((res) => {
+        expect(res.statusCode).toBe(201);
+        // 09:00 NZST on 2026-09-15 is 21:00Z on 2026-09-14.
+        expect(res.json<Task>().remind_at).toBe("2026-09-14T21:00:00.000Z");
+      });
+  });
+
+  it("leaves remind_at null when omitted", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/tasks",
+      payload: { title: "No reminder", timezone: "America/Chicago" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json<Task>().remind_at).toBeNull();
+  });
+
+  it("rejects a malformed reminder rather than storing garbage", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/tasks",
+      payload: { title: "Bad", remind_at: "next tuesday-ish", timezone: "America/Chicago" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("round-trips a creation reminder through PATCH and back to null", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/tasks",
+      payload: {
+        title: "Round trip",
+        remind_at: "2026-09-15T14:00:00-05:00",
+        timezone: "America/Chicago",
+      },
+    });
+    const id = created.json<Task>().id;
+
+    const cleared = await app.inject({
+      method: "PATCH",
+      url: `/tasks/${id}`,
+      payload: { remind_at: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json<Task>().remind_at).toBeNull();
+  });
+});

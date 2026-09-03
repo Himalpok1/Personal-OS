@@ -1,6 +1,7 @@
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { usePlaceholderColor } from "@/components/placeholder-color";
+import { DateTimeField } from "@/components/datetime-field";
 import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
 import { coerceProjectIdParam, useProjects } from "@/queries/projects";
 import { useCreateTask } from "@/queries/tasks";
@@ -22,7 +23,8 @@ export default function NewTaskScreen() {
 
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [dueAt, setDueAt] = useState("");
+  const [dueAt, setDueAt] = useState<string | null>(null);
+  const [remindAt, setRemindAt] = useState<string | null>(null);
   // Preselected via /tasks/new?projectId=<uuid> (project detail "+ Task").
   const [projectId, setProjectId] = useState<string | undefined>(() =>
     coerceProjectIdParam(params.projectId),
@@ -63,7 +65,8 @@ export default function NewTaskScreen() {
       {
         title: title.trim(),
         body: body.trim() || undefined,
-        due_at: dueAt.trim() || undefined,
+        due_at: dueAt ?? undefined,
+        remind_at: remindAt ?? undefined,
         project_id: projectId,
         timezone: userTimezone,
         ...recurrenceFields,
@@ -105,13 +108,13 @@ export default function NewTaskScreen() {
         className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
 
-      <Text className="mb-1 text-sm text-neutral-500">Due date (optional, ISO 8601)</Text>
-      <TextInput
-        value={dueAt}
-        onChangeText={setDueAt}
-        placeholder="2026-08-20T15:00:00"
-        placeholderTextColor={placeholderColor}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+      <DateTimeField label="Due date (optional)" value={dueAt} onChange={setDueAt} />
+
+      <DateTimeField
+        label="Reminder (optional)"
+        value={remindAt}
+        onChange={setRemindAt}
+        warnIfPast
       />
 
       <Text className="mb-1 text-sm text-neutral-500">Project (optional)</Text>
