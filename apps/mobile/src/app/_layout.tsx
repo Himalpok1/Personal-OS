@@ -122,6 +122,9 @@ function AppStack() {
           -- the Rabbit R1's 480px bar already carries five labels, and the same
           reasoning that kept Health off it applies here. */}
       <Stack.Screen name="monitor/index" options={{ title: "Monitoring" }} />
+      {/* Phase 8 Checkpoint 8.3. Reached from a header action on every tab,
+          not a sixth tab -- same 480px reasoning as Health and Monitoring. */}
+      <Stack.Screen name="search/index" options={{ title: "Search" }} />
       <Stack.Screen name="settings" options={{ title: "Settings" }} />
       <Stack.Screen name="hardware-debug" options={{ title: "Hardware spike" }} />
     </Stack>
