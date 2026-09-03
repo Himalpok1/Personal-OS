@@ -1,4 +1,4 @@
-import { DatePickerDialog, TimePickerDialog } from "@expo/ui/jetpack-compose";
+import { DatePickerDialog, Host, TimePickerDialog } from "@expo/ui/jetpack-compose";
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import {
@@ -23,9 +23,23 @@ import {
  * Date and time are picked in sequence because Material 3 has no combined
  * dialog; combineDateAndTime merges the meaningful half of each.
  *
+ * Each dialog MUST be a DIRECT child of <Host>. Found the hard way during
+ * Checkpoint 8.4's physical acceptance: with the dialog inside this
+ * component's own <View>, tapping the field did nothing at all, and the only
+ * evidence anywhere was one logcat line --
+ *   ExpoComposeView: MissingHostException: A Jetpack Compose view
+ *   "DatePickerDialogView" must be rendered as a direct child of a <Host>
+ * -- because any non-Compose ViewGroup between Host and the view breaks the
+ * Compose composition boundary. Nothing throws and no test fails, which is
+ * why compose-host.test.ts now checks this mechanically.
+ *
  * Android-only by construction -- see datetime-field.web.tsx for the web
  * target, which keeps the text input.
  */
+// The dialogs overlay the screen themselves, so their Host must occupy no
+// layout space in the form. Declared once so both agree.
+const HOST_STYLE = { position: "absolute", width: 0, height: 0 } as const;
+
 export interface DateTimeFieldProps {
   label: string;
   value: string | null;
@@ -86,19 +100,22 @@ export function DateTimeField({
       ) : null}
 
       {pickingDate ? (
-        <DatePickerDialog
+        <Host style={HOST_STYLE}>
+          <DatePickerDialog
           initialDate={pickerInitialInstant(value).toISOString()}
           onDateSelected={(date) => {
             setPickingDate(false);
             setDraftDate(date);
             setPickingTime(true);
           }}
-          onDismissRequest={() => setPickingDate(false)}
-        />
+            onDismissRequest={() => setPickingDate(false)}
+          />
+        </Host>
       ) : null}
 
       {pickingTime ? (
-        <TimePickerDialog
+        <Host style={HOST_STYLE}>
+          <TimePickerDialog
           initialDate={pickerInitialInstant(value).toISOString()}
           onDateSelected={(time) => {
             setPickingTime(false);
@@ -107,11 +124,12 @@ export function DateTimeField({
             if (!base) return;
             onChange(serializePickedInstant(combineDateAndTime(base, time)));
           }}
-          onDismissRequest={() => {
-            setPickingTime(false);
-            setDraftDate(null);
-          }}
-        />
+            onDismissRequest={() => {
+              setPickingTime(false);
+              setDraftDate(null);
+            }}
+          />
+        </Host>
       ) : null}
     </View>
   );

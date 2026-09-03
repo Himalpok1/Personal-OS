@@ -6,8 +6,10 @@
 **Checkpoint 8.1 — Failure visibility + AI input/output hardening — is COMPLETE and DEPLOYED.**
 **Checkpoint 8.2 — Enable the real Google Calendar — is COMPLETE (2026-09-03). No code, no migration.**
 **Checkpoint 8.3 — Find what you stored (search + export) — is COMPLETE (2026-09-03).**
-API, web and the Rabbit R1 APK (**versionCode 8**) are all deployed and physically accepted.
-**Next checkpoint allowed:** **8.4**, on explicit approval only. It has not begun.
+**Checkpoint 8.4 — Low-friction capture — is COMPLETE (2026-09-03).** Its mandatory Lane 0
+reliability gate (the `capture.parse` confirm failure) passed; Lane 3 is deferred on evidence.
+API, web and the Rabbit R1 APK (**versionCode 9**) are all deployed and physically accepted.
+**Next checkpoint allowed:** **8.5**, on explicit approval only. It has not begun.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -41,8 +43,9 @@ what is true *now*, it is in this file.
 | | |
 |---|---|
 | Migration level | **16** (`0000`–`0015`); local and production agree |
-| Serving commit | api **`b06b0ca`** · web **`b06b0ca`** (Checkpoint 8.3) · worker **`dc3983d`** (8.1 — deliberately not rebuilt; runtime unchanged) |
-| Rabbit R1 | `com.himal.personalos` **versionCode 8**, built from `d030fc1`, installed in place 2026-09-03 |
+| Serving commit | api **`7b7acca`** · web **`7b7acca`** (Checkpoint 8.4) · worker **`c0cf4a1`** (8.4 Lane 0; not rebuilt for Lanes 1–6 — runtime unchanged) |
+| Rabbit R1 | `com.himal.personalos` **versionCode 9**, built from `7b7acca`, installed in place 2026-09-03 |
+| Capture front doors | Quick Capture · PTT · Siri/Assistant · **Android share sheet (8.4)** · **launcher shortcut (8.4)**. Notification-shade capture **deferred** — see 8.4 Lane 3. |
 | Integrations | Google Health **active** · Google Calendar **active** · Gmail **active** |
 | Calendar sync | **2 of 5 calendars enabled** — the owner's real primary (enabled at 8.2) and the dedicated test calendar. **98 events** ingested, all from the primary. |
 | Monitoring | 5 targets seeded, including both Tailscale Serve routes |
@@ -50,8 +53,9 @@ what is true *now*, it is in this file.
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
 | Backups | **None, by design** (ADR-024) |
 | Source durability | **`origin` = `https://github.com/Himalpok1/Personal-OS` — PRIVATE, established 2026-09-02.** `main` + `phase-8-consolidation` pushed and hash-verified. No CI, no Actions workflow, no repository secret. |
-| Test baseline | **3,226 tests / 21 turbo tasks** (see *Last verification*) |
+| Test baseline | **3,320 tests / 21 turbo tasks** (see *Last verification*) |
 | Search / export | `GET /search` and `GET /export` live, perimeter-only, no migration (ADR-059) |
+| Confirm contract | An uncommittable confirm is refused **409** before enqueueing; corrections are validated and stored in the shape the worker reads (8.4) |
 
 ---
 
@@ -680,6 +684,150 @@ worked.
 rendered**: the sandboxed browser fails `ERR_BLOCKED_BY_CLIENT` on `/_expo/static/*` at `:8443`, the
 documented Phase 2 limitation. The device is the real acceptance and it passed.
 
+### Checkpoint 8.4 — Low-friction capture (2026-09-03)
+
+**Lane 0 (the mandatory reliability gate) PASSED. Lanes 1, 2, 4, 5 and 6 shipped. Lane 3
+(notification-shade text capture) is DEFERRED on evidence — it is not viable on the installed
+runtime without adding a background-task framework.** **No migration** — level stays 16,
+`packages/db` byte-unchanged, `0016` absent.
+
+#### Lane 0 — the `capture.parse` incident: root cause and fix
+
+Checkpoint 8.3 closure recorded that two `needs_confirm` inbox items were confirmed, both parse jobs
+failed all five retries, and both items stayed `needs_confirm` with the user told nothing. The cause
+is **not** an AI outage and never was — **the confirm path calls no model at all.**
+
+**Reconstructed first-hand against production, no user text printed:**
+
+| Evidence | Value |
+|---|---|
+| Failed jobs | `378954c5…`, `bfd695be…` — both `mode: "confirm"`, `retry_count 5/5` |
+| API requests | `04:38:07.729Z` and `04:38:10.779Z`; jobs enqueued 6 ms and 8 ms later |
+| Stored tool call | **`unclear`** on both, `confidenceFlags: ["modelUnclear"]`, args `{reason}` |
+| `job.output` | `AiJobError: capture.parse failed (Error)` — a bare `Error`, no SQLSTATE |
+| Worker log | **3 lines in the whole 40-minute window**, all `mail.sync.finished`. Nothing about the failures. |
+
+**Root cause.** `runAutoParse` stores an `unclear` tool call as a confirmable `parse_result`, but
+`commitParsedEntity` ends `case "unclear": throw new Error(...)` — so confirming one is
+*structurally impossible*, deterministically, forever. Nothing consulted that before enqueueing.
+
+**Four defects, each silent on its own, compounding:**
+
+1. `POST /inbox/:id/confirm` returned **202 for work that could only fail** — it never read
+   `parse_result`.
+2. `corrected_tool_call` was `z.unknown()`, so a correction was never validated.
+3. The API stored a correction as a **bare tool call** while the worker reads `parse_result.toolCall`
+   — so the documented escape hatch from an `unclear` parse was **itself broken**.
+4. The mobile mutation had **no error path at all**: 404, 409 and 503 were all indistinguishable
+   from success. The button simply returned to its idle label.
+
+Compounding both: `capture.parse` is the **only retrying queue in the system with no dead-letter
+queue** (`ptt.transcribe`, `notifications.dispatch` and all three calendar queues have one), and the
+lane logged **nothing** on failure.
+
+**Fix.** The API now computes the *effective* tool call — the correction if supplied, else the
+stored one — and refuses an uncommittable confirm with **409 `parse_result_not_committable`** before
+enqueueing anything. The refusal echoes the tool **enum only**; the `unclear` tool's own `reason` is
+derived from capture text and is deliberately never returned. Corrections are validated against
+`ParserToolCallSchema` and stored in the shape the worker reads. The worker treats an
+uncommittable/unreadable confirm as **permanent, not retryable**, and every capture.parse failure is
+now classified by **stage** (`load_row` / `confirm_commit` / `auto_parse` / `confirmation_push`)
+through `errorToken`, which can carry neither provider prose nor capture text. Mobile surfaces the
+refusal and no longer offers a button that cannot succeed.
+
+#### Lane 0 live proof (production)
+
+- **The exact defect, on the exact rows.** Confirming both stuck items now returns **409
+  `parse_result_not_committable`** immediately. Verified non-mutating: both remain `needs_confirm`
+  with `entity_id` null, and **zero new `capture.parse` jobs were created** — the newest job in the
+  table is still the original 04:38 failure. The response body contains no `reason` and no capture text.
+- **Happy path, end to end.** A synthetic capture ("water the office plants every 3 days") parsed to
+  `needs_confirm` via the `recurrenceInferred` hard flag, was confirmed (202), and committed exactly
+  one task — inbox `confirmed`, `entity_type: task`, tasks 2 → 3. Both jobs completed with
+  `retry_count 0`.
+- **Replay proves no duplicate.** Three confirm replays → `409 not_awaiting_confirmation`; a capture
+  replay with the same `client_uuid` returned the **same** `inbox_id`. Totals unchanged.
+- **Log scan.** 17 needles (every stored `raw_text`, task/note title, and every `unclear` reason)
+  matched binary-safely against both container logs: **0 found**, with positive controls proving the
+  scanner works.
+
+The smoke task was **archived** afterwards (Today is clean, active tasks back to 2). Its inbox row
+remains as lineage, matching the Gate H smoke-note precedent.
+
+**The two original stuck items are unchanged and remain `needs_confirm`.** They are 1- and
+2-character captures the model could not classify. They are now *honestly* unconfirmable rather than
+silently so. **Owner action, if wanted:** supply a real classification with
+`POST /inbox/<id>/confirm -d '{"corrected_tool_call":{"tool":"create_note","args":{...}}}'`, which
+now works because defect 3 is fixed. Doing nothing is also fine.
+
+#### Lanes 1 + 2 — share sheet and launcher shortcut
+
+Both Android front doors mean the same thing, so both go through **one** local Expo module
+(`modules/capture-intent`) and **one** composer. `source: "share"` and the `share` CHECK value
+already existed — **no migration**.
+
+- **Share sheet needs no config plugin**: `android.intentFilters` IS in `@expo/config-types`'
+  ExpoConfig, verified against the installed package. (Contrast `android.usesCleartextTraffic`, which
+  is *not* in the schema and cost this repo three checkpoints.)
+- **The shortcut does**: there is no `android.shortcuts` key, so `plugins/withCaptureShortcut.ts`
+  writes `res/xml/shortcuts.xml` plus the meta-data pointer — which must sit on the **launcher
+  activity**, not on `<application>`.
+- Verified by prebuild: both the `SEND`/`text/plain` filter and the shortcuts meta-data render on
+  MainActivity under `applicationId com.himal.personalos`, and `share-intent` autolinks alongside the
+  two existing local modules.
+
+**Not turning one gesture into two Inbox rows** is the whole correctness story:
+
+| Hazard | Defence |
+|---|---|
+| The launch intent is **sticky** and re-delivered after process death + Recents restore | Native **consumes and neuters** it (`removeExtra` + action reset), never a plain getter |
+| `activity.intent` stays the ORIGINAL launch intent forever (RN never calls `setIntent()`) | The warm path uses the Intent handed to `OnNewIntent` |
+| A fresh `randomUUID()` per submit defeats the server's dedupe | The **native intent id becomes the `client_uuid`** |
+| Remount (identity gate, Activity recreation) resets component state | The claimed-id set is **module scope** |
+
+A share **pre-fills** the composer rather than submitting: the text came from another app, so the
+owner sees it and can edit or cancel, and nothing is posted without a tap. Text is
+control-character-stripped **before** truncation (the 8.1 ordering) and bounded by the same constant
+the server enforces. Nothing interprets it — no HTML, no Markdown, no autolink, no derived route.
+
+#### Lane 3 — notification-shade text capture: DEFERRED, not shipped
+
+`textInput` **is** genuinely implemented on Android in the installed `expo-notifications@57.0.12` —
+traced through the native source: `TextInputNotificationAction` → `RemoteInput.Builder` →
+`RemoteInput.getResultsFromIntent` → `userText`. So the type is not iOS-only.
+
+**It is nonetheless not viable here, and the evidence is specific.** When the app process is dead —
+the normal state for a shade affordance — the reply is parked in a static in-process collection
+(`ExpoHandlingDelegate.kt:172`), replayed only if JS later registers; if the process dies first, the
+captured text is **lost**. The durable path is `runTaskManagerTasks`, which needs
+**`expo-task-manager` — verified ABSENT** from both `node_modules` and `package.json`. The
+alternatives are (a) add a background-task framework, which this checkpoint was told not to do, or
+(b) `opensAppToForeground: true`, which defeats the point and which the launcher shortcut already
+does better. Silently losing captures is the one failure this architecture exists to prevent.
+
+Two further costs, recorded rather than discovered later: it needs a **new notification channel**
+(APK-level), and `use-notification-lifecycle.ts` dedupes by notification identifier, so a persistent
+notification with a stable id would **swallow every reply after the first**.
+
+#### Lanes 4 + 5 + 6 — pickers, creation reminders, eligibility
+
+- **Pickers.** Every date field has been a hand-typed ISO-8601 `TextInput` since Phase 2. Now a real
+  Material 3 date + time dialog, using **`@expo/ui` — already installed and already autolinked with
+  zero import sites**, so no new package and no new native surface. `formatInstantWithOffset`
+  (`packages/core`) carries the zone's real offset for that instant: a bare local string would be
+  silently ambiguous, and UTC would discard the wall clock the user chose. **Web keeps the text
+  input** via a `.web.tsx` fallback — verified in the deployed bundle: `ISO 8601` present,
+  `DatePickerDialog` / `jetpack-compose` **absent**.
+- **`remind_at` at creation.** Previously writable only by AI capture and by PATCH, so setting a
+  reminder on a new task meant create-then-patch. **No migration** — the column has existed since
+  Phase 1. Verified live: `14:00:00-06:00` → stored `20:00:00Z`, cleared via PATCH, task archived.
+- **Reminder eligibility on Today.** `describeReminderEligibility` has existed since Checkpoint 5 but
+  rendered **only on Settings**, so the failure it was written for — a re-pair strands primary on the
+  old device row and the device in your hand schedules nothing — was invisible unless you opened
+  Settings. Renders **nothing** when reminders will fire. **Informational only**: never promotes a
+  device, never flips a setting. ADR-019 and ADR-036 stand.
+
+
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
 **Phase 7 is closed.** Checkpoints 7.0–7.8B and the full Checkpoint 7.9 record — the open
@@ -977,8 +1125,10 @@ an intentionally-logged field — are recorded in the ledger below.
 - **Every client change needs a full APK (standing).** `expo-updates` is not a dependency, so there
   is no OTA channel and each client-side checkpoint costs an EAS cloud build plus a physical
   in-place install. A property of the architecture, not an 8.3 regression.
-- **⚠️ Confirming a `needs_confirm` inbox item fails, silently (found at 8.3 closure; NOT caused by
-  8.3).** At 2026-09-03 04:38 UTC the app sent `POST /inbox/851d3455…/confirm` and
+- ~~**⚠️ Confirming a `needs_confirm` inbox item fails, silently (found at 8.3 closure; NOT caused by
+  8.3).**~~ — **CLOSED by Checkpoint 8.4 Lane 0.** Root cause: the stored tool call is `unclear`,
+  which `commitParsedEntity` throws on unconditionally, so the confirm could only ever fail. Fixed at
+  four layers and proven live on the two original production rows. Original finding: At 2026-09-03 04:38 UTC the app sent `POST /inbox/851d3455…/confirm` and
   `POST /inbox/0cd123a1…/confirm`; both enqueued `capture.parse`, both retried 5× and **failed**, and
   **both items are still `needs_confirm`** — so the confirmation never completed and the user got no
   error. These are the first `capture.parse` failures ever recorded. **Not an AI outage**: a Daily
@@ -994,20 +1144,54 @@ an intentionally-logged field — are recorded in the ledger below.
 - **The search error state has never been exercised (8.3).** Reproducing it needs network disruption
   on the owner's daily-driver device. The state is covered by unit tests, not by a device.
 
+- **Notification-shade text capture is not shipped (8.4 Lane 3, deferred on evidence).** Android
+  direct reply IS natively implemented in the installed `expo-notifications@57.0.12`, but with the
+  process dead the reply is parked in a static in-process collection and lost if the process dies
+  before JS boots. The durable path needs `expo-task-manager`, which is **absent** from the
+  dependency set. Revisiting it means accepting a background-task framework, a new notification
+  channel, and a fix to the identifier-based dedupe in `use-notification-lifecycle.ts` that would
+  otherwise swallow every reply after the first.
+- **`capture.parse` still has no dead-letter queue (8.4).** It remains the only retrying queue
+  without one — `ptt.transcribe`, `notifications.dispatch` and all three calendar queues have one,
+  and `ptt.transcribe`'s handler finalizes the inbox row. 8.4 made failures *visible* (classified
+  `capture.parse.failed` with a stage) and made the known permanent case unreachable, but a future
+  permanent failure from another cause still exhausts five retries into a job nobody reads. Adding
+  one is a queue-config change and wants its own decision.
+- **Kotlin correctness is only ever verified by the EAS cloud build (8.4).** This machine has no
+  JVM, so neither the new `CaptureIntentModule.kt` nor any future native module can be compiled or
+  unit-tested locally. The `native-contract.test.ts` guard pins the cross-file strings but cannot
+  typecheck Kotlin.
+- **The share composer holds text only in component state (8.4).** A share pre-fills the Quick
+  Capture sheet; if the app is killed before the owner taps Capture, the draft is gone — the native
+  intent was already consumed. Deliberate (consuming once is what prevents duplicates) but it means
+  a share is not durable until submitted. The outbox covers everything after that point.
+- **Date/time pickers are Android-only (8.4).** `@expo/ui` ships no DatePicker in its `universal`
+  build, so the web target keeps the ISO text input via a `.web.tsx` fallback. Acceptable — the
+  friction this closes is on the Rabbit — but the two surfaces now differ.
+- **`events/new.tsx` still uses hand-typed ISO date fields (8.4, deliberate).** Lane 4 replaced the
+  fields named in the recorded debt (task due date and reminder). The event screen has four more and
+  was left alone to keep the checkpoint scoped.
+- **One 8.4 smoke capture remains in the inbox as lineage.** The task it committed is archived and
+  invisible; the `inbox_items` row is not archivable and stays, matching the Gate H smoke-note
+  precedent. It is searchable.
+
 ## Current objective
 
-**Checkpoint 8.3 is COMPLETE.** Search and export are live on the API, in the web bundle, and — as
-of 2026-09-03 — on the Rabbit R1 itself at **versionCode 8**, installed in place with
-`firstInstallTime`, pairing, PRIMARY status, push token and the exact-alarm appop all preserved.
+**Checkpoint 8.4 is COMPLETE.** Capture on the Rabbit R1 now takes one or two gestures from
+anywhere: the system share sheet accepts text from any app, and a launcher long-press opens the
+composer directly. Dates and reminders are picked, not typed, and a reminder can be set when the
+task is created rather than by a second edit.
 
-Stored content is findable from the device the owner actually carries: one query returns matching
-tasks, notes, inbox captures and mail metadata together, grouped by type, with each type capped
-independently so hundreds of mail rows cannot evict a matching note.
+**The mandatory Lane 0 gate passed before any front door was added**, which was the right ordering:
+the defect it found was not in capture but in *confirmation*, and it was the only path in the system
+that turned a deliberate user action into a silent no-op. It is fixed at four layers and proven on
+the two original production rows.
 
-**8.3 leaves one thing genuinely unproven and one thing newly found.** The search error state was
-never exercised on-device, because reproducing it means disrupting the daily driver. And the closure
-surfaced a defect that is *not* 8.3's: confirming a `needs_confirm` inbox item enqueues a
-`capture.parse` that fails, leaving the item unconfirmed with no error shown. Both are in the ledger.
+**Two things are deliberately not done, and neither is a partial success dressed up as one.**
+Notification-shade capture is **deferred on evidence** — it would silently lose captures when the
+process is dead, which is the one failure this architecture exists to prevent, and making it durable
+means adding a background-task framework this checkpoint was told not to introduce. And
+`capture.parse` still has no dead-letter queue; 8.4 made its failures visible rather than adding one.
 
 ## Completed
 
@@ -1031,49 +1215,60 @@ routes.
 
 ## Current work
 
-**None in progress.** Checkpoint 8.3 closed 2026-09-03. Seven commits across the checkpoint:
-contracts, API, mobile, the inert-rendering guard, a mutation-driven test fix, and two documentation
-corrections. Two production deployments (api + web; worker deliberately untouched) and one in-place
-APK install. **No production data was written by this work** — every live check was a `GET`, and the
-only writes on the system were the owner's own app activity.
+**None in progress.** Checkpoint 8.4 closed 2026-09-03. Four commits: the capture.parse reliability
+fix, the share-sheet + launcher front doors, the pickers/reminders/eligibility work, and this record.
+Two production deployments (api + worker for Lane 0; api + web for Lanes 4–6 — **worker deliberately
+not rebuilt the second time**, its runtime being unchanged) and one in-place APK install.
+
+**Production writes made by this work, all deliberate and all cleaned up:** one synthetic capture and
+the task it committed (task archived), and one `remind_at` round-trip task (archived). Every other
+live check was a `GET` or a refused `POST`.
 
 ## Last verification
 
-**Phase 8 Checkpoint 8.3 (2026-09-03).** Branch `phase-8-consolidation`, from `26cf910`.
+**Phase 8 Checkpoint 8.4 (2026-09-03).** Branch `phase-8-consolidation`, from `1d50f92`.
 
-Baseline **re-measured first-hand rather than assumed**: `turbo run test --force --concurrency=1`
-reproduced **3,075 tests / 21 tasks, 0 of 21 cached** exactly, matching the recorded 8.1 figure
-per-package. After the checkpoint, the same uncached serial run gives **3,226 tests across 21 turbo
-tasks, zero failing** — api **673** · mobile **529** · worker **431** · core **439** ·
-health-providers 315 · schema **280** · monitoring 132 · api-client **133** · mail-providers 116 ·
-db 79 · **calendar-providers 74** (zero-drift canary, held exactly) · ai-providers 25. **No package
-decreased.**
+Baseline **re-measured first-hand, not assumed**: `turbo run test --force --concurrency=1`
+reproduced **3,226 tests / 21 tasks, 0 of 21 cached** exactly, matching the recorded 8.3 figure
+per-package. After the checkpoint, the same uncached serial run gives **3,320 tests across 21 turbo
+tasks, zero failing** — api **686** (+13) · mobile **580** (+51) · worker **439** (+8) · core
+**447** (+8) · health-providers 315 · schema **294** (+14) · monitoring 132 · api-client 133 ·
+mail-providers 116 · db 79 · **calendar-providers 74** (zero-drift canary, held exactly) ·
+ai-providers 25. **No package decreased.**
 
 Build **23/23**, typecheck **23/23**, `eslint .` clean, `prettier --check .` clean,
 `git diff --check` clean, gitleaks clean on every commit.
 
-**Mutation tests — 8 of 8 killed and restored**, covering every load-bearing guard: the per-type
-result cap, LIKE wildcard escaping, query minimum-length validation, the search result allowlist,
-the export inbox narrowing, the archived-row exclusion, the mail tombstone exclusion, and the
-inert-rendering guard. One of them (escaping) **survived on the first attempt** and exposed a real
-weakness in the test rather than in the control; the test was strengthened with a decoy row.
+**Mutation tests — 20 of 20 killed and restored**, covering every load-bearing guard added:
+the committability guard, the correction storage shape, the unreadable-parse guard, the worker's
+permanent-vs-retryable split, the confirm idempotency guard, failure classification, the client's
+refusal surface, `isCommittableToolCall`, `readStoredParseResult`, the `corrected_tool_call` type,
+share-intent dedupe, control-strip-before-truncate ordering, the length bound, the Kotlin/TS action
+pairing, the warm-path intent source, the sticky-intent neutering, picker date/time combination,
+offset serialization, the Today notice's silence when healthy, and `remind_at` on create.
+
+**Two failures were found by the suite rather than by review**, and both were real:
+`worker#build` rejected an index-signature property access that `typecheck` had allowed (different
+tsconfig scopes), and `packages/schema`'s `tasks.test.ts` correctly failed on a test that
+*deliberately pinned* the old "creation rejects `remind_at`" contract. The second was updated rather
+than deleted, and the replacement says what it reversed and why.
+
+A third real gap surfaced while writing tests: the worker's `truncateTestTables` **never deleted
+`notes`**, so every note `commitParsedEntity` created in a worker test had been accumulating in the
+shared `personalos_test` database. Closed.
 
 Migration invariant: **16 `.sql` / 16 journal entries**, `0016` absent, `packages/db` byte-unchanged,
-production tracking table **16**.
-
-**The mobile lane required NO source change**, so this baseline stands unchanged and the suite was
-deliberately not re-run for the APK install. The APK was built from `d030fc1`, which is the same
-application tree the 3,226-test run covered — the only commits after it are documentation.
+production tracking table **16** before and after both deployments.
 
 ## Next action
 
-**Stop at readiness. Checkpoint 8.4 must not begin without explicit approval.**
+**Stop at readiness. Checkpoint 8.5 must not begin without explicit approval.**
 
 Nothing blocks it. The items below are open work, not gates:
 
-1. **Investigate the inbox-confirm failure** (ledger, above). It is the sharpest of these: a user
-   action that appears to succeed and silently does nothing. Worth its own checkpoint, and it needs
-   the AI error containment to surface *something* diagnosable without leaking provider text.
+1. **Run the adoption soak (8.5) with the front doors that now exist.** This is the point of the
+   whole phase, and 8.4 removed the friction it was waiting on. The soak's deliverable is evidence,
+   not a feature.
 2. **Configuration / key durability remains the sharpest systemic risk.**
    `CREDENTIALS_ENCRYPTION_KEY` has no key version, no KDF and no rotation path and exists on exactly
    two hosts. Intended direction: SOPS + age with the private key held off both machines. **Nothing
@@ -1081,9 +1276,14 @@ Nothing blocks it. The items below are open work, not gates:
 3. **Retention windows remain an owner decision** and gate the mail prune ADR-054 requires.
 4. **Optional GitHub hardening:** Actions is default-on although no workflow exists in history.
 5. **Local hygiene:** delete `apps/mobile/.expo/dev/logs/export.log`, which holds a plaintext
-   `EXPO_TOKEN` at mode 644. Separately, `/sdcard` on the Rabbit holds ~157 stray `.xml` uiautomator
-   dumps from earlier checkpoints' UI testing; this checkpoint removed only its own ten.
+   `EXPO_TOKEN` at mode 644.
 
-Deliberately **not** started: Checkpoint 8.4 and any capture-front-door work, adding `events` or
+Deliberately **not** started: Checkpoint 8.5, a dead-letter queue for `capture.parse`, notification
+capture (deferred on evidence — see 8.4 Lane 3), pickers on the event screen, adding `events` or
 `projects` to search, bounding event text at write, any notification-producer change, any Brief
 prompt or output-filter change, enabling any further calendar, and migration `0016`.
+
+The 8.2/8.3 findings this checkpoint deliberately did **not** absorb remain open and unchanged: the
+calendar `summary` display-name bug, the zero-length all-day event, Today multi-day event bucketing,
+`done` occurrence presentation, `/search` query logging, events/projects search, export UI, and
+calendar write-side bounds.
