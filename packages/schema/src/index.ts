@@ -22,3 +22,6 @@ export * from "./mail-connections.js";
 export * from "./mail-messages.js";
 export * from "./mail-digests.js";
 export * from "./monitor.js";
+
+export * from "./search.js";
+export * from "./export.js";
