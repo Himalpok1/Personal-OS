@@ -601,9 +601,13 @@ missing step.**
 
 - **`expo-updates` is not a dependency**, so there is no OTA channel: new JS reaches the Rabbit R1
   **only** via a new APK. Proven first-hand rather than assumed.
-- **No Android device is reachable** — `adb devices` is empty, `system_profiler` enumerates no USB
-  device, and adb TCP 5555 is refused. The Rabbit IS powered on and answers ping over the tailnet,
-  so it is an ADB-transport problem, not an offline device.
+- **No Android device is reachable** — `adb devices` is empty and adb TCP 5555 is refused, and with
+  a USB cable attached the device **does not enumerate on the USB bus at all**: `ioreg -p IOUSB`
+  lists only hubs, a Stream Deck, a card reader and the external SSD. (Use `ioreg`, not
+  `system_profiler SPUSBDataType` — the latter returns EMPTY output in this environment, so reading
+  it as "no devices" is a tool failure mistaken for evidence.) The Rabbit IS powered on and reaches
+  the production API over the tailnet, so this is a USB/ADB-transport problem, not an offline
+  device — the likeliest cause being a charge-only cable or a device USB mode with no data.
 - **The EAS build path is available and authenticated** — `npx eas-cli whoami` succeeds using the
   `EXPO_TOKEN` already in `apps/mobile/.env`. `eas-cli` is not a declared dependency, but that is
   not a blocker. **No build was triggered deliberately**: `autoIncrement: true` means every build
