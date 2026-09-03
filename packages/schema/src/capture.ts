@@ -17,8 +17,13 @@ import { z } from "zod";
 // budget.
 export const CaptureSourceSchema = z.enum(["siri", "ptt", "web", "share", "assistant"]);
 
+// Exported so every client-side producer bounds text against the SAME number
+// the server enforces, rather than each picking its own. Checkpoint 8.4 added
+// the Android share sheet, whose text comes from another app entirely.
+export const CAPTURE_TEXT_MAX_LENGTH = 4000;
+
 export const CaptureRequestSchema = z.object({
-  text: z.string().min(1).max(4000),
+  text: z.string().min(1).max(CAPTURE_TEXT_MAX_LENGTH),
   source: CaptureSourceSchema,
   client_uuid: z.string().uuid(),
   captured_at: z.string().datetime({ offset: true }),

@@ -48,6 +48,23 @@ const config: ExpoConfig = {
     ...(!uiTestMode && {
       googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json",
     }),
+    // Android share sheet (Checkpoint 8.4). Gated on the production identity
+    // for the same reason googleServicesFile is above: leaving it ungated
+    // would put a second, near-identical "Personal OS" entry in the share
+    // sheet whenever a UI-test build is installed alongside.
+    //
+    // Unlike `android.usesCleartextTraffic` (see the comment above, which
+    // records three checkpoints lost to a property Expo's schema does not
+    // have), `intentFilters` IS in the schema -- @expo/config-types'
+    // ExpoConfig declares it, and @expo/config-plugins' IntentFilters.js
+    // renders `action` as android.intent.action.SEND, `category` as
+    // android.intent.category.DEFAULT and `data.mimeType` as
+    // android:mimeType. Verified against the installed packages, not assumed.
+    ...(!uiTestMode && {
+      intentFilters: [
+        { action: "SEND", category: ["DEFAULT"], data: [{ mimeType: "text/plain" }] },
+      ],
+    }),
     adaptiveIcon: {
       backgroundColor: "#E6F4FE",
       foregroundImage: "./assets/images/android-icon-foreground.png",
@@ -71,6 +88,10 @@ const config: ExpoConfig = {
       },
     ],
     "./plugins/withHardwareInputBridge.ts",
+    // Launcher shortcut into Quick Capture (Checkpoint 8.4). Production only,
+    // for the same reason the share-sheet intentFilters above are: two
+    // near-identical "Capture" shortcuts on one device is worse than none.
+    ...(!uiTestMode ? ["./plugins/withCaptureShortcut.ts"] : []),
     "expo-secure-store",
     ...(!uiTestMode ? ["expo-audio"] : []),
     "expo-sqlite",

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { randomUUID } from "expo-crypto";
 import { Alert, Modal, Pressable, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -6,6 +6,8 @@ import { useQuery } from "@tanstack/react-query";
 import { getOutboxStats } from "@/outbox/queue";
 import { usePlaceholderColor } from "@/components/placeholder-color";
 import { useCapture } from "@/queries/capture";
+import { normalizeSharedText } from "@/capture-intent/normalize";
+import { useCaptureIntent } from "@/capture-intent/use-capture-intent";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import {
   FLOATING_BUTTON_BOTTOM,
@@ -52,6 +54,41 @@ export function QuickAddFab() {
   const capture = useCapture();
   const outbox = useOutboxBadge();
 
+  // Android share sheet and launcher shortcut (Checkpoint 8.4). Both open
+  // THIS composer rather than submitting anything on their own. For a share
+  // that is a deliberate safety property: the text came from another app, so
+  // the owner sees exactly what will be captured and can edit or cancel it,
+  // and nothing is ever posted without a tap.
+  const captureIntent = useCaptureIntent();
+  // Non-null only while a SHARE-originated draft is in the composer. It
+  // carries the NATIVE intent id, which becomes the capture's client_uuid --
+  // so if the same share were ever delivered twice, the server's existing
+  // client_uuid dedupe returns the first Inbox row instead of creating a
+  // second. A fresh randomUUID() per submit would defeat that entirely.
+  // A `compose` shortcut gets no id: it carries no content to duplicate, and
+  // labelling a hand-typed capture `share` would be wrong.
+  const [shareId, setShareId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!captureIntent) return;
+    if (captureIntent.kind === "compose") {
+      setOpen(true);
+      return;
+    }
+    const normalized = normalizeSharedText(captureIntent.text);
+    if (!normalized) return;
+    setText(normalized);
+    setShareId(captureIntent.id);
+    setOpen(true);
+  }, [captureIntent]);
+
+  const closeSheet = () => {
+    setOpen(false);
+    // A cancelled share must not leave its id attached to the next
+    // hand-typed capture, which would mislabel it `share`.
+    setShareId(null);
+  };
+
   // The badge beside the FAB carries pending/failed counts visually, but the
   // FAB itself is the only focusable element here (the badge is
   // pointerEvents="none" and non-accessible) -- so its own accessible name
@@ -76,8 +113,9 @@ export function QuickAddFab() {
         // and is the correct value here. There is deliberately no "app"
         // member: adding one is a CHECK-constraint change, i.e. a migration.
         // See docs/ARCHITECTURE.md's capture section.
-        source: "web",
-        client_uuid: randomUUID(),
+        // `share` when this draft arrived from the Android share sheet.
+        source: shareId ? "share" : "web",
+        client_uuid: shareId ?? randomUUID(),
         captured_at: new Date().toISOString(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
@@ -85,6 +123,7 @@ export function QuickAddFab() {
         onSuccess: (result) => {
           setText("");
           setOpen(false);
+          setShareId(null);
           if (result.status === "queued") {
             // Best-effort: the outbox already persisted it to SQLite and
             // will flush automatically on reconnect (see
@@ -156,7 +195,7 @@ export function QuickAddFab() {
         </View>
       ) : null}
 
-      <Modal visible={open} animationType="slide" transparent onRequestClose={() => setOpen(false)}>
+      <Modal visible={open} animationType="slide" transparent onRequestClose={closeSheet}>
         <View className="flex-1 justify-end bg-black/40" style={{ paddingBottom: keyboardHeight }}>
           {/* The bottom safe-area inset only applies when the keyboard is
               down; with it up, the keyboard already occupies that space. */}
@@ -184,7 +223,7 @@ export function QuickAddFab() {
               ) : null}
               <View className="mt-3 flex-row justify-end gap-2">
                 <Pressable
-                  onPress={() => setOpen(false)}
+                  onPress={closeSheet}
                   className="min-h-[44px] justify-center rounded-lg px-4 py-2"
                   accessibilityRole="button"
                   accessibilityLabel="Cancel this capture"
