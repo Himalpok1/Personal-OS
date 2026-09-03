@@ -5,9 +5,9 @@
 **Phase 7 is CLOSED** — Checkpoint 7.9 completed 2026-09-02; its record is in `docs/history/phase-7.md`.
 **Checkpoint 8.1 — Failure visibility + AI input/output hardening — is COMPLETE and DEPLOYED.**
 **Checkpoint 8.2 — Enable the real Google Calendar — is COMPLETE (2026-09-03). No code, no migration.**
-**Checkpoint 8.3 — Find what you stored (search + export) — API and web are COMPLETE and DEPLOYED (2026-09-03).
-Its mobile lane is BLOCKED on owner-only actions; see the 8.3 section.**
-**Next checkpoint allowed:** **8.4**, on explicit approval only, and not before 8.3's mobile lane closes.
+**Checkpoint 8.3 — Find what you stored (search + export) — is COMPLETE (2026-09-03).**
+API, web and the Rabbit R1 APK (**versionCode 8**) are all deployed and physically accepted.
+**Next checkpoint allowed:** **8.4**, on explicit approval only. It has not begun.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -41,7 +41,8 @@ what is true *now*, it is in this file.
 | | |
 |---|---|
 | Migration level | **16** (`0000`–`0015`); local and production agree |
-| Serving commit | api **`b06b0ca`** · web **`b06b0ca`** (both Checkpoint 8.3) · worker **`dc3983d`** (8.1 — deliberately not rebuilt; its runtime is unchanged) |
+| Serving commit | api **`b06b0ca`** · web **`b06b0ca`** (Checkpoint 8.3) · worker **`dc3983d`** (8.1 — deliberately not rebuilt; runtime unchanged) |
+| Rabbit R1 | `com.himal.personalos` **versionCode 8**, built from `d030fc1`, installed in place 2026-09-03 |
 | Integrations | Google Health **active** · Google Calendar **active** · Gmail **active** |
 | Calendar sync | **2 of 5 calendars enabled** — the owner's real primary (enabled at 8.2) and the dedicated test calendar. **98 events** ingested, all from the primary. |
 | Monitoring | 5 targets seeded, including both Tailscale Serve routes |
@@ -594,37 +595,90 @@ gratuitous restart. Verified after: the worker's serving image digest is byte-id
 (`012f981f…`), while api and web moved to new digests. All four containers `restarts=0`, API
 `(healthy)` in 11 s, and monitoring recorded **zero** `down` checks through the recreation.
 
-#### What is NOT done, and why
+#### Mobile lane — CLOSED 2026-09-03
 
-**The mobile lane is blocked on owner-only actions, and the block is architectural rather than a
-missing step.**
+The blocker was a **charge-only USB cable**, not a device setting. `ioreg -p IOUSB` (not
+`system_profiler`, which returns empty output here) showed the device absent from the bus entirely;
+a data cable made it appear immediately as serial `919109A4M16001324668`, `model:rabbit_r1`, matching
+the serial recorded at Checkpoint 6.7B.
 
-- **`expo-updates` is not a dependency**, so there is no OTA channel: new JS reaches the Rabbit R1
-  **only** via a new APK. Proven first-hand rather than assumed.
-- **No Android device is reachable** — `adb devices` is empty and adb TCP 5555 is refused, and with
-  a USB cable attached the device **does not enumerate on the USB bus at all**: `ioreg -p IOUSB`
-  lists only hubs, a Stream Deck, a card reader and the external SSD. (Use `ioreg`, not
-  `system_profiler SPUSBDataType` — the latter returns EMPTY output in this environment, so reading
-  it as "no devices" is a tool failure mistaken for evidence.) The Rabbit IS powered on and reaches
-  the production API over the tailnet, so this is a USB/ADB-transport problem, not an offline
-  device — the likeliest cause being a charge-only cable or a device USB mode with no data.
-- **The EAS build path is available and authenticated** — `npx eas-cli whoami` succeeds using the
-  `EXPO_TOKEN` already in `apps/mobile/.env`. `eas-cli` is not a declared dependency, but that is
-  not a blocker. **No build was triggered deliberately**: `autoIncrement: true` means every build
-  irrevocably consumes a `versionCode`, so building an APK that cannot be installed or verified in
-  the same session would burn one and hand over an unverified artifact for the owner's daily-driver
-  device.
-- A **locally-built** APK is not an option: ADR-037 requires the EAS-managed signing key and a match
-  against the recorded production certificate SHA-256, so a debug-signed build would fail
-  `adb install -r` with a signature mismatch and could only proceed by uninstalling — which
-  destroys pairing, SecureStore, primary-device state and the exact-alarm grant.
+**Build.** `eas build --platform android --profile production-internal --freeze-credentials`, EAS
+cloud, build `4530b425-be99-49e9-bc62-30a4329a379e` from commit `d030fc1`. EAS incremented
+**versionCode 7 → 8** and used remote keystore **`Build Credentials 91FWKRpxFX`** — the same named
+credential as 6.7B. The EAS `production` environment supplied only `EXPO_PUBLIC_API_URL` and
+`EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID`; **`EXPO_PUBLIC_UI_TEST_MODE` was absent**, as required.
 
-**The deployed web bundle IS verified to carry the search screen** — the served 2.55 MB bundle
-contains the placeholder copy, the `search-result-` testIDs and the idle-state copy — but it was
-**not visually rendered**: the sandboxed browser pane fails with `ERR_BLOCKED_BY_CLIENT` on
-`/_expo/static/*` at `:8443`, the documented Phase 2 limitation. `curl` proves the server serves
-those exact assets in 0.3 s. **No physical-device or visual claim is made.**
+**Signing proof — three-way, before installing anything.** The installed v7 APK was pulled from the
+device (sha256 `5c400467…f96a4`, an exact match to the recorded v7 artifact) and its certificate
+compared against the new one. Both are `4601e3a2c4ecfe791b0bf6d960871c017fe1f3bc56087389f7ccc3a3f6cc23ea`
+/ SHA-1 `7eac1aa4…`, equal to the recorded production identity.
 
+> `apksigner` needs a JVM and this machine has none, and the APKs carry no v1 block, so the
+> fingerprint came from a purpose-written APK-Signing-Block parser. **Its first result was WRONG** —
+> it read the v2 block's outer length-prefix as the first signer instead of the signers sequence,
+> one nesting level off, and produced a plausible but incorrect digest. The recorded fingerprint is
+> what caught it. That is the argument for comparing against a recorded value rather than trusting a
+> fresh tool, and it is why the parser was only trusted on the new APK **after** it reproduced the
+> known-good one exactly.
+
+**Bundle contents verified pre-install** (Hermes bytecode, so `grep -a`): the five 8.3 search markers
+— the placeholder, `search-result-`, `search-input`, the idle copy and `No matches.` — are present in
+the new bundle and **absent from the installed v7 bundle**. The production tailnet API URL is baked
+in and `localhost:3000` is absent. The one `personalos.dev` hit is `UI_TEST_ANDROID_PACKAGE`, the
+constant in the isolation guard that refuses to start if production runs in the UI-test package —
+the guard naming what it forbids.
+
+**Install and preservation.** `adb install -r` only — no uninstall, no `-d`, no data clear. Result
+`Success`.
+
+| Check | Before | After |
+|---|---|---|
+| versionCode | 7 | **8** |
+| `firstInstallTime` | 2026-08-19 16:26:10 | **2026-08-19 16:26:10 — unchanged** |
+| `lastUpdateTime` | 2026-08-29 22:40:57 | advanced to 2026-09-02 23:58:38 |
+| `dataDir` | `/data/user/0/com.himal.personalos` | unchanged |
+| Packages | production only | production only |
+| appop `SCHEDULE_EXACT_ALARM` | `allow` | **`allow` — preserved** |
+| `POST_NOTIFICATIONS` | granted | granted |
+| Device row | `c6c0b43d…` PRIMARY, push present | **same row**, PRIMARY, same push token (md5 `d0a7fdbf4119`) |
+| Pairing codes consumed | 2 | **2 — no re-pairing** |
+| Device count | 2 (1 active) | 2 (1 active) — no duplicate |
+
+**No pairing screen on cold launch**, and `last_seen_at` refreshed immediately — the SecureStore
+credential survived the update.
+
+> **The ROM's exact-alarm inconsistency was reconfirmed first-hand**, exactly as Checkpoint 5.7
+> recorded: `cmd appops get … SCHEDULE_EXACT_ALARM` reports **`allow`** while
+> `dumpsys package … SCHEDULE_EXACT_ALARM` reports **`granted=false`**, both before and after. The
+> appop is the authoritative gate on Android 14+. A live-alarm reading
+> (`window=0 exactAllowReason=permission`) was **not available**: the app has no alarm scheduled,
+> because this device has `notify_reminders = false`. The preservation claim therefore rests on the
+> appop being identical before and after, not on a scheduled alarm.
+
+**Physical acceptance at 480×640 — passed.** The 🔍 header action appears beside ⚙️ on every tab
+(before/after screenshots confirm it was absent on v7), **still five tabs, no sixth**. The field
+autofocuses with the keyboard up; the idle state reads "Type at least 2 characters to search."
+Results render as grouped sections in the contract's type order — TASKS, NOTES, INBOX, then MAIL —
+with previews and clamped long text, no overflow. Mail rows show subject plus sender display name
+and **no address**; tapping one does not navigate, as designed. Task → Task detail, note → Note
+detail, and a committed inbox capture → the Note it became, all verified.
+
+**Live device search proof.** The API log shows the device's own queries arriving through Tailscale
+Serve (`host: personal-os.tail62a68f.ts.net`) — including `/search?q=%25%25`, a query never issued
+from any other client. With the field holding exactly `%%`, the device rendered **"No matches."**;
+had escaping been absent, that pattern would have matched **every one of the ~560 searchable rows**.
+All 13 `/search` responses in the window were `200`. A log scan of **1,708 content needles** from the
+database found **0** in either the api or worker log, with a positive control proving the scanner
+worked.
+
+> Honest limitation: the app issues one request per keystroke (five requests while typing a
+> six-character query). At single-user scale with 18–35 ms responses that is harmless, and it is
+> recorded as debt rather than fixed. The error state was **not** exercised — reproducing it needs
+> network disruption on the owner's daily driver.
+
+**The deployed web bundle** was verified to carry the search screen but was **not visually
+rendered**: the sandboxed browser fails `ERR_BLOCKED_BY_CLIENT` on `/_expo/static/*` at `:8443`, the
+documented Phase 2 limitation. The device is the real acceptance and it passed.
 
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
@@ -920,34 +974,40 @@ an intentionally-logged field — are recorded in the ledger below.
 - **There is no export affordance in the client (8.3).** `GET /export` is reachable by `curl` or a
   browser from any tailnet machine; saving a file from the app would need new native file-system and
   sharing surface, which this checkpoint did not open.
-- **The Rabbit R1 cannot receive search without a new APK (8.3).** `expo-updates` is not a
-  dependency, so there is no OTA channel. This is a standing property of the architecture, not an
-  8.3 regression, and it gates every future client-side checkpoint the same way.
+- **Every client change needs a full APK (standing).** `expo-updates` is not a dependency, so there
+  is no OTA channel and each client-side checkpoint costs an EAS cloud build plus a physical
+  in-place install. A property of the architecture, not an 8.3 regression.
+- **⚠️ Confirming a `needs_confirm` inbox item fails, silently (found at 8.3 closure; NOT caused by
+  8.3).** At 2026-09-03 04:38 UTC the app sent `POST /inbox/851d3455…/confirm` and
+  `POST /inbox/0cd123a1…/confirm`; both enqueued `capture.parse`, both retried 5× and **failed**, and
+  **both items are still `needs_confirm`** — so the confirmation never completed and the user got no
+  error. These are the first `capture.parse` failures ever recorded. **Not an AI outage**: a Daily
+  Brief generated successfully at 04:38:00, seven seconds earlier, on the same `gpt-4.1` /
+  `My OpenAI` connection, and all four AI routes are enabled with keys present. **Not 8.3**: the
+  worker was never rebuilt (image digest unchanged) and this preceded the APK install by 20 minutes.
+  The cause is opaque by design — the AI error containment strips provider detail from both the log
+  and `job.output`, leaving only `AiJobError: capture.parse failed (Error)`. Needs its own
+  investigation; it is the one path that turns a capture the user tried to file into a silent no-op.
+- **Search issues one request per keystroke (8.3).** Typing a six-character query produced five
+  `/search` requests. Harmless at single-user scale with 18–35 ms responses, but a debounce is the
+  obvious fix if the corpus or the latency ever grows.
+- **The search error state has never been exercised (8.3).** Reproducing it needs network disruption
+  on the owner's daily-driver device. The state is covered by unit tests, not by a device.
 
 ## Current objective
 
-**Checkpoint 8.3's server side is COMPLETE and DEPLOYED.** `GET /search` and `GET /export` are live
-over Tailscale, the web bundle carries the search screen, and the whole thing shipped with **no
-migration** — level 16, `packages/db` byte-unchanged.
+**Checkpoint 8.3 is COMPLETE.** Search and export are live on the API, in the web bundle, and — as
+of 2026-09-03 — on the Rabbit R1 itself at **versionCode 8**, installed in place with
+`firstInstallTime`, pairing, PRIMARY status, push token and the exact-alarm appop all preserved.
 
-Stored content is findable for the first time: a single query returns matching tasks, notes, inbox
-captures and mail metadata together, with each type capped independently so 549 mail rows cannot
-evict the owner's 3 notes.
+Stored content is findable from the device the owner actually carries: one query returns matching
+tasks, notes, inbox captures and mail metadata together, grouped by type, with each type capped
+independently so hundreds of mail rows cannot evict a matching note.
 
-**The honest gap 8.3 leaves is the physical device.** There is no OTA channel and no Android device
-is reachable over adb, so the Rabbit R1 has no search affordance. **It runs `versionCode 7`, built at
-Checkpoint 6.7B from commit `c0dbff3` and installed 2026-08-30** — no APK has been built since, so it
-carries no Phase 7 or Phase 8 client code at all. No physical-device claim is made, and no visual
-render was obtained either: the sandboxed browser blocks `/_expo/static/*` at `:8443`, the documented
-Phase 2 limitation. The mobile code is verified by 30 unit tests and by the deployed bundle's
-contents, not by a screenshot.
-
-> **Corrects an earlier line in this section.** It previously read that the Rabbit "is still running
-> the 8.1-era APK" and named `eas-cli` not being installed as a blocker. Both were wrong: **no APK
-> was built in Phase 7 or Phase 8**, so the device's client code is 6.7B-era, and `npx eas-cli`
-> authenticates fine with the stored `EXPO_TOKEN`. The only blocker is the ADB transport.
-
-**8.3 is therefore NOT closed.** Its remaining lane needs owner action (below).
+**8.3 leaves one thing genuinely unproven and one thing newly found.** The search error state was
+never exercised on-device, because reproducing it means disrupting the daily driver. And the closure
+surfaced a defect that is *not* 8.3's: confirming a `needs_confirm` inbox item enqueues a
+`capture.parse` that fails, leaving the item unconfirmed with no error shown. Both are in the ledger.
 
 ## Completed
 
@@ -971,10 +1031,11 @@ routes.
 
 ## Current work
 
-**None in progress.** Checkpoint 8.3's server lane completed and deployed 2026-09-03; its mobile
-lane is open and owner-gated. Five commits: contracts, API, mobile, the inert-rendering guard, and a
-mutation-driven test fix. One production deployment (api + web; worker deliberately untouched). No
-production data was written — every live check was a `GET`.
+**None in progress.** Checkpoint 8.3 closed 2026-09-03. Seven commits across the checkpoint:
+contracts, API, mobile, the inert-rendering guard, a mutation-driven test fix, and two documentation
+corrections. Two production deployments (api + web; worker deliberately untouched) and one in-place
+APK install. **No production data was written by this work** — every live check was a `GET`, and the
+only writes on the system were the owner's own app activity.
 
 ## Last verification
 
@@ -1000,48 +1061,28 @@ weakness in the test rather than in the control; the test was strengthened with 
 Migration invariant: **16 `.sql` / 16 journal entries**, `0016` absent, `packages/db` byte-unchanged,
 production tracking table **16**.
 
+**The mobile lane required NO source change**, so this baseline stands unchanged and the suite was
+deliberately not re-run for the APK install. The APK was built from `d030fc1`, which is the same
+application tree the 3,226-test run covered — the only commits after it are documentation.
+
 ## Next action
 
-**Stop at readiness. Checkpoint 8.4 must not begin without explicit approval, and 8.3's mobile lane
-should close first.**
+**Stop at readiness. Checkpoint 8.4 must not begin without explicit approval.**
 
-**Owner-only, to finish 8.3 — ONE action is required; everything downstream is resolved:**
+Nothing blocks it. The items below are open work, not gates:
 
-1. **Make the Rabbit R1 visible to adb.** This is the sole blocker. Connect it by USB with USB
-   debugging on and accept the on-device "Allow USB debugging?" prompt. Nothing else is needed —
-   no token, no password, no keystore material.
-
-Once that is done, the rest is fully specified and needs no further owner input:
-
-| Step | Established value |
-|---|---|
-| Build | `eas build --profile production-internal --platform android --freeze-credentials` — the recipe `docs/history/phase-3.md` records as mandatory for every release |
-| Auth | `EXPO_TOKEN` already in `apps/mobile/.env` (gitignored, mode 600); `npx eas-cli whoami` verified working |
-| Signing | EAS-managed remote keystore, project `@himal_pok/mobile` `b704be80-…`, `credentialsSource: remote`. No new keystore, no identity change (ADR-037) |
-| Signer to match | SHA-256 `4601e3a2c4ecfe791b0bf6d960871c017fe1f3bc56087389f7ccc3a3f6cc23ea` (SHA-1 `7eac1aa4…`) |
-| versionCode | installed **7** → next **8** (EAS-owned; every build consumes one irrevocably) |
-| Install | **`adb install -r` only.** Never uninstall, never `-d`, never clear data |
-| Must be preserved | `firstInstallTime` **`2026-08-19 16:26:10`** — unchanged since versionCode 3; device row `c6c0b43d-2eed-41f4-8ee1-4c1aff65bc61` still PRIMARY, push token present, `revoked_at` null, exactly one PRIMARY, zero pairing codes consumed, no pairing screen on cold launch |
-
-⚠️ **Do NOT use `dumpsys package … SCHEDULE_EXACT_ALARM granted=` as exact-alarm evidence** — this
-ROM reports it incorrectly (recorded at Checkpoint 5.7). The deciding evidence is the scheduled
-alarm itself in `dumpsys alarm`: `window=0 exactAllowReason=permission` when granted, versus
-`window=+1h0m0s0ms` with no `exactAllowReason` when not.
-
-2. **Physical Rabbit R1 acceptance**, once installed: the header search action is reachable from
-   every tab, the field focuses on open, results render at 480x640 without overflow, and tapping a
-   task/note/inbox result navigates.
-
-**Owner-only, still open from earlier checkpoints and unchanged by 8.3:**
-
-3. **Configuration / key durability remains the sharpest risk in the system.**
+1. **Investigate the inbox-confirm failure** (ledger, above). It is the sharpest of these: a user
+   action that appears to succeed and silently does nothing. Worth its own checkpoint, and it needs
+   the AI error containment to surface *something* diagnosable without leaking provider text.
+2. **Configuration / key durability remains the sharpest systemic risk.**
    `CREDENTIALS_ENCRYPTION_KEY` has no key version, no KDF and no rotation path and exists on exactly
    two hosts. Intended direction: SOPS + age with the private key held off both machines. **Nothing
    secret goes in GitHub.** ADR-024 is unchanged.
-4. **Retention windows remain an owner decision** and gate the mail prune ADR-054 requires.
-5. **Optional GitHub hardening:** Actions is default-on although no workflow exists in history.
-6. **Local hygiene:** delete `apps/mobile/.expo/dev/logs/export.log`, which holds a plaintext
-   `EXPO_TOKEN` at mode 644.
+3. **Retention windows remain an owner decision** and gate the mail prune ADR-054 requires.
+4. **Optional GitHub hardening:** Actions is default-on although no workflow exists in history.
+5. **Local hygiene:** delete `apps/mobile/.expo/dev/logs/export.log`, which holds a plaintext
+   `EXPO_TOKEN` at mode 644. Separately, `/sdcard` on the Rabbit holds ~157 stray `.xml` uiautomator
+   dumps from earlier checkpoints' UI testing; this checkpoint removed only its own ten.
 
 Deliberately **not** started: Checkpoint 8.4 and any capture-front-door work, adding `events` or
 `projects` to search, bounding event text at write, any notification-producer change, any Brief
