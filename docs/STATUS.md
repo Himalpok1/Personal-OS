@@ -601,10 +601,15 @@ missing step.**
 
 - **`expo-updates` is not a dependency**, so there is no OTA channel: new JS reaches the Rabbit R1
   **only** via a new APK. Proven first-hand rather than assumed.
-- **No Android device is reachable** — `adb devices` is empty.
-- **`eas-cli` is not a declared dependency anywhere** and no EAS build was triggered. Building an
-  APK that cannot be installed or verified in the same session would burn a `versionCode`
-  (`autoIncrement: true`) and hand over an unverified artifact for the owner's daily-driver device.
+- **No Android device is reachable** — `adb devices` is empty, `system_profiler` enumerates no USB
+  device, and adb TCP 5555 is refused. The Rabbit IS powered on and answers ping over the tailnet,
+  so it is an ADB-transport problem, not an offline device.
+- **The EAS build path is available and authenticated** — `npx eas-cli whoami` succeeds using the
+  `EXPO_TOKEN` already in `apps/mobile/.env`. `eas-cli` is not a declared dependency, but that is
+  not a blocker. **No build was triggered deliberately**: `autoIncrement: true` means every build
+  irrevocably consumes a `versionCode`, so building an APK that cannot be installed or verified in
+  the same session would burn one and hand over an unverified artifact for the owner's daily-driver
+  device.
 - A **locally-built** APK is not an option: ADR-037 requires the EAS-managed signing key and a match
   against the recorded production certificate SHA-256, so a debug-signed build would fail
   `adb install -r` with a signature mismatch and could only proceed by uninstalling — which
@@ -925,11 +930,18 @@ Stored content is findable for the first time: a single query returns matching t
 captures and mail metadata together, with each type capped independently so 549 mail rows cannot
 evict the owner's 3 notes.
 
-**The honest gap 8.3 leaves is the physical device.** There is no OTA channel, no Android device is
-reachable, and `eas-cli` is not installed — so the Rabbit R1 is still running the 8.1-era APK and has
-no search affordance. No physical-device claim is made, and no visual render was obtained either: the
-sandboxed browser blocks `/_expo/static/*` at `:8443`, the documented Phase 2 limitation. The mobile
-code is verified by 30 unit tests and by the deployed bundle's contents, not by a screenshot.
+**The honest gap 8.3 leaves is the physical device.** There is no OTA channel and no Android device
+is reachable over adb, so the Rabbit R1 has no search affordance. **It runs `versionCode 7`, built at
+Checkpoint 6.7B from commit `c0dbff3` and installed 2026-08-30** — no APK has been built since, so it
+carries no Phase 7 or Phase 8 client code at all. No physical-device claim is made, and no visual
+render was obtained either: the sandboxed browser blocks `/_expo/static/*` at `:8443`, the documented
+Phase 2 limitation. The mobile code is verified by 30 unit tests and by the deployed bundle's
+contents, not by a screenshot.
+
+> **Corrects an earlier line in this section.** It previously read that the Rabbit "is still running
+> the 8.1-era APK" and named `eas-cli` not being installed as a blocker. Both were wrong: **no APK
+> was built in Phase 7 or Phase 8**, so the device's client code is 6.7B-era, and `npx eas-cli`
+> authenticates fine with the stored `EXPO_TOKEN`. The only blocker is the ADB transport.
 
 **8.3 is therefore NOT closed.** Its remaining lane needs owner action (below).
 
@@ -989,14 +1001,29 @@ production tracking table **16**.
 **Stop at readiness. Checkpoint 8.4 must not begin without explicit approval, and 8.3's mobile lane
 should close first.**
 
-**Owner-only, to finish 8.3:**
+**Owner-only, to finish 8.3 — ONE action is required; everything downstream is resolved:**
 
-1. **Build and install the 8.3 APK.** Requires EAS auth and a reachable device. The pipeline is
-   `eas build --profile production-internal --platform android` (which owns `versionCode` via
-   `appVersionSource: "remote"` and `autoIncrement: true`), then **`adb install -r` only — never
-   uninstall**, since uninstalling destroys pairing, SecureStore, the primary-reminder-device flag,
-   the push token and the exact-alarm grant. Verify Android `firstInstallTime` is preserved
-   before/after.
+1. **Make the Rabbit R1 visible to adb.** This is the sole blocker. Connect it by USB with USB
+   debugging on and accept the on-device "Allow USB debugging?" prompt. Nothing else is needed —
+   no token, no password, no keystore material.
+
+Once that is done, the rest is fully specified and needs no further owner input:
+
+| Step | Established value |
+|---|---|
+| Build | `eas build --profile production-internal --platform android --freeze-credentials` — the recipe `docs/history/phase-3.md` records as mandatory for every release |
+| Auth | `EXPO_TOKEN` already in `apps/mobile/.env` (gitignored, mode 600); `npx eas-cli whoami` verified working |
+| Signing | EAS-managed remote keystore, project `@himal_pok/mobile` `b704be80-…`, `credentialsSource: remote`. No new keystore, no identity change (ADR-037) |
+| Signer to match | SHA-256 `4601e3a2c4ecfe791b0bf6d960871c017fe1f3bc56087389f7ccc3a3f6cc23ea` (SHA-1 `7eac1aa4…`) |
+| versionCode | installed **7** → next **8** (EAS-owned; every build consumes one irrevocably) |
+| Install | **`adb install -r` only.** Never uninstall, never `-d`, never clear data |
+| Must be preserved | `firstInstallTime` **`2026-08-19 16:26:10`** — unchanged since versionCode 3; device row `c6c0b43d-2eed-41f4-8ee1-4c1aff65bc61` still PRIMARY, push token present, `revoked_at` null, exactly one PRIMARY, zero pairing codes consumed, no pairing screen on cold launch |
+
+⚠️ **Do NOT use `dumpsys package … SCHEDULE_EXACT_ALARM granted=` as exact-alarm evidence** — this
+ROM reports it incorrectly (recorded at Checkpoint 5.7). The deciding evidence is the scheduled
+alarm itself in `dumpsys alarm`: `window=0 exactAllowReason=permission` when granted, versus
+`window=+1h0m0s0ms` with no `exactAllowReason` when not.
+
 2. **Physical Rabbit R1 acceptance**, once installed: the header search action is reachable from
    every tab, the field focuses on open, results render at 480x640 without overflow, and tapping a
    task/note/inbox result navigates.
