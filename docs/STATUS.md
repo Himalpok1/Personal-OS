@@ -4,7 +4,8 @@
 **Current phase:** **Phase 8 — Consolidation & adoption (ADR-056, approved 2026-09-02).** Checkpoint **8.0 — Foundation / Discovery Gate closure** is **COMPLETE**.
 **Phase 7 is CLOSED** — Checkpoint 7.9 completed 2026-09-02; its record is in `docs/history/phase-7.md`.
 **Checkpoint 8.1 — Failure visibility + AI input/output hardening — is COMPLETE and DEPLOYED.**
-**Next checkpoint allowed:** **8.2**, on explicit approval only. It has not begun.
+**Checkpoint 8.2 — Enable the real Google Calendar — is COMPLETE (2026-09-03). No code, no migration.**
+**Next checkpoint allowed:** **8.3**, on explicit approval only. It has not begun.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -40,6 +41,7 @@ what is true *now*, it is in this file.
 | Migration level | **16** (`0000`–`0015`); local and production agree |
 | Serving commit | api/worker **`dc3983d`** (Checkpoint 8.1) · web `a5bbc48` |
 | Integrations | Google Health **active** · Google Calendar **active** · Gmail **active** |
+| Calendar sync | **2 of 5 calendars enabled** — the owner's real primary (enabled at 8.2) and the dedicated test calendar. **98 events** ingested, all from the primary. |
 | Monitoring | 5 targets seeded, including both Tailscale Serve routes |
 | AI task routes | `capture_parser`, `daily_brief`, `mail_digest`, `voice_transcribe` — all on the existing `gpt-4.1` row |
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
@@ -392,6 +394,105 @@ genuine integration failure and no safe deterministic trigger exists that does n
 Google grant. What IS verified first-hand is that the **running containers** carry the new key
 expressions, the new Gmail alert module, the shared filter and the corrected Brief prompt.
 
+### Checkpoint 8.2 — Enable the real Google Calendar (COMPLETE, 2026-09-03)
+
+**Zero runtime code changes, zero migrations, zero new routes, zero queue changes, no OAuth change.**
+The application tree is byte-unchanged; the only commit is this record. Migration level stays **16**.
+
+**What changed:** exactly one boolean. `PATCH /calendar-connections/<conn>/calendars` at
+**2026-09-02T23:49:26.362Z** flipped `calendar_connection_calendars.sync_enabled` from `false` to
+`true` for the owner's real primary Google Calendar. No direct DB write was used and no validation
+was bypassed.
+
+**Target chosen from Google metadata, not from a name.** `GET /calendar-connections/:id/available-calendars`
+proxies Google's own `calendarList`; it returned exactly **one** row with `primary: true`, whose id
+hashes to `efe3d33ae266` (local row `066404b2…`). Independently corroborated in the database: that is
+the only calendar whose `google_calendar_id` equals the connection's `google_account_email`, which is
+how Google identifies a primary calendar.
+
+**Nothing else was touched.** The PATCH body carried one item; the route is a partial patch keyed by
+calendar id, so unlisted calendars are untouched. The other four rows' `updated_at` values are
+byte-identical to the pre-change snapshot, including the dedicated test calendar, which remains
+enabled and unchanged.
+
+| Measure | Before (23:49:07Z) | After |
+|---|---|---|
+| `events` | 0 | **98** |
+| `event_external_links` | 0 | **98** |
+| `occurrences` | 0 | **0** (correct — see below) |
+| `calendar_event_instances` | 0 | 0 |
+| Agenda event items, data-bearing window | 0 | **6 items / 5 distinct ids** |
+| `ai_daily_briefs` | 0 | 1 |
+
+**Sync proof.** Picked up by the **normal cron** (`*/15 * * * *` UTC), not a forced `sync-now`.
+First full sync completed `00:00:29.483Z`; all 98 events share one `created_at`
+(`00:00:28.698967Z`), i.e. one atomic transaction. Connection stayed `active`, `last_sync_error`
+NULL, and `calendar_connections.updated_at` was **not** re-stamped — so no `needs_reauth` transition
+and no dead-letter occurred. No new alert row: `notification_dispatch_log` still 7 rows, 0 of them
+`calendar-needs-reauth`.
+
+**Idempotency proof (second natural cycle, `00:15:24.946Z`).** Row counts unchanged at 98/98/0.
+**Zero event rows and zero link rows were rewritten** — every `updated_at` still equals the original
+`00:00:28.698967Z`. `last_full_sync_at` stayed at `00:00:29.483Z` while `last_successful_sync_at`
+advanced, proving the replay ran incrementally off the stored sync token rather than repeating a full
+sync. Duplicate external identities are structurally impossible anyway: `event_external_links` carries
+a UNIQUE index on `(connection_id, google_calendar_id, google_event_id)` plus a UNIQUE on `event_id`.
+Measured: 0 duplicates, 0 orphan links, 0 events without a link, 98 distinct linked events.
+
+**Data integrity.** 0 ADR-042 violations — all 29 all-day events have `starts_at` NULL with
+`start_date` set; all 69 timed events have `starts_at` set with `start_date` NULL. 0 events with a
+NULL/empty timezone; 5 distinct timezones present. 0 `ends_at < starts_at`.
+
+**Recurrence behaves per ADR-042/045, verified on real data.** The yearly all-day master anchored
+2024-07-23 expanded on demand to `occurs_at = 2026-07-23T12:00:00Z` — **local noon**, ADR-042's
+DST-safe anchor — with `start_date` correctly **re-pointed to the instance date** `2026-07-23` rather
+than the template's 2024 date. A multi-day timed event fans out across two agenda days under one id,
+which is fan-out, not duplication.
+
+**`occurrences` staying 0 is correct, not a missing expansion.** Calendar sync never inserts
+occurrences; the nightly `occurrences.expand-window` (`0 3 * * *` UTC) owns that, over a rolling
+90-day window. Both recurring masters fall outside it deterministically: one is `FREQ=DAILY` with
+`UNTIL 2020-12-31`, the other `FREQ=YEARLY` whose instances (2026-07-23, 2027-07-23) both sit outside
+2026-09-03 → 2026-12-02. Read-path expansion is separate and does work, as above.
+
+**Cancelled semantics are code-verified, not exercised.** Sync requests `showDeleted=true` and maps a
+cancelled event to a **soft delete** (`events.archived_at` set, link row removed) — never a hard
+delete. `events_archived = 0` because on a first full sync a cancelled event with no pre-existing
+link is correctly ignored.
+
+**Surfaces.** Agenda went 0 → 6 event items over a window containing real data, with ADR-042
+invariants holding on the wire. **Today correctly shows 0 events**: every one of the 98 events is in
+the past (latest 2026-07-30), so there is nothing today and nothing in the 7-day upcoming horizon.
+That is honest emptiness, not a broken read path — the same read model returns real rows the moment
+the window contains data. Note that Today/Agenda apply **no** `sync_enabled` filter and read `events`
+unconditionally; enabling a calendar is therefore the *only* control over what these surfaces show.
+
+**Brief-lane safety, verified inside the running containers.** The API image carries
+`packages/core/dist/ai/output-safety.js`, and `apps/api/dist/brief/output.js` imports
+`sanitizeModelText` from `@personal-os/core/ai/output-safety` — the same shared module the mail
+digest uses. The corrected prompt premise (*"The data DOES sometimes contain sensitive strings"*) and
+the stranger-authored-calendar framing are both present in `apps/api/dist/brief/prompt.js`; the false
+premise survives **only inside a comment at line 14**, outside the `BRIEF_SYSTEM_PROMPT` literal
+(lines 27–51). `generateText` is called with exactly `model`, `system`, `prompt`, `maxOutputTokens`,
+`abortSignal` — **no `tools`**. Event text is bounded at the prompt boundary (title 120, location 80,
+control characters stripped *before* truncation) and `description` reaches the model nowhere at all.
+
+One manual Brief was generated on the live path (`POST /briefs`, HTTP 200, 2.7 s). It was served by
+the expected `gpt-4.1` row `313633f4…`, persisted `content` with **exactly one key, `text`** (server
+owns the shape, ADR-043), and its 362-character output contains 0 URLs, 0 emails, 0 bare domains,
+0 UUIDs and 0 markdown. **Honest limitation: it did not exercise calendar text**, because Today had
+no events to include. The calendar→Brief path remains verified structurally, not by live traversal.
+
+**Privacy.** A content-free leak scan pulled all 192 event-derived needles (98 titles, 46 locations,
+55 descriptions, 1 account email) from the database and searched both container logs: **0 matches**.
+The only URLs in the API log are loopback health-check addresses. No event content, attendee address,
+location or conference URL appears in any log.
+
+**Production health after two sync cycles.** All three Google integrations `active` with no error;
+containers `restarts=0`, API `(healthy)`; migration level 16; worker heartbeat fresh; monitoring 0
+incidents and 0 open. Every pg-boss job created since the change completed — the only failed job in
+the system remains the pre-deployment `calendar.google.sync-calendar` of 2026-08-31.
+
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
 **Phase 7 is closed.** Checkpoints 7.0–7.8B and the full Checkpoint 7.9 record — the open
@@ -628,20 +729,64 @@ an intentionally-logged field — are recorded in the ledger below.
   needs a genuine integration failure, and no safe deterministic trigger exists that does not break a
   real Google grant. The running containers are verified to carry the new code.
 
+- **`calendar_connection_calendars.summary` stores the calendar ID, not the display name (found at
+  8.2).** All 5 rows have `summary == google_calendar_id`, while Google's `calendarList` returns real
+  display names (25, 6, 8, 23 and 26 characters). Cause: the **only** insert into that table anywhere
+  in non-test source is `apps/api/src/routes/calendar-connections.ts:315`, which sets
+  `summary: calendarKey`; the UPDATE branch never touches `summary` and no worker path backfills it.
+  Cosmetic only — `summary` is never consulted for sync or matching — but any UI listing calendars
+  shows opaque ids. Compounded by there being **no `GET` route for persisted calendar rows**
+  (already recorded above).
+- **Event text is still unbounded at write (8.2 confirms ADR-057 finding #3's residual).**
+  `events.title/description/location` are plain `text` with `z.string()` and no `.max()`, and the
+  sync path writes provider values verbatim. Checkpoint 8.1 bounded them at the **prompt** boundary
+  only. As of 8.2 this path carries real third-party text for the first time: stored descriptions
+  include conference links and meeting passcodes. Not currently reachable by the AI layer —
+  `description` is absent from `BriefInput` entirely and title/location are truncated before the
+  model — but the write-side bound ADR-054 requires for mail has no calendar counterpart.
+- **One ingested all-day event has `end_date` one day BEFORE `start_date` (8.2).** Google's all-day
+  `end.date` is exclusive and the translator converts to inclusive by subtracting a day
+  (`googleAllDayToLocal`), so this row is a faithful conversion of an upstream event whose
+  `end.date == start.date` — a zero-length all-day event at Google. Personal OS has no guard that
+  rejects or normalises `end_date < start_date` on ingest. One 2021 row; harmless today, but a
+  reversed span is expressible in the schema.
+- **A timed multi-day event in progress appears on NO Today day (found at 8.2, latent).**
+  `classifyEventIntoWindows` returns the first matching window and matches a timed event only on its
+  start instant, so an event that began before today's local midnight and is still running is
+  bucketed nowhere. All-day multi-day events are matched by date containment and do appear. The 24 h
+  front padding widens the fetch, not the classification. Not triggered by current data.
+- **A `done` event occurrence still renders on Today and Agenda (found at 8.2, latent).** Only
+  `skipped` occurrences are excluded, and `status` is absent from `TodayEventItemSchema` and
+  `AgendaEventItemSchema`, so a completed occurrence is indistinguishable from a scheduled one.
+  `status` is exposed only via `GET /events/range`.
+- **`GET /calendar-connections/:id/available-calendars` can write to the database (found at 8.2).**
+  It is a live provider pass-through: when the stored access token has under 60 s of life it refreshes
+  and UPDATEs the token columns on `calendar_connections`. Harmless, but it is not the read-only probe
+  its name suggests. Separately, a failed refresh there surfaces as **500**, not 401, because
+  `GoogleOAuthError` carries `httpStatus` rather than the `statusCode` the API's 4xx passthrough tests
+  for.
+- **`POST /calendar-connections/:id/sync-now` is not a safe read probe (noted at 8.2).** It enqueues
+  real sync jobs. Checkpoint 8.2 deliberately used the natural cron instead.
+
 
 ---
 
 ## Current objective
 
-**Checkpoint 8.1 is COMPLETE and DEPLOYED.** Phase 7 is closed, source durability is established,
-and the first Phase 8 runtime checkpoint has shipped: integration failure is now reportable
-(occurrence-scoped alert dedupe on Calendar, Health and a new Gmail producer), and both live AI
-lanes filter their output through one shared, structurally-hardened control.
+**Checkpoints 8.1 and 8.2 are COMPLETE.** Phase 7 is closed, source durability is established,
+integration failure is reportable (occurrence-scoped alert dedupe on Calendar, Health and a new Gmail
+producer), both live AI lanes filter output through one shared hardened control — and as of
+2026-09-03 the owner's **real primary Google Calendar is syncing**, putting 98 real events into a
+core that previously held none.
 
-The owner-gated cleanup of the two obsolete burned dispatch rows is **done** (2026-09-02): a
-narrow, guarded DELETE of exactly 2 rows, with the 7 survivors proven byte-identical.
+8.2 changed exactly one boolean through the supported API and produced **no runtime code commit and
+no migration**. Two natural sync cycles proved first ingest and then a true row-level no-op replay.
 
-**No outstanding actions for 8.1. Checkpoint 8.2 has not begun and must not begin without explicit
+**The honest gap 8.2 leaves:** every ingested event is in the past, so Today is legitimately empty
+and the calendar→Brief path has still never been traversed by live third-party text. It is verified
+structurally, not by traffic.
+
+**No outstanding actions for 8.2. Checkpoint 8.3 has not begun and must not begin without explicit
 approval.**
 
 ## Completed
@@ -666,7 +811,8 @@ routes.
 
 ## Current work
 
-**None in progress.** Two closure tasks completed on 2026-09-02, both outside Checkpoint 8.1:
+**None in progress.** Checkpoint 8.2 completed 2026-09-03; see its section above. Earlier, two
+closure tasks completed on 2026-09-02, both outside Checkpoint 8.1:
 
 1. **Checkpoint 7.9 closed**, discharging the gate on Phase 8 runtime work. The scheduled
    mail-digest cron was proven to have fired by a structural discriminator rather than by timing,
@@ -704,15 +850,25 @@ and Gmail occurrence discriminators; and both mechanical guards.
 
 Migration invariant: **16 `.sql` / 16 journal entries**, no `0016`; `packages/db` byte-unchanged.
 
+**Checkpoint 8.2 ran no test suite, deliberately.** It changed no application code — `git status` is
+clean apart from this file — so the 8.1 baseline stands unchanged and re-running it would prove
+nothing. 8.2's verification is production evidence instead: two natural sync cycles, row-level
+idempotency, ADR-042 invariant checks over all 98 ingested rows, a live Brief generation, a
+192-needle log leak scan, and a post-change production health pass. Migration level confirmed **16**
+in production and locally, with `0016` absent.
+
 ## Next action
 
-**Stop at readiness.** Checkpoint 8.1 is unblocked but **must not begin without explicit
+**Stop at readiness.** Checkpoint 8.3 is unblocked but **must not begin without explicit
 approval.**
 
 Gates now discharged:
 
 1. ~~Checkpoint 7.9 must be formally closed~~ — **CLOSED 2026-09-02.**
 2. ~~Source durability requires owner action~~ — **ESTABLISHED 2026-09-02**, private GitHub remote.
+3. ~~Checkpoint 8.1 (failure visibility + AI I/O hardening) is a precondition for 8.2~~ —
+   **COMPLETE and DEPLOYED 2026-09-02**; 8.2 verified its hardening inside the running containers
+   before enabling the calendar.
 
 Remaining owner-only work, none of it blocking 8.1:
 
@@ -730,6 +886,12 @@ Remaining owner-only work, none of it blocking 8.1:
 4. **Local hygiene:** delete `apps/mobile/.expo/dev/logs/export.log`, which holds a plaintext
    `EXPO_TOKEN` at mode 644.
 
-Deliberately **not** started: Checkpoint 8.1, any notification-producer change, the burned-dedupe
-`DELETE`, any Brief prompt/output-filter change, enabling the real Google Calendar, search, mobile
-capture changes, any Phase 8 runtime deployment, and migration `0016`.
+Deliberately **not** started: Checkpoint 8.3, search or export, mobile capture changes, any
+notification-producer change, any Brief prompt/output-filter change, enabling any *further* calendar
+(the three still-disabled ones, including two shared/group calendars, need their own approval), any
+Phase 8 runtime deployment, and migration `0016`.
+
+Newly surfaced by 8.2 and deliberately deferred: bounding event text at write, a guard against
+`end_date < start_date` on ingest, backfilling `calendar_connection_calendars.summary` with real
+display names, and the two latent Today/Agenda presentation defects. All are recorded in the debt
+ledger; none blocks 8.3.
