@@ -8,6 +8,7 @@ import {
   CALENDAR_REFRESH_TOKEN_QUEUE,
   CALENDAR_SYNC_CALENDAR_DEAD_QUEUE,
   CALENDAR_SYNC_CALENDAR_QUEUE,
+  CAPTURE_PARSE_DEAD_QUEUE,
   CAPTURE_PARSE_QUEUE,
   HEALTH_SYNC_CONNECTION_QUEUE,
   MAIL_DIGEST_GENERATE_QUEUE,
@@ -71,7 +72,19 @@ export async function registerBoss(app: FastifyInstance): Promise<void> {
     // handler registration) has started yet or already created these. Must
     // pass the same retry options the worker uses (see QUEUE_RETRY_OPTIONS)
     // since whichever process creates the queue first wins.
-    await boss.createQueue(CAPTURE_PARSE_QUEUE, QUEUE_RETRY_OPTIONS[CAPTURE_PARSE_QUEUE]);
+    // Checkpoint 8.6A. Dead queue first (queue.dead_letter is a FK against
+    // queue.name), then createQueue for a fresh database, then updateQueue --
+    // which is what actually attaches the dead-letter on every EXISTING
+    // deployment, because create_queue ends in ON CONFLICT DO NOTHING and so
+    // silently discards the option on a queue that already exists. Both
+    // processes do this identically; whichever starts first wins, and either
+    // order produces the same end state.
+    await boss.createQueue(CAPTURE_PARSE_DEAD_QUEUE);
+    await boss.createQueue(CAPTURE_PARSE_QUEUE, {
+      ...QUEUE_RETRY_OPTIONS[CAPTURE_PARSE_QUEUE],
+      deadLetter: CAPTURE_PARSE_DEAD_QUEUE,
+    });
+    await boss.updateQueue(CAPTURE_PARSE_QUEUE, { deadLetter: CAPTURE_PARSE_DEAD_QUEUE });
     await boss.createQueue(
       OCCURRENCES_GENERATE_LAZY_QUEUE,
       QUEUE_RETRY_OPTIONS[OCCURRENCES_GENERATE_LAZY_QUEUE],

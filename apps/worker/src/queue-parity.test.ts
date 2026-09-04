@@ -150,3 +150,58 @@ describe("queue-name parity between apps/api and apps/worker", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// The dead-letter attach is invisible to every other test. Checkpoint 8.6A.
+// ---------------------------------------------------------------------------
+//
+// `create_queue` ends in ON CONFLICT DO NOTHING, so passing `deadLetter` to
+// createQueue only takes effect on a queue that does not yet exist. Every test
+// suite runs against a fresh database where the INSERT DOES fire -- so a change
+// that attaches a dead-letter queue looks fully covered, passes, deploys, and
+// then does NOTHING on production, where `capture.parse` has existed since
+// Phase 1. That is the same shape as the Checkpoint 5.7 "migrations applied
+// successfully" no-op that the frozen deployment order exists because of.
+//
+// `boss.updateQueue` is pg-boss's supported UPDATE path and is what actually
+// attaches it on an existing database. Nothing else in the suite can catch its
+// removal, so this scans the registration sources directly.
+const WORKER_INDEX = path.resolve(import.meta.dirname, "index.ts");
+const API_BOSS = path.resolve(import.meta.dirname, "../../api/src/plugins/boss.ts");
+
+describe("dead-letter attach survives an existing queue", () => {
+  it.each([
+    ["apps/worker/src/index.ts", WORKER_INDEX],
+    ["apps/api/src/plugins/boss.ts", API_BOSS],
+  ])("%s calls updateQueue for capture.parse", (_label, file) => {
+    const source = readFileSync(file, "utf8");
+    expect(source).toContain(
+      "updateQueue(CAPTURE_PARSE_QUEUE, { deadLetter: CAPTURE_PARSE_DEAD_QUEUE })",
+    );
+  });
+
+  it.each([
+    ["apps/worker/src/index.ts", WORKER_INDEX],
+    ["apps/api/src/plugins/boss.ts", API_BOSS],
+  ])("%s creates the dead queue BEFORE the primary (FK ordering)", (_label, file) => {
+    const source = readFileSync(file, "utf8");
+    const dead = source.indexOf("createQueue(CAPTURE_PARSE_DEAD_QUEUE)");
+    const primary = source.indexOf("createQueue(CAPTURE_PARSE_QUEUE");
+    expect(dead).toBeGreaterThan(-1);
+    expect(primary).toBeGreaterThan(-1);
+    expect(dead).toBeLessThan(primary);
+  });
+
+  // A dead-letter handler bound to the PRIMARY queue would compete with the
+  // real handler for live jobs and finalize them as failed. This exact mistake
+  // was made and caught while writing 8.6A.
+  it("binds the dead-letter handler to the dead queue, not the primary", () => {
+    const source = readFileSync(WORKER_INDEX, "utf8");
+    expect(source).toContain(
+      "work(CAPTURE_PARSE_DEAD_QUEUE, createCaptureParseDeadLetterHandler(db))",
+    );
+    expect(source).not.toContain(
+      "work(CAPTURE_PARSE_QUEUE, createCaptureParseDeadLetterHandler(db))",
+    );
+  });
+});

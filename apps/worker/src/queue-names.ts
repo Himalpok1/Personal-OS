@@ -2,6 +2,16 @@
 // two processes only share an interface through Postgres/pg-boss, not code
 // (same convention as this file's existing HEARTBEAT_QUEUE in index.ts).
 export const CAPTURE_PARSE_QUEUE = "capture.parse";
+// Dead-letter target for capture.parse (Checkpoint 8.6A). Same ordering rule
+// as PTT_TRANSCRIBE_DEAD_QUEUE: create it BEFORE the primary queue, because
+// pg-boss's queue.dead_letter is a foreign key against queue.name.
+//
+// NOTE FOR DEPLOYMENT: `capture.parse` already exists in production without a
+// dead_letter, and createQueue is INSERT ... ON CONFLICT DO NOTHING -- so
+// passing `deadLetter` to createQueue is a SILENT NO-OP on an existing queue.
+// Both processes therefore also call boss.updateQueue(), which is pg-boss's
+// supported UPDATE path for exactly this.
+export const CAPTURE_PARSE_DEAD_QUEUE = "capture.parse.dead";
 export const OCCURRENCES_EXPAND_WINDOW_QUEUE = "occurrences.expand-window";
 export const OCCURRENCES_GENERATE_LAZY_QUEUE = "occurrences.generate-lazy";
 export const PTT_TRANSCRIBE_QUEUE = "ptt.transcribe";

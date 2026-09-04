@@ -11,6 +11,29 @@ import {
 } from "./translate.js";
 
 describe("googleAllDayToLocal / localAllDayToGoogle", () => {
+  // Checkpoint 8.6A. Google emits end.date == start.date for a zero-length
+  // all-day event, and production already holds one. Unclamped, the exclusive
+  // -> inclusive conversion put end one day BEFORE start, which made
+  // classifyEventIntoWindows' `start <= day <= end` range EMPTY -- so the event
+  // matched no Today window and silently disappeared.
+  it("clamps a zero-length all-day event to a single day instead of inverting it", () => {
+    const result = googleAllDayToLocal("2026-08-20", "2026-08-20");
+    expect(result.startDate).toBe("2026-08-20");
+    expect(result.endDate).toBe("2026-08-20");
+  });
+
+  it("never returns an end date before the start date", () => {
+    const cases = [
+      { start: "2026-08-20", end: "2026-08-20" },
+      { start: "2026-03-01", end: "2026-02-28" },
+      { start: "2026-01-01", end: "2025-12-25" },
+    ];
+    for (const { start, end } of cases) {
+      const result = googleAllDayToLocal(start, end);
+      expect(result.endDate >= result.startDate).toBe(true);
+    }
+  });
+
   it("converts a one-day event (exclusive end == start + 1) to an inclusive one-day range", () => {
     const result = googleAllDayToLocal("2026-08-20", "2026-08-21");
     expect(result).toEqual({ startDate: "2026-08-20", endDate: "2026-08-20" });

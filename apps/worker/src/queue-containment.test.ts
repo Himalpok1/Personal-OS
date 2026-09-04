@@ -166,6 +166,10 @@ function isContained(
 // ---------------------------------------------------------------------------
 const EXPECTED_CONTAINMENT: Readonly<Record<string, boolean>> = {
   HEARTBEAT_QUEUE: false,
+  // Dead-letter handlers are NOT containment-wrapped, consistently with every
+  // other *_DEAD_QUEUE: they make no provider call, so there is no provider
+  // error to contain. Checkpoint 8.6A.
+  CAPTURE_PARSE_DEAD_QUEUE: false,
   CAPTURE_PARSE_QUEUE: true,
   OCCURRENCES_EXPAND_WINDOW_QUEUE: false,
   OCCURRENCES_GENERATE_LAZY_QUEUE: false,

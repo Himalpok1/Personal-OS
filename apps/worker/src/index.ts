@@ -1,7 +1,10 @@
 import { createCalDavClient, createGoogleCalendarClient } from "@personal-os/calendar-providers";
 import { createDbClient } from "@personal-os/db";
 import { PgBoss } from "pg-boss";
-import { createCaptureParseHandler } from "./jobs/capture-parse.js";
+import {
+  createCaptureParseDeadLetterHandler,
+  createCaptureParseHandler,
+} from "./jobs/capture-parse.js";
 import {
   createCalendarPushEventDeadLetterHandler,
   createCalendarPushEventHandler,
@@ -51,6 +54,7 @@ import {
   CALENDAR_REFRESH_TOKEN_QUEUE,
   CALENDAR_SYNC_CALENDAR_DEAD_QUEUE,
   CALENDAR_SYNC_CALENDAR_QUEUE,
+  CAPTURE_PARSE_DEAD_QUEUE,
   CAPTURE_PARSE_QUEUE,
   HEALTH_SYNC_CONNECTION_QUEUE,
   MAIL_DIGEST_GENERATE_QUEUE,
@@ -156,7 +160,29 @@ async function main(): Promise<void> {
   // work() options -- pg-boss applies them to every job sent to the queue
   // unless overridden per-send. See QUEUE_RETRY_OPTIONS for why apps/api
   // must create these same two shared queues with identical options.
-  await boss.createQueue(CAPTURE_PARSE_QUEUE, QUEUE_RETRY_OPTIONS[CAPTURE_PARSE_QUEUE]);
+  // Checkpoint 8.6A: capture.parse gains a dead-letter queue. Dead queue
+  // first -- queue.dead_letter is a foreign key against queue.name.
+  await boss.createQueue(CAPTURE_PARSE_DEAD_QUEUE);
+  await boss.createQueue(CAPTURE_PARSE_QUEUE, {
+    ...QUEUE_RETRY_OPTIONS[CAPTURE_PARSE_QUEUE],
+    deadLetter: CAPTURE_PARSE_DEAD_QUEUE,
+  });
+  // AND THEN updateQueue, which is NOT redundant.
+  //
+  // pg-boss's create_queue ends in ON CONFLICT DO NOTHING, so on any database
+  // where `capture.parse` already exists -- which is every deployed
+  // environment, since this queue has run since Phase 1 -- the createQueue
+  // above is a SILENT NO-OP and the deadLetter option is discarded. Tests run
+  // against a fresh database where the INSERT does fire, so the no-op is
+  // invisible to the suite: it would typecheck, pass, deploy, and change
+  // nothing. That is the same failure shape as the Checkpoint 5.7 migration
+  // no-op this project already has a frozen deployment order because of.
+  //
+  // updateQueue is pg-boss's supported UPDATE path (it sets queue.dead_letter
+  // and evicts the queue cache), and it is idempotent, so running it on a
+  // fresh database where createQueue already applied the option is harmless.
+  await boss.updateQueue(CAPTURE_PARSE_QUEUE, { deadLetter: CAPTURE_PARSE_DEAD_QUEUE });
+  await boss.work(CAPTURE_PARSE_DEAD_QUEUE, createCaptureParseDeadLetterHandler(db));
   await boss.work(CAPTURE_PARSE_QUEUE, createCaptureParseHandler(db, boss));
 
   await boss.createQueue(

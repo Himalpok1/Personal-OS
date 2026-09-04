@@ -18,6 +18,7 @@ import {
   readStoredParseResult,
   UnclearToolSchema,
   type ParserToolCall,
+  type StoredParseFailure,
   type StoredParseResult,
 } from "@personal-os/schema";
 import { generateText, tool, type LanguageModel } from "ai";
@@ -327,4 +328,67 @@ export function createCaptureParseHandler(db: Db, boss: PgBoss) {
       }
     },
   );
+}
+
+/**
+ * Dead-letter handler: runs only once pg-boss has exhausted every
+ * `capture.parse` retry.
+ *
+ * WHY THIS EXISTS (Checkpoint 8.6A). `capture.parse` was a retrying queue with
+ * no dead-letter queue, and the main handler writes `status: "failed"` for
+ * exactly one cause -- `NoProviderConfiguredError`. Every other exhaustion left
+ * the row in `pending` or `needs_confirm` FOREVER, with the only record living
+ * in pg-boss's `job.output`, which self-deletes on the queue's
+ * `deletion_seconds` (7 days by default -- a retention policy nobody chose).
+ * Checkpoint 8.4 made those failures visible in a LOG line; this makes them
+ * durable in the ROW, which is the thing a user and every read model actually
+ * see. `inbox.failed_count` already flows to Today, so a terminally-failed
+ * capture now surfaces instead of sitting silently as "pending".
+ *
+ * Idempotency key is the row's CURRENT status, not the job payload: a
+ * redelivered dead-letter job, or one whose row a later attempt or a manual
+ * correction already resolved, must be a no-op rather than clobbering a good
+ * outcome. This mirrors ptt-transcribe's dead-letter handler, which re-checks
+ * `audio_path` for the same reason.
+ */
+export function createCaptureParseDeadLetterHandler(db: Db) {
+  return async function handleCaptureParseDead(jobs: Job<CaptureParseJobData>[]): Promise<void> {
+    for (const job of jobs) {
+      const { inboxId, mode } = job.data;
+      const [row] = await db.select().from(inboxItems).where(eq(inboxItems.id, inboxId));
+      if (!row) {
+        log.warn("capture.parse.dead_letter_row_missing", {
+          mode: mode === "confirm" ? "confirm" : "auto",
+        });
+        continue;
+      }
+      if (row.status !== "pending" && row.status !== "needs_confirm") continue;
+
+      const stored = readStoredParseResult(row.parseResult);
+      const failure: StoredParseFailure = {
+        reason: "retries_exhausted",
+        mode: mode === "confirm" ? "confirm" : "auto",
+        failed_at: new Date().toISOString(),
+      };
+
+      // PRESERVE the stored tool call when there is one. A `needs_confirm` row
+      // that died on the confirm path still holds the parse the owner may want
+      // to correct, and ADR-060's `corrected_tool_call` escape hatch reads it.
+      // Overwriting it -- the shape the legacy no-provider path writes -- would
+      // take away the only route back.
+      await db
+        .update(inboxItems)
+        .set({
+          status: "failed",
+          parseResult: stored ? { ...stored, failure } : { failure },
+        })
+        .where(eq(inboxItems.id, inboxId));
+
+      log.warn("capture.parse.dead_lettered", {
+        mode: failure.mode,
+        previous_status: row.status,
+        preserved_tool_call: stored !== null,
+      });
+    }
+  };
 }

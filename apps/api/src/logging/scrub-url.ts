@@ -29,7 +29,12 @@
  * Applied on EVERY route, not just the callback, so a future route that gains a
  * sensitive parameter is covered without anyone having to remember.
  */
-export const SENSITIVE_QUERY_PARAMS: readonly string[] = ["code", "state", "access_token"];
+// `q` is the /search query string (Checkpoint 8.6A). It is the owner's own
+// first-party text rather than a credential, but Fastify's request serializer
+// emits `url` on every request, so every search anyone types was landing in the
+// container log verbatim. This list is applied on EVERY route by design, so
+// adding the name here also covers any future route that names a parameter `q`.
+export const SENSITIVE_QUERY_PARAMS: readonly string[] = ["code", "state", "access_token", "q"];
 
 const REDACTED = "[redacted]";
 

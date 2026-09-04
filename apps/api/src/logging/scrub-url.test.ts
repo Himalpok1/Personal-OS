@@ -2,6 +2,25 @@ import { describe, expect, it } from "vitest";
 import { scrubSensitiveQueryParams, SENSITIVE_QUERY_PARAMS } from "./scrub-url.js";
 
 describe("scrubSensitiveQueryParams", () => {
+  // Checkpoint 8.6A. `q` is the /search query string. Not a credential -- it is
+  // the owner's own text -- but the request serializer emits `url` on every
+  // request, so every search anyone typed was landing in the container log.
+  it("destroys a /search query string but keeps the route visible", () => {
+    const out = scrubSensitiveQueryParams("/search?q=insurance%20renewal&limit=20");
+    expect(out).not.toContain("insurance");
+    expect(out).toContain("/search");
+    expect(out).toContain("q=");
+    expect(out).toContain("limit=20");
+  });
+
+  it("redacts q even when it carries a LIKE wildcard", () => {
+    expect(scrubSensitiveQueryParams("/search?q=%25%25")).not.toContain("%25%25");
+  });
+
+  it("names q as sensitive", () => {
+    expect(SENSITIVE_QUERY_PARAMS).toContain("q");
+  });
+
   it("destroys an OAuth authorization code", () => {
     const out = scrubSensitiveQueryParams(
       "/health-connections/google/callback?code=4/0AbCdEfGhIjKlMnOp&state=abc123",
@@ -66,7 +85,14 @@ describe("scrubSensitiveQueryParams", () => {
     expect(scrubSensitiveQueryParams("/cb?%63ode=secret")).not.toContain("secret");
   });
 
-  it("covers code, state and access_token", () => {
-    expect([...SENSITIVE_QUERY_PARAMS].sort()).toEqual(["access_token", "code", "state"]);
+  // REVERSED AT CHECKPOINT 8.6A. This previously pinned exactly
+  // ["access_token", "code", "state"]. `q` (the /search query string) was added
+  // because Fastify's request serializer emits `url` on every request, so the
+  // owner's own search text was being written to the container log verbatim.
+  // The set-equality assertion is kept rather than loosened: it is what makes
+  // an accidental ADDITION or REMOVAL fail here instead of silently changing
+  // what gets redacted in production.
+  it("covers exactly code, state, access_token and q", () => {
+    expect([...SENSITIVE_QUERY_PARAMS].sort()).toEqual(["access_token", "code", "q", "state"]);
   });
 });

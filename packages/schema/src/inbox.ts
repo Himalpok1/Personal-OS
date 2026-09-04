@@ -44,11 +44,48 @@ export type InboxItem = z.infer<typeof InboxItemSchema>;
 // a bare tool call where the worker reads `.toolCall`) -- a correction was
 // therefore unreadable by the only code that consumes it. Declaring it here
 // makes API and worker agree by construction.
+// Durable record of a capture.parse job that exhausted every pg-boss retry.
+//
+// Before Checkpoint 8.6A the ONLY record of such a failure was pg-boss's own
+// `job.output`, which self-deletes on the queue's `deletion_seconds` (7 days by
+// default -- a value nobody chose). `capture.parse` additionally had no
+// dead-letter queue, so retry exhaustion left the inbox row in `pending` or
+// `needs_confirm` forever with nothing durable saying why.
+//
+// Deliberately a CLOSED vocabulary of scalars. It can carry neither provider
+// prose nor the user's capture text, for the same reason `errorToken` exists:
+// this value is persisted, and a free-text field here would be a laundering
+// path from an upstream error message into the database.
+export const StoredParseFailureSchema = z.object({
+  reason: z.literal("retries_exhausted"),
+  mode: z.enum(["auto", "confirm"]),
+  // `inbox_items` has no `updated_at`, so without this there is no record of
+  // WHEN a row reached its terminal state.
+  failed_at: z.string(),
+});
+export type StoredParseFailure = z.infer<typeof StoredParseFailureSchema>;
+
 export const StoredParseResultSchema = z.object({
   toolCall: ParserToolCallSchema,
   confidenceFlags: z.array(z.string()),
+  // Present only on a row the dead-letter handler finalized. Optional so every
+  // pre-8.6A row still parses unchanged, and so finalizing a `needs_confirm`
+  // row PRESERVES its stored tool call -- destroying it would take away the
+  // correction the owner may still want to supply.
+  failure: StoredParseFailureSchema.optional(),
 });
 export type StoredParseResult = z.infer<typeof StoredParseResultSchema>;
+
+// Reads the failure marker from either shape it can occupy: alongside a
+// preserved tool call, or alone on a row that never had one (the `pending`
+// auto-parse path, where `parse_result` was NULL).
+export function readStoredParseFailure(value: unknown): StoredParseFailure | null {
+  if (typeof value !== "object" || value === null) return null;
+  const parsed = StoredParseFailureSchema.safeParse(
+    (value as { failure?: unknown }).failure ?? value,
+  );
+  return parsed.success ? parsed.data : null;
+}
 
 // inbox_items.parse_result is `jsonb` and is `unknown` on the wire, so every
 // reader must narrow it defensively rather than casting. Returns null for the

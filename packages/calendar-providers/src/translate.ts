@@ -47,9 +47,23 @@ export function googleAllDayToLocal(
   googleStartDate: string,
   googleEndDate: string,
 ): { startDate: string; endDate: string } {
+  const endDate = addCalendarDays(googleEndDate, -1);
+  // FLOOR AT THE START DATE (Checkpoint 8.6A).
+  //
+  // Google's `end.date` is exclusive, so a zero-length all-day event -- one
+  // whose `end.date` EQUALS its `start.date`, which Google does emit and which
+  // production already holds one of -- converts to an end one day BEFORE its
+  // start. That is not merely an odd row: `classifyEventIntoWindows` matches an
+  // all-day event with `start_date <= day <= (end_date ?? start_date)`, and when
+  // end < start that range is EMPTY, so the event matches no window and is
+  // INVISIBLE on Today and in every review context. It was recorded as
+  // "harmless today"; it is not, and the failure is silent disappearance.
+  //
+  // A single-day event is the only honest reading of start == end, so clamp
+  // rather than reject: refusing would drop a real event the provider accepted.
   return {
     startDate: googleStartDate,
-    endDate: addCalendarDays(googleEndDate, -1),
+    endDate: endDate < googleStartDate ? googleStartDate : endDate,
   };
 }
 

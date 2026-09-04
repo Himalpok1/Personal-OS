@@ -3,6 +3,10 @@
 // code, so these are kept as local literals per queue (same convention as
 // apps/worker's existing HEARTBEAT_QUEUE) rather than a shared package.
 export const CAPTURE_PARSE_QUEUE = "capture.parse";
+// Checkpoint 8.6A -- see apps/worker/src/queue-names.ts for why this needs
+// both createQueue (fresh deployments) and updateQueue (the existing
+// production queue, where createQueue is a silent no-op).
+export const CAPTURE_PARSE_DEAD_QUEUE = "capture.parse.dead";
 export const OCCURRENCES_GENERATE_LAZY_QUEUE = "occurrences.generate-lazy";
 export const PTT_TRANSCRIBE_QUEUE = "ptt.transcribe";
 export const PTT_TRANSCRIBE_DEAD_QUEUE = "ptt.transcribe.dead";
