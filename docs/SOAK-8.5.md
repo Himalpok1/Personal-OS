@@ -1,6 +1,6 @@
 # Checkpoint 8.5 — Instrumented daily-driver soak
 
-**Status: OPEN — soak running.** This file is the checkpoint's working record: the window, the
+**Status: TERMINATED BY OWNER 2026-09-04. Adoption soak DEFERRED.** This file is the checkpoint's working record: the window, the
 baseline, the health-check readings and the observation ledger. `docs/STATUS.md` carries only the
 summary. Closed-phase material never goes here; this file is deleted into `docs/history/` when
 Phase 8 closes.
@@ -233,3 +233,73 @@ Neither Ask Personal OS nor embeddings is built during 8.5. pgvector remains exc
 The privacy posture remains local retrieval → bounded cloud reasoning.
 
 **Checkpoint 8.6 does not begin automatically.**
+
+
+---
+
+## TERMINATION RECORD — 2026-09-04 00:04 CDT
+
+**CHECKPOINT 8.5 TERMINATED BY OWNER — ADOPTION SOAK DEFERRED.**
+
+The owner elected to continue normal Personal OS development rather than hold a 3–4 week feature
+freeze. **This is an intentional product-management decision, not a technical failure and not a
+failed checkpoint.** Nothing in the system misbehaved; every health signal was green at termination.
+
+### Duration — and why it disqualifies every adoption conclusion
+
+| | |
+|---|---|
+| SOAK_START | 2026-09-03 15:07 CDT |
+| TERMINATED | 2026-09-04 00:04 CDT |
+| **Elapsed** | **9.1 hours (0.38 days)** |
+| Minimum valid window | 21 full days |
+| **Fraction of minimum reached** | **1.8%** |
+| Milestones reached | **none** — DAY_7, DAY_14, DAY_21 and DAY_28 were all unreached |
+
+Nine hours, most of them overnight, is not an observation window. It is a rounding error against
+the 21-day minimum.
+
+### What may NOT be claimed from this checkpoint
+
+These are hard prohibitions on every future document, not cautions:
+
+- **No capture-first conclusion may be claimed.** The evidence for Strategic Fork A does not exist.
+- **No integration-first conclusion may be claimed.** The evidence for Strategic Fork B does not exist.
+- **No inference about any feature's usefulness may be presented as soak evidence** — not for
+  Ask Personal OS, not for search, not for reminders, not for the share sheet or the launcher
+  shortcut, not for the digest.
+- **The strategic fork is UNRESOLVED.** Not "leaning A", not "probably C". Unresolved.
+- **The zero organic usage observed in the window means NOTHING.** It is what nine mostly-overnight
+  hours look like on any system. It is not disengagement, and reading it as such would be a
+  fabrication in the opposite direction.
+- **Never write "the soak showed…"**, because it did not show anything.
+
+### What this checkpoint DID produce, and what remains usable
+
+The baseline above is **real, first-hand, privacy-safe measurement of production on 2026-09-03**,
+and it stays valid as historical data regardless of the soak's termination. It is a dated snapshot,
+not adoption evidence — a distinction that must survive into every later document.
+
+Also durable: the two negative results the baseline forced (`notify_reminders` does not gate local
+scheduling; the archived smoke task's occurrence does not leak onto Today), and the two
+measurability limits discovered (launcher captures are indistinguishable from Quick Capture; search
+frequency is per-log-epoch). Those are properties of the system, not of the soak, so they survive.
+
+### Freeze status
+
+**The feature freeze is LIFTED as of 2026-09-04.** Development may continue normally across all
+modules.
+
+**Freeze exceptions during the soak: 0.** No code was written, no deployment occurred, no production
+write was made, and no migration was created. Three documentation-only commits exist: `d32b376`,
+`76ebb24`, `3bf03db`.
+
+### Accepted consequence
+
+Ongoing development will contaminate any adoption measurement taken from here. The owner accepts
+this deliberately. **Phase 8 therefore does NOT use soak evidence as a gating dependency**, and
+every subsequent decision must separate **VERIFIED TECHNICAL EVIDENCE** from **UNVERIFIED PRODUCT
+HYPOTHESIS**.
+
+A fresh soak may be run against a future stable release if the owner wants adoption evidence. That
+would be a new checkpoint with a new baseline, not a resumption of this one.

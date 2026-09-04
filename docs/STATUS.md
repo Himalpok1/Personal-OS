@@ -9,10 +9,13 @@
 **Checkpoint 8.4 — Low-friction capture — is COMPLETE (2026-09-03).** Its mandatory Lane 0
 reliability gate (the `capture.parse` confirm failure) passed; Lane 3 is deferred on evidence.
 API, web and the Rabbit R1 APK (**versionCode 10**) are all deployed and physically accepted.
-**Checkpoint 8.5 — Instrumented daily-driver soak — is OPEN and RUNNING.** Started
-**2026-09-03 15:07 CDT**; minimum close **2026-09-24**, preferred **2026-10-01**. **Hard feature
-freeze in force.** Working record and observation ledger: **`docs/SOAK-8.5.md`**.
-**Next checkpoint allowed:** **8.6**, on explicit approval only, and not before 8.5 closes.
+**Checkpoint 8.5 — TERMINATED BY OWNER 2026-09-04 — adoption soak DEFERRED.** It ran **9.1 hours of
+a 21-day minimum (1.8%)**; no milestone was reached. The owner chose continued development over a
+3–4 week freeze — an intentional product decision, **not a failed checkpoint and not a technical
+failure**. **The feature freeze is LIFTED.** **No adoption conclusion — capture-first,
+integration-first or mixed — may be drawn from it, and the phrase "the soak showed" is
+prohibited.** Its baseline survives as dated historical measurement. Record: **`docs/SOAK-8.5.md`**.
+**Checkpoint 8.6 — Intelligence & Operations Decision Gate — is IN PROGRESS** (analysis only).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -915,7 +918,7 @@ tag. Mutation-verified against the exact defect that shipped.
 Recorded because the failure mode is the point: a native view that silently renders nothing is
 invisible to every check that does not run on a device.
 
-### Checkpoint 8.5 — Instrumented daily-driver soak (OPEN, started 2026-09-03)
+### Checkpoint 8.5 — Instrumented daily-driver soak (TERMINATED BY OWNER 2026-09-04)
 
 A 3–4 week **feature freeze** whose deliverable is evidence, not features. It answers one question:
 does Personal OS become genuinely useful when development stops? The Rabbit R1 is the owner's
@@ -957,7 +960,39 @@ from the two captures that can never be confirmed in-app. A counter that never c
 owner to ignore it and will bias the soak; the owner can clear it with a `corrected_tool_call`, and
 there is no in-app route. P2 — recorded, not absorbed.
 
-**Freeze exceptions so far: 0.**
+**Freeze exceptions: 0.** No code was written, no deployment occurred, no production write was made,
+and no migration was created during the soak.
+
+#### Termination — owner decision, 2026-09-04 00:04 CDT
+
+The owner elected to continue normal development rather than hold a 3-4 week freeze. **This is an
+intentional product-management decision, not a failed checkpoint and not a technical failure** --
+every health signal was green at termination.
+
+The soak ran **9.1 hours of a 21-day minimum, or 1.8%**, and reached **no milestone**: DAY_7, DAY_14,
+DAY_21 and DAY_28 were all unreached.
+
+**What may never be claimed from it.** No capture-first conclusion. No integration-first conclusion.
+No inference about any feature's usefulness presented as soak evidence. **The strategic fork is
+UNRESOLVED** -- not "leaning", not "probably". The zero organic usage observed means nothing: it is
+what nine mostly-overnight hours look like on any system, and reading it as disengagement would be a
+fabrication in the opposite direction. **The phrase "the soak showed" is prohibited**, because it
+did not show anything.
+
+**What survives.** The baseline is real, first-hand, privacy-safe measurement of production on
+2026-09-03 and remains valid as dated historical data -- a snapshot, never adoption evidence. So do
+the two negative results it forced (`notify_reminders` does not gate local scheduling; the archived
+smoke task's occurrence does not leak onto Today) and the two measurability limits it found
+(launcher captures are indistinguishable from Quick Capture; search frequency is per-log-epoch).
+Those are properties of the system, so they outlive the experiment.
+
+**The feature freeze is LIFTED.** Development continues normally across all modules. Ongoing
+development will contaminate any future adoption measurement, and the owner accepts this: **Phase 8
+does not use soak evidence as a gating dependency.** Every later decision must separate **VERIFIED
+TECHNICAL EVIDENCE** from **UNVERIFIED PRODUCT HYPOTHESIS**. A fresh soak against a future stable
+release would be a new checkpoint with a new baseline, not a resumption of this one.
+
+Full record: `docs/SOAK-8.5.md`.
 
 ---
 
