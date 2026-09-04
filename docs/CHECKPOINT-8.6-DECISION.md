@@ -308,6 +308,77 @@ Recorded because a future reader would otherwise trust a stale statement.
    column: a triple copied between columns decrypts cleanly. GCM protects the bytes, not their
    placement.
 
+## 17b. Adversarial review — claims of mine that were REFUTED
+
+An adversarial critic was run over these conclusions with instructions to refute them. It found
+real errors. They are corrected here rather than defended, because a decision gate that launders its
+own mistakes is worse than no gate.
+
+**REFUTED — "`inbox_items.raw_text` is the only user-text column with a write-side bound."** False.
+`reviews.summary` is `z.string().max(2000)` on a live write path. Worse, my own example was wrong in
+detail: the 4000 cap lives on `CaptureRequestSchema.text`, not on the column, and
+`ptt-transcribe.ts:115` writes the Whisper transcript into that same `raw_text` with **no bound at
+all**. The correct statement is narrower: **most user-text columns are unbounded, bounds are applied
+inconsistently at request schemas rather than at the column, and `raw_text` has one bounded and one
+unbounded writer.**
+
+**REFUTED — "`isDueForCheck` is a phase RATCHET."** Wrong word, and the causal attribution was wrong.
+After a skip the anchor stays put and the next tick lands ~120 s later, comfortably due — so it
+*recovers* rather than accumulating, which my own data shows (max delta 148.1 s, not growing). It is
+an **asymmetric per-occurrence penalty**: a late pass is free, an early one costs exactly one check.
+More importantly, `heartbeat-watchdog.ts:161` calls the **same `isDueForCheck` with the same 1 s
+tolerance**, so my "control" isolates the **scheduler**, not the function. The measured 64.23 vs
+60.04 proves **pg-boss polling jitter** (a 5 s timekeeper poll plus two 2 s work polls, up to ~9 s
+against a 1 s tolerance). `isDueForCheck` is the **amplifier, not the cause** — which matters,
+because "fix isDueForCheck" alone treats the symptom. Grid alignment still works, and still needs no
+migration; the *diagnosis* was overstated, not the remedy.
+
+**OVERSTATED — the corpus headroom.** "~9% of the ceiling" compared raw content bytes to a
+**serialized** budget. In the export shape the repo already uses, those 17 rows measure ~43% compact
+/ ~57% pretty-printed — real headroom nearer **1.7x, not 11x**. The conclusion (Option A now,
+B later, C excluded) survives, but the margin does not, and the crossover is far closer than stated:
+roughly 19 export-shaped tasks, **or one 12,001-character note**, which is expressible today because
+`notes.body` has no `.max()`.
+
+**REFUTED as framed — the Ask corpus axis.** I presented the decision as *which entities*. ADR-056
+names **"whole note bodies"** first among the things requiring an explicit owner decision, so the
+load-bearing axis is **which FIELDS**. `BriefInput` has never carried a `body` at all — the most
+body-like thing the AI layer has ever sent is five 160-character inbox snippets. An Ask lane over
+titles only is within existing precedent **and nearly useless**, since `/search` already covers
+titles. **D1 is therefore the whole decision, not a side condition.** Relatedly, excluding `events`
+is *prudent* but not strictly *necessary*: the Brief already sends third-party event titles and
+locations under the same prompt-boundary truncation, so applying that treatment to Ask creates no new
+exposure.
+
+**PARTLY WRONG — the ADR-050 correction.** The staleness finding stands, but three conditions I
+stated do not: `IF EXISTS` is optional, same-table is **not** required, and ordering is **not**
+enforced despite both the comment and the abort text saying "later". That last is a genuine
+fail-open hole in a fail-closed script — a `DROP CONSTRAINT foo` on table `a` paired with an
+`ADD CONSTRAINT foo` on table `b` is accepted with no verification.
+
+### Further findings from the review, none of them mine
+
+- **`basic404` logs the raw URL outside the scrubbing serializer.** There is no `setNotFoundHandler`,
+  so a mistyped OAuth callback carrying a live `?code=` is logged unscrubbed **and echoed in the
+  response body**. Verified: the handler is absent. This is a real hole in the protection that
+  `scrub-url.ts` exists to provide, and it is adjacent to — but distinct from — the `/search` leak
+  fixed in 8.6A.
+- **ADR-054's mail `.max()` constraints never execute.** `MailMessageMetadataSchema` carries every
+  bound the ADR claims, and is `.parse()`d nowhere; enforcement is entirely the truncation at write.
+  There are zero `varchar` and zero length CHECKs in all 16 migrations.
+- **`classifyEventIntoWindows` is duplicated** across `today.ts` and `review-contexts.ts`, with a
+  third deliberate divergence in `agenda.ts`. Any fix to event bucketing is at least two edits, or it
+  breaks `docs/ARCHITECTURE.md`'s own "sections cannot disagree" invariant.
+- **`occurrences.generate-lazy` has no containment wrapper and no structured logging at all** — only
+  raw `console.warn` on skip paths. It is strictly less observable than `capture.parse` was *before*
+  8.4, and the review verified all three plausible recovery paths are closed: the nightly job filters
+  completion-anchored rules out, the only enqueue sites key on an existing occurrence, and PATCH does
+  not re-seed. A completion-anchored chore whose successor job fails five times is **permanently and
+  silently dead.**
+- **A monitor pass can approach its own cron interval** (~50 s of timeouts against a 60 s cron during
+  a multi-target outage), and an overlapping `stately` send with `retryLimit: 0` is **dropped and
+  gone** — so sampling degrades exactly when something is broken.
+
 ## 18–26. Plans (conditional on §27 owner decisions)
 
 **DB / migration plan.** **Target: zero migrations, and it is achievable for every recommended
@@ -399,6 +470,49 @@ No embeddings, no retrieval layer, **no pgvector**, no Postgres image change, no
 GIN/trigram index, no new external integration, no write-capable or tool-holding agent, no finance,
 no Phase 9 planning, no new notification producer without an occurrence-scoped dedupe key, no mobile
 build in 8.6, and **no migration `0016`** during this gate.
+
+## 28b. Checkpoint 8.6A — IMPLEMENTED (owner-scoped, 2026-09-04)
+
+The owner scoped 8.6A to four items and they are complete. **No migration** — level stays 16,
+`packages/db` byte-unchanged, `0016` absent.
+
+| Item | What shipped |
+|---|---|
+| `capture.parse` durable terminal state | Dead-letter handler writes `status: "failed"` on retry exhaustion, instead of leaving the row `pending`/`needs_confirm` forever |
+| `capture.parse` DLQ / durable failure record | New `capture.parse.dead` queue; a closed scalar failure record that can carry neither provider prose nor capture text; the stored tool call is **preserved** so ADR-060's correction route survives |
+| Zero-length all-day event | `googleAllDayToLocal` floors the inclusive end at the start date |
+| Scrub `/search` query from logs | `q` added to `SENSITIVE_QUERY_PARAMS` |
+
+**The DLQ change would have silently done nothing without a second call.** `createQueue` ends in
+`ON CONFLICT DO NOTHING`, and `capture.parse` has existed since Phase 1 — so the `deadLetter` option
+is discarded on every deployed database, while every test suite runs against a fresh one where the
+INSERT *does* fire. It would have typechecked, passed, deployed and changed nothing: the same shape
+as the Checkpoint 5.7 migration no-op the frozen deployment order exists because of. Both processes
+therefore also call `boss.updateQueue`, and a source-scanning guard now pins that call, the
+foreign-key creation order, and the handler being bound to the **dead** queue rather than the
+primary.
+
+**Three mistakes were caught by the repo's own guards or by mutation testing while writing this**, and
+each is now pinned: a raw `console.warn` (caught by `no-raw-console`), an unregistered queue in the
+containment map (caught by `queue-containment`), and the dead-letter handler bound to the *primary*
+queue (my error, now pinned by a test).
+
+**Verification.** Build **11/11** · typecheck **21/21** · `eslint .` clean · `prettier --check .`
+clean · `git diff --check` clean · gitleaks clean. Full suite **uncached and serial: 3,340 tests /
+21 turbo tasks, 0 of 21 cached, zero failing** (baseline 3,322). No package decreased — worker
+**452** (+13), api **689** (+3), calendar-providers **76** (+2, the zero-drift canary moved
+deliberately by this checkpoint), all others held exactly. **Mutation tests: 9 of 9 killed and
+restored**, covering the terminal-status guard, the tool-call preservation, the status transition,
+the all-day floor, the `q` scrub, both `updateQueue` calls, the handler binding, and the FK ordering.
+
+**Two honest limitations.**
+
+1. **The fix is write-path only and does NOT repair the existing production row.** `e2b9a5f7` still
+   holds `start_date 2021-12-16 / end_date 2021-12-15` and remains invisible on Today, because
+   calendar sync is incremental and will not re-translate an unchanged event. Repairing it is a
+   one-row `UPDATE events SET end_date = start_date` — a production write, reversible, and **an owner
+   decision** rather than something to slip into a deployment.
+2. **Not yet deployed.** Nothing has been rolled out; production still runs the previous images.
 
 ## 30. Git status / final HEAD
 

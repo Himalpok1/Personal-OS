@@ -15,7 +15,10 @@ a 21-day minimum (1.8%)**; no milestone was reached. The owner chose continued d
 failure**. **The feature freeze is LIFTED.** **No adoption conclusion — capture-first,
 integration-first or mixed — may be drawn from it, and the phrase "the soak showed" is
 prohibited.** Its baseline survives as dated historical measurement. Record: **`docs/SOAK-8.5.md`**.
-**Checkpoint 8.6 — Intelligence & Operations Decision Gate — is IN PROGRESS** (analysis only).
+**Checkpoint 8.6 — Intelligence & Operations Decision Gate — DECISION REPORT COMPLETE**
+(`docs/CHECKPOINT-8.6-DECISION.md`). Owner approved the breakdown **8.6A / 8.6B / 8.6C / 8.6D**.
+**8.6A — reliability & data-integrity hardening — is COMPLETE and COMMITTED, not yet deployed.**
+8.6B (read-only Ask) is **gated on one owner decision**; 8.6C on retention windows; 8.6D on evidence.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -996,6 +999,59 @@ Full record: `docs/SOAK-8.5.md`.
 
 ---
 
+### Checkpoint 8.6 — Intelligence & Operations Decision Gate (2026-09-04)
+
+Replaces the originally soak-dependent 8.6. **No adoption evidence exists**, so every claim in the
+report is labelled **FACT** (verified first-hand) or **HYPOTHESIS**. Full report:
+**`docs/CHECKPOINT-8.6-DECISION.md`**. Six read-only sub-agents ran; **every load-bearing claim was
+re-verified by the integrator**, and an adversarial critic refuted several of the integrator's own
+conclusions, which are corrected in §17b of the report rather than defended.
+
+**Measured, not estimated.** User-authored corpus **1,082 bytes (~270 tokens)**; everything including
+events, mail headers and health ~50 KB (~12,500 tokens). **pgvector is NOT available** in the image
+(`pg_available_extensions` returns 0; only `plpgsql` installed) and `posops_app` **cannot CREATE** in
+`public` — so Option C is blocked by infrastructure, not only by ADR-056. `posops_app` holds
+SELECT/INSERT/UPDATE/DELETE on **all 37 tables** including all six credential tables, so a read-only
+AI lane is read-only **because it holds no tools**, never because the grant stops it.
+
+**Present-state corrections found by this gate** (recorded in the report and §17b): the ledger's
+"`capture.parse` is the only retrying queue without a DLQ" is **false** — `occurrences.expand-window`
+and `occurrences.generate-lazy` also lack one, and the latter's failure means **a completed recurring
+task silently never spawns its successor**, with all three recovery paths verified closed. The
+zero-length all-day event was **not** "harmless" — it is invisible on Today. ADR-050's
+reconcile-script claim is **stale**. `credential-crypto.ts` has **no AAD**. And the `/search?q=` fix
+was far cheaper than recorded.
+
+#### Checkpoint 8.6A — reliability & data-integrity hardening (COMPLETE, committed 2026-09-04)
+
+Owner-scoped to four items; all four shipped. **No migration** — level stays 16, `packages/db`
+byte-unchanged, `0016` absent.
+
+`capture.parse` gains a dead-letter queue and a durable terminal state: retry exhaustion now writes
+`status: "failed"` with a **closed scalar failure record** (no provider prose, no capture text)
+instead of leaving the row `pending`/`needs_confirm` forever with the only evidence in pg-boss's
+`job.output`, which self-deletes after 7 days on a default nobody chose. A `needs_confirm` row's
+stored tool call is **preserved**, so ADR-060's `corrected_tool_call` route survives. Zero-length
+all-day events are floored at their start date. `q` is scrubbed from the request log.
+
+**The DLQ change would have silently done nothing.** `createQueue` is `ON CONFLICT DO NOTHING` and
+`capture.parse` has existed since Phase 1, so the option is discarded on every deployed database —
+while every suite runs against a fresh one where the INSERT fires. Both processes therefore also call
+`boss.updateQueue`, and a source-scanning guard pins that call, the FK creation order, and the
+handler being bound to the **dead** queue rather than the primary.
+
+Verification: build **11/11** · typecheck **21/21** · eslint clean · prettier clean · gitleaks clean ·
+full suite **uncached and serial 3,340 tests / 21 tasks, 0 cached, zero failing** (baseline 3,322;
+worker **452**, api **689**, calendar-providers **76** — the zero-drift canary moved deliberately;
+no package decreased) · **mutation tests 9 of 9 killed and restored**.
+
+**Two limitations, stated rather than discovered later:** the fix is **write-path only** and does
+**not** repair the existing inverted production row `e2b9a5f7` (2021-12-16 → 2021-12-15), which stays
+invisible on Today because sync is incremental — repairing it is a one-row owner-approved `UPDATE`;
+and **nothing is deployed**, production still runs the previous images.
+
+---
+
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
 **Phase 7 is closed.** Checkpoints 7.0–7.8B and the full Checkpoint 7.9 record — the open
@@ -1462,41 +1518,47 @@ production tracking table **16** before and after both deployments.
 
 ## Next action
 
-**Use the system. The soak is the work.** Checkpoint 8.5 is open and the feature freeze holds until
-**2026-09-24** at the earliest. Checkpoint 8.6 must not begin until 8.5 closes with a report.
+**Checkpoint 8.6A is complete and committed but NOT deployed.** Nothing proceeds without your call
+on the items below.
 
-Scheduled during the soak:
+**Ready when you are — 8.6A deployment.** Frozen order to a new `personal-os-8.6a-release`; rollback
+images tagged by resolved digest; **`api` and `worker` recreated in SEPARATE invocations** (both run
+a pg-boss timekeeper); `web` NOT rebuilt, its runtime being unchanged. Migration level stays 16, so
+the migrate step will correctly apply nothing. **Watch for one thing specifically:** the dead-letter
+attach depends on `boss.updateQueue` executing against the existing queue — verify
+`select dead_letter from pgboss.queue where name = 'capture.parse'` is non-null *after* rollout, not
+before, because `createQueue` alone is a silent no-op there.
 
-1. **DAY_7 — 2026-09-10.** Read-only health check plus an interim report: baseline→current content
-   deltas, capture source deltas, reminder usage, search evidence, integration reliability,
-   recurring friction, freeze exceptions, emerging Phase 9 signals.
-2. **DAY_14 — 2026-09-17.** The same.
-3. **DAY_21 — 2026-09-24.** Full A–H review: adoption, capture, retrieval, planning, integrations,
-   reliability, friction, missing capability. **Continue to DAY_28 (2026-10-01) if the evidence is
-   weak.**
+**Owner decisions, in the order they block work:**
 
-Open work that is **not** a gate on the soak and is **not** started during it:
+1. **D1 — may note and task BODIES leave the machine to a cloud model?** This is the whole of 8.6B,
+   not a side condition: `BriefInput` has never carried a body, ADR-056 names "whole note bodies"
+   first among things needing an explicit decision, and an Ask lane over titles alone is nearly
+   useless because `/search` already covers titles.
+2. **D3–D6 — retention windows** (`monitor_checks`, `mail_messages` and its axis, the two sync-run
+   tables, and whether terminal `capture.parse` failures may keep self-deleting after 7 days).
+   Irreversible under ADR-024; 8.6C cannot start without them.
+3. **One-row data repair:** `UPDATE events SET end_date = start_date` for `e2b9a5f7`, which is
+   invisible on Today today. Reversible, but it is a production write and therefore yours.
+4. **D7 — is monitor target CRUD exposed over HTTP at all?** `url` is `z.string().url()` with no
+   scheme or host allowlist, so a writable `url` makes the prober an SSRF oracle. A `PATCH` excluding
+   `url` and `kind` gets most of the value with none of the surface.
 
-4. **Configuration / key durability remains the sharpest systemic risk.**
-   `CREDENTIALS_ENCRYPTION_KEY` has no key version, no KDF and no rotation path and exists on exactly
-   two hosts. Intended direction: SOPS + age with the private key held off both machines. **Nothing
-   secret goes in GitHub.** ADR-024 is unchanged.
-5. **Retention windows remain an owner decision** and gate the mail prune ADR-054 requires.
-6. **Optional GitHub hardening:** Actions is default-on although no workflow exists in history.
-7. **Local hygiene:** delete `apps/mobile/.expo/dev/logs/export.log`, which holds a plaintext
-   `EXPO_TOKEN` at mode 644.
+**Recommended before 8.6B, and newly evidenced rather than inherited:**
+`occurrences.generate-lazy` has the same missing-DLQ defect with a worse outcome — a completed
+recurring task silently never spawns its successor — and it has **no containment wrapper and no
+structured logging at all**, making it less observable than `capture.parse` was before 8.4. All three
+recovery paths were verified closed. It was outside the 8.6A scope you set and is flagged, not
+absorbed.
 
-**Owner decision available at any time, and deliberately not taken for them:** the two `unclear`
-captures keep Today's attention counter permanently at 2. They can be cleared with a
-`corrected_tool_call` confirm, or left alone. Either is fine; leaving them is itself soak evidence
-about how a never-clearing badge is treated.
+**Also newly found, not fixed:** there is no `setNotFoundHandler`, so Fastify's `basic404` logs the
+raw URL outside the scrubbing serializer — a mistyped OAuth callback carrying a live `?code=` would
+be logged unscrubbed and echoed in the response body. Adjacent to the `/search` leak 8.6A closed, but
+a distinct hole.
 
-Deliberately **not** started: Checkpoint 8.6, a dead-letter queue for `capture.parse`, notification
-capture (deferred on evidence — see 8.4 Lane 3), pickers on the event screen, adding `events` or
-`projects` to search, bounding event text at write, any notification-producer change, any Brief
-prompt or output-filter change, enabling any further calendar, and migration `0016`.
+Deliberately **not** started: 8.6B, 8.6C, 8.6D, migration `0016`, any mobile build, any new
+notification producer, any embeddings or retrieval work, and Phase 9.
 
-The 8.2/8.3 findings earlier checkpoints deliberately did **not** absorb remain open and unchanged:
-the calendar `summary` display-name bug, the zero-length all-day event, Today multi-day event
-bucketing, `done` occurrence presentation, `/search` query logging, events/projects search, export
-UI, and calendar write-side bounds.
+The 8.2/8.3 findings remain open and unchanged: the calendar `summary` display-name bug, Today
+multi-day timed bucketing, `done` occurrence presentation, events/projects search, export UI, and
+calendar write-side bounds.
