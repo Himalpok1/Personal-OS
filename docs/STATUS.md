@@ -17,7 +17,7 @@ integration-first or mixed — may be drawn from it, and the phrase "the soak sh
 prohibited.** Its baseline survives as dated historical measurement. Record: **`docs/SOAK-8.5.md`**.
 **Checkpoint 8.6 — Intelligence & Operations Decision Gate — DECISION REPORT COMPLETE**
 (`docs/CHECKPOINT-8.6-DECISION.md`). Owner approved the breakdown **8.6A / 8.6B / 8.6C / 8.6D**.
-**8.6A — reliability & data-integrity hardening — is COMPLETE and COMMITTED, not yet deployed.**
+**8.6A — reliability & data-integrity hardening — is COMPLETE and DEPLOYED (2026-09-11); acceptance PASSED.**
 8.6B (read-only Ask) is **gated on one owner decision**; 8.6C on retention windows; 8.6D on evidence.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
@@ -52,7 +52,7 @@ what is true *now*, it is in this file.
 | | |
 |---|---|
 | Migration level | **16** (`0000`–`0015`); local and production agree |
-| Serving commit | api **`7b7acca`** · web **`7b7acca`** (Checkpoint 8.4) · worker **`c0cf4a1`** (8.4 Lane 0; not rebuilt for Lanes 1–6 — runtime unchanged) |
+| Serving commit | api **`41f00cd`** · worker **`41f00cd`** (Checkpoint 8.6A, 2026-09-11) · web **`7b7acca`** (8.4; deliberately not rebuilt — runtime unchanged) |
 | Rabbit R1 | `com.himal.personalos` **versionCode 10**, built from `6788b8d`, installed in place 2026-09-03 |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · **Android share sheet (8.4)** · **launcher shortcut (8.4)**. Notification-shade capture **deferred** — see 8.4 Lane 3. |
 | Integrations | Google Health **active** · Google Calendar **active** · Gmail **active** |
@@ -62,7 +62,8 @@ what is true *now*, it is in this file.
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
 | Backups | **None, by design** (ADR-024) |
 | Source durability | **`origin` = `https://github.com/Himalpok1/Personal-OS` — PRIVATE, established 2026-09-02.** `main` + `phase-8-consolidation` pushed and hash-verified. No CI, no Actions workflow, no repository secret. |
-| Test baseline | **3,322 tests / 21 turbo tasks** (see *Last verification*) |
+| Test baseline | **3,340 tests / 21 turbo tasks** (8.6A; see *Last verification*) |
+| `capture.parse` DLQ | **`capture.parse.dead`, live in production** — attached to the pre-existing queue via `updateQueue`, consumer bound (8.6A) |
 | Search / export | `GET /search` and `GET /export` live, perimeter-only, no migration (ADR-059) |
 | Confirm contract | An uncommittable confirm is refused **409** before enqueueing; corrections are validated and stored in the shape the worker reads (8.4) |
 
@@ -1045,10 +1046,55 @@ full suite **uncached and serial 3,340 tests / 21 tasks, 0 cached, zero failing*
 worker **452**, api **689**, calendar-providers **76** — the zero-drift canary moved deliberately;
 no package decreased) · **mutation tests 9 of 9 killed and restored**.
 
-**Two limitations, stated rather than discovered later:** the fix is **write-path only** and does
-**not** repair the existing inverted production row `e2b9a5f7` (2021-12-16 → 2021-12-15), which stays
-invisible on Today because sync is incremental — repairing it is a one-row owner-approved `UPDATE`;
-and **nothing is deployed**, production still runs the previous images.
+#### 8.6A deployment and acceptance — 2026-09-11 (PASSED)
+
+Frozen order to `/home/himallinux/personal-os-8.6a-release` (797 tracked files via `git archive`;
+no `.env`, no `google-services.json`). Rollback images tagged **by resolved digest** as
+`:rollback-pre-8.6a` for api, worker and web, each verified equal to the serving digest before any
+build. Only `api` and `worker` were built. The new api image was inspected **before anything running
+was touched**: 16 migrations, no `0016`, and every 8.6A marker present in compiled output. Migration
+ran as `posops_migrator` from the new image with `--no-deps` and **applied nothing** (16 → 16);
+`MIGRATIONS_DATABASE_URL` is not in the api `environment:` block, so it was forwarded from the stable
+`.env` with `-e`, never printed. **`api` recreated alone**, healthy in ~8 s; **`worker` recreated
+alone** 44 s later, `worker.started` reporting **queues: 26** (25 + the new dead queue, counted not
+hardcoded) with `digestTimezone` preserved. **`web` and `postgres` untouched** — `web` still started
+2026-09-03, `postgres` 2026-08-30. Monitoring recorded **zero** `down` checks through both
+recreations.
+
+**The critical criterion, with provenance rather than inference.** `pgboss.queue` for `capture.parse`
+now reads `dead_letter = 'capture.parse.dead'`, on a row whose `created_on` is **2026-08-16** (Phase
+1) and whose `updated_on` is **2026-09-11 21:56:17** — the worker's `pgboss.started` instant to the
+second. A 26-day-old row modified today can only be `updateQueue`; `createQueue` on it is a no-op by
+construction. An intermediate read taken after the API alone had been recreated already showed the
+value set, so **both processes executed the path** and the worker's call was idempotent. The dead
+queue exists (26 → 27 queues, FK valid) and the retry options are byte-identical to before.
+
+**Acceptance, each with direct evidence:**
+
+| | Evidence |
+|---|---|
+| **B1 normal parse** | Smoke capture → `202` → `parsed\|note` in ~9 s, job `completed retries=0` on the new worker |
+| **B2 DLQ consumer** | A job sent straight to `capture.parse.dead` for a **nonexistent** id completed at 21:59:07.270, and the worker log at 21:59:07.269 shows `capture.parse.dead_letter_row_missing` — an event that exists **only** in the 8.6A handler. No real row touched. |
+| **B — not exercised live** | A real job exhausting five retries and being routed `capture.parse → .dead` by pg-boss. Manufacturing that failure is unsafe; the routing is pg-boss's own mechanism on the verified `dead_letter` column, and the handler's behaviour on a real row is pinned by 8 DB-backed tests and 9 mutations. |
+| **C search-log privacy** | `GET /search?q=<sentinel>` → the full structured `req` object reads `"url":"/search?q=[redacted]"` with exactly `method/url/host/remoteAddress/remotePort`, no body field; sentinel appears **0 times** in either container log |
+| **D all-day floor** | Present at `translate.js:55` in the running worker (the sync write path) and in the api |
+
+**Legacy row `e2b9a5f7` repaired, after acceptance passed.** Before: `2021-12-16 → 2021-12-15`,
+unarchived, untouched since the 8.2 ingest. The `UPDATE` ran inside a transaction under a `ROW_COUNT`
+guard that raises unless exactly one row matches; it matched exactly one. After: `2021-12-16 →
+2021-12-16`, **zero** inverted all-day rows remain anywhere, `events` still 98, and the range read
+model now returns it as a valid single-day span. Today is anchored to now, so a 2021 event cannot
+appear there and no such claim is made; the before-state evidence is that `end_date < start_date`
+made the classifier's containment predicate an empty range, and it is now satisfiable.
+
+**Content-count changes caused by this deployment, all deliberate:** one smoke capture (inbox 8 → 9,
+row remains as lineage per the 8.4 precedent) and the note it committed (notes 4 → 5, **archived**
+afterwards, 3 archived total), plus the one-row event repair. Tasks, projects, events and
+`notification_dispatch_log` unchanged.
+
+One process note: the first two migrate attempts failed harmlessly — a wrong dist path, then an empty
+URL because compose never forwards `MIGRATIONS_DATABASE_URL` into the container. Migration level was
+16 before, between and after; nothing partial ran. The working invocation is recorded above.
 
 ---
 
@@ -1401,38 +1447,11 @@ an intentionally-logged field — are recorded in the ledger below.
 
 ## Current objective
 
-**Run the Checkpoint 8.5 soak.** The build stops here. From 2026-09-03 the owner uses Personal OS
-naturally on the Rabbit R1 — share sheet when something is worth keeping, launcher Capture when a
-thought occurs, tasks and reminders when actually useful, Today and Agenda, search when something
-needs finding, Calendar and the Gmail digest and Health consumed as they arrive. **No artificial
-quotas, and no records manufactured to make adoption look real.**
-
-The freeze holds until 2026-09-24 at the earliest. The only permitted interruptions are P0
-security/privacy exposure, P0 data loss, P1 a core flow broken, and P1 a severe silent failure.
-Everything else is recorded in `docs/SOAK-8.5.md` and deferred — including friction that is merely
-annoying, which is the category most likely to tempt a fix.
-
-**Interim reports at DAY_7 (2026-09-10) and DAY_14 (2026-09-17); the full A–H review at DAY_21
-(2026-09-24).** If the Day-21 evidence is weak the soak continues to DAY_28 rather than closing on
-a good uptime number.
+**Checkpoint 8.6A is deployed and accepted.** Production runs `41f00cd` on api and worker with the
+`capture.parse` dead-letter queue live and consumed. Nothing further is in progress. The next
+checkpoint — 8.6B, 8.6C or 8.6D — begins only on explicit approval, and 8.6B is gated on **D1**.
 
 ---
-
-**Checkpoint 8.4 is COMPLETE.** Capture on the Rabbit R1 now takes one or two gestures from
-anywhere: the system share sheet accepts text from any app, and a launcher long-press opens the
-composer directly. Dates and reminders are picked, not typed, and a reminder can be set when the
-task is created rather than by a second edit.
-
-**The mandatory Lane 0 gate passed before any front door was added**, which was the right ordering:
-the defect it found was not in capture but in *confirmation*, and it was the only path in the system
-that turned a deliberate user action into a silent no-op. It is fixed at four layers and proven on
-the two original production rows.
-
-**Two things are deliberately not done, and neither is a partial success dressed up as one.**
-Notification-shade capture is **deferred on evidence** — it would silently lose captures when the
-process is dead, which is the one failure this architecture exists to prevent, and making it durable
-means adding a background-task framework this checkpoint was told not to introduce. And
-`capture.parse` still has no dead-letter queue; 8.4 made its failures visible rather than adding one.
 
 ## Completed
 
@@ -1456,23 +1475,11 @@ routes.
 
 ## Current work
 
-**Checkpoint 8.5 soak is running** (started 2026-09-03 15:07 CDT). No code work is in progress and
-none is permitted while the freeze holds. Activity is limited to read-only health checks at
-DAY_7/14/21/28 and to appending observations to `docs/SOAK-8.5.md`.
-
-**Production writes made by 8.5 so far: none.** The baseline was collected entirely with `GET`s and
-read-only SQL; nothing was created, modified or deleted, and no user-authored content was read.
+**None in progress.** 8.6A deployed 2026-09-11 (api + worker recreated separately; web untouched).
+**Production writes made by this deployment, all deliberate:** one smoke capture and its note
+(archived), the `UPDATE` on `e2b9a5f7`, and pg-boss's own `updateQueue` on `capture.parse`.
 
 ---
-
-**Checkpoint 8.4 closed 2026-09-03.** Four commits: the capture.parse reliability
-fix, the share-sheet + launcher front doors, the pickers/reminders/eligibility work, and this record.
-Two production deployments (api + worker for Lane 0; api + web for Lanes 4–6 — **worker deliberately
-not rebuilt the second time**, its runtime being unchanged) and one in-place APK install.
-
-**Production writes made by this work, all deliberate and all cleaned up:** one synthetic capture and
-the task it committed (task archived), and one `remind_at` round-trip task (archived). Every other
-live check was a `GET` or a refused `POST`.
 
 ## Last verification
 
@@ -1518,43 +1525,31 @@ production tracking table **16** before and after both deployments.
 
 ## Next action
 
-**Checkpoint 8.6A is complete and committed but NOT deployed.** Nothing proceeds without your call
-on the items below.
-
-**Ready when you are — 8.6A deployment.** Frozen order to a new `personal-os-8.6a-release`; rollback
-images tagged by resolved digest; **`api` and `worker` recreated in SEPARATE invocations** (both run
-a pg-boss timekeeper); `web` NOT rebuilt, its runtime being unchanged. Migration level stays 16, so
-the migrate step will correctly apply nothing. **Watch for one thing specifically:** the dead-letter
-attach depends on `boss.updateQueue` executing against the existing queue — verify
-`select dead_letter from pgboss.queue where name = 'capture.parse'` is non-null *after* rollout, not
-before, because `createQueue` alone is a silent no-op there.
+**Stop. Nothing proceeds without approval.** 8.6A is deployed and accepted; the next checkpoint is
+yours to choose.
 
 **Owner decisions, in the order they block work:**
 
-1. **D1 — may note and task BODIES leave the machine to a cloud model?** This is the whole of 8.6B,
-   not a side condition: `BriefInput` has never carried a body, ADR-056 names "whole note bodies"
-   first among things needing an explicit decision, and an Ask lane over titles alone is nearly
-   useless because `/search` already covers titles.
+1. **D1 — may note and task BODIES leave the machine to a cloud model?** This is the whole of 8.6B:
+   `BriefInput` has never carried a body, ADR-056 names "whole note bodies" first among things
+   needing an explicit decision, and an Ask lane over titles alone is nearly useless because
+   `/search` already covers titles.
 2. **D3–D6 — retention windows** (`monitor_checks`, `mail_messages` and its axis, the two sync-run
    tables, and whether terminal `capture.parse` failures may keep self-deleting after 7 days).
    Irreversible under ADR-024; 8.6C cannot start without them.
-3. **One-row data repair:** `UPDATE events SET end_date = start_date` for `e2b9a5f7`, which is
-   invisible on Today today. Reversible, but it is a production write and therefore yours.
-4. **D7 — is monitor target CRUD exposed over HTTP at all?** `url` is `z.string().url()` with no
-   scheme or host allowlist, so a writable `url` makes the prober an SSRF oracle. A `PATCH` excluding
-   `url` and `kind` gets most of the value with none of the surface.
+3. **D7 — is monitor target CRUD exposed over HTTP at all?** `url` is `z.string().url()` with no
+   scheme or host allowlist. A `PATCH` excluding `url` and `kind` gets most of the value with none of
+   the SSRF surface.
 
-**Recommended before 8.6B, and newly evidenced rather than inherited:**
+**Recommended before 8.6B, newly evidenced rather than inherited, and still not absorbed:**
 `occurrences.generate-lazy` has the same missing-DLQ defect with a worse outcome — a completed
-recurring task silently never spawns its successor — and it has **no containment wrapper and no
-structured logging at all**, making it less observable than `capture.parse` was before 8.4. All three
-recovery paths were verified closed. It was outside the 8.6A scope you set and is flagged, not
-absorbed.
+recurring task silently never spawns its successor — and **no containment wrapper and no structured
+logging at all**. All three recovery paths were verified closed. Now that the `capture.parse` pattern
+is proven in production, it is a direct template.
 
 **Also newly found, not fixed:** there is no `setNotFoundHandler`, so Fastify's `basic404` logs the
-raw URL outside the scrubbing serializer — a mistyped OAuth callback carrying a live `?code=` would
-be logged unscrubbed and echoed in the response body. Adjacent to the `/search` leak 8.6A closed, but
-a distinct hole.
+raw URL outside the scrubbing serializer — a mistyped OAuth callback carrying a live `?code=` would be
+logged unscrubbed and echoed in the response body.
 
 Deliberately **not** started: 8.6B, 8.6C, 8.6D, migration `0016`, any mobile build, any new
 notification producer, any embeddings or retrieval work, and Phase 9.
