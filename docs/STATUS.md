@@ -18,7 +18,9 @@ prohibited.** Its baseline survives as dated historical measurement. Record: **`
 **Checkpoint 8.6 — Intelligence & Operations Decision Gate — DECISION REPORT COMPLETE**
 (`docs/CHECKPOINT-8.6-DECISION.md`). Owner approved the breakdown **8.6A / 8.6B / 8.6C / 8.6D**.
 **8.6A — reliability & data-integrity hardening — is COMPLETE and DEPLOYED (2026-09-11); acceptance PASSED.**
-8.6B (read-only Ask) is **gated on one owner decision**; 8.6C on retention windows; 8.6D on evidence.
+**8.6B — Ask / Cloud Data Boundary — DESIGN GATE COMPLETE (2026-09-11), OWNER DECISION REQUIRED.**
+Design: **`docs/CHECKPOINT-8.6B-DESIGN.md`**. Nothing implemented. 8.6C gated on retention windows;
+8.6D on evidence.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -1098,6 +1100,45 @@ URL because compose never forwards `MIGRATIONS_DATABASE_URL` into the container.
 
 ---
 
+### Checkpoint 8.6B — Ask / Cloud Data Boundary (DESIGN GATE, 2026-09-11)
+
+**Nothing implemented.** A first-principles audit and a design recommendation, in
+**`docs/CHECKPOINT-8.6B-DESIGN.md`**, put through an adversarial critic that refuted several of the
+first draft's claims; every refutation is recorded in the design's §15 and resolved in place.
+
+**The finding that reframes the question.** *"Bodies remain local by default"* is not true today:
+the capture parser sends every capture's **full `raw_text`** as the prompt, twice (`capture-parse.ts:101`,
+`:177-178`), and puts it in a **push body** (`:253`). Measured in production: **4 of 5 notes and 3 of
+5 tasks originated as captures and have already been transmitted.** The honest contract names three
+egress routes — parse, confirmation push, and Ask — and Ask's genuinely new exposure is in-app-authored
+text, re-transmission beside a question, and aggregation across records.
+
+**Recommendation: adopt Explicit cloud Ask** (the owner's preference), with four corrections: the
+"local by default" wording replaced; the switch scoped to Ask and named *Cloud Ask*, not *Cloud AI*;
+"only required context" made enforceable as lexical top-K with a hard budget and **no model call on
+an empty match**; and every transmission made exactly one deliberate act (`maxRetries: 0`, primary
+model only). Read-only, no tools, nothing persisted, counts-only logging. **Zero migrations**: the
+`ask` row in `ai_task_routes` is the switch, create-or-delete only, so any model change is a
+re-consent.
+
+**Two findings that outrun 8.6B's scope**, both verified in `ai@7.0.66`'s source: the SDK's
+telemetry is **opt-out** — omitted, the start event carries the entire prompt to any in-process
+subscriber, and none of the five existing lanes opts out (nothing subscribes today, so nothing leaks);
+and none passes `maxRetries`, so the parser's ceiling is pg-boss × samples × SDK × fallbacks. Both are
+put to the owner as **D1f**.
+
+**The enforcement boundary was rebuilt after review.** The first draft's TypeScript brand was a
+lint, not a boundary (`as unknown as` forges it; a `db`-only signature is callable from the API's
+own `setInterval` lane). It is now a runtime `WeakSet` grant minted only inside the route handler,
+request-bound and single-use, with ratchets labelled honestly as protection against mistakes.
+
+**Owner decisions:** D1 (approve, with the corrected contract) · D1a switch storage · D1b whether the
+parser is also gated · D1c inbox in corpus · D1d server/mobile split · **D1e device-token auth on
+`/ai/*` writes (an ADR-029 amendment)** · **D1f harden the five existing lanes now**. Recommendations
+for each are in the design's §16.
+
+---
+
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
 **Phase 7 is closed.** Checkpoints 7.0–7.8B and the full Checkpoint 7.9 record — the open
@@ -1447,9 +1488,8 @@ an intentionally-logged field — are recorded in the ledger below.
 
 ## Current objective
 
-**Checkpoint 8.6A is deployed and accepted.** Production runs `41f00cd` on api and worker with the
-`capture.parse` dead-letter queue live and consumed. Nothing further is in progress. The next
-checkpoint — 8.6B, 8.6C or 8.6D — begins only on explicit approval, and 8.6B is gated on **D1**.
+**Await the 8.6B decision.** The design gate is complete and nothing is implemented. 8.6A is
+deployed and accepted. No checkpoint proceeds without explicit approval.
 
 ---
 
@@ -1475,9 +1515,8 @@ routes.
 
 ## Current work
 
-**None in progress.** 8.6A deployed 2026-09-11 (api + worker recreated separately; web untouched).
-**Production writes made by this deployment, all deliberate:** one smoke capture and its note
-(archived), the `UPDATE` on `e2b9a5f7`, and pg-boss's own `updateQueue` on `capture.parse`.
+**None in progress.** 8.6B design committed 2026-09-11; production untouched since the 8.6A
+acceptance (read-only verification only).
 
 ---
 
@@ -1525,35 +1564,20 @@ production tracking table **16** before and after both deployments.
 
 ## Next action
 
-**Stop. Nothing proceeds without approval.** 8.6A is deployed and accepted; the next checkpoint is
-yours to choose.
+**Stop at the 8.6B decision gate.** Read `docs/CHECKPOINT-8.6B-DESIGN.md` §16. In the order they
+block work:
 
-**Owner decisions, in the order they block work:**
+1. **D1 — approve Explicit cloud Ask with bodies**, under the corrected three-route contract.
+2. **D1a–D1d** — switch storage (route presence, zero migration, recommended), parser gating (no),
+   inbox in corpus (no), server/mobile split (yes).
+3. **D1f — harden the five existing lanes** (`experimental_telemetry: { isEnabled: false }`, explicit
+   `maxRetries`, AI SDK error names withheld from logs). Small, independent of D1, and recommended
+   regardless of it.
+4. **D1e — device-token auth on `/ai/*` write routes.** An ADR-029 amendment; its own decision.
+5. **D3–D6** retention windows (8.6C) and **D7** monitor CRUD (8.6D) remain open and unchanged.
 
-1. **D1 — may note and task BODIES leave the machine to a cloud model?** This is the whole of 8.6B:
-   `BriefInput` has never carried a body, ADR-056 names "whole note bodies" first among things
-   needing an explicit decision, and an Ask lane over titles alone is nearly useless because
-   `/search` already covers titles.
-2. **D3–D6 — retention windows** (`monitor_checks`, `mail_messages` and its axis, the two sync-run
-   tables, and whether terminal `capture.parse` failures may keep self-deleting after 7 days).
-   Irreversible under ADR-024; 8.6C cannot start without them.
-3. **D7 — is monitor target CRUD exposed over HTTP at all?** `url` is `z.string().url()` with no
-   scheme or host allowlist. A `PATCH` excluding `url` and `kind` gets most of the value with none of
-   the SSRF surface.
+**Still flagged, still not absorbed:** `occurrences.generate-lazy` (same missing-DLQ defect, worse
+outcome, no logging) and the `basic404` unscrubbed-URL path.
 
-**Recommended before 8.6B, newly evidenced rather than inherited, and still not absorbed:**
-`occurrences.generate-lazy` has the same missing-DLQ defect with a worse outcome — a completed
-recurring task silently never spawns its successor — and **no containment wrapper and no structured
-logging at all**. All three recovery paths were verified closed. Now that the `capture.parse` pattern
-is proven in production, it is a direct template.
-
-**Also newly found, not fixed:** there is no `setNotFoundHandler`, so Fastify's `basic404` logs the
-raw URL outside the scrubbing serializer — a mistyped OAuth callback carrying a live `?code=` would be
-logged unscrubbed and echoed in the response body.
-
-Deliberately **not** started: 8.6B, 8.6C, 8.6D, migration `0016`, any mobile build, any new
-notification producer, any embeddings or retrieval work, and Phase 9.
-
-The 8.2/8.3 findings remain open and unchanged: the calendar `summary` display-name bug, Today
-multi-day timed bucketing, `done` occurrence presentation, events/projects search, export UI, and
-calendar write-side bounds.
+Deliberately **not** started: 8.6B implementation, 8.6C, 8.6D, migration `0016`, any mobile build,
+any parser change, any embeddings or retrieval work, and Phase 9.
