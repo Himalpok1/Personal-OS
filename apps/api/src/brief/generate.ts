@@ -19,6 +19,7 @@ import {
   resolveModelForTask,
 } from "@personal-os/ai-providers";
 import type { Db } from "@personal-os/db";
+import { log } from "@personal-os/core/logging/logger";
 import { BriefContentSchema, type BriefContent } from "@personal-os/schema";
 import { generateText } from "ai";
 import {
@@ -115,62 +116,112 @@ export async function generateDailyBrief(
   const untrustedInputs = collectUntrustedBriefInputs(input);
   const startedAt = performance.now();
 
+  // AI USAGE ACCOUNTING (Checkpoint 8.6B, closing recorded debt: this lane
+  // previously emitted no ai.usage at all, because apps/api had no guarded
+  // logger until this checkpoint ported apps/worker's to @personal-os/core).
+  // Declared outside the attempt closure so the values survive it, assigned
+  // from the LAST attempt that reached a provider -- the one whose result is
+  // actually returned. `calls` comes from candidateIndex, not a literal 1, for
+  // the same reason mail/digest/generate.ts's identical comment gives: a
+  // primary-fails-then-fallback-succeeds run is an already-tested path.
+  let usageIn: number | undefined;
+  let usageOut: number | undefined;
+  let usageTotal: number | undefined;
+  let finishReason: string | undefined;
+  let calls = 1;
+
   try {
-    const { result, modelRowId } = await callWithFallbackTracked(chain, async (model) => {
-      const elapsed = performance.now() - startedAt;
-      const remaining = totalBudgetMs - elapsed;
-      if (remaining <= 0) {
-        // No further provider call for this (or any later) candidate --
-        // the total budget is already gone.
-        throw new BriefGenerationTimeoutError();
-      }
+    const { result, modelRowId } = await callWithFallbackTracked(
+      chain,
+      async (model, candidateIndex) => {
+        calls = candidateIndex + 1;
+        const elapsed = performance.now() - startedAt;
+        const remaining = totalBudgetMs - elapsed;
+        if (remaining <= 0) {
+          // No further provider call for this (or any later) candidate --
+          // the total budget is already gone.
+          throw new BriefGenerationTimeoutError();
+        }
 
-      // A fresh AbortSignal per attempt -- Math.min bounds it by both the
-      // per-attempt cap and whatever budget is left, and a signal that has
-      // already fired is never reused for a fallback candidate.
-      // AbortSignal.timeout() requires an integer millisecond count --
-      // performance.now() has sub-millisecond precision, so `remaining`
-      // must be floored (never rounded up past the real deadline) and
-      // floor-clamped to at least 1ms since `remaining > 0` was already
-      // checked above but could still be a sub-1ms fraction.
-      const signalMs = Math.max(1, Math.floor(Math.min(attemptTimeoutMs, remaining)));
-      const abortSignal = AbortSignal.timeout(signalMs);
+        // A fresh AbortSignal per attempt -- Math.min bounds it by both the
+        // per-attempt cap and whatever budget is left, and a signal that has
+        // already fired is never reused for a fallback candidate.
+        // AbortSignal.timeout() requires an integer millisecond count --
+        // performance.now() has sub-millisecond precision, so `remaining`
+        // must be floored (never rounded up past the real deadline) and
+        // floor-clamped to at least 1ms since `remaining > 0` was already
+        // checked above but could still be a sub-1ms fraction.
+        const signalMs = Math.max(1, Math.floor(Math.min(attemptTimeoutMs, remaining)));
+        const abortSignal = AbortSignal.timeout(signalMs);
 
-      const generated = await generateText({
-        model,
-        system: systemPrompt,
-        prompt: userPrompt,
-        maxOutputTokens: BRIEF_MAX_OUTPUT_TOKENS,
-        abortSignal,
-      });
+        const generated = await generateText({
+          model,
+          system: systemPrompt,
+          prompt: userPrompt,
+          maxOutputTokens: BRIEF_MAX_OUTPUT_TOKENS,
+          abortSignal,
+          // Checkpoint 8.6B (D1f) -- see capture-parse.ts's identical comment.
+          // callWithFallbackTracked already owns the fallback chain, and the
+          // route owns nothing further (POST /briefs is synchronous, no queue
+          // retry beneath it) -- so the SDK's own retry must be zero, not
+          // silently doubling or tripling a slow/failing candidate's attempts.
+          maxRetries: 0,
+          // Telemetry is opt-out in ai@7.0.66: omitted, its start event carries
+          // the whole prompt -- here, the user's own Today snapshot -- to any
+          // in-process subscriber. Pinned explicitly rather than relying on
+          // nothing subscribing today.
+          experimental_telemetry: { isEnabled: false },
+        });
 
-      // THE OUTPUT FILTER RUNS INSIDE THE ATTEMPT, before anything is
-      // returned, so no unfiltered text can reach a caller even transiently.
-      // Before Checkpoint 8.1 this was a bare `.trim()` and the Brief lane had
-      // no output constraint at all -- see output.ts for why that was a real
-      // gap rather than a theoretical one.
-      const sanitized = sanitizeBriefText(generated.text, untrustedInputs);
-      const text = sanitized.text;
-      if (text.length === 0) {
-        // An empty brief is a failure, not a success -- the frozen
-        // no-overwrite invariant means this must never displace a good
-        // cached brief with an empty one.
-        throw new BriefGenerationFailedError();
-      }
+        // Scalars only, and every one of them first-party or SDK-normalized --
+        // see the mail digest's identical comment for why each field here is
+        // safe to log. Deliberately absent: generated.text, providerMetadata,
+        // rawFinishReason, response.modelId/headers/body, usage.raw.
+        usageIn = generated.usage?.inputTokens;
+        usageOut = generated.usage?.outputTokens;
+        usageTotal = generated.usage?.totalTokens;
+        finishReason = generated.finishReason;
 
-      // Post-condition, asserted rather than assumed. If link-shaped content
-      // survives the filter, the filter has a hole, and a persisted brief
-      // carrying a live link is exactly what ADR-054's reasoning forbids -- so
-      // the brief is refused rather than stored with a warning nobody reads.
-      if (containsLinkShapedContent(text, untrustedInputs)) {
-        throw new BriefGenerationFailedError();
-      }
+        // THE OUTPUT FILTER RUNS INSIDE THE ATTEMPT, before anything is
+        // returned, so no unfiltered text can reach a caller even transiently.
+        // Before Checkpoint 8.1 this was a bare `.trim()` and the Brief lane had
+        // no output constraint at all -- see output.ts for why that was a real
+        // gap rather than a theoretical one.
+        const sanitized = sanitizeBriefText(generated.text, untrustedInputs);
+        const text = sanitized.text;
+        if (text.length === 0) {
+          // An empty brief is a failure, not a success -- the frozen
+          // no-overwrite invariant means this must never displace a good
+          // cached brief with an empty one.
+          throw new BriefGenerationFailedError();
+        }
 
-      // Server-owned output: only `text` is taken from the model's result
-      // and re-constructed here, never spread -- BriefContentSchema being
-      // `.passthrough()` is for future server-authored fields, not a
-      // license to persist arbitrary model-returned keys.
-      return BriefContentSchema.parse({ text });
+        // Post-condition, asserted rather than assumed. If link-shaped content
+        // survives the filter, the filter has a hole, and a persisted brief
+        // carrying a live link is exactly what ADR-054's reasoning forbids -- so
+        // the brief is refused rather than stored with a warning nobody reads.
+        if (containsLinkShapedContent(text, untrustedInputs)) {
+          throw new BriefGenerationFailedError();
+        }
+
+        // Server-owned output: only `text` is taken from the model's result
+        // and re-constructed here, never spread -- BriefContentSchema being
+        // `.passthrough()` is for future server-authored fields, not a
+        // license to persist arbitrary model-returned keys.
+        return BriefContentSchema.parse({ text });
+      },
+    );
+
+    // COUNTS ONLY. NO PROMPT, NO OUTPUT, NO USER CONTENT.
+    log.info("ai.usage", {
+      task: DAILY_BRIEF_TASK_NAME,
+      modelId: modelRowId,
+      calls,
+      latencyMs: Math.round(performance.now() - startedAt),
+      ...(usageIn === undefined ? {} : { usageIn }),
+      ...(usageOut === undefined ? {} : { usageOut }),
+      ...(usageTotal === undefined ? {} : { usageTotal }),
+      ...(finishReason === undefined ? {} : { finishReason }),
     });
 
     return { content: result, modelRowId };

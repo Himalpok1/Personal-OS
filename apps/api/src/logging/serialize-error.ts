@@ -1,3 +1,5 @@
+import { AISDKError } from "ai";
+
 /**
  * A closed-allowlist replacement for pino's default `err` serializer.
  *
@@ -33,6 +35,22 @@
  * someone else. `stack` is reduced to frame lines: V8 puts the message on the
  * stack's first line too, so keeping the stack verbatim would reinstate the leak
  * through the back door.
+ *
+ * CHECKPOINT 8.6B ADDITION -- STRUCTURAL DETECTION FOR THE AI SDK.
+ *
+ * The 8.6B design audit (finding #23) found that `AI_APICallError` was absent
+ * from the name-only allowlist below, so its `message` -- which for a
+ * content-policy rejection can quote the request back -- would have survived
+ * into this serializer's output. Rather than enumerating the AI SDK's ~40
+ * error subclasses by name (a list a future SDK minor version would silently
+ * grow past), every one of them extends the SDK's own exported `AISDKError`
+ * base class (verified against the installed `ai@7.0.66`: `new
+ * APICallError(...) instanceof AISDKError` is `true`, and its `name` is
+ * `"AI_APICallError"`). `err instanceof AISDKError` is therefore preferred
+ * here over name matching, per this checkpoint's instruction to prefer
+ * structural detection where practical -- it is authored by whichever
+ * provider or adapter threw it, never by this codebase, exactly like the
+ * five hand-named classes below.
  */
 
 /** Error classes whose `message` is authored upstream, not by us. */
@@ -50,6 +68,16 @@ const PROVIDER_ERROR_NAMES: ReadonlySet<string> = new Set([
   "GmailOAuthError",
   "GmailApiError",
 ]);
+
+/**
+ * Whether `err`'s message is authored by an upstream AI provider/SDK rather
+ * than by this codebase -- true for the five hand-named classes above, and
+ * structurally true for EVERY AI SDK error via `instanceof AISDKError` (see
+ * the comment above `PROVIDER_ERROR_NAMES`).
+ */
+function isProviderAuthoredError(err: Error): boolean {
+  return PROVIDER_ERROR_NAMES.has(err.name || "Error") || err instanceof AISDKError;
+}
 
 /**
  * `stack` is a required `string` because Fastify's own
@@ -76,7 +104,7 @@ export function serializeErrorForLog(err: unknown): SerializedError {
   }
 
   const type = err.name || "Error";
-  const isProviderAuthored = PROVIDER_ERROR_NAMES.has(type);
+  const isProviderAuthored = isProviderAuthoredError(err);
 
   // A `pg` error's `code` is a SQLSTATE; anything else shaped like a short
   // machine token is equally safe. Free text is not echoed.

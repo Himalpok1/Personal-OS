@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 // A guard, not an audit.
@@ -17,6 +18,19 @@ import { describe, expect, it } from "vitest";
 // what it guards is a test people learn to update without reading.
 
 const SRC = path.resolve(import.meta.dirname);
+
+/**
+ * The REAL sanctioned sink, since Checkpoint 8.6B ported it to
+ * `@personal-os/core/logging/logger` so `apps/api` could share it (see that
+ * module and `./logger.ts`, now a re-export shim with no console call of its
+ * own). Resolved relative to this file rather than assumed, and reached across
+ * the package boundary via plain fs -- the same cross-directory scanning
+ * `apps/worker/src/mobile-inert-rendering.test.ts` already uses to enforce a
+ * boundary that lives outside its own package.
+ */
+const PORTED_LOGGER_PATH = path.resolve(
+  fileURLToPath(new URL("../../../packages/core/src/logging/logger.ts", import.meta.url)),
+);
 
 /**
  * Pre-existing `console.*` call sites, frozen at Checkpoint 7.3.
@@ -92,11 +106,20 @@ describe("raw console usage in apps/worker", () => {
   });
 
   it("finds the sanctioned sink exactly where it is supposed to be", () => {
-    // A guard on the guard: if logger.ts stopped containing a console call the
-    // scan would still pass while nothing was being written anywhere, and the
-    // exclusion above would be silently pointless.
-    const contents = readFileSync(path.join(SRC, SANCTIONED), "utf8");
+    // A guard on the guard: if the ported logger stopped containing a console
+    // call the scan would still pass while nothing was being written anywhere,
+    // and the exclusion above would be silently pointless. Checkpoint 8.6B
+    // moved the real call out of this directory entirely (into
+    // @personal-os/core/logging/logger, shared with apps/api), so the local
+    // shim is expected to hold zero -- this asserts the call exists at its new
+    // home instead of assuming the port preserved it.
+    const contents = readFileSync(PORTED_LOGGER_PATH, "utf8");
     expect(countConsoleCalls(contents)).toBeGreaterThan(0);
+  });
+
+  it("the local shim itself carries no console call of its own", () => {
+    const contents = readFileSync(path.join(SRC, SANCTIONED), "utf8");
+    expect(countConsoleCalls(contents)).toBe(0);
   });
 
   it("scans real files, so a broken walker cannot pass by finding nothing", () => {

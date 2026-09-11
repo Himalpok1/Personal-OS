@@ -151,6 +151,16 @@ export async function generateMailDigest(
           prompt: userPrompt,
           maxOutputTokens: MAIL_DIGEST_MAX_OUTPUT_TOKENS,
           abortSignal: AbortSignal.timeout(signalMs),
+          // Checkpoint 8.6B (D1f) -- see apps/worker/src/jobs/capture-parse.ts's
+          // identical comment. callWithFallbackTracked already owns the
+          // fallback chain; the SDK's own internal retry must be zero so it
+          // cannot silently re-send a prompt containing attacker-authored
+          // subject lines.
+          maxRetries: 0,
+          // Telemetry is opt-out in ai@7.0.66: omitted, its start event
+          // carries the whole prompt -- here, attacker-authored subjects and
+          // display names -- to any in-process subscriber. Pinned explicitly.
+          experimental_telemetry: { isEnabled: false },
         });
 
         // THE OUTPUT FILTER RUNS INSIDE THE ATTEMPT, before anything is returned,

@@ -11,6 +11,7 @@
 
 import type * as AiProviders from "@personal-os/ai-providers";
 import { NoProviderConfiguredError } from "@personal-os/ai-providers";
+import { setLogSink } from "@personal-os/core/logging/logger";
 import type { Db } from "@personal-os/db";
 import type { LanguageModel } from "ai";
 import type * as Ai from "ai";
@@ -126,6 +127,48 @@ describe("generateDailyBrief", () => {
     expect(call.abortSignal).toBeInstanceOf(AbortSignal);
     expect(call).not.toHaveProperty("tools");
     expect(call).not.toHaveProperty("temperature");
+  });
+
+  it("disables SDK retry and telemetry explicitly (Checkpoint 8.6B / D1f)", async () => {
+    vi.mocked(resolveModelForTask).mockResolvedValue(singleCandidateChain());
+    vi.mocked(generateText).mockResolvedValue(fakeGenerateTextResult("Brief text."));
+
+    await generateDailyBrief(FAKE_DB, SAMPLE_INPUT, FAKE_ENCRYPTION_KEY);
+
+    const call = vi.mocked(generateText).mock.calls[0]![0];
+    expect(call.maxRetries).toBe(0);
+    expect(call.experimental_telemetry).toEqual({ isEnabled: false });
+  });
+
+  it("emits ai.usage (counts only) on success -- closing the recorded debt that this lane logged nothing", async () => {
+    vi.mocked(resolveModelForTask).mockResolvedValue(singleCandidateChain());
+    vi.mocked(generateText).mockResolvedValue({
+      text: "You have 2 tasks today.",
+      usage: { inputTokens: 100, outputTokens: 40, totalTokens: 140 },
+      finishReason: "stop",
+    } as unknown as GenerateTextReturn);
+
+    const records: Record<string, unknown>[] = [];
+    const restore = setLogSink({ write: (_level, record) => records.push(record) });
+    try {
+      await generateDailyBrief(FAKE_DB, SAMPLE_INPUT, FAKE_ENCRYPTION_KEY);
+    } finally {
+      restore();
+    }
+
+    const usageRecord = records.find((r) => r["event"] === "ai.usage");
+    expect(usageRecord).toMatchObject({
+      task: "daily_brief",
+      modelId: "model-primary-id",
+      calls: 1,
+      usageIn: 100,
+      usageOut: 40,
+      usageTotal: 140,
+      finishReason: "stop",
+    });
+    // Never the brief text or the input snapshot.
+    const flat = JSON.stringify(records);
+    expect(flat).not.toContain("You have 2 tasks today.");
   });
 
   it("server-owned output: extra fields on the model's result are not persisted, only text", async () => {

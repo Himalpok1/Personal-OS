@@ -12,7 +12,9 @@
     "./health/*": "./dist/health/*.js",
     "./mail/*": "./dist/mail/*.js",
     "./ai/*": "./dist/ai/*.js",
-    "./search/*": "./dist/search/*.js"
+    "./search/*": "./dist/search/*.js",
+    "./logging/*": "./dist/logging/*.js",
+    "./ask/*": "./dist/ask/*.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

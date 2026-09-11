@@ -1,3 +1,4 @@
+import { APICallError, TypeValidationError } from "ai";
 import { describe, expect, it } from "vitest";
 import { serializeErrorForLog } from "./serialize-error.js";
 
@@ -139,5 +140,66 @@ describe("serializeErrorForLog", () => {
   it("rejects a code that is not a short machine token", () => {
     const err = Object.assign(new Error("boom"), { code: GOOGLE_PROSE });
     expect(serializeErrorForLog(err).code).toBeUndefined();
+  });
+
+  // Checkpoint 8.6B (finding #23): AI_APICallError was previously reachable to
+  // the generic handler's request.log.error({ err }) with no allowlist
+  // protection at all, because it was absent from the name-only list. These
+  // pin the STRUCTURAL fix -- `instanceof AISDKError` -- against real SDK
+  // classes rather than a hand-rolled stand-in, so a future SDK error class
+  // this file has never heard of is covered by construction.
+  describe("AI SDK errors (Checkpoint 8.6B)", () => {
+    const PROMPT_SECRET = "the user's raw capture text, never to be logged";
+
+    it("withholds an APICallError's message, which can echo the request body", () => {
+      const err = new APICallError({
+        message: `upstream rejected: ${PROMPT_SECRET}`,
+        url: "https://api.openai.example/v1/chat/completions",
+        requestBodyValues: { prompt: PROMPT_SECRET },
+        responseBody: `{"error":"contains ${PROMPT_SECRET}"}`,
+      });
+      const out = serializeErrorForLog(err);
+      expect(out.type).toBe("AI_APICallError");
+      expect(out.message).toBe("[AI_APICallError message withheld]");
+      const flat = flatten(out);
+      expect(flat).not.toContain(PROMPT_SECRET);
+      expect(flat).not.toContain("requestBodyValues");
+      expect(flat).not.toContain("responseBody");
+    });
+
+    it("withholds an APICallError's stack entirely, like the five hand-named classes", () => {
+      const err = new APICallError({
+        message: "boom",
+        url: "https://api.openai.example",
+        requestBodyValues: {},
+      });
+      expect(serializeErrorForLog(err).stack).toBe("");
+    });
+
+    it("withholds a TypeValidationError's message, which embeds the validated VALUE verbatim", () => {
+      // Not a hypothetical: this SDK class's own message literally contains
+      // `Value: ${JSON.stringify(value)}` -- verified against the installed
+      // ai@7.0.66 -- so a tool-call validation failure on a capture would
+      // otherwise put the capture's own text straight into a log line.
+      const err = new TypeValidationError({
+        value: { prompt: PROMPT_SECRET },
+        cause: new Error("bad shape"),
+      });
+      expect(err.message).toContain(PROMPT_SECRET); // sanity: the SDK really does this
+      const out = serializeErrorForLog(err);
+      expect(out.type).toBe("AI_TypeValidationError");
+      expect(out.message).toBe("[AI_TypeValidationError message withheld]");
+      expect(flatten(out)).not.toContain(PROMPT_SECRET);
+    });
+
+    it("emits only the allowlisted keys for an AI SDK error, same as every other class", () => {
+      const err = new APICallError({
+        message: "boom",
+        url: "https://api.openai.example",
+        requestBodyValues: { prompt: PROMPT_SECRET },
+        statusCode: 400,
+      });
+      expect(Object.keys(serializeErrorForLog(err)).sort()).toEqual(["message", "stack", "type"]);
+    });
   });
 });

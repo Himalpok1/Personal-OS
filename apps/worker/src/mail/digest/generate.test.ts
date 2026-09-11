@@ -150,6 +150,16 @@ describe("the prompt actually sent", () => {
     expect(call["toolChoice"]).toBeUndefined();
     expect(call["maxOutputTokens"]).toBe(600);
   });
+
+  it("disables SDK retry and telemetry explicitly (Checkpoint 8.6B / D1f)", async () => {
+    vi.mocked(resolveModelForTask).mockResolvedValue(chain("primary"));
+    vi.mocked(generateText).mockResolvedValue({ text: "ok" } as never);
+
+    await generateMailDigest(FAKE_DB, INPUT, KEY);
+    const call = vi.mocked(generateText).mock.calls[0]![0] as Record<string, unknown>;
+    expect(call["maxRetries"]).toBe(0);
+    expect(call["experimental_telemetry"]).toEqual({ isEnabled: false });
+  });
 });
 
 describe("output filtering runs INSIDE the attempt", () => {

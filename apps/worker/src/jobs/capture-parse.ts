@@ -101,6 +101,19 @@ async function callParser(
     prompt: text,
     tools: PARSER_TOOLS,
     toolChoice: "required",
+    // Checkpoint 8.6B (D1f). Retry ownership belongs to the caller, not the
+    // SDK: this call already sits under two samples x callWithFallback's own
+    // fallback loop x pg-boss's five retries, and the AI SDK's own default of
+    // 2 internal retries per call was silently multiplying that ceiling
+    // further (up to 36 transmissions of one capture, per the 8.6B design
+    // audit). maxRetries: 0 makes the outer layers the only retry authority.
+    maxRetries: 0,
+    // The AI SDK's telemetry is OPT-OUT, not opt-in (ai@7.0.66): omitted, its
+    // start event carries the entire prompt -- here, the user's raw capture
+    // text -- to any in-process subscriber of the "ai:telemetry" tracing
+    // channel or globalThis.AI_SDK_TELEMETRY_INTEGRATIONS. Nothing subscribes
+    // today, but this must not depend on that staying true.
+    experimental_telemetry: { isEnabled: false },
   });
   const call = result.toolCalls[0];
   if (!call) throw new Error("model returned no tool call");
