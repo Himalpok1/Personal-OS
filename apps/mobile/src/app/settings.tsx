@@ -2,6 +2,7 @@ import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { useBusyPress } from "@/components/use-busy-press";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { calendarSyncErrorCopy } from "@/components/calendar/sync-error-copy";
+import { CloudAskCard } from "@/components/ask/cloud-ask-card";
 import { confirmDestructive } from "@/components/confirm-destructive";
 import { mailCallbackRedirectUri } from "@/components/mail/callback-redirect";
 import {
@@ -1389,6 +1390,7 @@ export default function SettingsScreen() {
         <ConnectedHealthCard />
         <ConnectedMailCard />
         <MonitoringCard />
+        <CloudAskCard />
         <NotificationDiagnostics />
         <OutboxDiagnostics />
 

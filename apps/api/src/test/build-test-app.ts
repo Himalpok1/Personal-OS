@@ -1,5 +1,6 @@
 import {
   aiDailyBriefs,
+  aiTaskRoutes,
   calendarConnectionCalendars,
   calendarConnections,
   calendarEventInstances,
@@ -85,6 +86,13 @@ export async function truncateTestTables(app: FastifyInstance): Promise<void> {
   // ai_daily_briefs references ai_models (ON DELETE set null), which route
   // tests never populate, so it clears independently of everything above.
   await app.db.delete(aiDailyBriefs);
+  // ai_task_routes -- Checkpoint 8.6B. Earlier AI route tests (briefs.test.ts)
+  // never populated this table for real: they mock resolveModelForTask
+  // entirely. Cloud Ask's tests do populate a real "ask" row (its presence IS
+  // the switch, checked by a real SELECT in apps/api/src/ask/authorize.ts), so
+  // it must clear between tests or a row left by one test file would silently
+  // enable/disable Ask for the next one sharing this database.
+  await app.db.delete(aiTaskRoutes);
   // Phase 6 health tables. FK order: every one of the five child tables
   // references health_connections (cascade), and health_sync_runs additionally
   // references health_metric_streams (set null) -- so runs clear before

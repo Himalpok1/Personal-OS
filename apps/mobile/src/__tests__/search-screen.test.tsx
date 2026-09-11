@@ -125,6 +125,25 @@ function renderView(overrides: Partial<SearchViewProps> = {}): unknown {
   return deepRender(SearchView(props));
 }
 
+describe("SearchView -- modeToggle (Checkpoint 8.6B)", () => {
+  it("renders nothing extra when omitted -- the pre-8.6B behavior, unchanged", () => {
+    const tree = renderView({});
+    expect(findByTestId(tree, "ask-mode-marker")).toBeUndefined();
+  });
+
+  it("renders whatever node the caller passes, in every state", () => {
+    for (const state of [
+      { kind: "idle" },
+      { kind: "loading" },
+      { kind: "error" },
+      { kind: "ready", response: readyResponse([]) },
+    ] as SearchViewState[]) {
+      const tree = renderView({ state, modeToggle: <Text testID="ask-mode-marker">toggle</Text> });
+      expect(findByTestId(tree, "ask-mode-marker")).toBeDefined();
+    }
+  });
+});
+
 describe("SearchView -- entry and query field", () => {
   it("always renders the search input, whatever the state", () => {
     for (const state of [

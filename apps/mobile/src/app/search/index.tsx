@@ -1,11 +1,22 @@
-import { SEARCH_QUERY_MIN_CHARS, type SearchResponse, type SearchResult } from "@personal-os/schema";
+import {
+  ASK_QUESTION_MIN_CHARS,
+  SEARCH_QUERY_MIN_CHARS,
+  type SearchResponse,
+  type SearchResult,
+} from "@personal-os/schema";
 import { useRouter } from "expo-router";
+import type { ReactNode } from "react";
 import { useState } from "react";
 import { FlatList, Pressable, SafeAreaView, Text, TextInput, View } from "react-native";
+import { AskView, type AskState } from "@/components/ask/ask-view";
+import { askErrorMessage } from "@/components/ask/ask-errors";
+import { AskModeToggle, type SearchAskMode } from "@/components/ask/mode-toggle";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { usePlaceholderColor } from "@/components/placeholder-color";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
+import { useAskCloud, useAskEnabled } from "@/queries/ask";
 import { useSearch } from "@/queries/search";
+import { askSourceHref } from "@/utils/ask-navigation";
 import { searchResultHref } from "@/utils/search-navigation";
 import { buildSearchRows, searchRowKey, type SearchRow } from "@/utils/search-sections";
 
@@ -120,6 +131,15 @@ export interface SearchViewProps {
   onRetry: () => void;
   placeholderColor: string;
   keyboardHeight: number;
+  /**
+   * The Search/Ask segmented toggle (Checkpoint 8.6B), built by the caller
+   * and rendered above the input. Optional and additive: every existing
+   * caller omits it, in which case nothing renders here and this view's
+   * behavior is exactly what it was before Cloud Ask existed -- this is the
+   * mechanism that hides the Ask affordance entirely when it is disabled,
+   * rather than merely disabling it.
+   */
+  modeToggle?: ReactNode;
 }
 
 export function SearchView({
@@ -130,9 +150,11 @@ export function SearchView({
   onRetry,
   placeholderColor,
   keyboardHeight,
+  modeToggle,
 }: SearchViewProps) {
   return (
     <SafeAreaView className="flex-1 bg-white dark:bg-black">
+      {modeToggle ?? null}
       <View className="px-4 pb-2 pt-3">
         <TextInput
           testID="search-input"
@@ -203,10 +225,54 @@ export function SearchView({
 
 export default function SearchScreen() {
   const [query, setQuery] = useState("");
+  const [question, setQuestion] = useState("");
+  const [mode, setMode] = useState<SearchAskMode>("search");
   const router = useRouter();
   const placeholderColor = usePlaceholderColor();
   const keyboardHeight = useKeyboardHeight();
   const { data, isError, refetch } = useSearch(query);
+  const askEnabled = useAskEnabled();
+  const askMutation = useAskCloud();
+
+  // Ask is a MODE inside this screen, never a sixth tab or a third header
+  // icon -- and it is HIDDEN, not merely disabled, whenever the "ask" task
+  // route does not exist. If Cloud Ask is switched off elsewhere (or a
+  // `cloud_ask_disabled` response from `useAskCloud` just invalidated this
+  // query) the toggle disappears and this falls back to "search" on its own,
+  // with no effect needed to reset local state.
+  const effectiveMode: SearchAskMode = askEnabled.enabled ? mode : "search";
+  const modeToggle = askEnabled.enabled ? <AskModeToggle mode={mode} onChange={setMode} /> : null;
+
+  if (effectiveMode === "ask") {
+    const trimmedQuestion = question.trim();
+    const canSubmit = trimmedQuestion.length >= ASK_QUESTION_MIN_CHARS;
+
+    const askState: AskState = askMutation.isPending
+      ? { kind: "submitting" }
+      : askMutation.isError
+        ? { kind: "error", message: askErrorMessage(askMutation.error) }
+        : askMutation.data
+          ? { kind: "ready", response: askMutation.data }
+          : { kind: "idle" };
+
+    return (
+      <AskView
+        question={question}
+        onQuestionChange={setQuestion}
+        state={askState}
+        canSubmit={canSubmit}
+        onSubmit={() => {
+          if (!canSubmit) return;
+          askMutation.mutate(trimmedQuestion);
+        }}
+        onSelectSource={(source) => router.push(askSourceHref(source))}
+        connectionName={askEnabled.route?.connection_name ?? ""}
+        placeholderColor={placeholderColor}
+        keyboardHeight={keyboardHeight}
+        modeToggle={modeToggle}
+      />
+    );
+  }
 
   const enabled = query.trim().length >= SEARCH_QUERY_MIN_CHARS;
   // `data` rather than `isLoading` is what decides between loading and ready:
@@ -233,6 +299,7 @@ export default function SearchScreen() {
       onRetry={() => void refetch()}
       placeholderColor={placeholderColor}
       keyboardHeight={keyboardHeight}
+      modeToggle={modeToggle}
     />
   );
 }

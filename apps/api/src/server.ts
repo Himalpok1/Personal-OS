@@ -21,6 +21,7 @@ import {
 } from "./plugins/heartbeat-watchdog.js";
 import { buildLoggerOptions } from "./logging/logger-options.js";
 import agendaRoutes from "./routes/agenda.js";
+import askRoutes from "./routes/ask.js";
 import briefsRoutes from "./routes/briefs.js";
 import aiConfigRoutes from "./routes/ai-config.js";
 import calendarConnectionsRoutes from "./routes/calendar-connections.js";
@@ -161,6 +162,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await app.register(mailDigestsRoutes);
   await app.register(monitorRoutes);
   await app.register(aiConfigRoutes);
+  await app.register(askRoutes);
   await app.register(devicesRoutes);
   await app.register(transcribeRoutes);
   await app.register(searchRoutes);

@@ -8,6 +8,14 @@ import {
   listMailConnections,
 } from "./mail.js";
 import { acknowledgeMonitorIncident, getMonitorOverview, listMonitorIncidents } from "./monitor.js";
+import { askCloud } from "./ask.js";
+import {
+  createTaskRoute,
+  deleteTaskRoute,
+  getTaskRoutes,
+  listAiModels,
+  listAiProviders,
+} from "./ai-config.js";
 import { HealthCheckResponseSchema, type HealthCheckResponse } from "@personal-os/schema";
 import {
   connectCaldavCalendar,
@@ -174,6 +182,8 @@ export type { AgendaParams, AgendaResponse } from "./agenda.js";
 export type { MonitorIncidentListParams } from "./monitor.js";
 export type { SearchParams, SearchResponse } from "./search.js";
 export type { ExportResponse } from "./export.js";
+export type { AskResponse } from "./ask.js";
+export type { AiModel, AiProviderConnection, AiTaskRoute, AiTaskRouteInfo } from "./ai-config.js";
 
 // A flat method bag, not a nested tasks.list()/notes.list() namespace --
 // matches the shape the original single health() method already had.
@@ -298,6 +308,15 @@ export function createApiClient(baseUrl: string) {
     updateDevicePushToken: updateDevicePushToken.bind(null, baseUrl),
     revokeDevice: revokeDevice.bind(null, baseUrl),
     sendTestNotification: sendTestNotification.bind(null, baseUrl),
+
+    // Checkpoint 8.6B -- Cloud Ask and the task-route surface it needs to
+    // enable/disable itself and disclose which model would receive content.
+    askCloud: askCloud.bind(null, baseUrl),
+    listAiModels: listAiModels.bind(null, baseUrl),
+    listAiProviders: listAiProviders.bind(null, baseUrl),
+    getTaskRoutes: getTaskRoutes.bind(null, baseUrl),
+    createTaskRoute: createTaskRoute.bind(null, baseUrl),
+    deleteTaskRoute: deleteTaskRoute.bind(null, baseUrl),
   };
 }
 

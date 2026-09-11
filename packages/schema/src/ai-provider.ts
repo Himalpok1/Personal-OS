@@ -89,3 +89,27 @@ export const AiTaskRouteSchema = z.object({
   updated_at: z.string().datetime({ offset: true }),
 });
 export type AiTaskRoute = z.infer<typeof AiTaskRouteSchema>;
+
+// Checkpoint 8.6B -- GET /ai/task-routes. A read-only, JOINED view for the
+// mobile Settings card: what a task route resolves to, in terms a person can
+// read (a connection name, a provider type, the HOST of a base_url when one
+// is set) rather than raw uuids. This is also how the mobile client learns
+// whether Cloud Ask is enabled at all -- the "ask" row's presence IS the
+// switch (see apps/api/src/ask/authorize.ts) -- so this schema is the only
+// place either surface needs to agree on the shape.
+//
+// Deliberately excludes any key material -- same discipline as
+// AiProviderConnectionSchema above, and for the same reason: a future screen
+// that renders this response can never leak one just by reusing it.
+export const AiTaskRouteInfoSchema = z
+  .object({
+    task_name: z.string(),
+    primary_model_id: z.string().uuid(),
+    connection_name: z.string(),
+    provider_type: AiProviderTypeSchema,
+    /** The HOST of the connection's base_url when one is configured, else null. */
+    base_url_host: z.string().nullable(),
+    enabled: z.boolean(),
+  })
+  .strict();
+export type AiTaskRouteInfo = z.infer<typeof AiTaskRouteInfoSchema>;
