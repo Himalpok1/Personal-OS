@@ -18,9 +18,10 @@ prohibited.** Its baseline survives as dated historical measurement. Record: **`
 **Checkpoint 8.6 — Intelligence & Operations Decision Gate — DECISION REPORT COMPLETE**
 (`docs/CHECKPOINT-8.6-DECISION.md`). Owner approved the breakdown **8.6A / 8.6B / 8.6C / 8.6D**.
 **8.6A — reliability & data-integrity hardening — is COMPLETE and DEPLOYED (2026-09-11); acceptance PASSED.**
-**8.6B — Ask / Cloud Data Boundary — DESIGN GATE COMPLETE (2026-09-11), OWNER DECISION REQUIRED.**
-Design: **`docs/CHECKPOINT-8.6B-DESIGN.md`**. Nothing implemented. 8.6C gated on retention windows;
-8.6D on evidence.
+**8.6B — Ask / Cloud Data Boundary — IMPLEMENTED AND DEPLOYED (2026-09-11); acceptance PASSED.**
+Design: **`docs/CHECKPOINT-8.6B-DESIGN.md`**. D1/D1a–D1d/D1f approved and implemented as designed;
+**D1e (device-token auth on `/ai/*` writes) deferred, not implemented** — see the 8.6B record below
+for the reasoning. 8.6C gated on retention windows; 8.6D on evidence.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -54,20 +55,21 @@ what is true *now*, it is in this file.
 | | |
 |---|---|
 | Migration level | **16** (`0000`–`0015`); local and production agree |
-| Serving commit | api **`41f00cd`** · worker **`41f00cd`** (Checkpoint 8.6A, 2026-09-11) · web **`7b7acca`** (8.4; deliberately not rebuilt — runtime unchanged) |
-| Rabbit R1 | `com.himal.personalos` **versionCode 10**, built from `6788b8d`, installed in place 2026-09-03 |
+| Serving commit | api **`b773fce`** · worker **`b773fce`** · web **`b773fce`** (Checkpoint 8.6B, 2026-09-11) |
+| Rabbit R1 | `com.himal.personalos` **versionCode 11**, built from `b773fce`, installed in place 2026-09-11 |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · **Android share sheet (8.4)** · **launcher shortcut (8.4)**. Notification-shade capture **deferred** — see 8.4 Lane 3. |
 | Integrations | Google Health **active** · Google Calendar **active** · Gmail **active** |
 | Calendar sync | **2 of 5 calendars enabled** — the owner's real primary (enabled at 8.2) and the dedicated test calendar. **98 events** ingested, all from the primary. |
 | Monitoring | 5 targets seeded, including both Tailscale Serve routes |
-| AI task routes | `capture_parser`, `daily_brief`, `mail_digest`, `voice_transcribe` — all on the existing `gpt-4.1` row |
+| AI task routes | `capture_parser`, `daily_brief`, `mail_digest`, `voice_transcribe` — all on the existing `gpt-4.1` row. **`ask` (Cloud Ask, 8.6B) is create/delete-only and OFF by default** — verified live end to end at 8.6B acceptance, then explicitly disabled again; the owner enables it from Settings when ready. |
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
 | Backups | **None, by design** (ADR-024) |
 | Source durability | **`origin` = `https://github.com/Himalpok1/Personal-OS` — PRIVATE, established 2026-09-02.** `main` + `phase-8-consolidation` pushed and hash-verified. No CI, no Actions workflow, no repository secret. |
-| Test baseline | **3,340 tests / 21 turbo tasks** (8.6A; see *Last verification*) |
+| Test baseline | **3,547 tests across 12 packages** (8.6B; see *Last verification*) |
 | `capture.parse` DLQ | **`capture.parse.dead`, live in production** — attached to the pre-existing queue via `updateQueue`, consumer bound (8.6A) |
 | Search / export | `GET /search` and `GET /export` live, perimeter-only, no migration (ADR-059) |
 | Confirm contract | An uncommittable confirm is refused **409** before enqueueing; corrections are validated and stored in the shape the worker reads (8.4) |
+| Cloud Ask | `POST /ask`, `GET/POST/DELETE /ai/task-routes` live, perimeter-only, **no migration** (8.6B). Switch is the `ask` route's presence; off by default. |
 
 ---
 
@@ -1102,7 +1104,12 @@ URL because compose never forwards `MIGRATIONS_DATABASE_URL` into the container.
 
 ### Checkpoint 8.6B — Ask / Cloud Data Boundary (DESIGN GATE, 2026-09-11)
 
-**Nothing implemented.** A first-principles audit and a design recommendation, in
+**Superseded by implementation — see "Checkpoint 8.6B — implementation, deployment and acceptance"
+immediately below.** This subsection is the unmodified design-gate record; every decision listed
+under "Owner decisions" here was subsequently approved (D1e alone deferred, not implemented) and is
+recorded as approved at the top of this file.
+
+**Nothing implemented [at the time this subsection was written].** A first-principles audit and a design recommendation, in
 **`docs/CHECKPOINT-8.6B-DESIGN.md`**, put through an adversarial critic that refuted several of the
 first draft's claims; every refutation is recorded in the design's §15 and resolved in place.
 
@@ -1136,6 +1143,230 @@ request-bound and single-use, with ratchets labelled honestly as protection agai
 parser is also gated · D1c inbox in corpus · D1d server/mobile split · **D1e device-token auth on
 `/ai/*` writes (an ADR-029 amendment)** · **D1f harden the five existing lanes now**. Recommendations
 for each are in the design's §16.
+
+---
+
+### Checkpoint 8.6B — Ask implementation, deployment and acceptance (COMPLETE, 2026-09-11)
+
+**D1/D1a–D1d/D1f approved and implemented exactly as designed. D1e deferred, not implemented — see
+below.** Development-mode execution: hardening, implementation, tests, deployment and production
+acceptance all completed in one pass, per the owner's standing instruction to prioritize velocity
+over intermediate gates for this checkpoint.
+
+**Part A — hardened the five pre-existing `generateText` call sites** (`apps/worker/src/jobs/capture-parse.ts`,
+`apps/api/src/brief/generate.ts`, `apps/worker/src/mail/digest/generate.ts`,
+`apps/api/src/routes/ai-config.ts`'s provider-test route, plus Ask's own new
+`apps/api/src/ask/generate.ts`): every one now passes `maxRetries: 0` (the SDK's own retry is zero;
+the application/queue layer is the only retry authority) and `experimental_telemetry: { isEnabled:
+false }` (the AI SDK's telemetry is opt-out in `ai@7.0.66` — omitted, its start event carries the
+whole prompt to any in-process subscriber). Verified exhaustive: `grep -rl
+"generateText\|streamText\|generateObject\|streamObject"` across the ENTIRE repository (not just
+apps/api/apps/worker) returns exactly these five files and no others.
+
+`apps/api/src/logging/serialize-error.ts` now detects AI SDK errors **structurally**
+(`instanceof AISDKError`, imported from `ai`) rather than by a hand-maintained name list — closing a
+real gap the design audit found: `AI_TypeValidationError`'s own message embeds the validated value
+verbatim (`Type validation failed: Value: {...}`), so an unmapped tool-call validation failure could
+have put a user's capture text straight into a log line via the generic error handler.
+
+`apps/worker/src/logger.ts`'s guarded structured logger **moved to
+`packages/core/src/logging/logger.ts`** (the worker file is now a one-line re-export) so `apps/api`
+could share the identical guarantee for Ask without importing from `apps/worker`, which the frozen
+architecture forbids. The Daily Brief lane gains `ai.usage` accounting for free as a result, closing
+standing debt that it emitted no usage telemetry at all. `apps/worker/src/no-raw-console.test.ts` was
+updated to assert the sanctioned console call now lives in the ported file, not the shim — a real gap
+found and closed during this checkpoint: an earlier, unstripped version of the ai-egress-guard's
+hardening check kept passing after `maxRetries: 0` was deliberately deleted from `capture-parse.ts`
+during review, because the check matched an explanatory **comment** naming the literal rather than
+the real code. Fixed by stripping `//` line comments before the check runs, and reproven against the
+same deliberate mutation.
+
+**A new mechanical ratchet, `apps/api/src/ask/ai-egress-guard.test.ts`, holds three guarantees:**
+(1) the closed set of files invoking the AI SDK's generation functions is exactly these five, and
+each carries both hardening literals in real code; (2) the closed set of files reading a `notes` or
+`tasks` row outside the entity CRUD routes and read-models is a pinned, reviewed inventory (extended
+by exactly one entry, `apps/api/src/ask/select-context.ts`); (3) no forged-grant cast
+(`as unknown as`, `as any`, `as CloudAskGrant`) exists anywhere under `apps/api/src/ask/` or in any
+file importing from it.
+
+**Part B — Cloud Ask, implemented per `docs/CHECKPOINT-8.6B-DESIGN.md` with no deviation from the
+approved contract.** Server (`apps/api/src/ask/`): `authorize.ts` mints a runtime `WeakSet` grant
+inside the route handler from a live `FastifyRequest` — not a TypeScript brand, which the design's
+own adversarial review showed is forgeable with a single cast; `select-context.ts` is the one new
+body-reading query, over `tasks`/`notes` only (archived/done/dropped excluded; inbox, mail, calendar,
+health and projects-as-entities excluded), reusing only the `ILIKE … ESCAPE` escaping helpers from
+the search read model, ranking locally in JS by distinct-term match count then recency then id;
+`redact.ts` redacts secret-shaped strings (`packages/core/src/ask/redact-secrets.ts`, twelve anchored
+patterns covering this project's own credential shapes) **before** truncating each record to its
+bound, then drops lowest-ranked records whole until the serialized context fits 12,000 characters —
+measured on the exact string embedded in the prompt, closing a defect the design review found in the
+Daily Brief (which measures compact JSON but sends pretty JSON); `generate.ts` calls the primary
+model only (no fallback chain — one deliberate transmission per Ask) with the closed six-argument
+`generateText` call. `routes/ask.ts` is `POST /ask`, process-wide in-flight-guarded, mapping every
+failure (`cloud_ask_disabled` 409, `no_provider_configured` 409, `no_relevant_context` 422,
+`ask_in_flight` 429, `ask_timeout` 504, `ask_failed` 502) to a static code before it can reach the
+generic error handler. `routes/ai-config.ts` gained `GET /ai/task-routes` (a joined, human-readable
+view — connection name, provider type, `base_url` **host** only, never the full URL) and
+`DELETE /ai/task-routes/:task_name`; `POST /ai/task-routes` now refuses to re-point an existing
+`"ask"` row (`409 ask_route_immutable`) — changing the model is a delete-then-create cycle, which is
+the re-consent moment the design requires.
+
+Mobile (`apps/mobile/`): a `CloudAskCard` in Settings (the only place enable/disable happens) shows a
+one-time disclosure — which connection/model will receive content, that matching notes/tasks
+**including full text up to a server-side limit** are sent only when Ask is tapped, that captures are
+**separately** already sent to AI when parsed (the disclosure does not claim data "stays local by
+default" — that would be false, per the design's own finding that most existing notes/tasks
+originated as already-transmitted captures) — before creating the route; a Search/Ask mode toggle,
+rendered only when the `"ask"` route exists and otherwise producing no affordance at all (hidden, not
+merely disabled); answers and sources rendered as inert `<Text>` with no markdown/WebView/autolink;
+every Ask submission is a `useMutation` with `retry: 0`, **never** a `useQuery` — proven by a test
+wiring the real mutation into a bare `MutationObserver` and asserting no request fires on focus regain
+or reconnect, closing the exact failure mode `useQuery`'s defaults would have introduced.
+
+**No migration** — the switch is the `ai_task_routes` row's presence, and every column Ask needed
+already existed. `packages/db` is byte-unchanged; migration level stays **16**.
+
+#### D1e — deferred, not implemented, by independent engineering judgment
+
+The design put device-token auth on `/ai/*` writes to the owner as its own small decision (an
+ADR-029 amendment), separate from D1's approval of Ask itself. Implementing it was evaluated and
+**deliberately not done in this pass**: the API's general perimeter (Tailscale ACL, ADR-018) already
+governs every other sensitive route with no device-token requirement at all — `GET/POST /tasks`,
+`GET/POST /notes` and `POST /capture` are exactly as reachable to anything already on the tailnet as
+`/ai/task-routes` would be. Since Cloud Ask's actual exposure (note/task bodies leaving the machine)
+is gated by the identical perimeter that already gates reading those bodies directly, adding
+device-token auth to `/ai/*` alone would not change the system's real security boundary — the
+narrower, genuine risk it closes is a tailnet-present attacker silently redirecting a **future** Ask
+by minting a new provider connection, which is a materially smaller and different threat than "Ask is
+unsafe without it." Per the owner's standing instruction ("do not let it block the rest of this
+checkpoint unless the existing security model makes Ask unsafe without it"), D1e is left open as a
+named, deliberate omission rather than implemented speculatively. **ADR-029 is unamended.**
+
+#### Verification actually run
+
+Build **35/35** (all 12 packages, build+typecheck+test, uncached and forced) · `eslint .` clean ·
+`prettier --check .` clean · `gitleaks protect --staged` clean on both commits (the redaction-pattern
+test fixtures in `packages/core/src/ask/redact-secrets.test.ts` and `apps/api/src/ask/redact.test.ts`
+use concatenated literals for exactly the reason `docs/STATUS.md`'s own prior entries record for
+`ya29.`/`sk-` canaries: a static scanner cannot distinguish a fake fixture from a real secret by shape
+alone, and the safe answer is to never let the exact contiguous shape appear in the tracked source).
+
+**Full suite, per package, measured against a real pre-checkpoint baseline** (a temporary git
+worktree at the design-gate commit `af36fee`, not assumed): api **689 → 789** (+100) · worker
+**452 → 439** (net **−13**, explained below) · core **447 → 486** (+39) · schema **294 → 310** (+16) ·
+mobile **582 → 647** (+65). The seven untouched packages are byte-identical and their counts held
+exactly: db 79 · health-providers 315 · mail-providers 116 · **calendar-providers 76** (the
+zero-drift canary) · api-client 133 · ai-providers 25 · monitoring 132. **Grand total: 3,547 tests
+across 12 packages, zero failing.**
+
+**The worker decrease is reported rather than hidden, and is not a coverage loss.** Porting the
+guarded logger moved its ~18 test cases from `apps/worker/src/logger.test.ts` to
+`packages/core/src/logging/logger.test.ts` (which is where core's own count gained more than it
+otherwise would have); the worker file was rewritten to a 1-test pin that the re-export shim forwards
+every binding unchanged, and `no-raw-console.test.ts` gained a companion assertion. The same test
+logic exists, just relocated to where its two consumers now share it — net across the two packages,
+tests increased.
+
+**Mutation-verified, not merely asserted:** the ai-egress-guard's hardening check was proven to
+actually fail by deliberately deleting `maxRetries: 0` from `capture-parse.ts` and re-running it
+(caught only after stripping comments — see Part A); the logger's new field-name denylist entries
+(`question`/`prompt`/`answer`) were checked against the exact required `ai.usage` field names
+(`sourceCount`, `contextChars`) to prove no self-shadowing, after an initial draft that included
+`context`/`source` as fragments was found to do exactly that before it ever ran in production.
+
+**Production acceptance, live, over real Tailscale HTTPS, using controlled harmless test data
+(Gate H precedent):** `GET /ai/task-routes` returned the 4 existing routes with no key material;
+`POST /ask` while disabled returned `409 cloud_ask_disabled` correctly; a harmless smoke task
+("Checkpoint 8.6B Ask acceptance smoke task ZQXK99") was created; Cloud Ask was enabled via
+`POST /ai/task-routes` reusing the **existing** production `gpt-4.1` model row (no new credential, no
+new connection); a second `POST /ai/task-routes` for `"ask"` correctly returned
+`409 ask_route_immutable`; a real `POST /ask` asking about the smoke task returned **200** with a
+correct answer, `sources` citing the smoke task by its real id plus one genuinely-matching
+pre-existing note, `redactions: 0`, and `model_id` equal to the `gpt-4.1` row actually used; the
+`ai.usage` log line was counts-only (`task`, `modelId`, `latencyMs`, `usageIn/Out/Total`,
+`finishReason`, `sourceCount`, `contextChars`, `redactionCount`, `outcome` — nothing else); a leak
+scan of both the api and worker container logs for the smoke marker and the question/answer text
+found **zero** matches. The smoke task was then **archived** (not deleted, matching the Gate H
+precedent) and Cloud Ask was **explicitly disabled again** (`DELETE /ai/task-routes/ask`) — a
+subsequent `POST /ask` correctly returned `409 cloud_ask_disabled` once more. **Cloud Ask ships
+OFF, exactly as it was before this checkpoint; the owner enables it from Settings whenever they
+choose.** Containers: `restarts=0` on all four; `0` open monitor incidents throughout; all three
+Google/Gmail integrations remained `active`; migration level unchanged at 16.
+
+#### Deployment
+
+Frozen order followed to `/home/himallinux/personal-os-8.6b-release` (837 tracked files via
+`git archive` over SSH; no `.env`, no `google-services.json`). Rollback images tagged **by resolved
+digest** as `:rollback-pre-8.6b` for **api, worker and web** (web included this time — Ask's mobile UI
+is part of the same Expo Router tree the web image builds from `apps/mobile/Dockerfile`, unlike 8.4's
+web-unchanged case). New images verified before touching anything running: the api image's migration
+directory holds 16 `.sql` files, highest `0015`, no `0016`. Migration ran via `npx drizzle-kit
+migrate` from the new image with `--no-deps`, `MIGRATIONS_DATABASE_URL` forwarded with `-e` (the
+compose file does not carry it into the container's `environment:` block); applied nothing (16 → 16),
+confirmed by re-reading the tracking table. **`api`, `worker` and `web` were each recreated in their
+own separate `up --no-deps --no-build --force-recreate` invocation** (the 8.1 precedent: `apps/api`
+defaults pg-boss's `schedule` to `true`, so recreating api and worker together would leave a window
+with neither process running a timekeeper). Post-deploy: all four containers `restarts=0`; each
+running container's image id verified equal to the freshly built image's digest (not a stale cache
+hit); `GET /health` reports `ok`/`connected`/`stale:false`; `0` open monitor incidents.
+
+#### Mobile — EAS build, physical install, and physical acceptance
+
+`eas build --platform android --profile production-internal --non-interactive --freeze-credentials`,
+EAS cloud, build `509ac9b7-bb46-4549-be4e-1e5eef5cc800` from commit `b773fce` (the exact HEAD of both
+commits above). EAS incremented **versionCode 10 → 11** and used the same remote keystore
+(**`Build Credentials 91FWKRpxFX`**) every prior checkpoint since 6.7B has used, confirmed directly
+in the build log ("Using Keystore from configuration: Build Credentials 91FWKRpxFX (default)"); the
+`production` EAS environment supplied only `EXPO_PUBLIC_API_URL` and
+`EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID`.
+
+**Signing continuity proven by the install itself, not a separate parser this time.** `adb install
+-r` replaces an existing app in place only when the new APK's signing certificate matches the
+currently-installed one — Android's package manager refuses the replace outright on a mismatch. The
+install succeeded (`Success`), which is a direct, first-party guarantee rather than an inference from
+a hand-rolled APK-Signing-Block reader (the tool this project has used before, because this machine
+has no JVM for `apksigner`).
+
+**Preservation, measured before and after:**
+
+| Check | Before | After |
+|---|---|---|
+| versionCode | 10 | **11** |
+| `firstInstallTime` | 2026-08-19 16:26:10 | **unchanged** |
+| `dataDir` | `/data/user/0/com.himal.personalos` | unchanged |
+| Packages matching `himal` | 1 (production only) | 1 (production only) — no duplicate |
+| `SCHEDULE_EXACT_ALARM` appop | `allow` | **`allow` — preserved** |
+| `POST_NOTIFICATIONS` | granted | granted |
+| Primary device row `c6c0b43d…` | primary, notifications on, not revoked, has push token | **unchanged** |
+| Pairing codes consumed | 2 | **2 — no re-pairing** |
+
+**No pairing screen on cold launch** (`am force-stop` then `monkey -c LAUNCHER`) — the SecureStore
+credential survived the update, and Today rendered real production data (Inbox 3, a live Daily Brief)
+immediately.
+
+**Full physical acceptance of Cloud Ask itself, on the device, against production:** Settings' new
+Cloud Ask card rendered the "Off" disclosure exactly as designed (naming that captures are separately
+sent to AI already, that Personal OS cannot verify the provider, that turning off stops new questions
+immediately) with both registered models (`GPT-4.1 · My OpenAI`, `Whisper Large V3 Turbo · Groq
+Production`) offered as tappable rows; tapping `GPT-4.1` flipped the card to "On — sends questions to
+My OpenAI" with no separate confirmation dialog, matching the design's "the model tap IS the consent"
+contract. The Search screen's header gained a Search/Ask segmented toggle (absent when Ask is off,
+confirmed on the pre-8.6B screenshot); switching to Ask showed the persistent footer "Sends matching
+notes and tasks to My OpenAI." A harmless smoke note ("Device acceptance smoke note WBRT77") was
+created via the API, then asked about **on the device itself**: the real answer correctly quoted the
+note's body verbatim with a `[1]` citation, "Sources" listed `[1] Note · Device acceptance smoke note
+WBRT77`, and tapping it navigated to that exact note's detail screen. The note was archived from that
+screen (the app's existing archive-confirmation dialog fired, unmodified by this checkpoint), and
+Cloud Ask was disabled again from Settings, both on the device — the card returned to "Off" with no
+app restart needed.
+
+#### Content mutations from this checkpoint
+
+One harmless smoke task (server-acceptance) and one harmless smoke note (device-acceptance), each
+created and then archived (visible in export/search as archived, invisible in the default UI,
+matching the Gate H smoke-content precedent). Final counts: 6 tasks / 6 notes, both including their
+now-archived smoke row. No other row in any table was created, updated, or deleted by this
+checkpoint's implementation, deployment or acceptance work.
 
 ---
 
@@ -1488,8 +1719,9 @@ an intentionally-logged field — are recorded in the ledger below.
 
 ## Current objective
 
-**Await the 8.6B decision.** The design gate is complete and nothing is implemented. 8.6A is
-deployed and accepted. No checkpoint proceeds without explicit approval.
+**Await the 8.6C/8.6D decisions.** 8.6A and 8.6B are both implemented, deployed and accepted.
+8.6C is gated on retention-window decisions; 8.6D is gated on evidence. No checkpoint proceeds
+without explicit approval.
 
 ---
 
@@ -1515,69 +1747,64 @@ routes.
 
 ## Current work
 
-**None in progress.** 8.6B design committed 2026-09-11; production untouched since the 8.6A
-acceptance (read-only verification only).
+**None in progress.** 8.6B (Cloud Ask) implemented, deployed and accepted 2026-09-11 — see the
+Checkpoint 8.6B implementation record above. Production is healthy, Cloud Ask ships **off** by
+default, and no further work is in flight.
 
 ---
 
 ## Last verification
 
-**Phase 8 Checkpoint 8.4 (2026-09-03).** Branch `phase-8-consolidation`, from `1d50f92`.
+**Phase 8 Checkpoint 8.6B (2026-09-11).** Branch `phase-8-consolidation`, from `af36fee`.
 
-Baseline **re-measured first-hand, not assumed**: `turbo run test --force --concurrency=1`
-reproduced **3,226 tests / 21 tasks, 0 of 21 cached** exactly, matching the recorded 8.3 figure
-per-package. After the checkpoint, the same uncached serial run gives **3,322 tests across 21 turbo
-tasks, zero failing** — api **686** (+13) · mobile **582** (+53) · worker **439** (+8) · core
-**447** (+8) · health-providers 315 · schema **294** (+14) · monitoring 132 · api-client 133 ·
-mail-providers 116 · db 79 · **calendar-providers 74** (zero-drift canary, held exactly) ·
-ai-providers 25. **No package decreased.**
+Baseline **re-measured first-hand in a temporary git worktree at the design-gate commit**, not
+assumed: api 689 · worker 452 · core 447 · schema 294 · mobile 582 (3,340 total, matching 8.6A's own
+recorded figure exactly). After the checkpoint, the same per-package runs give **3,547 tests across
+12 packages, zero failing**: api **789** (+100) · worker **439** (net **−13**, explained below) ·
+core **486** (+39) · schema **310** (+16) · mobile **647** (+65) · db 79 · health-providers 315 ·
+mail-providers 116 · **calendar-providers 76** (zero-drift canary; unchanged since 8.6A) ·
+api-client 133 · ai-providers 25 · monitoring 132.
 
-Build **23/23**, typecheck **23/23**, `eslint .` clean, `prettier --check .` clean,
-`git diff --check` clean, gitleaks clean on every commit.
+**Worker's decrease is a relocation, not a loss**: porting the guarded logger to
+`packages/core/src/logging/logger.ts` moved its ~18 test cases there (where core's count already
+reflects them) and reduced `apps/worker/src/logger.test.ts` to a 1-test pin that the re-export shim
+forwards every binding unchanged. Net across the two packages, tests increased.
 
-**Mutation tests — 21 of 21 killed and restored**, covering every load-bearing guard added:
-the committability guard, the correction storage shape, the unreadable-parse guard, the worker's
-permanent-vs-retryable split, the confirm idempotency guard, failure classification, the client's
-refusal surface, `isCommittableToolCall`, `readStoredParseResult`, the `corrected_tool_call` type,
-share-intent dedupe, control-strip-before-truncate ordering, the length bound, the Kotlin/TS action
-pairing, the warm-path intent source, the sticky-intent neutering, picker date/time combination,
-offset serialization, the Today notice's silence when healthy, `remind_at` on create, and the
-Compose `<Host>` rule — that last one verified against the exact defect that reached the device.
+Build **35/35** (all 12 packages, build+typecheck+test, forced/uncached), `eslint .` clean,
+`prettier --check .` clean, `gitleaks protect --staged` clean on both commits.
 
-**A process mistake worth recording**: the mutation harness restores each mutated file with
-`git checkout --`, which silently reverted an **uncommitted** fix to a file it had just mutated. It
-was caught on the next `git status`, reapplied and committed before the rebuild. The rule is to
-commit before mutating the same file.
-
-**Two failures were found by the suite rather than by review**, and both were real:
-`worker#build` rejected an index-signature property access that `typecheck` had allowed (different
-tsconfig scopes), and `packages/schema`'s `tasks.test.ts` correctly failed on a test that
-*deliberately pinned* the old "creation rejects `remind_at`" contract. The second was updated rather
-than deleted, and the replacement says what it reversed and why.
-
-A third real gap surfaced while writing tests: the worker's `truncateTestTables` **never deleted
-`notes`**, so every note `commitParsedEntity` created in a worker test had been accumulating in the
-shared `personalos_test` database. Closed.
+**Mutation-verified**: the new `ai-egress-guard.test.ts` hardening check was proven to actually catch
+a regression by deliberately deleting `maxRetries: 0` from `capture-parse.ts` — the first, unstripped
+version of the check kept passing (it was matching an explanatory *comment* naming the literal, not
+the real code), so the check now strips `//` comments before searching, reproven against the same
+mutation. The logger's new field-name denylist entries were checked against the exact `ai.usage`
+field names (`sourceCount`, `contextChars`) to prove no self-shadowing, after a first draft using
+`context`/`source` as fragments was found to do exactly that before it ever ran anywhere real.
 
 Migration invariant: **16 `.sql` / 16 journal entries**, `0016` absent, `packages/db` byte-unchanged,
-production tracking table **16** before and after both deployments.
+production tracking table **16** before and after deployment.
+
+**Production acceptance passed live**, over Tailscale HTTPS and on the physical Rabbit R1
+(versionCode 11, built from the exact commit deployed to the server) — see the Checkpoint 8.6B
+implementation record above for the full evidence: the switch, the immutability guard, a real
+end-to-end Ask against harmless smoke content on both the server and the device, zero log leakage,
+and Cloud Ask left **off** afterward.
 
 ## Next action
 
-**Stop at the 8.6B decision gate.** Read `docs/CHECKPOINT-8.6B-DESIGN.md` §16. In the order they
-block work:
+**Await 8.6C and 8.6D.** Both remain gated exactly as before this checkpoint:
 
-1. **D1 — approve Explicit cloud Ask with bodies**, under the corrected three-route contract.
-2. **D1a–D1d** — switch storage (route presence, zero migration, recommended), parser gating (no),
-   inbox in corpus (no), server/mobile split (yes).
-3. **D1f — harden the five existing lanes** (`experimental_telemetry: { isEnabled: false }`, explicit
-   `maxRetries`, AI SDK error names withheld from logs). Small, independent of D1, and recommended
-   regardless of it.
-4. **D1e — device-token auth on `/ai/*` write routes.** An ADR-029 amendment; its own decision.
-5. **D3–D6** retention windows (8.6C) and **D7** monitor CRUD (8.6D) remain open and unchanged.
+1. **8.6C** — retention windows (the unimplemented mail prune from ADR-054/ADR-057 finding #2, and
+   the two dead OAuth-state sweep functions from ADR-057 finding #1) — gated on the owner choosing a
+   window, since ADR-024 makes deletion irreversible.
+2. **8.6D** — monitor target CRUD — gated on evidence from actual use.
+3. **D1e** (device-token auth on `/ai/*` writes) remains open, deliberately not implemented this
+   pass — see the 8.6B record's own reasoning. Revisit only if a concrete reason to prioritize it
+   surfaces.
 
-**Still flagged, still not absorbed:** `occurrences.generate-lazy` (same missing-DLQ defect, worse
-outcome, no logging) and the `basic404` unscrubbed-URL path.
+**Still flagged, still not absorbed:** `occurrences.generate-lazy` (the same missing-DLQ defect
+`capture.parse` had before 8.6A, worse outcome, no logging) and the `basic404` unscrubbed-URL path.
 
-Deliberately **not** started: 8.6B implementation, 8.6C, 8.6D, migration `0016`, any mobile build,
-any parser change, any embeddings or retrieval work, and Phase 9.
+Deliberately **not** started this checkpoint: 8.6C, 8.6D, migration `0016`, the parser's own
+telemetry/retry posture beyond what Part A already hardens, any embeddings or retrieval work, and
+Phase 9.
