@@ -23,8 +23,11 @@ Design: **`docs/CHECKPOINT-8.6B-DESIGN.md`**. D1/D1a–D1d/D1f approved and impl
 **D1e (device-token auth on `/ai/*` writes) deferred, not implemented** — see the 8.6B record below
 for the reasoning.
 **8.6D — Monitor target CRUD — is COMPLETE and DEPLOYED (2026-09-12); acceptance PASSED.**
-Create/read/update/enable-disable/archive, migration `0016` (level 16 → 17). 8.6C remains gated on
-retention-window decisions.
+Create/read/update/enable-disable/archive, migration `0016` (level 16 → 17).
+**8.6C — Retention cleanup (D3–D6) — is COMPLETE and DEPLOYED (2026-09-12); acceptance PASSED.**
+Bounded daily prune of `monitor_checks` (30d), `mail_messages` (45d), `mail_digests` (45d),
+`mail_sync_runs`/`health_sync_runs` (30d). **No migration.** All four Phase 8.6 sub-checkpoints
+(A/B/C/D) are now complete.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -58,7 +61,7 @@ what is true *now*, it is in this file.
 | | |
 |---|---|
 | Migration level | **17** (`0000`–`0016`); local and production agree |
-| Serving commit | api **`ca04e57`** · web **`ca04e57`** (Checkpoint 8.6D, 2026-09-12) · worker **`b773fce`** (8.6B — deliberately not rebuilt, see 8.6D record) |
+| Serving commit | api **`ca04e57`** · web **`ca04e57`** (Checkpoint 8.6D, 2026-09-12) · worker **`6913f78`** (Checkpoint 8.6C, 2026-09-12) |
 | Rabbit R1 | `com.himal.personalos` **versionCode 11**, built from `b773fce`, installed in place 2026-09-11. **Does not yet include 8.6D's Monitor CRUD UI** — no new APK was built this checkpoint; the web client already serves it. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · **Android share sheet (8.4)** · **launcher shortcut (8.4)**. Notification-shade capture **deferred** — see 8.4 Lane 3. |
 | Integrations | Google Health **active** · Google Calendar **active** · Gmail **active** |
@@ -68,12 +71,13 @@ what is true *now*, it is in this file.
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
 | Backups | **None, by design** (ADR-024) |
 | Source durability | **`origin` = `https://github.com/Himalpok1/Personal-OS` — PRIVATE, established 2026-09-02.** `main` + `phase-8-consolidation` pushed and hash-verified. No CI, no Actions workflow, no repository secret. |
-| Test baseline | **3,643 tests across 12 packages** (8.6D; see *Last verification*) |
+| Test baseline | **3,668 tests across 12 packages** (8.6C; see *Last verification*) |
 | `capture.parse` DLQ | **`capture.parse.dead`, live in production** — attached to the pre-existing queue via `updateQueue`, consumer bound (8.6A) |
 | Search / export | `GET /search` and `GET /export` live, perimeter-only, no migration (ADR-059) |
 | Confirm contract | An uncommittable confirm is refused **409** before enqueueing; corrections are validated and stored in the shape the worker reads (8.4) |
 | Cloud Ask | `POST /ask`, `GET/POST/DELETE /ai/task-routes` live, perimeter-only, **no migration** (8.6B). Switch is the `ask` route's presence; off by default. |
 | Monitor target CRUD | `GET/POST /monitor/targets`, `GET/PATCH /monitor/targets/:id`, `POST /monitor/targets/:id/{enable,disable,archive}` live (8.6D). Migration `0016` adds `archived_at`; archive is the CRUD "delete" — never a hard delete. |
+| Retention cleanup | Daily worker cron (`retention.cleanup`, `0 4 * * *`) live in production (8.6C). `monitor_checks` 30d, `mail_messages`/`mail_digests` 45d, `mail_sync_runs`/`health_sync_runs` 30d. **No migration.** First production run pruned 51 `mail_messages` rows, 0 elsewhere; idempotent rerun confirmed live. |
 
 ---
 
@@ -1486,6 +1490,119 @@ and was not required to prove correctness here.
 
 ---
 
+### Checkpoint 8.6C — Retention cleanup, D3–D6 (COMPLETE, 2026-09-12)
+
+Bounded, irreversible daily deletion across five operational-log tables, per the owner-approved
+retention policy. **No migration** — every column and index already existed; level stays **17**.
+
+**Preceded by a 4-lane parallel audit** (schema/FK mapping, mail read-path, monitor read-path,
+sync-run read-path) and, after implementation, an independent **3-lane adversarial review**
+(predicate correctness, concurrency/failure-safety, blast-radius) before anything touched
+production. Two real, non-blocking issues the adversarial review found were fixed before deployment
+(see below); no blocking issue was found in either pass.
+
+**Policy implemented, one predicate per table:**
+
+| Table | Window | Axis | Notes |
+|---|---|---|---|
+| `monitor_checks` (D3) | 30 days | `checked_at` | Threshold evaluation reads at most the last 20 decisive checks (~100 min of history); 30 days affects no read path. `monitor_incidents` has no FK to `monitor_checks` in either direction — pruning cannot orphan an incident. |
+| `mail_messages` (D4) | 45 days | `internal_date` (Gmail's own timestamp, never `created_at`) | Sync upsert conflicts on `(connection_id, external_id)`, not `id` — a hard-deleted row Gmail later re-reports is just a fresh insert, never a duplicate-key error or orphan. Applies regardless of the separate, reversible `deleted_at` tombstone axis (ADR-047a). |
+| `mail_digests` (D5) | 45 days | `digest_date`, in the digest's OWN configured timezone (`resolveDigestTimezone()`), not a bare UTC date | Aligned to the same window as its source data: the table has exactly one read path (`GET /mail-digests/current`, most recent row only) and no FK to `mail_messages`. |
+| `mail_sync_runs` / `health_sync_runs` (D6) | 30 days | `finished_at`, **gated on `IS NOT NULL`** | Neither table's status vocabulary has a running/in-progress value; a `NULL finished_at` is the only signal a row might still be in flight or crashed mid-write, so it is never eligible regardless of age. Both tables' real resumable cursor state lives elsewhere (`mail_sync_cursors`, `health_metric_streams`), never touched here. Calendar has no equivalent run/audit table at all — its sync state lives directly on `calendar_connection_calendars`. |
+
+**Implementation.** One module, `apps/worker/src/jobs/retention-cleanup.ts`: five independent
+top-level `DELETE` statements (no shared transaction — each is its own autocommitted statement, so
+one table's failure can never roll back another's already-applied cleanup), tried in a loop that
+continues past a failure and throws a summary `RetentionCleanupError` (naming only the failed
+table names, never an underlying message) if anything failed — pg-boss's own job history is the
+record of a partial run, not a log line alone. No new index and no batching: measured production
+volume (tens of thousands of rows at the `monitor_checks` 30-day window, low hundreds elsewhere)
+makes a single unbatched `DELETE` fast enough that either would be precautionary infrastructure for
+volume that doesn't exist. Registered as `retention.cleanup`, a worker-internal daily cron
+(`0 4 * * *`, off-peak, after the 3am occurrences window expansion) — no dead-letter queue, matching
+the `sweep-orphan-audio`/`expand-due-date-window` precedent for an idempotent, cron-retried job.
+
+**Fixed by the adversarial review, before deployment:**
+
+- **`mail_digests`' cutoff was computed as a bare UTC calendar date**, but `digest_date` is written
+  in the digest's own configured timezone (production: `America/Chicago`). In any zone behind UTC
+  this silently deleted a digest up to one zone-offset (~5–6h) before the real 45-day boundary — a
+  concrete, reproducible, irreversible over-deletion under ADR-024. Fixed by deriving the cutoff the
+  same way `digest_date` itself is produced; a new test proves it against a case where the UTC and
+  Chicago calendar dates genuinely disagree.
+- **The queue relied entirely on pg-boss's stock 15-minute `expireInSeconds` and `retryLimit: 2`.**
+  Since every delete here is an unbatched, untimed full-table scan by design, a table that ever took
+  longer than 15 minutes to prune would let pg-boss redeliver the same job into the same worker
+  process while the first pass was still genuinely running. Not a correctness risk today (every
+  delete is standalone and idempotent — a concurrent duplicate just matches fewer or zero rows), but
+  cheap to close: `expireInSeconds` raised to 1h, `retryLimit: 0` (the daily cron is already the
+  natural retry).
+- A stale `health-sync-runs.ts` schema comment still named "90 days" as its intended prune window
+  from before any prune job existed to enforce either number; corrected to point at the real 30-day
+  implementation.
+
+#### Verification actually run
+
+Build **23/23** · typecheck **23/23** · `eslint .` clean · `prettier --check .` clean · `gitleaks`
+clean. Full suite, uncached and serialized: **3,668 tests across 12 packages, zero failing**
+(baseline 3,643) — worker **464** (+25: 24 new retention tests + 1 added during the review's own
+timezone fix) · every other package unchanged, including the **calendar-providers 76** zero-drift
+canary. No package decreased.
+
+Migration invariant: **17 `.sql` / 17 journal entries**, `0016` still the highest (no new file),
+`packages/db` diff against the pre-checkpoint HEAD limited to one schema comment (health-sync-runs.ts).
+
+#### Deployment
+
+Frozen order to `/home/himallinux/personal-os-8.6c-release` (via `git archive` over SSH; no `.env`,
+no `google-services.json`). Rollback image tagged **by resolved digest** as `:rollback-pre-8.6c` for
+**worker only** — `apps/api` and `apps/mobile` were untouched this checkpoint, so neither was
+rebuilt or recreated. New worker image verified before touching anything running: 17 migrations (no
+new one), the compiled `retention-cleanup.js` present, the queue/cron wiring present in
+`dist/index.js`. **No migration to run** — nothing in `packages/db` changed functionally. `worker`
+recreated alone (`--no-deps --no-build --force-recreate`); post-deploy `restarts=0` on all four
+containers, `queues: 27` (26 + the new queue), `schedules: 10` (+1 daily schedule), monitoring
+recorded continuous `up` checks with no gap through the recreation.
+
+#### Production acceptance — PASSED
+
+**Preflight**, computed with the exact production `now` and the exact predicates the code uses,
+before anything ran: `monitor_checks` 0 of 39,530 eligible (the table is only ~11 days old — nothing
+has crossed 30 days yet) · `mail_messages` 51 of 832 eligible · `mail_digests` 0 of 12 eligible ·
+`mail_sync_runs` 0 of 1,041 eligible · `health_sync_runs` 0 of 5,684 eligible. All five counts
+plausible against each table's known age and volume; no anomaly, so no gate was needed before
+proceeding.
+
+**Execution**, via the job's own normal path (not custom SQL) — a manual `boss.send("retention.cleanup")`
+against the already-running worker, which picked it up and ran it through its real registered
+handler within seconds:
+
+| | First run | Second run (idempotency proof) |
+|---|---|---|
+| `monitor_checks` | 0 deleted | 0 deleted |
+| `mail_messages` | **51 deleted** | 0 deleted |
+| `mail_digests` | 0 deleted | 0 deleted |
+| `mail_sync_runs` | 0 deleted | 0 deleted |
+| `health_sync_runs` | 0 deleted | 0 deleted |
+| Job result | `completed`, `tablesOk:5 tablesFailed:0` | `completed`, `tablesOk:5 tablesFailed:0` |
+
+Post-run counts confirm exactly `832 → 781` on `mail_messages` (−51, matching the preflight and the
+job's own report) and every other table unchanged aside from `monitor_checks`' ordinary growth from
+continued probing during the window. **Every logged line carries only `table`/`cutoff`/`deleted`/
+`durationMs` (or `tablesOk`/`tablesFailed`/`totalDeleted` on the summary line) — verified directly
+against the real log output, not inferred from the code.** No row content, no message subject, no
+sender address, nothing mail- or health-specific ever appears.
+
+**Post-acceptance health:** all four containers `restarts=0`; all three integrations (Gmail, Google
+Health, Google Calendar) `active`; zero new failed `pgboss.job` rows in the 10 minutes around the
+run; `monitor_incidents` still 0 ever / 0 open; migration level unchanged at 17; `GET /health`
+reports `ok`/`connected`/`stale:false`.
+
+**No smoke data was created or needs cleanup** — retention deletes real, already-existing eligible
+rows rather than creating test data, so there is nothing to clean up afterward.
+
+---
+
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
 **Phase 7 is closed.** Checkpoints 7.0–7.8B and the full Checkpoint 7.9 record — the open
@@ -1835,8 +1952,9 @@ an intentionally-logged field — are recorded in the ledger below.
 
 ## Current objective
 
-**Await the 8.6C decision.** 8.6A, 8.6B and 8.6D are all implemented, deployed and accepted.
-8.6C remains gated on retention-window decisions. No checkpoint proceeds without explicit approval.
+**Checkpoint 8.6 is fully closed.** 8.6A, 8.6B, 8.6C and 8.6D are all implemented, deployed and
+accepted. No checkpoint proceeds without explicit approval; the next Phase 8 decision is the owner's
+to make (see *Next action*).
 
 ---
 
@@ -1856,62 +1974,72 @@ the one-line summary is:
 | **6** | Server-side Google Health cloud integration, daily aggregates + sessions, health dashboard (ADR-046). |
 | **7** | Gmail `gmail.metadata` integration, incremental sync with cursor recovery, AI mail digest, service-monitoring platform with incident lifecycle. **Deployed 2026-09-01; CLOSED 2026-09-02.** |
 
-**Production is at migration level 17** and serves api/web images built from `ca04e57` (worker still
-`b773fce` — deliberately not rebuilt, see the 8.6D record). All three Google integrations are active.
-Monitoring runs against five seeded targets including both Tailscale Serve routes, now with full CRUD.
+**Production is at migration level 17** and serves api/web images built from `ca04e57` and a worker
+image built from `6913f78`. All three Google integrations are active. Monitoring runs against five
+seeded targets including both Tailscale Serve routes, with full CRUD. A daily retention cron now
+bounds `monitor_checks`/`mail_messages`/`mail_digests`/`mail_sync_runs`/`health_sync_runs`.
 
 ## Current work
 
-**None in progress.** 8.6D (Monitor target CRUD) implemented, deployed and accepted 2026-09-12 — see
-the Checkpoint 8.6D record above. Production is healthy, and no further work is in flight.
+**None in progress.** 8.6C (retention cleanup) implemented, deployed and accepted 2026-09-12 — see
+the Checkpoint 8.6C record above. Production is healthy, and no further work is in flight.
 
 ---
 
 ## Last verification
 
-**Phase 8 Checkpoint 8.6D (2026-09-12).** Branch `phase-8-consolidation`, from `dd140d8`.
+**Phase 8 Checkpoint 8.6C (2026-09-12).** Branch `phase-8-consolidation`, from `f742400` (the 8.6D
+acceptance record).
 
-Baseline was the recorded 8.6B figure (3,547 tests). After the checkpoint, the same per-package runs
-give **3,643 tests across 12 packages, zero failing**: api **815** (+26) · mobile **673** (+26) ·
-monitoring **151** (+19) · schema **322** (+16) · api-client **146** (+13) · core 486 ·
-health-providers 315 · mail-providers 116 · **calendar-providers 76** (zero-drift canary; unchanged
-since 8.6B) · db 79 · ai-providers 25 · worker **439** (unchanged — no worker source touched). No
-package decreased.
+Baseline was the recorded 8.6D figure (3,643 tests). After the checkpoint, the same per-package runs
+give **3,668 tests across 12 packages, zero failing**: worker **464** (+25: 24 new retention tests
+plus one added during the adversarial review's own timezone fix) · every other package unchanged,
+including the **calendar-providers 76** zero-drift canary. No package decreased.
 
 Build **23/23** (all 12 packages, build+typecheck), `eslint .` clean, `prettier --check .` clean,
-`gitleaks protect --staged` clean.
+`gitleaks protect --staged` clean on both commits.
 
-**A real bug was found by the route tests, not by review**: `isUniqueViolation` checked `err.code`
-directly, missing that drizzle-orm wraps the underlying `pg` error under `.cause` — a duplicate-name
-create/rename returned a bare `500` instead of `409 name_already_exists` until fixed, using the same
-extraction `apps/worker/src/jobs/generate-lazy-occurrence.ts` already needed for the identical reason.
+**Two real issues were found by an independent post-implementation adversarial review**, not by the
+original authoring pass: `mail_digests`' retention cutoff compared a bare UTC calendar date against
+`digest_date`, which is written in the digest's own configured timezone — in any zone behind UTC
+(production runs `America/Chicago`) this silently deleted a digest up to one zone-offset early, a
+concrete and irreversible over-deletion under ADR-024, fixed and covered by a new test that
+reproduces the exact UTC/Chicago disagreement. The `retention.cleanup` queue also relied entirely on
+pg-boss's stock 15-minute job-expiry default for a job whose worst-case runtime is unbounded by
+design; hardened to a 1-hour expiry with `retryLimit: 0`. Neither was a live defect (no table has
+ever taken anywhere near 15 minutes to prune), but both were real, reproducible gaps the review
+caught before deployment rather than after.
 
-Migration invariant: **17 `.sql` / 17 journal entries**, highest `0016_monitor_target_archive`,
-`packages/db` diff against `dd140d8` limited to the new migration file, the schema column and the
-journal-guard test's allowlist entry. Production tracking table **17** after deployment (16 before).
+Migration invariant: **17 `.sql` / 17 journal entries**, `0016` still the highest (no new migration
+this checkpoint), `packages/db` diff against the pre-checkpoint HEAD limited to one schema comment.
+Production tracking table **17** before and after (unchanged, as expected).
 
-**Production acceptance passed live** over SSH to the production host (not Tailscale HTTPS this
-time — a direct host-local check was faster and equally authoritative for API-level CRUD
-correctness): create, edit, disable (checks stop), re-enable (checks resume, no duplicate
-execution), archive (excluded from the default list, included with `?include_archived=true`, history
-preserved, zero incidents ever opened), zero restarts, zero new failed jobs, zero regressions on the
-5 pre-existing targets — see the Checkpoint 8.6D record above for the full evidence table. **No new
-Android build**: the Rabbit R1 still runs the 8.6B APK (versionCode 11) and was not part of this
-checkpoint's acceptance — see that record's closing note for the reasoning.
+**Production acceptance passed live**, via the job's own normal pg-boss execution path (a manual
+`boss.send` against the already-running worker, not custom SQL): preflight counts computed with the
+exact production predicates (51/832 `mail_messages` eligible, 0 elsewhere, all plausible against
+each table's real age) matched the job's own report exactly on execution; a second run proved
+idempotency (0 additional deletions); post-run counts confirmed exactly `832 → 781` on
+`mail_messages` and no change elsewhere; every logged line carried only `table`/`cutoff`/`deleted`/
+`durationMs` (verified against the real log output, not inferred); zero restarts, zero new failed
+jobs, zero new incidents, all three integrations stayed `active` — see the Checkpoint 8.6C record
+above for the full evidence.
 
 ## Next action
 
-**Await 8.6C.** It remains gated exactly as before this checkpoint:
+**All four 8.6 sub-checkpoints are closed.** Nothing is gated or awaiting an owner decision from
+Checkpoint 8.6 itself. Two items remain open from earlier checkpoints, neither blocking anything:
 
-1. **8.6C** — retention windows (the unimplemented mail prune from ADR-054/ADR-057 finding #2, and
-   the two dead OAuth-state sweep functions from ADR-057 finding #1) — gated on the owner choosing a
-   window, since ADR-024 makes deletion irreversible.
-2. **D1e** (device-token auth on `/ai/*` writes) remains open, deliberately not implemented at 8.6B
+1. **D1e** (device-token auth on `/ai/*` writes) remains open, deliberately not implemented at 8.6B
    — see that record's own reasoning. Revisit only if a concrete reason to prioritize it surfaces.
-3. A Rabbit R1 APK build carrying 8.6D's (and 8.6B's already-shipped) mobile UI, whenever the owner
-   next wants a physical build — not gated on anything, just not done opportunistically this pass.
+2. A Rabbit R1 APK build carrying 8.6D's (and 8.6B's already-shipped) mobile UI, whenever the owner
+   next wants a physical build — not gated on anything, just not done opportunistically in 8.6D.
 
 **Still flagged, still not absorbed:** `occurrences.generate-lazy` (the same missing-DLQ defect
 `capture.parse` had before 8.6A, worse outcome, no logging) and the `basic404` unscrubbed-URL path.
+
+The two dead OAuth-state sweep functions from ADR-057 finding #1 (`sweepExpiredOAuthStates`,
+`sweepExpiredMailOAuthStates`) remain unwired — they were adjacent to but explicitly out of this
+checkpoint's owner-approved D3–D6 scope, and are recorded as a future, separately-scoped item rather
+than absorbed here.
 
 Deliberately **not** started this checkpoint: 8.6C, any embeddings or retrieval work, and Phase 9.
