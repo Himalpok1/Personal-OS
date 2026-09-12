@@ -6,8 +6,10 @@ import {
   monitorChecks,
   type Db,
 } from "@personal-os/db";
+import { localDayWindow } from "@personal-os/core";
 import { and, isNotNull, lt } from "drizzle-orm";
 import { errorToken, log } from "../logger.js";
+import { resolveDigestTimezone } from "../mail/digest/run.js";
 
 // Checkpoint 8.6C: bounded, irreversible retention cleanup (ADR-024 means
 // there is no backup to recover a mistake from, so every predicate here is
@@ -87,10 +89,22 @@ function daysAgo(now: Date, days: number): Date {
   return new Date(now.getTime() - days * DAY_MS);
 }
 
-/** UTC calendar date (YYYY-MM-DD) `days` before `now` -- for a `date` column. */
-function utcDateDaysAgo(now: Date, days: number): string {
-  const cutoff = daysAgo(now, days);
-  return cutoff.toISOString().slice(0, 10);
+/**
+ * The calendar date `days` before `now`, IN THE DIGEST'S OWN TIMEZONE -- for
+ * comparison against `mail_digests.digest_date`.
+ *
+ * `digest_date` is written as `localDayWindow(resolveDigestTimezone(), at)
+ * .localDate` (apps/worker/src/mail/digest/run.ts), a civil date in whatever
+ * zone MAIL_DIGEST_TIMEZONE names (defaulting to UTC only when unset). A
+ * cutoff taken from `now`'s bare UTC date instead would compare two civil
+ * dates anchored to different clocks -- in a zone behind UTC (e.g.
+ * America/Chicago) that silently deletes a digest up to one zone-offset
+ * before the policy's own 45-day boundary, found by this checkpoint's own
+ * adversarial review. Deriving the cutoff the SAME way the row itself was
+ * written is what keeps both sides of the comparison in one reference frame.
+ */
+function digestCutoffLocalDate(now: Date, days: number): string {
+  return localDayWindow(resolveDigestTimezone(), daysAgo(now, days)).localDate;
 }
 
 /**
@@ -152,7 +166,7 @@ async function deleteMailMessages(db: Db, now: Date): Promise<RetentionTableResu
 }
 
 async function deleteMailDigests(db: Db, now: Date): Promise<RetentionTableResult> {
-  const cutoffDate = utcDateDaysAgo(now, MAIL_DIGESTS_RETENTION_DAYS);
+  const cutoffDate = digestCutoffLocalDate(now, MAIL_DIGESTS_RETENTION_DAYS);
   const start = Date.now();
   const result = await db.delete(mailDigests).where(lt(mailDigests.digestDate, cutoffDate));
   return {

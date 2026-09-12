@@ -236,7 +236,18 @@ async function main(): Promise<void> {
   // Hourly -- generous relative to the 2h orphan threshold, cheap to run.
   await boss.schedule(SWEEP_ORPHAN_AUDIO_QUEUE, "0 * * * *");
 
-  await boss.createQueue(RETENTION_CLEANUP_QUEUE);
+  // expireInSeconds is generous (1h, versus pg-boss's 15-minute default)
+  // because every one of the five deletes is an unbatched, untimed
+  // full-table scan by design (see retention-cleanup.ts) -- pg-boss's own
+  // active-job expiry would otherwise redeliver this exact job into the
+  // same worker process while the first pass is still genuinely running,
+  // the moment any table's delete ever took longer than 15 minutes.
+  // retryLimit: 0 for the same reason expand-due-date-window's neighbors
+  // don't need pg-boss's own retry either: the daily cron IS the retry, and
+  // a better one -- it recomputes every cutoff from the real current time
+  // rather than replaying a stale one. Found by this checkpoint's own
+  // adversarial review.
+  await boss.createQueue(RETENTION_CLEANUP_QUEUE, { expireInSeconds: 3600, retryLimit: 0 });
   await boss.work(RETENTION_CLEANUP_QUEUE, async () => {
     await retentionCleanupJob(db);
   });

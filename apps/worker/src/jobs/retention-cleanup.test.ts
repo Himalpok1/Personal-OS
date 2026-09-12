@@ -17,7 +17,8 @@ import {
 } from "@personal-os/db";
 import { createMonitorTarget } from "@personal-os/monitoring";
 import { eq } from "drizzle-orm";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { env } from "../env.js";
 import { buildTestDb, truncateTestTables } from "../test/build-test-db.js";
 import { seedMailConnection, seedMailCursor, seedMailMessage } from "../test/mail-fixtures.js";
 import {
@@ -370,6 +371,41 @@ describe("retentionCleanupJob (Checkpoint 8.6C)", () => {
       await seedMailDigest(daysAgo(1).toISOString().slice(0, 10));
       const results = await retentionCleanupJob(db, NOW);
       expect(results.find((r) => r.table === "mail_digests")!.deleted).toBe(0);
+    });
+
+    describe("cutoff is computed in the DIGEST's own timezone, not bare UTC", () => {
+      const originalTimezone = env.MAIL_DIGEST_TIMEZONE;
+
+      afterEach(() => {
+        env.MAIL_DIGEST_TIMEZONE = originalTimezone;
+      });
+
+      it("does not delete a digest whose LOCAL calendar date is still within the window, even though its UTC calendar date already crossed it", async () => {
+        // Adversarial-review finding: a bare `now.toISOString().slice(0,10)`
+        // cutoff previously compared a UTC date against digest_date (which is
+        // written in the DIGEST's configured timezone), silently deleting a
+        // row up to one zone-offset before the real 45-day boundary in any
+        // zone behind UTC.
+        //
+        // Chosen so the two calendar dates genuinely disagree: at
+        // 2026-09-12T03:00:00Z minus 45 days = 2026-07-29T03:00:00Z, whose
+        // UTC calendar date is "2026-07-29" but whose America/Chicago local
+        // date (UTC-5 in September) is still "2026-07-28" -- the previous
+        // day, because 03:00 UTC is 22:00 the prior evening in Chicago.
+        env.MAIL_DIGEST_TIMEZONE = "America/Chicago";
+        const earlyUtcNow = new Date("2026-09-12T03:00:00.000Z");
+
+        // Exactly at the CORRECT (Chicago) cutoff -- must survive.
+        await seedMailDigest("2026-07-28");
+        // One day older than the correct cutoff -- must be deleted.
+        await seedMailDigest("2026-07-27");
+
+        const results = await retentionCleanupJob(db, earlyUtcNow);
+        expect(results.find((r) => r.table === "mail_digests")!.deleted).toBe(1);
+
+        const remaining = await db.select({ digestDate: mailDigests.digestDate }).from(mailDigests);
+        expect(remaining.map((r) => r.digestDate)).toEqual(["2026-07-28"]);
+      });
     });
   });
 

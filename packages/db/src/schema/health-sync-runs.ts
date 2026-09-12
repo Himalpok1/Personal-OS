@@ -13,8 +13,12 @@ import { healthMetricStreams } from "./health-metric-streams.js";
 // failure_class carries NO check constraint (ADR-050): this vocabulary will
 // grow, and widening a CHECK would need a DROP CONSTRAINT.
 //
-// This is operational metadata, not health data, so pruning it (90 days) is not
-// a data-loss policy and does not conflict with ADR-047's no-auto-delete rule.
+// This is operational metadata, not health data, so pruning it is not a
+// data-loss policy and does not conflict with ADR-047's no-auto-delete rule.
+// Checkpoint 8.6C implements the actual prune at 30 days (not the 90 this
+// comment previously named before any prune job existed to enforce either
+// number) -- see apps/worker/src/jobs/retention-cleanup.ts, the single
+// source of truth for the real window.
 export const healthSyncRuns = pgTable(
   "health_sync_runs",
   {
