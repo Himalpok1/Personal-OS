@@ -1,4 +1,5 @@
 import type { MonitorIncident, MonitorTargetStatus } from "@personal-os/schema";
+import { useRouter, type Href } from "expo-router";
 import { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { confirmDestructive } from "@/components/confirm-destructive";
@@ -89,12 +90,21 @@ function TargetCard({
   onAcknowledge: (incidentId: string, targetName: string) => void;
   isAcknowledging: boolean;
 }) {
+  const router = useRouter();
   const view = resolveMonitorTargetState(status, now);
   const lastCheck = describeLastCheck(status, now);
   const acknowledged = status.active_incident?.status === "acknowledged";
 
   return (
-    <View className={CARD_CLASS}>
+    <Pressable
+      // `as Href`: expo-router's typed routes are generated from the route
+      // tree and the generated declaration lags a newly added screen -- same
+      // escape hatch, for the same reason, as MONITOR_ROUTE in settings.tsx.
+      onPress={() => router.push(`/monitor/${status.target.id}` as Href)}
+      accessibilityRole="button"
+      accessibilityLabel={`View configuration for ${status.target.name}`}
+      className={CARD_CLASS}
+    >
       <Text className="text-base font-medium text-black dark:text-white">
         {status.target.name}
       </Text>
@@ -139,7 +149,13 @@ function TargetCard({
 
       {view.incidentId === null || acknowledged ? null : (
         <Pressable
-          onPress={() => onAcknowledge(view.incidentId!, status.target.name)}
+          onPress={(e) => {
+            // Stops propagation so this does not ALSO trigger the card's own
+            // navigate-to-detail onPress -- same precedent as
+            // apps/mobile/src/app/tasks/index.tsx's row action buttons.
+            e.stopPropagation();
+            onAcknowledge(view.incidentId!, status.target.name);
+          }}
           disabled={isAcknowledging}
           accessibilityRole="button"
           accessibilityState={{ disabled: isAcknowledging }}
@@ -152,7 +168,7 @@ function TargetCard({
           </Text>
         </Pressable>
       )}
-    </View>
+    </Pressable>
   );
 }
 
@@ -190,6 +206,7 @@ function IncidentRow({ incident, targetName }: { incident: MonitorIncident; targ
 }
 
 export default function MonitorScreen() {
+  const router = useRouter();
   const overview = useMonitorOverview();
   const incidents = useMonitorIncidents(false);
   const acknowledge = useAcknowledgeMonitorIncident();
@@ -256,15 +273,26 @@ export default function MonitorScreen() {
       contentContainerClassName={FLOATING_CLEARANCE}
     >
       <View className="px-4 pt-4">
-        <Text
-          className={`text-base ${
-            active_incident_count > 0
-              ? "text-red-600 dark:text-red-400"
-              : "text-black dark:text-white"
-          }`}
-        >
-          {describeMonitorSummary(configured, active_incident_count)}
-        </Text>
+        <View className="flex-row items-center justify-between gap-2">
+          <Text
+            className={`flex-1 text-base ${
+              active_incident_count > 0
+                ? "text-red-600 dark:text-red-400"
+                : "text-black dark:text-white"
+            }`}
+          >
+            {describeMonitorSummary(configured, active_incident_count)}
+          </Text>
+          <Pressable
+            onPress={() => router.push("/monitor/new" as Href)}
+            accessibilityRole="button"
+            accessibilityLabel="Add a monitor target"
+            hitSlop={8}
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-3 py-2 active:opacity-70"
+          >
+            <Text className="text-sm font-medium text-white">+ Add</Text>
+          </Pressable>
+        </View>
         {/* Latched until the next attempt. Without it an acknowledge failure is
             completely silent and the user believes it worked. */}
         {ackError === null ? null : (

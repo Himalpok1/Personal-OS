@@ -127,8 +127,53 @@ export const MonitorTargetSchema = z.object({
     .refine(isValidTimezone, { message: "unknown IANA timezone" })
     .nullable(),
   muted_until: z.string().datetime({ offset: true }).nullable(),
+  /** Checkpoint 8.6D. Non-null means removed from the default list; see targets.ts. */
+  archived_at: z.string().datetime({ offset: true }).nullable(),
 });
 export type MonitorTarget = z.infer<typeof MonitorTargetSchema>;
+
+// ---------------------------------------------------------------------------
+// CRUD (Checkpoint 8.6D)
+// ---------------------------------------------------------------------------
+//
+// NARROW URL VALIDATION, NOT AN SSRF SUBSYSTEM.
+//
+// The probe code (`packages/monitoring/src/probe.ts`) has ALWAYS dialed
+// whatever `url` a row carries -- an operator with direct database access
+// could already point it anywhere. What Checkpoint 8.6D changes is that a
+// value can now arrive through the API/UI instead of only through psql, so
+// the honest fix is a narrow block on the one shape that has no legitimate
+// use here and a real history of abuse (the cloud-metadata endpoint), NOT a
+// general private-IP/localhost blacklist: production's own seeded targets
+// are plain `http://` to in-cluster Docker hostnames (`api`, `web`) and
+// `https://` to a Tailscale hostname, and a blanket private-range block would
+// reject the system's own real configuration.
+const LINK_LOCAL_V4 = /^169\.254\.\d{1,3}\.\d{1,3}$/;
+
+/**
+ * True for the one host shape this project has decided has no legitimate use
+ * as a monitor target: the link-local range `169.254.0.0/16`, which is where
+ * AWS/GCP/Azure/DigitalOcean all serve their instance-metadata endpoint
+ * (`169.254.169.254`) -- the canonical SSRF payload. Matched on the literal
+ * hostname only, exactly like `packages/calendar-providers/src/caldav/ssrf.ts`
+ * already does for the identical reason: this is a narrow, targeted block, not
+ * a DNS-resolving validator.
+ */
+function isBlockedMonitorHost(hostname: string): boolean {
+  return LINK_LOCAL_V4.test(hostname);
+}
+
+/** True when `url` is an http(s) URL that does not target a blocked host. */
+function isSafeMonitorUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  return !isBlockedMonitorHost(parsed.hostname);
+}
 
 /**
  * A target as an operator supplies it.
@@ -206,8 +251,82 @@ export const MonitorTargetCreateSchema = z
       message: "maintenance_start, maintenance_end and maintenance_timezone are all-or-nothing",
       path: ["maintenance_timezone"],
     },
-  );
+  )
+  .refine((t) => t.url === null || t.url === undefined || isSafeMonitorUrl(t.url), {
+    message: "url must be http or https and may not target a link-local address",
+    path: ["url"],
+  });
 export type MonitorTargetCreate = z.infer<typeof MonitorTargetCreateSchema>;
+
+/**
+ * A target update, as an operator supplies it (Checkpoint 8.6D).
+ *
+ * Deliberately structural-only: every field is optional and `.strict()`, same
+ * shape `ProjectUpdateSchema`/`TaskUpdateSchema` use, and it does NOT repeat
+ * `MonitorTargetCreateSchema`'s cross-field refines (url-by-kind,
+ * tls-requires-https, maintenance all-or-nothing, the URL safety check) --
+ * duplicating them here would be a second copy of the same rule that could
+ * drift. Instead `updateMonitorTarget` (packages/monitoring/src/targets.ts)
+ * merges a validated patch onto the EXISTING row and re-validates the whole
+ * resulting object through `MonitorTargetCreateSchema` before writing, so the
+ * post-update state can never violate an invariant the create path enforces.
+ *
+ * `enabled` and `archived_at` are deliberately ABSENT: enable/disable and
+ * archive are dedicated action endpoints (`/enable`, `/disable`, `/archive`),
+ * never a generic PATCH field, matching ADR-039's rule for project lifecycle
+ * transitions -- a state change with its own meaning gets its own endpoint.
+ */
+export const MonitorTargetUpdateSchema = z
+  .object({
+    name: z.string().min(1).max(120).optional(),
+    kind: MonitorTargetKindSchema.optional(),
+    url: z.string().url().nullable().optional(),
+    expected_status: z.number().int().min(100).max(599).optional(),
+    expect_healthy_payload: z.boolean().optional(),
+    timeout_ms: z.number().int().positive().max(120_000).optional(),
+    interval_seconds: z.number().int().positive().optional(),
+    failure_threshold: z.number().int().positive().max(100).optional(),
+    recovery_threshold: z.number().int().positive().max(100).optional(),
+    tls_warn_days: z.number().int().positive().max(365).nullable().optional(),
+    heartbeat_max_age_seconds: z.number().int().positive().nullable().optional(),
+    maintenance_start: z
+      .string()
+      .regex(/^\d{2}:\d{2}(:\d{2})?$/)
+      .nullable()
+      .optional(),
+    maintenance_end: z
+      .string()
+      .regex(/^\d{2}:\d{2}(:\d{2})?$/)
+      .nullable()
+      .optional(),
+    maintenance_timezone: z
+      .string()
+      .refine(isValidTimezone, { message: "unknown IANA timezone" })
+      .nullable()
+      .optional(),
+    muted_until: z.string().datetime({ offset: true }).nullable().optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "at least one field must be provided",
+  });
+export type MonitorTargetUpdate = z.infer<typeof MonitorTargetUpdateSchema>;
+
+/**
+ * `GET /monitor/targets` query (Checkpoint 8.6D).
+ *
+ * `include_archived` mirrors ADR-059's `/search` convention exactly (a
+ * `booleanQueryParam` default `false`), for the identical reason: an archived
+ * target is removed from the default list but its history is never deleted,
+ * so it must remain reachable on request rather than only through the
+ * database.
+ */
+export const MonitorTargetListQuerySchema = z
+  .object({
+    include_archived: booleanQueryParam(false),
+  })
+  .strict();
+export type MonitorTargetListQuery = z.infer<typeof MonitorTargetListQuerySchema>;
 
 /** One recorded probe execution, on the wire. */
 export const MonitorCheckSchema = z.object({

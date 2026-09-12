@@ -7,7 +7,17 @@ import {
   getMailConnection,
   listMailConnections,
 } from "./mail.js";
-import { acknowledgeMonitorIncident, getMonitorOverview, listMonitorIncidents } from "./monitor.js";
+import {
+  acknowledgeMonitorIncident,
+  archiveMonitorTarget,
+  createMonitorTarget,
+  disableMonitorTarget,
+  enableMonitorTarget,
+  getMonitorOverview,
+  getMonitorTarget,
+  listMonitorIncidents,
+  updateMonitorTarget,
+} from "./monitor.js";
 import { askCloud } from "./ask.js";
 import {
   createTaskRoute,
@@ -179,7 +189,12 @@ export type { BriefContent, DailyBriefRecord } from "./brief.js";
 export type { Task, TaskCreate, TaskListParams, TaskStatus, TaskUpdate } from "./tasks.js";
 export type { TodayResponse } from "./today.js";
 export type { AgendaParams, AgendaResponse } from "./agenda.js";
-export type { MonitorIncidentListParams } from "./monitor.js";
+export type {
+  MonitorIncidentListParams,
+  MonitorTarget,
+  MonitorTargetCreate,
+  MonitorTargetUpdate,
+} from "./monitor.js";
 export type { SearchParams, SearchResponse } from "./search.js";
 export type { ExportResponse } from "./export.js";
 export type { AskResponse } from "./ask.js";
@@ -286,6 +301,13 @@ export function createApiClient(baseUrl: string) {
     getMonitorOverview: getMonitorOverview.bind(null, baseUrl),
     listMonitorIncidents: listMonitorIncidents.bind(null, baseUrl),
     acknowledgeMonitorIncident: acknowledgeMonitorIncident.bind(null, baseUrl),
+    // Checkpoint 8.6D -- Monitor CRUD.
+    getMonitorTarget: getMonitorTarget.bind(null, baseUrl),
+    createMonitorTarget: createMonitorTarget.bind(null, baseUrl),
+    updateMonitorTarget: updateMonitorTarget.bind(null, baseUrl),
+    enableMonitorTarget: enableMonitorTarget.bind(null, baseUrl),
+    disableMonitorTarget: disableMonitorTarget.bind(null, baseUrl),
+    archiveMonitorTarget: archiveMonitorTarget.bind(null, baseUrl),
 
     connectGoogleCalendar: connectGoogleCalendar.bind(null, baseUrl),
     connectCaldavCalendar: connectCaldavCalendar.bind(null, baseUrl),

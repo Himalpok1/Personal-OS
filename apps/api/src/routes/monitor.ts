@@ -37,9 +37,15 @@
 // to tokens before they are ever stored.
 import {
   acknowledgeIncident,
+  archiveMonitorTarget,
+  createMonitorTarget,
   findIncidentWithTarget,
+  getMonitorTarget,
   listMonitorIncidents,
   listMonitorTargetStatus,
+  setMonitorTargetEnabled,
+  updateMonitorTarget,
+  MonitorTargetActiveIncidentError,
   type MonitorIncidentRow,
   type MonitorTargetRow,
 } from "@personal-os/monitoring";
@@ -48,6 +54,10 @@ import {
   MonitorIncidentListResponseSchema,
   MonitorIncidentSchema,
   MonitorOverviewResponseSchema,
+  MonitorTargetCreateSchema,
+  MonitorTargetListQuerySchema,
+  MonitorTargetSchema,
+  MonitorTargetUpdateSchema,
   sanitizeMonitorFailureClass,
   type MonitorIncident,
   type MonitorIncidentListResponse,
@@ -57,6 +67,30 @@ import {
 } from "@personal-os/schema";
 import type { FastifyInstance } from "fastify";
 import type { monitorChecks } from "@personal-os/db";
+
+/**
+ * True for a Postgres unique-violation, whatever the constraint.
+ *
+ * drizzle-orm wraps the underlying `pg` error as `.cause` rather than exposing
+ * `code` directly on the thrown error, so both are checked -- the same
+ * extraction `apps/worker/src/jobs/generate-lazy-occurrence.ts` already uses
+ * for the identical reason.
+ */
+function isUniqueViolation(err: unknown): boolean {
+  return pgErrorCode(err) === "23505";
+}
+
+function pgErrorCode(err: unknown): string | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  const direct = (err as { code?: unknown }).code;
+  if (typeof direct === "string") return direct;
+  const cause = (err as { cause?: unknown }).cause;
+  if (typeof cause === "object" && cause !== null) {
+    const causeCode = (cause as { code?: unknown }).code;
+    if (typeof causeCode === "string") return causeCode;
+  }
+  return undefined;
+}
 
 type MonitorCheckRow = typeof monitorChecks.$inferSelect;
 
@@ -85,6 +119,7 @@ function toTarget(row: MonitorTargetRow): MonitorTarget {
     maintenance_end: row.maintenanceEnd,
     maintenance_timezone: row.maintenanceTimezone,
     muted_until: row.mutedUntil ? row.mutedUntil.toISOString() : null,
+    archived_at: row.archivedAt ? row.archivedAt.toISOString() : null,
   };
 }
 
@@ -132,21 +167,130 @@ export default function monitorRoutes(app: FastifyInstance): void {
    * ever been seeded in any environment, so it is the state every reader hits
    * first.
    */
-  app.get("/monitor/targets", async (): Promise<MonitorOverviewResponse> => {
-    const rows = await listMonitorTargetStatus(app.db);
+  app.get<{ Querystring: Record<string, string> }>(
+    "/monitor/targets",
+    async (request): Promise<MonitorOverviewResponse> => {
+      const query = MonitorTargetListQuerySchema.parse(request.query);
+      const rows = await listMonitorTargetStatus(app.db, {
+        includeArchived: query.include_archived,
+      });
 
-    return MonitorOverviewResponseSchema.parse({
-      configured: rows.length > 0,
-      items: rows.map((row) => ({
-        target: toTarget(row.target),
-        latest_check: toLatestCheck(row.latestCheck),
-        active_incident: row.activeIncident ? toIncident(row.activeIncident) : null,
-      })),
-      // Counted from the rows already fetched rather than a second query: an
-      // independent count could disagree with the list beside it, and two
-      // numbers that contradict each other on one screen is worse than either.
-      active_incident_count: rows.filter((row) => row.activeIncident !== null).length,
-    } satisfies MonitorOverviewResponse);
+      return MonitorOverviewResponseSchema.parse({
+        configured: rows.length > 0,
+        items: rows.map((row) => ({
+          target: toTarget(row.target),
+          latest_check: toLatestCheck(row.latestCheck),
+          active_incident: row.activeIncident ? toIncident(row.activeIncident) : null,
+        })),
+        // Counted from the rows already fetched rather than a second query: an
+        // independent count could disagree with the list beside it, and two
+        // numbers that contradict each other on one screen is worse than either.
+        active_incident_count: rows.filter((row) => row.activeIncident !== null).length,
+      } satisfies MonitorOverviewResponse);
+    },
+  );
+
+  /** A single target's full configuration, archived or not -- a detail/edit screen needs both. */
+  app.get<{ Params: { id: string } }>("/monitor/targets/:id", async (request, reply) => {
+    const row = await getMonitorTarget(app.db, request.params.id);
+    if (!row) return reply.code(404).send({ error: "not_found" });
+    return MonitorTargetSchema.parse(toTarget(row));
+  });
+
+  /**
+   * Creates a target (Checkpoint 8.6D).
+   *
+   * Validation is the SAME `MonitorTargetCreateSchema` `createMonitorTarget`
+   * already parses through -- the cross-field rules (an `http` target needs a
+   * url, `worker_heartbeat` must not have one, `tls_warn_days` needs
+   * `https://`, the maintenance triple is all-or-nothing, the URL safety
+   * check) reject an unmonitorable or unsafe target outright rather than
+   * silently coercing it.
+   */
+  app.post("/monitor/targets", async (request, reply) => {
+    const body = MonitorTargetCreateSchema.parse(request.body);
+    try {
+      const row = await createMonitorTarget(app.db, body);
+      return reply.code(201).send(MonitorTargetSchema.parse(toTarget(row)));
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        return reply.code(409).send({ error: "name_already_exists" });
+      }
+      throw err;
+    }
+  });
+
+  /**
+   * Edits a target's configuration.
+   *
+   * `enabled` and archiving are NOT accepted here -- see the dedicated
+   * `/enable`, `/disable` and `/archive` routes below, matching ADR-039's rule
+   * that a lifecycle transition gets its own endpoint, never a generic PATCH.
+   *
+   * `409 target_has_active_incident` is the one business-rule refusal this
+   * route can produce: changing `url` or `kind` while an incident is open
+   * would silently rewrite what that incident is "about" (see
+   * `MonitorTargetActiveIncidentError`'s comment in
+   * `@personal-os/monitoring`).
+   */
+  app.patch<{ Params: { id: string } }>("/monitor/targets/:id", async (request, reply) => {
+    const body = MonitorTargetUpdateSchema.parse(request.body);
+    try {
+      const row = await updateMonitorTarget(app.db, request.params.id, body);
+      if (!row) return reply.code(404).send({ error: "not_found" });
+      return MonitorTargetSchema.parse(toTarget(row));
+    } catch (err) {
+      if (err instanceof MonitorTargetActiveIncidentError) {
+        return reply.code(409).send({ error: "target_has_active_incident" });
+      }
+      if (isUniqueViolation(err)) {
+        return reply.code(409).send({ error: "name_already_exists" });
+      }
+      throw err;
+    }
+  });
+
+  /**
+   * Enable/disable -- a first-class, dedicated action (Checkpoint 8.6D).
+   *
+   * Disabling stops future probes immediately: it is the SAME `enabled` column
+   * the worker's suppression check has always read on every pass
+   * (`apps/worker/src/monitor/run.ts`), so nothing here touches the probe
+   * loop. An incident already open when a target is disabled is left exactly
+   * as it is -- open -- because no further check ever runs to confirm
+   * recovery; auto-resolving it on disable would record a recovery that was
+   * never observed. The client is responsible for warning about that BEFORE
+   * calling this route if an active incident exists (it already has that
+   * fact, from `GET /monitor/targets`).
+   */
+  app.post<{ Params: { id: string } }>("/monitor/targets/:id/enable", async (request, reply) => {
+    const row = await setMonitorTargetEnabled(app.db, request.params.id, true);
+    if (!row) return reply.code(404).send({ error: "not_found" });
+    return MonitorTargetSchema.parse(toTarget(row));
+  });
+
+  app.post<{ Params: { id: string } }>("/monitor/targets/:id/disable", async (request, reply) => {
+    const row = await setMonitorTargetEnabled(app.db, request.params.id, false);
+    if (!row) return reply.code(404).send({ error: "not_found" });
+    return MonitorTargetSchema.parse(toTarget(row));
+  });
+
+  /**
+   * Archives a target -- the CRUD "delete" (Checkpoint 8.6D).
+   *
+   * NEVER a hard `DELETE`: `monitor_checks`/`monitor_incidents` both cascade
+   * from this row, and ADR-024 means there is no backup to recover an
+   * accidental one from. Archiving sets `archived_at` (removed from the
+   * default `GET /monitor/targets` list, still reachable with
+   * `?include_archived=true` or by direct id) and `enabled = false` in one
+   * statement -- see `archiveMonitorTarget`'s comment. Idempotent: archiving
+   * an already-archived target just re-confirms the same state. There is no
+   * unarchive route, matching `tasks`' own precedent.
+   */
+  app.post<{ Params: { id: string } }>("/monitor/targets/:id/archive", async (request, reply) => {
+    const row = await archiveMonitorTarget(app.db, request.params.id);
+    if (!row) return reply.code(404).send({ error: "not_found" });
+    return MonitorTargetSchema.parse(toTarget(row));
   });
 
   /** Incident history, newest first, with honest totals. */

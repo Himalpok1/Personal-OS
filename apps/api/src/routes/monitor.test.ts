@@ -7,6 +7,7 @@ import type {
   MonitorIncident,
   MonitorIncidentListResponse,
   MonitorOverviewResponse,
+  MonitorTarget,
 } from "@personal-os/schema";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
 
@@ -282,6 +283,286 @@ describe("POST /monitor/incidents/:id/acknowledge", () => {
   });
 });
 
+describe("GET /monitor/targets/:id (Checkpoint 8.6D)", () => {
+  it("returns a target's full configuration", async () => {
+    const target = await seedTarget("api");
+    const res = await app.inject({ method: "GET", url: `/monitor/targets/${target.id}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ id: target.id, name: "api" });
+  });
+
+  it("404s an id that does not exist", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/monitor/targets/00000000-0000-0000-0000-000000000000",
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "not_found" });
+  });
+
+  it("returns an ARCHIVED target too -- a detail/edit screen needs both", async () => {
+    const target = await seedTarget("api");
+    await app.inject({ method: "POST", url: `/monitor/targets/${target.id}/archive` });
+    const res = await app.inject({ method: "GET", url: `/monitor/targets/${target.id}` });
+    expect(res.statusCode).toBe(200);
+    expect(targetBody(res).archived_at).not.toBeNull();
+  });
+});
+
+describe("GET /monitor/targets?include_archived (Checkpoint 8.6D)", () => {
+  it("excludes an archived target by default", async () => {
+    const target = await seedTarget("api");
+    await app.inject({ method: "POST", url: `/monitor/targets/${target.id}/archive` });
+    const body = overview(await app.inject({ method: "GET", url: "/monitor/targets" }));
+    expect(body.items).toHaveLength(0);
+  });
+
+  it("includes it with include_archived=true", async () => {
+    const target = await seedTarget("api");
+    await app.inject({ method: "POST", url: `/monitor/targets/${target.id}/archive` });
+    const body = overview(
+      await app.inject({ method: "GET", url: "/monitor/targets?include_archived=true" }),
+    );
+    expect(body.items.map((i) => i.target.id)).toContain(target.id);
+  });
+});
+
+describe("POST /monitor/targets (Checkpoint 8.6D)", () => {
+  it("creates an http target", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/monitor/targets",
+      payload: { name: "new-target", kind: "http", url: "http://api:3000/health" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ name: "new-target", kind: "http", enabled: true });
+  });
+
+  it("rejects rather than silently coercing an http target with no url", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/monitor/targets",
+      payload: { name: "bad", kind: "http" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: "validation_failed" });
+  });
+
+  it("rejects a link-local metadata-endpoint url", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/monitor/targets",
+      payload: { name: "bad", kind: "http", url: "http://169.254.169.254/" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("rejects an unknown field rather than ignoring it", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/monitor/targets",
+      payload: { name: "bad", kind: "http", url: "http://x/", bogus: 1 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("409s a duplicate name distinctly from a generic validation failure", async () => {
+    await seedTarget("dup");
+    const res = await app.inject({
+      method: "POST",
+      url: "/monitor/targets",
+      payload: { name: "dup", kind: "http", url: "http://other/" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "name_already_exists" });
+  });
+});
+
+describe("PATCH /monitor/targets/:id (Checkpoint 8.6D)", () => {
+  it("applies a partial patch", async () => {
+    const target = await seedTarget("api");
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/monitor/targets/${target.id}`,
+      payload: { name: "renamed" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ name: "renamed" });
+  });
+
+  it("404s a target that does not exist", async () => {
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/monitor/targets/00000000-0000-0000-0000-000000000000",
+      payload: { name: "renamed" },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("rejects an empty patch", async () => {
+    const target = await seedTarget("api");
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/monitor/targets/${target.id}`,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("rejects `enabled` on the generic PATCH -- it has its own endpoint", async () => {
+    const target = await seedTarget("api");
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/monitor/targets/${target.id}`,
+      payload: { enabled: false },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("409s changing the url while an incident is open on this target", async () => {
+    const target = await seedTarget("api");
+    await seedIncident(target.id);
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/monitor/targets/${target.id}`,
+      payload: { url: "http://somewhere-else/" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "target_has_active_incident" });
+  });
+
+  it("does not 409 an unrelated-field patch while an incident is open", async () => {
+    const target = await seedTarget("api");
+    await seedIncident(target.id);
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/monitor/targets/${target.id}`,
+      payload: { name: "renamed-while-down" },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("409s a patch that would collide with another target's name", async () => {
+    await seedTarget("aaa");
+    const second = await seedTarget("bbb");
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/monitor/targets/${second.id}`,
+      payload: { name: "aaa" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "name_already_exists" });
+  });
+});
+
+describe("POST /monitor/targets/:id/enable and /disable (Checkpoint 8.6D)", () => {
+  it("disable stops future probes -- flips enabled to false", async () => {
+    const target = await seedTarget("api");
+    const res = await app.inject({
+      method: "POST",
+      url: `/monitor/targets/${target.id}/disable`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ enabled: false });
+  });
+
+  it("enable flips it back to true", async () => {
+    const target = await seedTarget("api");
+    await app.inject({ method: "POST", url: `/monitor/targets/${target.id}/disable` });
+    const res = await app.inject({ method: "POST", url: `/monitor/targets/${target.id}/enable` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ enabled: true });
+  });
+
+  it("404s a target that does not exist", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/monitor/targets/00000000-0000-0000-0000-000000000000/disable",
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("disabling a target with an open incident leaves the incident open", async () => {
+    // "Prefer preserving historical truth rather than mutating past incident
+    // records merely because monitoring was disabled" -- nothing here touches
+    // monitor_incidents at all.
+    const target = await seedTarget("api");
+    const incidentId = await seedIncident(target.id);
+    await app.inject({ method: "POST", url: `/monitor/targets/${target.id}/disable` });
+
+    const [row] = await app.db
+      .select()
+      .from(monitorIncidents)
+      .where(eq(monitorIncidents.id, incidentId));
+    expect(row!.status).toBe("open");
+    expect(row!.resolvedAt).toBeNull();
+  });
+});
+
+describe("POST /monitor/targets/:id/archive (Checkpoint 8.6D)", () => {
+  it("archives a target and disables it in the same call", async () => {
+    const target = await seedTarget("api");
+    const res = await app.inject({ method: "POST", url: `/monitor/targets/${target.id}/archive` });
+    expect(res.statusCode).toBe(200);
+    const body = targetBody(res);
+    expect(body.enabled).toBe(false);
+    expect(body.archived_at).not.toBeNull();
+  });
+
+  it("is idempotent -- archiving twice succeeds both times", async () => {
+    const target = await seedTarget("api");
+    const first = await app.inject({
+      method: "POST",
+      url: `/monitor/targets/${target.id}/archive`,
+    });
+    const second = await app.inject({
+      method: "POST",
+      url: `/monitor/targets/${target.id}/archive`,
+    });
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+  });
+
+  it("404s a target that does not exist", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/monitor/targets/00000000-0000-0000-0000-000000000000/archive",
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("PRESERVES check and incident history -- never a hard delete", async () => {
+    const target = await seedTarget("api");
+    await seedCheck(target.id);
+    await seedIncident(target.id, { status: "resolved", resolvedAt: NOW });
+    await app.inject({ method: "POST", url: `/monitor/targets/${target.id}/archive` });
+
+    const checks = await app.db
+      .select()
+      .from(monitorChecks)
+      .where(eq(monitorChecks.targetId, target.id));
+    const incidentRows = await app.db
+      .select()
+      .from(monitorIncidents)
+      .where(eq(monitorIncidents.targetId, target.id));
+    expect(checks).toHaveLength(1);
+    expect(incidentRows).toHaveLength(1);
+  });
+
+  it("removes the target from the default overview list but not from incident history lookups", async () => {
+    const target = await seedTarget("api");
+    await seedIncident(target.id, { status: "resolved", resolvedAt: NOW });
+    await app.inject({ method: "POST", url: `/monitor/targets/${target.id}/archive` });
+
+    const body = overview(await app.inject({ method: "GET", url: "/monitor/targets" }));
+    expect(body.items).toHaveLength(0);
+
+    // The incident is still readable by history, with the target's name intact.
+    const incidentBody = incidents(await app.inject({ method: "GET", url: "/monitor/incidents" }));
+    expect(incidentBody.items[0]!.target_name).toBe("api");
+  });
+});
+
 /**
  * Typed accessors built on the REAL wire contracts.
  *
@@ -298,4 +579,8 @@ function incidents(res: { json: () => unknown }): MonitorIncidentListResponse {
 
 function incident(res: { json: () => unknown }): MonitorIncident {
   return res.json() as MonitorIncident;
+}
+
+function targetBody(res: { json: () => unknown }): MonitorTarget {
+  return res.json() as MonitorTarget;
 }

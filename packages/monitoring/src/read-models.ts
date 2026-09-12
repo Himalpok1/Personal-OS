@@ -1,7 +1,11 @@
 import { monitorChecks, monitorIncidents, monitorTargets, type Db } from "@personal-os/db";
 import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import type { MonitorIncidentRow } from "./incidents.js";
-import { listMonitorTargets, type MonitorTargetRow } from "./targets.js";
+import {
+  listMonitorTargets,
+  type ListMonitorTargetsOptions,
+  type MonitorTargetRow,
+} from "./targets.js";
 
 // Read models for the monitoring UI.
 //
@@ -50,8 +54,11 @@ export interface MonitorTargetStatusRow {
  * unreadable precisely when it matters most, and a screen that wants failures
  * first can sort what it is given.
  */
-export async function listMonitorTargetStatus(db: Db): Promise<MonitorTargetStatusRow[]> {
-  const targets = await listMonitorTargets(db);
+export async function listMonitorTargetStatus(
+  db: Db,
+  options: ListMonitorTargetsOptions = {},
+): Promise<MonitorTargetStatusRow[]> {
+  const targets = await listMonitorTargets(db, options);
   if (targets.length === 0) return [];
 
   // One row per target: its newest check. `distinct on` is the Postgres-native

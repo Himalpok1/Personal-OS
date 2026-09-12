@@ -94,6 +94,21 @@ export const monitorTargets = pgTable(
      * property of the service, "we are deploying right now" is an event.
      */
     mutedUntil: timestamp("muted_until", { withTimezone: true }),
+    /**
+     * Soft-delete (Checkpoint 8.6D, migration 0016) -- the same independent
+     * archive axis `tasks`/`notes`/`projects` already use, added here for the
+     * identical reason ADR-039 gives for projects: `monitor_checks` and
+     * `monitor_incidents` both reference this row `ON DELETE CASCADE`, so a
+     * hard delete would silently erase incident history with no backup
+     * (ADR-024) to recover it from. Archiving also sets `enabled = false` in
+     * the same statement -- the EXISTING suppression check the worker already
+     * runs on every pass is what stops future probes; this column exists only
+     * so the API/UI can tell "temporarily off" apart from "removed", and
+     * filter the default list accordingly. There is deliberately no restore
+     * path, matching `tasks`' own precedent (ARCHITECTURE.md: "no restore
+     * endpoint ships").
+     */
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

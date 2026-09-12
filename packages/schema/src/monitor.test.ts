@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   MonitorCheckSchema,
   MonitorTargetCreateSchema,
+  MonitorTargetListQuerySchema,
+  MonitorTargetUpdateSchema,
   MonitorUptimePointSchema,
   sanitizeMonitorFailureClass,
   MonitorIncidentListQuerySchema,
@@ -207,6 +209,95 @@ describe("MonitorTargetCreateSchema", () => {
     );
     expect(MonitorTargetCreateSchema.safeParse({ ...http, timeoutMs: 5000 }).success).toBe(false);
   });
+
+  // ---------------------------------------------------------------------
+  // URL SAFETY (Checkpoint 8.6D) -- narrow, not a general SSRF blacklist.
+  // ---------------------------------------------------------------------
+
+  it("REJECTS a non-http(s) scheme", () => {
+    for (const url of ["ftp://x/", "file:///etc/passwd", "javascript:alert(1)"]) {
+      expect(MonitorTargetCreateSchema.safeParse({ ...http, url }).success, url).toBe(false);
+    }
+  });
+
+  it("REJECTS the cloud-metadata endpoint and the wider link-local range", () => {
+    for (const host of ["169.254.169.254", "169.254.0.1", "169.254.255.255"]) {
+      expect(
+        MonitorTargetCreateSchema.safeParse({ ...http, url: `http://${host}/health` }).success,
+        host,
+      ).toBe(false);
+    }
+  });
+
+  it("does NOT reject in-cluster Docker hostnames or a tailnet https host -- production's own seeded targets need these", () => {
+    // The exact shapes `defaultMonitorTargets` produces: plain http:// to a
+    // bare Docker service name, and https:// to a *.ts.net host. A validator
+    // that rejected either would break the system's own real configuration.
+    for (const url of [
+      "http://api:3000/health",
+      "http://web:8080/",
+      "https://host.tailnet.ts.net/health",
+      "http://localhost:3000/health",
+      "http://10.0.0.4:3000/health",
+      "http://192.168.1.1/health",
+    ]) {
+      expect(MonitorTargetCreateSchema.safeParse({ ...http, url }).success, url).toBe(true);
+    }
+  });
+});
+
+describe("MonitorTargetUpdateSchema", () => {
+  it("accepts a single-field patch", () => {
+    expect(MonitorTargetUpdateSchema.safeParse({ name: "renamed" }).success).toBe(true);
+    expect(MonitorTargetUpdateSchema.safeParse({ timeout_ms: 8000 }).success).toBe(true);
+  });
+
+  it("REJECTS an empty patch", () => {
+    expect(MonitorTargetUpdateSchema.safeParse({}).success).toBe(false);
+  });
+
+  it("is STRICT, so a typo fails rather than being silently ignored", () => {
+    expect(MonitorTargetUpdateSchema.safeParse({ nam: "x" }).success).toBe(false);
+  });
+
+  it("does NOT accept enabled or archived_at -- those are dedicated action endpoints", () => {
+    expect(MonitorTargetUpdateSchema.safeParse({ enabled: false }).success).toBe(false);
+    expect(
+      MonitorTargetUpdateSchema.safeParse({ archived_at: "2026-09-01T00:00:00Z" }).success,
+    ).toBe(false);
+  });
+
+  it("still rejects a per-field malformed value (structural validation runs on a partial patch)", () => {
+    expect(MonitorTargetUpdateSchema.safeParse({ timeout_ms: 0 }).success).toBe(false);
+    expect(MonitorTargetUpdateSchema.safeParse({ url: "not a url" }).success).toBe(false);
+    expect(MonitorTargetUpdateSchema.safeParse({ kind: "tcp" }).success).toBe(false);
+  });
+
+  it("does NOT enforce cross-field rules on its own -- that is updateMonitorTarget's job, against the merged row", () => {
+    // A patch setting only tls_warn_days, with no url in the same patch, must
+    // pass THIS schema's structural check; whether it is actually valid
+    // depends on the target's EXISTING url, which this schema cannot see.
+    expect(MonitorTargetUpdateSchema.safeParse({ tls_warn_days: 21 }).success).toBe(true);
+  });
+});
+
+describe("MonitorTargetListQuerySchema", () => {
+  it("defaults include_archived to false", () => {
+    expect(MonitorTargetListQuerySchema.parse({}).include_archived).toBe(false);
+  });
+
+  it("parses the STRING 'true'/'false' correctly, not via truthy coercion", () => {
+    expect(MonitorTargetListQuerySchema.parse({ include_archived: "true" }).include_archived).toBe(
+      true,
+    );
+    expect(MonitorTargetListQuerySchema.parse({ include_archived: "false" }).include_archived).toBe(
+      false,
+    );
+  });
+
+  it("is STRICT", () => {
+    expect(MonitorTargetListQuerySchema.safeParse({ includeArchived: true }).success).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -231,6 +322,7 @@ const TARGET = {
   maintenance_end: null,
   maintenance_timezone: null,
   muted_until: null,
+  archived_at: null,
 };
 
 const CHECK = {

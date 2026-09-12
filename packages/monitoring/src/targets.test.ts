@@ -11,14 +11,18 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { observeWorkerHeartbeat, heartbeatFailureClass } from "./heartbeat.js";
 import { recordCheck } from "./incidents.js";
 import {
+  archiveMonitorTarget,
   createMonitorTarget,
   defaultMonitorTargets,
   deleteMonitorTarget,
+  getMonitorTarget,
   listMonitorTargets,
   listTargetsOfKind,
   muteMonitorTarget,
   seedDefaultMonitorTargets,
   setMonitorTargetEnabled,
+  updateMonitorTarget,
+  MonitorTargetActiveIncidentError,
 } from "./targets.js";
 
 const db: Db = createDbClient(process.env["DATABASE_URL"] ?? "");
@@ -207,6 +211,190 @@ describe("managing targets", () => {
 
     const disabled = await setMonitorTargetEnabled(db, target.id, false, NOW);
     expect(disabled!.enabled).toBe(false);
+  });
+
+  it("gets a single target by id, or undefined", async () => {
+    const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+    expect((await getMonitorTarget(db, target.id))?.name).toBe("t");
+    expect(await getMonitorTarget(db, "11111111-1111-4111-8111-111111111111")).toBeUndefined();
+  });
+
+  describe("updateMonitorTarget (Checkpoint 8.6D)", () => {
+    it("applies a single-field patch, leaving everything else unchanged", async () => {
+      const target = await createMonitorTarget(db, {
+        name: "t",
+        kind: "http",
+        url: "http://x/",
+        timeout_ms: 5000,
+      });
+      const updated = await updateMonitorTarget(db, target.id, { name: "renamed" }, NOW);
+      expect(updated!.name).toBe("renamed");
+      expect(updated!.timeoutMs).toBe(5000);
+      expect(updated!.url).toBe("http://x/");
+    });
+
+    it("returns undefined for a target that does not exist", async () => {
+      const result = await updateMonitorTarget(
+        db,
+        "11111111-1111-4111-8111-111111111111",
+        { name: "x" },
+        NOW,
+      );
+      expect(result).toBeUndefined();
+    });
+
+    it("re-validates the MERGED row: setting tls_warn_days alone is rejected when the EXISTING url is plaintext", async () => {
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      await expect(
+        updateMonitorTarget(db, target.id, { tls_warn_days: 21 }, NOW),
+      ).rejects.toThrow();
+    });
+
+    it("accepts tls_warn_days when url is changed to https in the SAME patch", async () => {
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      const updated = await updateMonitorTarget(
+        db,
+        target.id,
+        { url: "https://x/", tls_warn_days: 21 },
+        NOW,
+      );
+      expect(updated!.tlsWarnDays).toBe(21);
+    });
+
+    it("rejects switching kind to worker_heartbeat while a url is still set", async () => {
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      await expect(
+        updateMonitorTarget(db, target.id, { kind: "worker_heartbeat" }, NOW),
+      ).rejects.toThrow();
+    });
+
+    it("preserves enabled across an unrelated update -- update never touches it", async () => {
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      await setMonitorTargetEnabled(db, target.id, false, NOW);
+      const updated = await updateMonitorTarget(db, target.id, { name: "renamed" }, NOW);
+      expect(updated!.enabled).toBe(false);
+    });
+
+    it("THROWS MonitorTargetActiveIncidentError when url changes while an incident is open", async () => {
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      await db.insert(monitorIncidents).values({ targetId: target.id, status: "open" });
+
+      await expect(updateMonitorTarget(db, target.id, { url: "http://y/" }, NOW)).rejects.toThrow(
+        MonitorTargetActiveIncidentError,
+      );
+    });
+
+    it("THROWS when kind changes while an incident is open, even if url is untouched", async () => {
+      const target = await createMonitorTarget(db, {
+        name: "hb",
+        kind: "worker_heartbeat",
+        url: null,
+      });
+      await db.insert(monitorIncidents).values({ targetId: target.id, status: "open" });
+
+      await expect(
+        updateMonitorTarget(db, target.id, { kind: "http", url: "http://x/" }, NOW),
+      ).rejects.toThrow(MonitorTargetActiveIncidentError);
+    });
+
+    it("does NOT throw when an incident is open but url/kind are UNCHANGED -- every other field stays editable", async () => {
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      await db.insert(monitorIncidents).values({ targetId: target.id, status: "open" });
+
+      const updated = await updateMonitorTarget(
+        db,
+        target.id,
+        { name: "renamed", timeout_ms: 9000, failure_threshold: 5 },
+        NOW,
+      );
+      expect(updated!.name).toBe("renamed");
+      expect(updated!.timeoutMs).toBe(9000);
+    });
+
+    it("does NOT throw when url is patched to the SAME value it already has", async () => {
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      await db.insert(monitorIncidents).values({ targetId: target.id, status: "open" });
+
+      await expect(
+        updateMonitorTarget(db, target.id, { url: "http://x/" }, NOW),
+      ).resolves.toBeDefined();
+    });
+
+    it("does NOT throw for a RESOLVED incident -- only an active one blocks the identity change", async () => {
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      await db
+        .insert(monitorIncidents)
+        .values({ targetId: target.id, status: "resolved", resolvedAt: NOW });
+
+      await expect(
+        updateMonitorTarget(db, target.id, { url: "http://y/" }, NOW),
+      ).resolves.toBeDefined();
+    });
+
+    it("rejects a URL targeting the cloud-metadata address, same as create", async () => {
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      await expect(
+        updateMonitorTarget(db, target.id, { url: "http://169.254.169.254/" }, NOW),
+      ).rejects.toThrow();
+    });
+  });
+
+  describe("archiveMonitorTarget (Checkpoint 8.6D)", () => {
+    it("sets archived_at and enabled=false in one call", async () => {
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      const archived = await archiveMonitorTarget(db, target.id, NOW);
+      expect(archived!.archivedAt).toEqual(NOW);
+      expect(archived!.enabled).toBe(false);
+    });
+
+    it("is idempotent -- archiving an already-archived target just re-confirms the state", async () => {
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      await archiveMonitorTarget(db, target.id, NOW);
+      const again = await archiveMonitorTarget(db, target.id, new Date(NOW.getTime() + 1000));
+      expect(again!.archivedAt).not.toBeNull();
+      expect(again!.enabled).toBe(false);
+    });
+
+    it("returns undefined for a target that does not exist", async () => {
+      expect(
+        await archiveMonitorTarget(db, "11111111-1111-4111-8111-111111111111", NOW),
+      ).toBeUndefined();
+    });
+
+    it("PRESERVES check and incident history -- archiving is never a hard delete", async () => {
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      await recordCheck(db, { targetId: target.id, status: "down" });
+      await db.insert(monitorIncidents).values({ targetId: target.id, status: "open" });
+
+      await archiveMonitorTarget(db, target.id, NOW);
+
+      expect(
+        await db.select().from(monitorChecks).where(eq(monitorChecks.targetId, target.id)),
+      ).toHaveLength(1);
+      expect(
+        await db.select().from(monitorIncidents).where(eq(monitorIncidents.targetId, target.id)),
+      ).toHaveLength(1);
+    });
+
+    it("removes the target from listMonitorTargets' default (archived-excluded) view, but not from includeArchived:true", async () => {
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      await archiveMonitorTarget(db, target.id, NOW);
+
+      expect((await listMonitorTargets(db)).map((t) => t.id)).not.toContain(target.id);
+      expect((await listMonitorTargets(db, { includeArchived: true })).map((t) => t.id)).toContain(
+        target.id,
+      );
+    });
+
+    it("does NOT remove an archived target from listTargetsOfKind -- the worker's probe loop is untouched, `enabled` alone suppresses it", async () => {
+      // archiveMonitorTarget sets enabled=false in the SAME statement, so the
+      // EXISTING suppression check already stops probes; listTargetsOfKind
+      // deliberately still returns the row, proving no change was needed
+      // there.
+      const target = await createMonitorTarget(db, { name: "t", kind: "http", url: "http://x/" });
+      await archiveMonitorTarget(db, target.id, NOW);
+      expect((await listTargetsOfKind(db, "http")).map((t) => t.id)).toContain(target.id);
+    });
   });
 
   it("CASCADES checks and incidents when a target is deleted", async () => {

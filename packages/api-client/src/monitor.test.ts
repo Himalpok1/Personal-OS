@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClientError } from "./client.js";
-import { acknowledgeMonitorIncident, getMonitorOverview, listMonitorIncidents } from "./monitor.js";
+import {
+  acknowledgeMonitorIncident,
+  archiveMonitorTarget,
+  createMonitorTarget,
+  disableMonitorTarget,
+  enableMonitorTarget,
+  getMonitorOverview,
+  getMonitorTarget,
+  listMonitorIncidents,
+  updateMonitorTarget,
+} from "./monitor.js";
 
 const BASE = "http://localhost:3000";
 const originalFetch = global.fetch;
@@ -38,6 +48,7 @@ const TARGET = {
   maintenance_end: null,
   maintenance_timezone: null,
   muted_until: null,
+  archived_at: null,
 };
 
 const INCIDENT = {
@@ -51,12 +62,125 @@ const INCIDENT = {
   last_failure_at: "2026-09-01T12:05:00Z",
 };
 
+describe("getMonitorTarget (Checkpoint 8.6D)", () => {
+  it("fetches a single target by id", async () => {
+    const f = stub(TARGET);
+    const result = await getMonitorTarget(BASE, TARGET.id);
+    expect(result.name).toBe("api-internal-health");
+    expect(String(f.mock.calls[0]![0])).toBe(`${BASE}/monitor/targets/${TARGET.id}`);
+  });
+
+  it("surfaces a 404 as a typed ApiClientError", async () => {
+    stub({ error: "not_found" }, 404);
+    const error = await getMonitorTarget(BASE, TARGET.id).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect((error as ApiClientError).code).toBe("not_found");
+  });
+});
+
+describe("createMonitorTarget (Checkpoint 8.6D)", () => {
+  it("validates the input BEFORE sending -- rejects locally on a bad shape", async () => {
+    const f = stub(TARGET, 201);
+    await expect(
+      createMonitorTarget(BASE, { name: "bad", kind: "http" } as never),
+    ).rejects.toThrow();
+    expect(f).not.toHaveBeenCalled();
+  });
+
+  it("POSTs the validated body and parses the created target", async () => {
+    const f = stub(TARGET, 201);
+    const result = await createMonitorTarget(BASE, {
+      name: "api-internal-health",
+      kind: "http",
+      url: "http://api:3000/health",
+    });
+    expect(result.id).toBe(TARGET.id);
+    const init = f.mock.calls[0]![1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toMatchObject({ name: "api-internal-health" });
+  });
+
+  it("surfaces a 409 duplicate name as a typed ApiClientError", async () => {
+    stub({ error: "name_already_exists" }, 409);
+    const error = await createMonitorTarget(BASE, {
+      name: "dup",
+      kind: "http",
+      url: "http://x/",
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect((error as ApiClientError).code).toBe("name_already_exists");
+  });
+});
+
+describe("updateMonitorTarget (Checkpoint 8.6D)", () => {
+  it("PATCHes only the given fields", async () => {
+    const f = stub({ ...TARGET, name: "renamed" });
+    const result = await updateMonitorTarget(BASE, TARGET.id, { name: "renamed" });
+    expect(result.name).toBe("renamed");
+    const init = f.mock.calls[0]![1] as RequestInit;
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({ name: "renamed" });
+  });
+
+  it("rejects an empty patch locally, before sending", async () => {
+    const f = stub(TARGET);
+    await expect(updateMonitorTarget(BASE, TARGET.id, {})).rejects.toThrow();
+    expect(f).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a 409 active-incident refusal as a typed ApiClientError", async () => {
+    stub({ error: "target_has_active_incident" }, 409);
+    const error = await updateMonitorTarget(BASE, TARGET.id, { url: "http://y/" }).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect((error as ApiClientError).code).toBe("target_has_active_incident");
+  });
+});
+
+describe("enableMonitorTarget / disableMonitorTarget (Checkpoint 8.6D)", () => {
+  it("enable POSTs to /enable with no body", async () => {
+    const f = stub({ ...TARGET, enabled: true });
+    await enableMonitorTarget(BASE, TARGET.id);
+    expect(String(f.mock.calls[0]![0])).toBe(`${BASE}/monitor/targets/${TARGET.id}/enable`);
+    expect((f.mock.calls[0]![1] as RequestInit).body).toBeUndefined();
+  });
+
+  it("disable POSTs to /disable and parses enabled:false", async () => {
+    const f = stub({ ...TARGET, enabled: false });
+    const result = await disableMonitorTarget(BASE, TARGET.id);
+    expect(result.enabled).toBe(false);
+    expect(String(f.mock.calls[0]![0])).toBe(`${BASE}/monitor/targets/${TARGET.id}/disable`);
+  });
+});
+
+describe("archiveMonitorTarget (Checkpoint 8.6D)", () => {
+  it("POSTs to /archive and parses the archived target", async () => {
+    const f = stub({ ...TARGET, enabled: false, archived_at: "2026-09-11T12:00:00Z" });
+    const result = await archiveMonitorTarget(BASE, TARGET.id);
+    expect(result.archived_at).not.toBeNull();
+    expect(String(f.mock.calls[0]![0])).toBe(`${BASE}/monitor/targets/${TARGET.id}/archive`);
+  });
+});
+
 describe("getMonitorOverview", () => {
   it("parses an empty, unconfigured overview", async () => {
     stub({ configured: false, items: [], active_incident_count: 0 });
     const result = await getMonitorOverview(BASE);
     expect(result.configured).toBe(false);
     expect(result.items).toEqual([]);
+  });
+
+  it("sends no query string by default -- includeArchived is off", async () => {
+    const f = stub({ configured: false, items: [], active_incident_count: 0 });
+    await getMonitorOverview(BASE);
+    expect(String(f.mock.calls[0]![0])).toBe(`${BASE}/monitor/targets`);
+  });
+
+  it("sends include_archived=true when requested (Checkpoint 8.6D)", async () => {
+    const f = stub({ configured: false, items: [], active_incident_count: 0 });
+    await getMonitorOverview(BASE, true);
+    expect(String(f.mock.calls[0]![0])).toBe(`${BASE}/monitor/targets?include_archived=true`);
   });
 
   it("parses a target with a null latest check", async () => {

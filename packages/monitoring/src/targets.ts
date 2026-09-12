@@ -1,6 +1,13 @@
 import { monitorTargets, type Db } from "@personal-os/db";
-import { MonitorTargetCreateSchema, type MonitorTargetCreate } from "@personal-os/schema";
-import { asc, eq } from "drizzle-orm";
+import {
+  MonitorTargetCreateSchema,
+  MonitorTargetUpdateSchema,
+  type MonitorTargetCreate,
+  type MonitorTargetKind,
+  type MonitorTargetUpdate,
+} from "@personal-os/schema";
+import { asc, eq, isNull } from "drizzle-orm";
+import { findActiveIncident } from "./incidents.js";
 
 // Target management.
 //
@@ -60,9 +67,27 @@ export async function createMonitorTarget(
   return row!;
 }
 
-/** Every target, oldest name first, so listings are stable. */
-export async function listMonitorTargets(db: Db): Promise<MonitorTargetRow[]> {
-  return await db.select().from(monitorTargets).orderBy(asc(monitorTargets.name));
+export interface ListMonitorTargetsOptions {
+  /** Default false, matching ADR-059's `/search` convention: an archived target is removed from the default list, never deleted. */
+  includeArchived?: boolean;
+}
+
+/** Every target, oldest name first, so listings are stable. Archived targets are excluded by default. */
+export async function listMonitorTargets(
+  db: Db,
+  options: ListMonitorTargetsOptions = {},
+): Promise<MonitorTargetRow[]> {
+  const where = options.includeArchived ? undefined : isNull(monitorTargets.archivedAt);
+  return await db.select().from(monitorTargets).where(where).orderBy(asc(monitorTargets.name));
+}
+
+/** A single target by id, or undefined. Includes archived targets -- a detail view must still be able to show one. */
+export async function getMonitorTarget(
+  db: Db,
+  targetId: string,
+): Promise<MonitorTargetRow | undefined> {
+  const [row] = await db.select().from(monitorTargets).where(eq(monitorTargets.id, targetId));
+  return row;
 }
 
 /** The targets a given process is responsible for probing. */
@@ -101,6 +126,172 @@ export async function setMonitorTargetEnabled(
   const [row] = await db
     .update(monitorTargets)
     .set({ enabled, updatedAt: now })
+    .where(eq(monitorTargets.id, targetId))
+    .returning();
+  return row;
+}
+
+/**
+ * Thrown by `updateMonitorTarget` when a patch would change WHAT is being
+ * observed (`url` or `kind`) while an incident is actively open on this
+ * target.
+ *
+ * `monitor_incidents` stores only a `target_id` foreign key -- never a
+ * snapshot of the target's `url`/`kind` at the moment it opened (see
+ * `packages/db/src/schema/monitor-incidents.ts`) -- so every read joins the
+ * LIVE target row. Silently allowing the edit would rewrite what an open
+ * incident is "about" out from under it. Every OTHER field (name, thresholds,
+ * interval, timeout, maintenance window, TLS warning) is safe to edit with an
+ * incident open, since none of them change the incident's own identity.
+ */
+export class MonitorTargetActiveIncidentError extends Error {
+  constructor(targetId: string) {
+    super(`target ${targetId} has an active incident; its url/kind cannot be changed`);
+    this.name = "MonitorTargetActiveIncidentError";
+  }
+}
+
+/**
+ * Applies a partial edit, returning the updated row or `undefined` if the
+ * target does not exist (matching `muteMonitorTarget`/`setMonitorTargetEnabled`'s
+ * existing not-found convention).
+ *
+ * VALIDATION STRATEGY: `patch` is checked only structurally by
+ * `MonitorTargetUpdateSchema` (each field's own shape). The cross-field
+ * invariants -- an `http` target needs a url, `tls_warn_days` needs `https://`,
+ * the maintenance triple is all-or-nothing, the URL safety check -- live in
+ * exactly one place, `MonitorTargetCreateSchema`, and are enforced here by
+ * MERGING the patch onto the CURRENT row and re-validating the whole resulting
+ * object through that same schema before writing. A partial update can
+ * therefore never produce a target that violates an invariant the create path
+ * would have rejected outright.
+ *
+ * `enabled` and `archived_at` are never touched here -- see
+ * `MonitorTargetUpdateSchema`'s comment on why those are dedicated endpoints.
+ */
+export async function updateMonitorTarget(
+  db: Db,
+  targetId: string,
+  patch: MonitorTargetUpdate,
+  now: Date = new Date(),
+): Promise<MonitorTargetRow | undefined> {
+  const parsedPatch = MonitorTargetUpdateSchema.parse(patch);
+  const [existing] = await db.select().from(monitorTargets).where(eq(monitorTargets.id, targetId));
+  if (!existing) return undefined;
+
+  const changingIdentity =
+    (parsedPatch.url !== undefined && parsedPatch.url !== existing.url) ||
+    (parsedPatch.kind !== undefined && parsedPatch.kind !== existing.kind);
+  if (changingIdentity) {
+    const active = await findActiveIncident(db, targetId);
+    if (active !== undefined) {
+      throw new MonitorTargetActiveIncidentError(targetId);
+    }
+  }
+
+  const merged: MonitorTargetCreate = {
+    name: parsedPatch.name ?? existing.name,
+    kind: (parsedPatch.kind ?? existing.kind) as MonitorTargetKind,
+    url: parsedPatch.url !== undefined ? parsedPatch.url : existing.url,
+    expected_status: parsedPatch.expected_status ?? existing.expectedStatus,
+    expect_healthy_payload: parsedPatch.expect_healthy_payload ?? existing.expectHealthyPayload,
+    timeout_ms: parsedPatch.timeout_ms ?? existing.timeoutMs,
+    interval_seconds: parsedPatch.interval_seconds ?? existing.intervalSeconds,
+    failure_threshold: parsedPatch.failure_threshold ?? existing.failureThreshold,
+    recovery_threshold: parsedPatch.recovery_threshold ?? existing.recoveryThreshold,
+    tls_warn_days:
+      parsedPatch.tls_warn_days !== undefined ? parsedPatch.tls_warn_days : existing.tlsWarnDays,
+    heartbeat_max_age_seconds:
+      parsedPatch.heartbeat_max_age_seconds !== undefined
+        ? parsedPatch.heartbeat_max_age_seconds
+        : existing.heartbeatMaxAgeSeconds,
+    // Preserved unconditionally -- enable/disable is a dedicated action, never
+    // part of a generic update, so it can never regress by omission here.
+    enabled: existing.enabled,
+    maintenance_start:
+      parsedPatch.maintenance_start !== undefined
+        ? parsedPatch.maintenance_start
+        : existing.maintenanceStart,
+    maintenance_end:
+      parsedPatch.maintenance_end !== undefined
+        ? parsedPatch.maintenance_end
+        : existing.maintenanceEnd,
+    maintenance_timezone:
+      parsedPatch.maintenance_timezone !== undefined
+        ? parsedPatch.maintenance_timezone
+        : existing.maintenanceTimezone,
+    muted_until:
+      parsedPatch.muted_until !== undefined
+        ? parsedPatch.muted_until
+        : (existing.mutedUntil?.toISOString() ?? null),
+  };
+  const validated = MonitorTargetCreateSchema.parse(merged);
+
+  const [row] = await db
+    .update(monitorTargets)
+    .set({
+      name: validated.name,
+      kind: validated.kind,
+      url: validated.url ?? null,
+      ...(validated.expected_status !== undefined
+        ? { expectedStatus: validated.expected_status }
+        : {}),
+      ...(validated.expect_healthy_payload !== undefined
+        ? { expectHealthyPayload: validated.expect_healthy_payload }
+        : {}),
+      ...(validated.timeout_ms !== undefined ? { timeoutMs: validated.timeout_ms } : {}),
+      ...(validated.interval_seconds !== undefined
+        ? { intervalSeconds: validated.interval_seconds }
+        : {}),
+      ...(validated.failure_threshold !== undefined
+        ? { failureThreshold: validated.failure_threshold }
+        : {}),
+      ...(validated.recovery_threshold !== undefined
+        ? { recoveryThreshold: validated.recovery_threshold }
+        : {}),
+      tlsWarnDays: validated.tls_warn_days ?? null,
+      heartbeatMaxAgeSeconds: validated.heartbeat_max_age_seconds ?? null,
+      maintenanceStart: validated.maintenance_start ?? null,
+      maintenanceEnd: validated.maintenance_end ?? null,
+      maintenanceTimezone: validated.maintenance_timezone ?? null,
+      mutedUntil:
+        validated.muted_until === undefined || validated.muted_until === null
+          ? null
+          : new Date(validated.muted_until),
+      updatedAt: now,
+    })
+    .where(eq(monitorTargets.id, targetId))
+    .returning();
+  return row;
+}
+
+/**
+ * Archives a target: the CRUD "delete" (Checkpoint 8.6D).
+ *
+ * NEVER a hard `DELETE` when it might have history. Both `monitor_checks` and
+ * `monitor_incidents` reference this row `ON DELETE CASCADE`
+ * (`packages/db/drizzle/0015_service_monitoring.sql`), and ADR-024 means there
+ * is no backup to recover from an accidental hard delete -- so archiving sets
+ * `archived_at` (removes it from the default list, per
+ * `ListMonitorTargetsOptions`) and `enabled = false` in the SAME statement.
+ * Setting `enabled` is what actually stops future probes: it is the EXISTING
+ * suppression check the worker already runs on every pass
+ * (`apps/worker/src/monitor/run.ts`), so archiving needs no change to the
+ * probe loop at all.
+ *
+ * Deliberately no `unarchiveMonitorTarget` -- matching `tasks`' own precedent
+ * (`docs/ARCHITECTURE.md`: "no restore endpoint ships"). An archived target's
+ * full row and all its history remain in the database forever; there is
+ * simply no path back to the active list from the app today.
+ */
+export async function archiveMonitorTarget(
+  db: Db,
+  targetId: string,
+  now: Date = new Date(),
+): Promise<MonitorTargetRow | undefined> {
+  const [row] = await db
+    .update(monitorTargets)
+    .set({ archivedAt: now, enabled: false, updatedAt: now })
     .where(eq(monitorTargets.id, targetId))
     .returning();
   return row;
