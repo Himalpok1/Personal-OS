@@ -43,6 +43,7 @@ import {
   createPttTranscribeDeadLetterHandler,
   createPttTranscribeHandler,
 } from "./jobs/ptt-transcribe.js";
+import { retentionCleanupJob } from "./jobs/retention-cleanup.js";
 import { sweepOrphanAudioJob } from "./jobs/sweep-orphan-audio.js";
 import { env } from "./env.js";
 import { recordHeartbeat } from "./heartbeat.js";
@@ -83,6 +84,8 @@ const MAIL_DIGEST_CRON_QUEUE = "mail.digest.cron";
 const MONITOR_CRON_QUEUE = "monitor.cron";
 
 const SWEEP_ORPHAN_AUDIO_QUEUE = "audio.sweep-orphan";
+/** Checkpoint 8.6C: bounded retention cleanup, see jobs/retention-cleanup.ts. */
+const RETENTION_CLEANUP_QUEUE = "retention.cleanup";
 
 const HEARTBEAT_QUEUE = "bootstrap.heartbeat";
 const RETRY_DELAY_MS = 5000;
@@ -232,6 +235,16 @@ async function main(): Promise<void> {
   });
   // Hourly -- generous relative to the 2h orphan threshold, cheap to run.
   await boss.schedule(SWEEP_ORPHAN_AUDIO_QUEUE, "0 * * * *");
+
+  await boss.createQueue(RETENTION_CLEANUP_QUEUE);
+  await boss.work(RETENTION_CLEANUP_QUEUE, async () => {
+    await retentionCleanupJob(db);
+  });
+  // Daily, off-peak, after the 3am occurrences.expand-window pass. Retention
+  // does not need to run every tick like a probe or a sync cron -- see
+  // jobs/retention-cleanup.ts for why a daily cadence is more than enough at
+  // this system's volume.
+  await boss.schedule(RETENTION_CLEANUP_QUEUE, "0 4 * * *");
 
   // Phase 4 Checkpoint 4.5 & 4.6 (Google & CalDAV Calendar sync).
   const googleCalendarClient = createGoogleCalendarClient();

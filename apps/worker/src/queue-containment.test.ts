@@ -178,6 +178,11 @@ const EXPECTED_CONTAINMENT: Readonly<Record<string, boolean>> = {
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE: false,
   NOTIFICATIONS_DISPATCH_QUEUE: false,
   SWEEP_ORPHAN_AUDIO_QUEUE: false,
+  // No provider/external-API surface -- every statement is a plain timestamp
+  // comparison against this project's own database, and retention-cleanup.ts
+  // already reduces any underlying error to a bare table name via its own
+  // `RetentionCleanupError`, never a message. Checkpoint 8.6C.
+  RETENTION_CLEANUP_QUEUE: false,
   CALENDAR_REFRESH_TOKEN_DEAD_QUEUE: false,
   CALENDAR_REFRESH_TOKEN_QUEUE: true,
   CALENDAR_SYNC_CALENDAR_QUEUE: true,
