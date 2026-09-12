@@ -1,6 +1,6 @@
 import type { FastifyRequest } from "fastify";
 import { serializeErrorForLog } from "./serialize-error.js";
-import { scrubSensitiveQueryParams } from "./scrub-url.js";
+import { scrubQueryForUnknownRoute, scrubSensitiveQueryParams } from "./scrub-url.js";
 
 /**
  * The API's Pino options.
@@ -22,7 +22,34 @@ export function buildLoggerOptions() {
       req(request: FastifyRequest) {
         return {
           method: request.method,
-          url: scrubSensitiveQueryParams(request.url),
+          // Checkpoint 9.0 Part B. `request.is404` is Fastify's own public
+          // flag for "this request is being served by the not-found
+          // context" (lib/request.js: `config.url` is undefined only for the
+          // not-found context and for the bad-URL context server.ts's
+          // `frameworkErrors` runs under), and it is already true when this
+          // serializer runs inside the very first "incoming request" log
+          // call -- verified in server.not-found.test.ts against the real
+          // stream. That is what lets the policy differ by route existence
+          // without a hook (which would be too late, see scrub-url.ts): a
+          // KNOWN route keeps name-based scrubbing so its non-sensitive
+          // parameters stay diagnosable, while an UNKNOWN route loses its
+          // whole query, because a mistyped path can carry any parameter
+          // name and nothing would have read it anyway.
+          //
+          // OPTIONS is treated as unknown too, whatever the path. `is404` is
+          // false for every OPTIONS request because @fastify/cors registers a
+          // real `OPTIONS *` catch-all (index.js `fastify.options('*', ...)`)
+          // that matches any path at all, so `OPTIONS /nope?anything=x` was
+          // reaching the name-based branch and logging `anything=x` verbatim
+          // -- the exact leak the unknown-route policy closes for GET. The
+          // catch-all's handler and the cors preflight hook read headers
+          // only, never the query, and this API registers no OPTIONS route
+          // of its own (server.not-found.test.ts pins that), so there is no
+          // diagnostic value being given up.
+          url:
+            request.is404 || request.method === "OPTIONS"
+              ? scrubQueryForUnknownRoute(request.url)
+              : scrubSensitiveQueryParams(request.url),
           host: request.host,
           remoteAddress: request.ip,
           remotePort: request.socket.remotePort,

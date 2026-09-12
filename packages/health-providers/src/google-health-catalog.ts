@@ -269,6 +269,15 @@ export const HEALTH_METRIC_CATALOG: Readonly<Record<string, HealthMetricDefiniti
     METRICS_SCOPE,
     "beatsPerMinute",
   ),
+  // `unit` on every precomputedDaily entry below is a DISPLAY KEY (the mobile
+  // formatter maps it to "ms", "%", "°C"...), NEVER a response field name. The
+  // live field for HRV is `averageHeartRateVariabilityMilliseconds`, declared
+  // in sync/value-spec.ts; Checkpoint 9.0 found the earlier spec had copied
+  // this string as the leaf, and every real record was rejected. The 9.0
+  // review then found `percentage` and `breathsPerMinute` copied the same
+  // way and corrected them there. `celsiusDelta` is a SEMANTIC, not a field:
+  // the documented value is an absolute nightly temperature, and the delta
+  // the formatter renders is not yet derivable -- see value-spec.ts.
   "daily-heart-rate-variability": precomputedDaily(
     "daily-heart-rate-variability",
     METRICS_SCOPE,

@@ -13,7 +13,22 @@ export const CAPTURE_PARSE_QUEUE = "capture.parse";
 // supported UPDATE path for exactly this.
 export const CAPTURE_PARSE_DEAD_QUEUE = "capture.parse.dead";
 export const OCCURRENCES_EXPAND_WINDOW_QUEUE = "occurrences.expand-window";
+// Dead-letter target for occurrences.expand-window (Checkpoint 9.0). WORKER-ONLY,
+// like its primary: apps/api never sends to or creates the expand-window queue,
+// so there is nothing for the api copy of this file to mirror. Same ordering
+// rule as every other *_DEAD_QUEUE (create it BEFORE the primary -- FK), and
+// the same deployment note as CAPTURE_PARSE_DEAD_QUEUE: the primary already
+// exists in production without a dead_letter, so createQueue's deadLetter
+// option is a silent no-op there and boss.updateQueue() is what attaches it.
+// See jobs/occurrences-dead-letter.ts.
+export const OCCURRENCES_EXPAND_WINDOW_DEAD_QUEUE = "occurrences.expand-window.dead";
 export const OCCURRENCES_GENERATE_LAZY_QUEUE = "occurrences.generate-lazy";
+// Dead-letter target for occurrences.generate-lazy (Checkpoint 9.0). SHARED:
+// apps/api creates and sends to the primary from the occurrence complete/skip
+// routes, so both processes must create this dead queue, then the primary
+// with `deadLetter`, then updateQueue -- identically, in that order (see
+// CAPTURE_PARSE_DEAD_QUEUE above for why all three steps are load-bearing).
+export const OCCURRENCES_GENERATE_LAZY_DEAD_QUEUE = "occurrences.generate-lazy.dead";
 export const PTT_TRANSCRIBE_QUEUE = "ptt.transcribe";
 // Dead-letter target for ptt.transcribe -- must be created via createQueue
 // *before* the primary queue (pg-boss's dead_letter column is a foreign key

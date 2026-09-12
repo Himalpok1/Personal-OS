@@ -1,8 +1,13 @@
 import { events, occurrences, tasks, type Db } from "@personal-os/db";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { setLogSink } from "../logger.js";
 import { buildTestDb, truncateTestTables } from "../test/build-test-db.js";
-import { expandDueDateWindowJob } from "./expand-due-date-window.js";
+import {
+  createExpandDueDateWindowHandler,
+  expandDueDateWindowJob,
+} from "./expand-due-date-window.js";
+import { OccurrencesJobError } from "./occurrences-job-error.js";
 
 async function insertRecurringTask(
   db: Db,
@@ -196,5 +201,122 @@ describe("expandDueDateWindowJob", () => {
     const secondRun = await db.select().from(occurrences).where(eq(occurrences.parentId, taskId));
 
     expect(secondRun).toHaveLength(firstRun.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-parent containment. Checkpoint 9.0.
+// ---------------------------------------------------------------------------
+//
+// Before this, the job ran both loops bare: one parent whose rule could not be
+// expanded threw out of the whole sweep, every parent after it was silently
+// skipped that night, three retries hit the same parent, and there was no
+// dead-letter queue to report the exhaustion. These pin the new contract: the
+// bad parent is isolated, the good ones still expand, the sweep still FAILS so
+// pg-boss retries and eventually dead-letters, and nothing raw reaches the
+// thrown error or the log.
+describe("expandDueDateWindowJob per-parent containment", () => {
+  let db: Db;
+  let records: Record<string, unknown>[];
+  let restore: () => void;
+
+  // A zone Intl does not know: `toWallClockComponents` throws a RangeError
+  // whose message names the zone, so it is both a realistic persistent
+  // per-item fault and a string the log must not carry.
+  const BAD_ZONE = "Not/AZone";
+
+  beforeEach(async () => {
+    db = buildTestDb();
+    await truncateTestTables(db);
+    records = [];
+    restore = setLogSink({ write: (_level, record) => records.push(record) });
+    return () => restore();
+  });
+
+  afterAll(async () => {
+    await truncateTestTables(db);
+  });
+
+  it("one unexpandable parent does not stop the others, and the sweep still fails", async () => {
+    const badTaskId = await insertRecurringTask(db, { recurrenceTimezone: BAD_ZONE });
+    const goodTaskId = await insertRecurringTask(db, {});
+    // The events loop runs strictly AFTER the tasks loop, so a good event is
+    // the deterministic proof that a throwing task no longer aborts the rest
+    // of the sweep whatever order Postgres returns the task rows in.
+    const goodEventId = await insertRecurringEvent(db, {});
+
+    const caught = await expandDueDateWindowJob(db).catch((err: unknown) => err);
+
+    expect(caught).toBeInstanceOf(OccurrencesJobError);
+    expect((caught as OccurrencesJobError).failedParents).toBe(1);
+    expect((caught as OccurrencesJobError).totalParents).toBe(3);
+    expect((caught as Error).message).toBe(
+      "occurrences.expand-window failed: 1 of 3 parents failed",
+    );
+    // The thrown error -- and therefore pgboss.job.output, and therefore the
+    // dead job -- names WHICH parent, by id and type only.
+    expect((caught as OccurrencesJobError).failedParentRefs).toEqual([
+      { parentType: "task", parentId: badTaskId },
+    ]);
+
+    const bad = await db.select().from(occurrences).where(eq(occurrences.parentId, badTaskId));
+    const good = await db.select().from(occurrences).where(eq(occurrences.parentId, goodTaskId));
+    const event = await db.select().from(occurrences).where(eq(occurrences.parentId, goodEventId));
+    expect(bad).toHaveLength(0);
+    expect(good.length).toBeGreaterThan(0);
+    expect(event.length).toBeGreaterThan(0);
+  });
+
+  it("records each failed parent by id and token, plus one summary line", async () => {
+    const badTaskId = await insertRecurringTask(db, { recurrenceTimezone: BAD_ZONE });
+    await insertRecurringEvent(db, {});
+
+    await expandDueDateWindowJob(db).catch(() => undefined);
+
+    const failed = records.filter((r) => r["event"] === "occurrences.expand_window.parent_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({
+      level: "warn",
+      parentType: "task",
+      parentId: badTaskId,
+      error: "RangeError",
+    });
+    const summary = records.find((r) => r["event"] === "occurrences.expand_window.completed");
+    expect(summary).toMatchObject({ tasks: 1, events: 1, attempted: 2, failed: 1 });
+  });
+
+  it("carries neither the zone, the rule nor an error message anywhere", async () => {
+    await insertRecurringTask(db, { recurrenceTimezone: BAD_ZONE, title: "Pay rent to landlord" });
+
+    const caught = await expandDueDateWindowJob(db).catch((err: unknown) => err);
+
+    const thrown = JSON.stringify({
+      ...(caught as object),
+      message: (caught as Error).message,
+      stack: (caught as Error).stack,
+    });
+    const logged = JSON.stringify(records);
+    for (const forbidden of [BAD_ZONE, "Invalid time zone", "FREQ=", "landlord"]) {
+      expect(thrown).not.toContain(forbidden);
+      expect(logged).not.toContain(forbidden);
+    }
+  });
+
+  it("still succeeds cleanly, with a summary line, when nothing fails", async () => {
+    await insertRecurringTask(db, {});
+    await expect(expandDueDateWindowJob(db)).resolves.toBeUndefined();
+    expect(records.find((r) => r["event"] === "occurrences.expand_window.completed")).toMatchObject(
+      { failed: 0, attempted: 1 },
+    );
+  });
+
+  it("the pg-boss factory contains the sweep's own failure unchanged", async () => {
+    // The counts-carrying error passes through the wrapper as-is, so
+    // pgboss.job.output keeps "1 of 1 parents failed" rather than a bare
+    // "failed"; anything else thrown is wrapped by the same class.
+    await insertRecurringTask(db, { recurrenceTimezone: BAD_ZONE });
+    const caught = await createExpandDueDateWindowHandler(db)([]).catch((err: unknown) => err);
+    expect(caught).toBeInstanceOf(OccurrencesJobError);
+    expect((caught as OccurrencesJobError).failedParents).toBe(1);
   });
 });

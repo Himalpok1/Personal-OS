@@ -104,7 +104,7 @@ function registrations(indexSource: string): { queue: string; handler: string }[
     // This guard missed `MAIL_DIGEST_GENERATE_QUEUE` exactly that way when it
     // was first written. Whole lines only, so a `//` inside a string literal on
     // a line of real code cannot be corrupted.
-    const handler =
+    const handlerOrOptions =
       comma < 0
         ? ""
         : args
@@ -113,10 +113,65 @@ function registrations(indexSource: string): { queue: string; handler: string }[
             .filter((line) => !line.trim().startsWith("//"))
             .join("\n")
             .trim();
+    // A LEADING WORK-OPTIONS OBJECT IS SKIPPED. `boss.work(queue, { includeMetadata:
+    // true }, handler)` is a real pg-boss overload (Checkpoint 9.0's
+    // expand-window dead-letter handler uses it), and without this the "handler"
+    // would be the options literal, so a wrapped factory behind it would be
+    // reported as uncontained -- silently, since `false` is a legal expectation.
+    // Only a literal starting with `{` is treated as options; a factory call
+    // never starts with one.
+    const handler = handlerOrOptions.startsWith("{")
+      ? handlerOrOptions.slice(handlerOrOptions.indexOf("},") + 2).trim()
+      : handlerOrOptions;
     out.push({ queue, handler });
     cursor = end + 1;
   }
   return out;
+}
+
+/**
+ * Source text with every comment removed: `/* ... *\/` blocks and `//` to end
+ * of line. Applied to a factory's body BEFORE it is searched for a wrapper
+ * call, because a comment is exactly where the wrapper's name is most likely
+ * to appear without the wrapper being called -- a docblock explaining why the
+ * factory is wrapped survives the edit that unwraps it. A guard that a comment
+ * can satisfy is no guard; the review of Checkpoint 9.0 found one
+ * (`expand-due-date-window.ts` quoted the literal match string in a comment,
+ * and a mutation that removed the real call still passed).
+ *
+ * Line-based for `//`, so a `//` inside a string literal on a line of real
+ * code cannot corrupt that line: only text from the FIRST `//` on a line is
+ * dropped, and the wrapper call this file looks for never follows one.
+ */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .map((line) => {
+      const slash = line.indexOf("//");
+      return slash < 0 ? line : line.slice(0, slash);
+    })
+    .join("\n");
+}
+
+/** Whether a factory's own (comment-stripped) definition calls a wrapper. */
+function bodyReachesWrapper(body: string, wrappers: ReadonlySet<string>): boolean {
+  const code = stripComments(body);
+  for (const wrapper of wrappers) {
+    if (code.includes(`${wrapper}(`)) return true;
+  }
+  return false;
+}
+
+/** A factory's own text: from its declaration to the next top-level export. */
+function factoryBody(source: string, factory: string): string | null {
+  const defIndex = source.indexOf(`export function ${factory}(`);
+  if (defIndex < 0) return null;
+  // Bounded to this function's own text: from its declaration to the next
+  // top-level `export function`, so a wrapper used by an unrelated neighbour
+  // cannot make this one look contained.
+  const nextExport = source.indexOf("\nexport function ", defIndex + 1);
+  return source.slice(defIndex, nextExport < 0 ? undefined : nextExport);
 }
 
 /**
@@ -134,25 +189,14 @@ function isContained(
   files: readonly string[],
   wrappers: ReadonlySet<string>,
 ): boolean {
-  for (const wrapper of wrappers) {
-    if (handler.includes(`${wrapper}(`)) return true;
-  }
+  if (bodyReachesWrapper(handler, wrappers)) return true;
   const factory = /^(create\w+)\s*\(/.exec(handler)?.[1];
   if (factory === undefined) return false;
 
   for (const file of files) {
-    const source = readFileSync(file, "utf8");
-    const defIndex = source.indexOf(`export function ${factory}(`);
-    if (defIndex < 0) continue;
-    // Bounded to this function's own text: from its declaration to the next
-    // top-level `export function`, so a wrapper used by an unrelated neighbour
-    // cannot make this one look contained.
-    const nextExport = source.indexOf("\nexport function ", defIndex + 1);
-    const body = source.slice(defIndex, nextExport < 0 ? undefined : nextExport);
-    for (const wrapper of wrappers) {
-      if (body.includes(`${wrapper}(`)) return true;
-    }
-    return false;
+    const body = factoryBody(readFileSync(file, "utf8"), factory);
+    if (body === null) continue;
+    return bodyReachesWrapper(body, wrappers);
   }
   return false;
 }
@@ -171,8 +215,17 @@ const EXPECTED_CONTAINMENT: Readonly<Record<string, boolean>> = {
   // error to contain. Checkpoint 8.6A.
   CAPTURE_PARSE_DEAD_QUEUE: false,
   CAPTURE_PARSE_QUEUE: true,
-  OCCURRENCES_EXPAND_WINDOW_QUEUE: false,
-  OCCURRENCES_GENERATE_LAZY_QUEUE: false,
+  // Checkpoint 9.0: both occurrences lanes are now contained
+  // (withOccurrencesJobErrorContainment). They make no provider call, but a
+  // raw throw here carried the user's own data -- packages/core's recurrence
+  // errors interpolate the RRULE text, and a `pg` unique/CHECK violation's
+  // `detail` is the whole occurrence row -- into pgboss.job.output and, on
+  // exhaustion, onto the dead-letter job. Their dead-letter handlers are
+  // uncontained like every other *_DEAD_QUEUE.
+  OCCURRENCES_EXPAND_WINDOW_DEAD_QUEUE: false,
+  OCCURRENCES_EXPAND_WINDOW_QUEUE: true,
+  OCCURRENCES_GENERATE_LAZY_DEAD_QUEUE: false,
+  OCCURRENCES_GENERATE_LAZY_QUEUE: true,
   PTT_TRANSCRIBE_DEAD_QUEUE: false,
   PTT_TRANSCRIBE_QUEUE: true,
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE: false,
@@ -215,6 +268,45 @@ describe("pg-boss handler containment", () => {
     expect(wrappers).toContain("withCalendarJobErrorContainment");
     expect(wrappers).toContain("withMonitorJobErrorContainment");
     expect(wrappers).toContain("withAiJobErrorContainment");
+    expect(wrappers).toContain("withOccurrencesJobErrorContainment");
+  });
+
+  it("does not let a comment stand in for the wrapper call", () => {
+    // The failure this prevents: the containment wrapper is removed from a
+    // factory (or the factory is refactored into a bare arrow) while its
+    // explanatory comment, which names the wrapper, is left standing -- and
+    // the frozen `true` for that queue keeps passing. Both comment forms, and
+    // the exact real shape that was found satisfiable in review.
+    const wrappersUnderTest = new Set(["withOccurrencesJobErrorContainment"]);
+    const commentOnly = [
+      "export function createX(db: Db) {\n" +
+        "  // matches the literal text `withOccurrencesJobErrorContainment(`.\n" +
+        "  return (async () => {\n    await run(db);\n  });\n}\n",
+      "export function createX(db: Db) {\n" +
+        "  /* was wrapped in withOccurrencesJobErrorContainment(queue, ...) */\n" +
+        "  return async () => run(db);\n}\n",
+    ];
+    for (const body of commentOnly) {
+      expect(bodyReachesWrapper(body, wrappersUnderTest)).toBe(false);
+    }
+    // And the real thing still resolves as contained, comment and all.
+    const real =
+      "export function createX(db: Db) {\n" +
+      "  // matches the wrapper's call expression textually.\n" +
+      "  return withOccurrencesJobErrorContainment(QUEUE, async () => {\n" +
+      "    await run(db);\n  });\n}\n";
+    expect(bodyReachesWrapper(real, wrappersUnderTest)).toBe(true);
+    // The exact file the review found: its comment no longer reproduces the
+    // match string, and its code does.
+    const source = readFileSync(join(SRC, "jobs/expand-due-date-window.ts"), "utf8");
+    const body = factoryBody(source, "createExpandDueDateWindowHandler");
+    expect(body).not.toBeNull();
+    expect(stripComments(body!)).toContain("withOccurrencesJobErrorContainment(");
+    expect(bodyReachesWrapper(body!, wrappersUnderTest)).toBe(true);
+    // Mutation: with the real call removed, the same comments remain and the
+    // guard must now say uncontained.
+    const mutated = body!.replace(/withOccurrencesJobErrorContainment\(/g, "(");
+    expect(bodyReachesWrapper(mutated, wrappersUnderTest)).toBe(false);
   });
 
   it("registers every queue exactly once", () => {

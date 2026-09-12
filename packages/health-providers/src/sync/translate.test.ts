@@ -4,6 +4,7 @@ import { contentHash } from "../identity.js";
 import {
   caloriesBucket,
   exerciseSession,
+  heartRateVariabilityRecord,
   restingHeartRateRecord,
   sleepSession,
   stepsBucket,
@@ -27,6 +28,7 @@ const STEPS = getHealthMetric("steps");
 const CALORIES = getHealthMetric("total-calories");
 const ZONES = getHealthMetric("active-zone-minutes");
 const RHR = getHealthMetric("daily-resting-heart-rate");
+const HRV = getHealthMetric("daily-heart-rate-variability");
 const WEIGHT = getHealthMetric("weight");
 const SLEEP = getHealthMetric("sleep");
 const EXERCISE = getHealthMetric("exercise");
@@ -181,6 +183,46 @@ describe("translateDailyListRecord", () => {
     expect(
       translateDailyListRecord({}, RHR, getValueSpec("daily-resting-heart-rate")),
     ).toMatchObject({ ok: false, rejection: { code: "container_not_object" } });
+  });
+
+  // The first list-type daily vital this project ever received (Checkpoint
+  // 9.0). Its previous spec rejected every real record; this pins the whole
+  // record -> row path on the observed shape, not just the leaf extraction.
+  it("translates the observed daily-heart-rate-variability record into a row", () => {
+    const row = unwrap(
+      translateDailyListRecord(
+        heartRateVariabilityRecord({
+          localDate: "2026-09-11",
+          averageRmssd: 38.2,
+          deepSleepRmssd: 41.9,
+        }),
+        HRV,
+        getValueSpec("daily-heart-rate-variability"),
+      ),
+    );
+    expect(row).toEqual({
+      metric: "daily-heart-rate-variability",
+      localDate: "2026-09-11",
+      hasData: true,
+      value: "38.2",
+      breakdown: { deepSleepRootMeanSquareOfSuccessiveDifferencesMilliseconds: "41.9" },
+      sourceCount: null,
+    });
+  });
+
+  it("never lets the record's dataSource reach a daily row", () => {
+    // The observed record carries a dataSource with `platform` at its root and
+    // `application.packageName` / `device.manufacturer` beneath it. The daily
+    // path stores no provenance at all; this proves none of it leaks into the
+    // row or its breakdown, whatever shape Google chooses for it.
+    const row = unwrap(
+      translateDailyListRecord(
+        heartRateVariabilityRecord({ localDate: "2026-09-11", averageRmssd: 38.2 }),
+        HRV,
+        getValueSpec("daily-heart-rate-variability"),
+      ),
+    );
+    expect(JSON.stringify(row)).not.toMatch(/packageName|manufacturer|ANDROID|RECORDED/);
   });
 
   // A record dated outside the chunk is the sync engine's rejection to count,

@@ -6,6 +6,9 @@ import {
 import { occurrences, tasks, type Db } from "@personal-os/db";
 import { eq } from "drizzle-orm";
 import type { Job } from "pg-boss";
+import { errorToken, log } from "../logger.js";
+import { OCCURRENCES_GENERATE_LAZY_QUEUE } from "../queue-names.js";
+import { withOccurrencesJobErrorContainment } from "./occurrences-job-error.js";
 
 export interface GenerateLazyOccurrenceJobData {
   occurrenceId: string;
@@ -26,20 +29,48 @@ function pgErrorCode(err: unknown): string | undefined {
 
 const UNIQUE_VIOLATION = "23505";
 
-async function generateOne(db: Db, data: GenerateLazyOccurrenceJobData): Promise<void> {
+/**
+ * What one attempt at a successor came to. `generated` and `successor_exists`
+ * both mean an open occurrence now exists for the parent; `skipped` means the
+ * current durable state warrants no successor at all (occurrence gone, not a
+ * task, not completion-anchored). A failure is a throw, never a member of this
+ * set, so a caller that wants "did it work" reads the outcome and a caller that
+ * wants "why not" reads the log line the skip already wrote.
+ */
+export type GenerateLazyOutcome = "generated" | "successor_exists" | "skipped";
+
+// Every skip below is logged through the structured logger rather than
+// `console.warn` (Checkpoint 9.0): ids and closed-vocabulary reasons only,
+// never a title or a rule string. The `reason` values are a closed set so an
+// operator can grep the log for a class of skip rather than a sentence.
+//
+// Exported so the dead-letter handler (jobs/occurrences-dead-letter.ts) can
+// make ONE further attempt before alerting: the realistic way this queue
+// exhausts its retries is a transient outage -- a Postgres restart, the
+// deployment rollout itself -- that has healed by the time the dead job runs,
+// and an alert for a successor that a single retry would have produced is a
+// misleading push followed by a task that never recurs again.
+export async function generateOne(
+  db: Db,
+  data: GenerateLazyOccurrenceJobData,
+): Promise<GenerateLazyOutcome> {
   const [occurrence] = await db
     .select()
     .from(occurrences)
     .where(eq(occurrences.id, data.occurrenceId));
   if (!occurrence) {
-    console.warn(`occurrences.generate-lazy: occurrence ${data.occurrenceId} not found, skipping`);
-    return;
+    log.warn("occurrences.generate_lazy.skipped", {
+      occurrenceId: data.occurrenceId,
+      reason: "occurrence_missing",
+    });
+    return "skipped";
   }
   if (occurrence.parentType !== "task") {
-    console.warn(
-      `occurrences.generate-lazy: occurrence ${data.occurrenceId} is not a task occurrence, skipping`,
-    );
-    return;
+    log.warn("occurrences.generate_lazy.skipped", {
+      occurrenceId: data.occurrenceId,
+      reason: "not_task_occurrence",
+    });
+    return "skipped";
   }
 
   const [task] = await db.select().from(tasks).where(eq(tasks.id, occurrence.parentId));
@@ -49,16 +80,20 @@ async function generateOne(db: Db, data: GenerateLazyOccurrenceJobData): Promise
     !task.rrule ||
     !task.recurrenceTimezone
   ) {
-    console.warn(
-      `occurrences.generate-lazy: task ${occurrence.parentId} is not completion-anchored, skipping`,
-    );
-    return;
+    log.warn("occurrences.generate_lazy.skipped", {
+      occurrenceId: data.occurrenceId,
+      taskId: occurrence.parentId,
+      reason: "not_completion_anchored",
+    });
+    return "skipped";
   }
 
   // Re-validated defensively even though this should already have been
   // enforced at write time (see commit-parsed-entity.ts) -- hitting this
   // here would indicate a data-integrity bug worth surfacing loudly, not a
-  // normal error path.
+  // normal error path. It IS loud now: the throw is classified below, retried
+  // by pg-boss, and on exhaustion routed to occurrences.generate-lazy.dead,
+  // which alerts the owner (jobs/occurrences-dead-letter.ts).
   validateCompletionAnchoredRule(task.rrule);
 
   const fromInstant = occurrence.completedAt ?? new Date();
@@ -83,21 +118,49 @@ async function generateOne(db: Db, data: GenerateLazyOccurrenceJobData): Promise
     // constraint means the successor already exists, which is success, not
     // an error to retry.
     if (pgErrorCode(err) === UNIQUE_VIOLATION) {
-      console.warn(
-        `occurrences.generate-lazy: successor already exists for task ${task.id}, no-op`,
-      );
-      return;
+      log.info("occurrences.generate_lazy.skipped", {
+        occurrenceId: data.occurrenceId,
+        taskId: task.id,
+        reason: "successor_exists",
+      });
+      return "successor_exists";
     }
     throw err;
   }
+  return "generated";
 }
 
+/**
+ * Contained at the batch boundary (Checkpoint 9.0), for the same reason every
+ * other retrying lane is: the handler used to rethrow raw, so a `pg`
+ * DatabaseError's `detail` ("Failing row contains (...)") or a core recurrence
+ * error carrying the RRULE text in its message was persisted verbatim into
+ * `pgboss.job.output` -- and, on exhaustion, would have been copied onto the
+ * dead-letter job too. The rethrow is UNCHANGED in effect: pg-boss still sees a
+ * failure and applies the queue's retry policy; only what it persists differs.
+ *
+ * The per-job classification line is emitted BEFORE the throw so a failure is
+ * visible in the log at every attempt, not only on the dead-letter handler's
+ * final say. `errorToken` emits a SQLSTATE or a class name and nothing else.
+ */
 export function createGenerateLazyOccurrenceHandler(db: Db) {
-  return async function handleGenerateLazyOccurrence(
-    jobs: Job<GenerateLazyOccurrenceJobData>[],
-  ): Promise<void> {
-    for (const job of jobs) {
-      await generateOne(db, job.data);
-    }
-  };
+  return withOccurrencesJobErrorContainment(
+    OCCURRENCES_GENERATE_LAZY_QUEUE,
+    async function handleGenerateLazyOccurrence(
+      jobs: Job<GenerateLazyOccurrenceJobData>[],
+    ): Promise<void> {
+      for (const job of jobs) {
+        try {
+          await generateOne(db, job.data);
+        } catch (err) {
+          log.warn("occurrences.generate_lazy.failed", {
+            occurrenceId: job.data.occurrenceId,
+            fromStatus: job.data.fromStatus,
+            error: errorToken(err),
+          });
+          throw err;
+        }
+      }
+    },
+  );
 }

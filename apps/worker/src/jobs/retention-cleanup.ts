@@ -1,7 +1,9 @@
 import {
+  healthOauthStates,
   healthSyncRuns,
   mailDigests,
   mailMessages,
+  mailOauthStates,
   mailSyncRuns,
   monitorChecks,
   type Db,
@@ -16,8 +18,11 @@ import { resolveDigestTimezone } from "../mail/digest/run.js";
 // explicit and every window is the owner-approved number, never invented).
 //
 // ===========================================================================
-// ONE CENTRAL EXECUTION PATH, FIVE INDEPENDENT TABLES.
+// ONE CENTRAL EXECUTION PATH, SEVEN INDEPENDENT TABLES.
 // ===========================================================================
+//
+// Five age-windowed tables from Checkpoint 8.6C (D3-D6), plus the two OAuth
+// state tables added by Checkpoint 9.0 Part D (see the section below).
 //
 // Each table gets its own single bounded DELETE, tried independently of the
 // others: one table's failure must not stop the rest (a Postgres error on
@@ -62,6 +67,46 @@ import { resolveDigestTimezone } from "../mail/digest/run.js";
 // entirely -- rather than trusting `started_at` age alone to prove
 // abandonment -- means a retention pass can never race a run that is still
 // writing to its own row.
+//
+// ---------------------------------------------------------------------------
+// WHY EXPIRED OAUTH STATES ARE SWEPT HERE, AND WHY THEY HAVE NO WINDOW.
+//
+// `health_oauth_states` and `mail_oauth_states` hold the single-use CSRF
+// state for a consent flow: a sha256 of the state (never the raw value), the
+// redirect it was bound to, and an `expires_at` stamped at mint from the
+// API's own 10-minute TTL (`STATE_TTL_MS` in apps/api/src/services/
+// health-connection.ts and mail-connection.ts). Consumption is an UPDATE
+// that sets `consumed_at`; nothing ever deleted a row, so both tables grew
+// monotonically. ADR-047 recorded the INTENT that "expired OAuth states" are
+// swept as operational metadata; ADR-057 #1 recorded that the two sweep
+// functions written for it in apps/api had zero production callers; ADR-061
+// carried "the OAuth-state half remains open" into Phase 9. This is the
+// closure. The apps/api functions are deleted rather than called, because
+// apps/worker may never import from apps/api and two implementations of one
+// DELETE is how one of them rots.
+//
+// There is NO retention window constant for these two tables, and that is
+// not an omission. Every other table here is pruned by an owner-chosen age
+// (D3-D6). An OAuth state carries its own eligibility in the row: past
+// `expires_at` it is unusable by construction -- `consumeOAuthState` rejects
+// it with "has expired" even when it is unconsumed -- so "older than N days"
+// would be a second, invented number laid over a row that already says when
+// it stopped mattering. The predicate is exactly the one the deleted API
+// functions used, `expires_at < now`, read from the stored column; a future
+// TTL change in the API flows through without touching this file.
+//
+// `consumed_at` is deliberately NOT a criterion. A consumed-but-unexpired row
+// is already dead to the consent flow (the UPDATE ... WHERE consumed_at IS
+// NULL cannot match it again), but it ages out within the same 10 minutes on
+// `expires_at` alone, and one predicate that mirrors the consumer's own
+// expiry rule is simpler to reason about than two. What matters for safety
+// is the converse: a LIVE in-flight state -- unconsumed, minted less than 10
+// minutes ago -- has `expires_at` strictly in the future relative to any
+// `now` this job captures, so it cannot match. Deleting a row this job is
+// allowed to delete changes only WHICH message branch a later consume of it
+// throws ("is unknown, already used, or expired" instead of "has expired");
+// both are the same error class, both routes map it to `400 invalid_state`,
+// and nothing distinguishes the two strings.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -111,7 +156,7 @@ function digestCutoffLocalDate(now: Date, days: number): string {
  * Wraps whatever a table's cleanup statement throws down to a queue name and
  * a SQLSTATE, never a message -- the same containment `MonitorJobError` and
  * `MailJobError` apply to their lanes, sized down to what this lane actually
- * needs. None of these five statements carry attacker-authored text (they are
+ * needs. None of these seven statements carry attacker-authored text (they are
  * plain timestamp comparisons), so the residual risk is lower than theirs,
  * but the shape is kept identical rather than trusting that a future Postgres
  * error can never carry a value worth not persisting into pgboss.job.output.
@@ -208,6 +253,37 @@ async function deleteHealthSyncRuns(db: Db, now: Date): Promise<RetentionTableRe
   };
 }
 
+/**
+ * Checkpoint 9.0 Part D. The row's own `expires_at` is the whole predicate
+ * -- see the module comment for why there is no window constant and why
+ * `consumed_at` is not consulted. `cutoff` is reported as the pass's captured
+ * `now` so the log line reads the same way as every other table's: "rows
+ * whose axis column is strictly before this instant were deleted".
+ */
+async function deleteHealthOauthStates(db: Db, now: Date): Promise<RetentionTableResult> {
+  const start = Date.now();
+  const result = await db.delete(healthOauthStates).where(lt(healthOauthStates.expiresAt, now));
+  return {
+    table: "health_oauth_states",
+    cutoff: now.toISOString(),
+    deleted: result.rowCount ?? 0,
+    durationMs: Date.now() - start,
+    ok: true,
+  };
+}
+
+async function deleteMailOauthStates(db: Db, now: Date): Promise<RetentionTableResult> {
+  const start = Date.now();
+  const result = await db.delete(mailOauthStates).where(lt(mailOauthStates.expiresAt, now));
+  return {
+    table: "mail_oauth_states",
+    cutoff: now.toISOString(),
+    deleted: result.rowCount ?? 0,
+    durationMs: Date.now() - start,
+    ok: true,
+  };
+}
+
 export interface RetentionTableCleaner {
   table: string;
   clean: (db: Db, now: Date) => Promise<RetentionTableResult>;
@@ -220,6 +296,8 @@ export const TABLE_CLEANERS: readonly RetentionTableCleaner[] = [
   { table: "mail_digests", clean: deleteMailDigests },
   { table: "mail_sync_runs", clean: deleteMailSyncRuns },
   { table: "health_sync_runs", clean: deleteHealthSyncRuns },
+  { table: "health_oauth_states", clean: deleteHealthOauthStates },
+  { table: "mail_oauth_states", clean: deleteMailOauthStates },
 ];
 
 /**
@@ -229,7 +307,7 @@ export const TABLE_CLEANERS: readonly RetentionTableCleaner[] = [
  * immediately after a clean pass finds nothing newly eligible and deletes 0
  * rows everywhere, since the cutoff is recomputed fresh from `now` each call.
  *
- * `cleaners` defaults to the real five-table list and exists as a seam for
+ * `cleaners` defaults to the real seven-table list and exists as a seam for
  * the tests proving "one table's failure does not stop the others" -- the
  * alternative (revoking a real Postgres privilege mid-test) would need DDL
  * rights `posops_app` deliberately does not have, per the same least-

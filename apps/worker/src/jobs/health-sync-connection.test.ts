@@ -24,6 +24,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "../env.js";
+import { setLogSink } from "../logger.js";
 import { HealthSyncJobError } from "./health-sync-connection.js";
 import {
   isSyncableMetric,
@@ -668,6 +669,54 @@ describe("health.google.sync-connection", () => {
       expect(run!.rowsRejected).toBe(1);
       expect(await dailyRows(connectionId)).toHaveLength(0);
       expect((await streamRow(connectionId, "steps")).verifiedThroughDate).toBeNull();
+    });
+
+    // Checkpoint 9.0. The HRV incident tripped a breaker five times with an
+    // identical rejection and left no record of WHICH shape was rejected: the
+    // count survived, the Rejection did not, and the worker log that held the
+    // response shape was discarded by a container recreation. This pins the
+    // two durable records that now exist -- the rejection CODE as a token in
+    // the run row, and the code/key-path/JSON-kind triple in a structured log
+    // line -- and that neither carries the rejected value itself.
+    it("records WHICH shape was rejected: a token in error_message and a value-free log line", async () => {
+      const records: Record<string, unknown>[] = [];
+      const restore = setLogSink({ write: (_level, record) => records.push(record) });
+      try {
+        const connectionId = await insertConnection();
+        await insertStream(connectionId, "steps", { firstDataDate: "2026-07-01" });
+
+        const fake = createFakeGoogleHealthClient();
+        fake.queueDailyRollUp("steps", {
+          rollupDataPoints: [steps("2026-08-20", "12.5"), steps("2026-08-21", "13.5")],
+        });
+        await runPass(fake, { connectionId, trigger: "manual" });
+
+        const [run] = await runRows(connectionId);
+        expect(run!.rowsRejected).toBe(2);
+        // The class first, then the rejection code upper-cased into the TOKEN
+        // form closeSyncRun persists; nothing else.
+        expect(run!.errorMessage).toBe("value_shape_violation LEAF_TYPE_MISMATCH");
+
+        const rejectionLines = records.filter((r) => r["event"] === "health.sync.rejection");
+        // Two records, one distinct shape: the line is per SHAPE with a count,
+        // not per record.
+        expect(rejectionLines).toHaveLength(1);
+        expect(rejectionLines[0]).toMatchObject({
+          runId: run!.id,
+          metric: "steps",
+          kind: "manual",
+          code: "leaf_type_mismatch",
+          keyPath: "steps.countSum",
+          sawType: "string",
+          count: 2,
+        });
+        const serialized = JSON.stringify(records);
+        expect(serialized).not.toContain("12.5");
+        expect(serialized).not.toContain("13.5");
+        expect(run!.errorMessage).not.toContain("12.5");
+      } finally {
+        restore();
+      }
     });
 
     it("drops records dated outside the requested window and counts them as rejections", async () => {

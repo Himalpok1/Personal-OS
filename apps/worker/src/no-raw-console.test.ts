@@ -42,7 +42,9 @@ const PORTED_LOGGER_PATH = path.resolve(
 const PRE_EXISTING: Readonly<Record<string, number>> = {
   "health/orchestrate.ts": 3,
   "jobs/capture-parse.ts": 1,
-  "jobs/generate-lazy-occurrence.ts": 4,
+  // "jobs/generate-lazy-occurrence.ts" held 4 until Checkpoint 9.0 moved every
+  // one of them onto the structured logger; the entry is removed rather than
+  // zeroed so a reintroduced call fails as an UNEXPECTED file, not as a count.
   "jobs/ptt-transcribe.ts": 3,
   "jobs/sweep-orphan-audio.ts": 1,
 };

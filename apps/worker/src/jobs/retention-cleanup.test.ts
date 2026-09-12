@@ -2,10 +2,12 @@ import {
   aiProviderConnections,
   aiTaskRoutes,
   healthConnections,
+  healthOauthStates,
   healthSyncRuns,
   mailConnections,
   mailDigests,
   mailMessages,
+  mailOauthStates,
   mailSyncCursors,
   mailSyncRuns,
   monitorChecks,
@@ -16,6 +18,7 @@ import {
   type Db,
 } from "@personal-os/db";
 import { createMonitorTarget } from "@personal-os/monitoring";
+import { setLogSink } from "@personal-os/core/logging/logger";
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { env } from "../env.js";
@@ -93,6 +96,67 @@ async function seedMonitorCheck(targetId: string, checkedAt: Date): Promise<void
 
 async function seedMailDigest(digestDate: string): Promise<void> {
   await db.insert(mailDigests).values({ digestDate, timezone: "UTC", content: { text: "digest" } });
+}
+
+// The API's own TTL (`STATE_TTL_MS` in apps/api/src/services/*-connection.ts).
+// Restated here rather than imported because apps/worker may never import
+// from apps/api; the retention predicate does not depend on this number --
+// it reads the row's stored `expires_at` -- so a drift between the two only
+// affects how realistic the "live in-flight state" fixtures below are.
+const STATE_TTL_MS = 10 * 60_000;
+
+// Values shaped like the real rows (a 64-hex sha256, an https redirect) so
+// the log-capture test below is asserting against something that WOULD be
+// recognisable if it leaked, not against a placeholder no filter could miss.
+// Every seeded hash shares this 32-hex prefix (the unique index needs the
+// rest to differ), so the prefix is what the log assertion looks for.
+const SEEDED_STATE_HASH_PREFIX = "e3b0c44298fc1c149afbf4c8996fb924";
+const SEEDED_REDIRECT_URI = "https://personal-os.example.ts.net/oauth/callback";
+
+function uniqueStateHash(): string {
+  const suffix = Math.random().toString(16).slice(2).padEnd(32, "0").slice(0, 32);
+  return `${SEEDED_STATE_HASH_PREFIX}${suffix}`;
+}
+
+interface OauthStateSeed {
+  expiresAt: Date;
+  consumedAt?: Date | null;
+}
+
+async function seedHealthOauthState(seed: OauthStateSeed): Promise<string> {
+  const [row] = await db
+    .insert(healthOauthStates)
+    .values({
+      stateHash: uniqueStateHash(),
+      redirectUri: SEEDED_REDIRECT_URI,
+      expiresAt: seed.expiresAt,
+      consumedAt: seed.consumedAt ?? null,
+    })
+    .returning({ id: healthOauthStates.id });
+  return row!.id;
+}
+
+async function seedMailOauthState(seed: OauthStateSeed): Promise<string> {
+  const [row] = await db
+    .insert(mailOauthStates)
+    .values({
+      stateHash: uniqueStateHash(),
+      redirectUri: SEEDED_REDIRECT_URI,
+      expiresAt: seed.expiresAt,
+      consumedAt: seed.consumedAt ?? null,
+    })
+    .returning({ id: mailOauthStates.id });
+  return row!.id;
+}
+
+async function healthOauthStateIds(): Promise<string[]> {
+  const rows = await db.select({ id: healthOauthStates.id }).from(healthOauthStates);
+  return rows.map((r) => r.id).sort();
+}
+
+async function mailOauthStateIds(): Promise<string[]> {
+  const rows = await db.select({ id: mailOauthStates.id }).from(mailOauthStates);
+  return rows.map((r) => r.id).sort();
 }
 
 beforeEach(async () => {
@@ -469,6 +533,167 @@ describe("retentionCleanupJob (Checkpoint 8.6C)", () => {
     });
   });
 
+  describe("OAuth state tables (Checkpoint 9.0 Part D, expires_at only, no window)", () => {
+    // Every case runs BOTH tables through the same expectations. The two
+    // tables are deliberate near-copies of each other (see the schema
+    // comments), and a test that covered only one would let the other drift.
+    const TABLES = [
+      { table: "health_oauth_states", seed: seedHealthOauthState, ids: healthOauthStateIds },
+      { table: "mail_oauth_states", seed: seedMailOauthState, ids: mailOauthStateIds },
+    ] as const;
+
+    for (const { table, seed, ids } of TABLES) {
+      describe(table, () => {
+        it("deletes an expired row whether or not it was consumed -- consumption is not what makes it eligible", async () => {
+          await seed({ expiresAt: new Date(NOW.getTime() - 1), consumedAt: null });
+          await seed({
+            expiresAt: new Date(NOW.getTime() - 1),
+            consumedAt: new Date(NOW.getTime() - STATE_TTL_MS),
+          });
+
+          const results = await retentionCleanupJob(db, NOW);
+
+          expect(results.find((r) => r.table === table)!.deleted).toBe(2);
+          expect(await ids()).toEqual([]);
+        });
+
+        it("preserves a LIVE in-flight state (unconsumed, expires_at in the future) -- the daily sweep can never race a consent screen", async () => {
+          // A state minted an instant ago has expires_at = now + TTL; one
+          // minted 9m59s ago still has a second of life. Both must survive:
+          // `expires_at < now` cannot match a row whose expires_at is in the
+          // future, so a human mid-consent is never invalidated by this job.
+          const freshlyMinted = await seed({ expiresAt: new Date(NOW.getTime() + STATE_TTL_MS) });
+          const nearlyExpired = await seed({ expiresAt: new Date(NOW.getTime() + 1_000) });
+
+          const results = await retentionCleanupJob(db, NOW);
+
+          expect(results.find((r) => r.table === table)!.deleted).toBe(0);
+          expect(await ids()).toEqual([freshlyMinted, nearlyExpired].sort());
+        });
+
+        it("preserves a consumed-but-unexpired row -- it ages out on expires_at like every other row, not on consumption", async () => {
+          // A consumed row is already dead to the consent flow, but this job
+          // does not consult consumed_at: one predicate, mirroring the
+          // consumer's own expiry rule, is the whole contract. The row goes
+          // on the next pass after it expires.
+          const id = await seed({
+            expiresAt: new Date(NOW.getTime() + STATE_TTL_MS / 2),
+            consumedAt: new Date(NOW.getTime() - 1_000),
+          });
+
+          const results = await retentionCleanupJob(db, NOW);
+
+          expect(results.find((r) => r.table === table)!.deleted).toBe(0);
+          expect(await ids()).toEqual([id]);
+        });
+
+        it("uses a STRICT inequality: a row expiring exactly at `now` survives, one expiring 1ms earlier is deleted", async () => {
+          // The consumer rejects `expiresAt <= now`; this job deletes only
+          // `expires_at < now`. The sweep is therefore never LESS
+          // conservative than the consumer: every row it deletes is a row
+          // any later consume would already have refused. A row at exactly
+          // `now` is the one instant where the two rules differ, and it is
+          // kept -- the safe direction under ADR-024, where deletion is
+          // irreversible.
+          const exactlyAtNow = await seed({ expiresAt: NOW });
+          await seed({ expiresAt: new Date(NOW.getTime() - 1) });
+
+          const results = await retentionCleanupJob(db, NOW);
+
+          expect(results.find((r) => r.table === table)!.deleted).toBe(1);
+          expect(await ids()).toEqual([exactlyAtNow]);
+        });
+
+        it("is idempotent -- a rerun with the same `now` deletes 0 additional rows", async () => {
+          await seed({ expiresAt: new Date(NOW.getTime() - 60_000) });
+          const live = await seed({ expiresAt: new Date(NOW.getTime() + STATE_TTL_MS) });
+
+          const first = await retentionCleanupJob(db, NOW);
+          expect(first.find((r) => r.table === table)!.deleted).toBe(1);
+
+          const second = await retentionCleanupJob(db, NOW);
+          expect(second.find((r) => r.table === table)!.deleted).toBe(0);
+          expect(await ids()).toEqual([live]);
+        });
+
+        it("reports the pass's own captured `now` as the cutoff -- there is no window constant to report", async () => {
+          const results = await retentionCleanupJob(db, NOW);
+          expect(results.find((r) => r.table === table)!.cutoff).toBe(NOW.toISOString());
+        });
+      });
+    }
+
+    it("never logs a state hash, a redirect URI, or any other row content -- captured log records carry counts and instants only", async () => {
+      // Dynamic complement to the structural field-name test above: seed
+      // rows whose values are shaped like the real thing (a 64-hex hash, an
+      // https URL), capture every record the job emits through the real
+      // sink seam, and assert none of that content -- nor any fragment of
+      // it -- reached a log line. The structural test proves which FIELD
+      // NAMES are passed; this proves what VALUES arrived.
+      await seedHealthOauthState({ expiresAt: new Date(NOW.getTime() - 1) });
+      await seedMailOauthState({ expiresAt: new Date(NOW.getTime() - 1) });
+
+      const records: Record<string, unknown>[] = [];
+      const restore = setLogSink({ write: (_level, record) => records.push(record) });
+      try {
+        await retentionCleanupJob(db, NOW);
+      } finally {
+        restore();
+      }
+
+      expect(records.length).toBeGreaterThan(0);
+      const serialized = JSON.stringify(records);
+      expect(serialized).not.toContain(SEEDED_STATE_HASH_PREFIX);
+      expect(serialized).not.toContain(SEEDED_REDIRECT_URI);
+      expect(serialized).not.toContain("example.ts.net");
+      expect(serialized).not.toContain("oauth/callback");
+      // And positively: the two tables' own completion lines are present,
+      // with the counts the rows above should produce.
+      const completed = records.filter((r) => r["event"] === "retention.cleanup.table_completed");
+      expect(completed.find((r) => r["table"] === "health_oauth_states")?.["deleted"]).toBe(1);
+      expect(completed.find((r) => r["table"] === "mail_oauth_states")?.["deleted"]).toBe(1);
+    });
+
+    it("hands every cleaner the SAME captured `now` -- one instant per pass, never re-read mid-run", async () => {
+      // The predicate is `expires_at < now`, so if one table's cleaner read
+      // the clock later than another's, a row expiring between the two
+      // reads would be eligible in one table and not its twin, and the log
+      // line's `cutoff` would disagree with the predicate that actually ran.
+      const seen: Date[] = [];
+      const observing: RetentionTableCleaner[] = TABLE_CLEANERS.map((c) => ({
+        table: c.table,
+        clean: (innerDb, now) => {
+          seen.push(now);
+          return c.clean(innerDb, now);
+        },
+      }));
+
+      await retentionCleanupJob(db, NOW, observing);
+
+      expect(seen).toHaveLength(TABLE_CLEANERS.length);
+      for (const now of seen) expect(now).toBe(NOW);
+    });
+
+    it("does NOT touch health_connections or mail_connections while sweeping their state tables", async () => {
+      const healthConnectionId = await seedHealthConnection();
+      const mailConnection = await seedMailConnection(db);
+      await seedHealthOauthState({ expiresAt: new Date(NOW.getTime() - 1) });
+      await seedMailOauthState({ expiresAt: new Date(NOW.getTime() - 1) });
+
+      await retentionCleanupJob(db, NOW);
+
+      expect(
+        await db
+          .select()
+          .from(healthConnections)
+          .where(eq(healthConnections.id, healthConnectionId)),
+      ).toHaveLength(1);
+      expect(
+        await db.select().from(mailConnections).where(eq(mailConnections.id, mailConnection.id)),
+      ).toHaveLength(1);
+    });
+  });
+
   describe("safety: no retention path touches unrelated durable data", () => {
     it("touches no notes, tasks, AI configuration, or credential tables", async () => {
       const [note] = await db
@@ -488,6 +713,8 @@ describe("retentionCleanupJob (Checkpoint 8.6C)", () => {
       await seedMonitorCheck(target.id, daysAgo(60));
       const mailConn = await seedMailConnection(db);
       await seedMailMessage(db, mailConn.id, { internalDate: daysAgo(60) });
+      await seedHealthOauthState({ expiresAt: daysAgo(60) });
+      await seedMailOauthState({ expiresAt: daysAgo(60) });
 
       await retentionCleanupJob(db, NOW);
 

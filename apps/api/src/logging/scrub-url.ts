@@ -39,6 +39,32 @@ export const SENSITIVE_QUERY_PARAMS: readonly string[] = ["code", "state", "acce
 const REDACTED = "[redacted]";
 
 /**
+ * Index of the character that starts the query string, or -1 if there is none.
+ *
+ * The router, not this file, decides where the query begins, and it does NOT
+ * split on `?` alone: find-my-way's `safeDecodeURI` (lib/url-sanitizer.js)
+ * treats `?` and `#` as query delimiters, so `/search#q=x` is routed to
+ * `/search` and executed with `q=x` -- a client that can put a `#` on the wire
+ * gets a real search out of it. A scrubber that only looked for `?` would then
+ * write that whole string to the log as if it were a path, which is exactly a
+ * mismatch between the privacy control and the thing it guards (Checkpoint 9.0
+ * Part B review). The earliest of the two wins, because a `#` inside a `?`
+ * query (or vice versa) is already query by then.
+ *
+ * `;` is deliberately not a delimiter here: find-my-way splits on it only under
+ * `useSemicolonDelimiter`, which Fastify defaults to false and this API never
+ * sets, so `/nope;code=x` is a PATH to the router and is kept as one. If that
+ * option is ever enabled, this function is where the third delimiter goes.
+ */
+function findQueryStart(url: string): number {
+  const question = url.indexOf("?");
+  const hash = url.indexOf("#");
+  if (question === -1) return hash;
+  if (hash === -1) return question;
+  return Math.min(question, hash);
+}
+
+/**
  * Returns `url` with every sensitive parameter's value replaced.
  *
  * Deliberately string-based rather than URL-based: `req.url` is a path with a
@@ -47,10 +73,14 @@ const REDACTED = "[redacted]";
  * logs. Preserving the URL as-sent makes log lines comparable.
  */
 export function scrubSensitiveQueryParams(url: string): string {
-  const queryStart = url.indexOf("?");
+  const queryStart = findQueryStart(url);
   if (queryStart === -1) return url;
 
+  // The delimiter is re-emitted as sent (`?` or `#`) for the same reason the
+  // rest of the URL is: a normalized log line is no longer comparable with
+  // what the client actually put on the wire.
   const path = url.slice(0, queryStart);
+  const delimiter = url[queryStart];
   const query = url.slice(queryStart + 1);
   if (query.length === 0) return url;
 
@@ -75,5 +105,31 @@ export function scrubSensitiveQueryParams(url: string): string {
     })
     .join("&");
 
-  return `${path}?${scrubbed}`;
+  return `${path}${delimiter}${scrubbed}`;
+}
+
+/**
+ * Returns `url` with the ENTIRE query string destroyed, keeping only the path
+ * and a marker that a query was present.
+ *
+ * For a route that does not exist (Checkpoint 9.0 Part B). `scrubSensitiveQueryParams`
+ * works by NAME, which is the right tool for a known route: its parameters are
+ * enumerable, so the sensitive ones can be listed and the rest stay readable
+ * for diagnosis (`/tasks?limit=5` should say `limit=5`). A mistyped route has no
+ * such list -- it can carry any parameter name at all, so name-based scrubbing
+ * can never enumerate what to hide -- and its query has no diagnostic value
+ * anyway, because there is no handler that would have read it. The only
+ * observability that matters for a 404 is the method and the path, which is
+ * what remains.
+ *
+ * The marker uses the same `[redacted]` sentinel as the per-parameter scrub so a
+ * single grep finds every place the logger has suppressed something. `?` alone
+ * (an empty query) is passed through unchanged: there is nothing to hide, and
+ * rewriting it would make the two log lines for one request disagree.
+ */
+export function scrubQueryForUnknownRoute(url: string): string {
+  const queryStart = findQueryStart(url);
+  if (queryStart === -1) return url;
+  if (queryStart === url.length - 1) return url;
+  return `${url.slice(0, queryStart)}${url[queryStart]}${REDACTED}`;
 }

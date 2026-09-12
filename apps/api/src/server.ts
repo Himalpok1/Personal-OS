@@ -6,7 +6,7 @@ import type { MailClient } from "@personal-os/mail-providers";
 import { workerHeartbeat } from "@personal-os/db";
 import { HealthCheckResponseSchema, type HealthCheckResponse } from "@personal-os/schema";
 import { sql } from "drizzle-orm";
-import Fastify from "fastify";
+import Fastify, { type FastifyError, type FastifyReply, type FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 import { env } from "./env.js";
 import { registerBoss } from "./plugins/boss.js";
@@ -20,6 +20,7 @@ import {
   type HeartbeatWatchdogOptions,
 } from "./plugins/heartbeat-watchdog.js";
 import { buildLoggerOptions } from "./logging/logger-options.js";
+import { scrubQueryForUnknownRoute } from "./logging/scrub-url.js";
 import agendaRoutes from "./routes/agenda.js";
 import askRoutes from "./routes/ask.js";
 import briefsRoutes from "./routes/briefs.js";
@@ -63,11 +64,63 @@ export interface BuildServerOptions {
    */
   heartbeatWatchdog?: HeartbeatWatchdogOptions;
   gmailClient?: MailClient;
+  /**
+   * Tests only (Checkpoint 9.0 Part B). Where the REAL server's log lines go,
+   * so `server.not-found.test.ts` can assert against the captured stream of
+   * the actual `buildServer` instance -- not-found handler, serializer and
+   * all -- rather than against a lookalike Fastify instance. Production
+   * (index.ts) never passes this, so the logger keeps writing to stdout.
+   */
+  logDestination?: NodeJS.WritableStream;
 }
 
 export async function buildServer(options: BuildServerOptions = {}) {
   const app = Fastify({
-    logger: buildLoggerOptions(),
+    logger:
+      options.logDestination === undefined
+        ? buildLoggerOptions()
+        : // `stream` is a Pino destination that Fastify's logger factory
+          // honours (lib/logger-factory.js), and its options type accepts it
+          // directly -- no cast, so the HTTP/1 overload still resolves and
+          // every downstream FastifyInstance annotation keeps matching.
+          // `level: "info"` is pinned explicitly so the captured lines do not
+          // depend on Pino's default.
+          {
+            ...buildLoggerOptions(),
+            level: "info",
+            stream: options.logDestination,
+          },
+    // Checkpoint 9.0 Part B. A URL whose PATH fails percent-decoding
+    // (`/bad%zz?code=...`) never reaches the router, the not-found handler,
+    // or setErrorHandler: find-my-way hands it to Fastify's main-router
+    // `onBadUrl` (fastify.js), which without this option writes a raw 400
+    // whose `message` is `'<the entire raw URL, query included>' is not a
+    // valid url component` -- an echo of the query straight back to the
+    // client -- and logs nothing at all, not even "incoming request".
+    // Supplying `frameworkErrors` replaces that raw response and makes
+    // Fastify log the request through the ordinary `req` serializer first,
+    // under a context whose `config.url` is undefined, so `request.is404`
+    // is true and the whole query is dropped exactly as for an unknown
+    // route (proven in server.not-found.test.ts). The same option also
+    // covers `FST_ERR_MAX_PARAM_LENGTH` (414) and async-constraint errors.
+    //
+    // `error.message` carries the raw URL and is deliberately never logged
+    // or sent; only the framework's own error code is, in the same
+    // `{ error: <code> }` shape setErrorHandler already uses for
+    // framework-level 4xx errors.
+    frameworkErrors(error: FastifyError, request: FastifyRequest, reply: FastifyReply) {
+      request.log.info(
+        {
+          classification: "malformed_request_url",
+          code: error.code,
+          method: request.method,
+          url: scrubQueryForUnknownRoute(request.url),
+        },
+        "malformed request url",
+      );
+      // Not returned: FastifyReply is thenable and this option expects void.
+      void reply.code(error.statusCode ?? 400).send({ error: error.code });
+    },
   });
 
   registerDb(app);
@@ -116,6 +169,41 @@ export async function buildServer(options: BuildServerOptions = {}) {
     }
     request.log.error({ err }, "unhandled error");
     return reply.code(500).send({ error: "internal_error" });
+  });
+
+  // Checkpoint 9.0 Part B. Fastify's default not-found handler (lib/four-oh-four.js
+  // `basic404`) does two things this API must not: it logs
+  // `Route ${method}:${request.raw.url} not found` as a PLAIN MESSAGE STRING,
+  // which bypasses the `req` serializer that is the only thing scrubbing
+  // `?code=`/`&state=`/`?q=` out of the log; and it echoes that same raw URL
+  // back to the client in the body. So a mistyped OAuth callback
+  // (`/health-connections/google/callbak?code=...`) wrote a live
+  // authorization code to the container log, on the one path the
+  // Checkpoint 7.2 scrubber could not reach. Registering a handler replaces
+  // `basic404` entirely (four-oh-four.js: `_routeEventHandler = handler`), so
+  // the raw-URL message line is never emitted.
+  //
+  // The whole query is dropped here rather than name-scrubbed: a route that
+  // does not exist can carry any parameter name, so no list can enumerate
+  // what to hide, and nothing would have read the query anyway. Method and
+  // path are kept -- that is the only observability a 404 has. The
+  // "incoming request" line for the same request applies the identical
+  // policy through the serializer (`request.is404`), so the two lines agree.
+  //
+  // The body is the API's own vocabulary -- `{ error: "not_found" }`, the
+  // exact shape every route already returns for a missing entity -- so
+  // `ApiClientError.code` is `not_found` for a missing route and a missing
+  // row alike, and no URL, message or framework prose is echoed.
+  app.setNotFoundHandler((request, reply) => {
+    request.log.info(
+      {
+        classification: "route_not_found",
+        method: request.method,
+        url: scrubQueryForUnknownRoute(request.url),
+      },
+      "route not found",
+    );
+    return reply.code(404).send({ error: "not_found" });
   });
 
   app.get("/health", async (): Promise<HealthCheckResponse> => {

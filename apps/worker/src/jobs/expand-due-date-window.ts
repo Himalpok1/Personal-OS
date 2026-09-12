@@ -7,6 +7,14 @@ import {
 } from "@personal-os/core";
 import { events, occurrences, tasks, type Db } from "@personal-os/db";
 import { and, eq, isNotNull, isNull, ne } from "drizzle-orm";
+import type { Job } from "pg-boss";
+import { errorToken, log } from "../logger.js";
+import { OCCURRENCES_EXPAND_WINDOW_QUEUE } from "../queue-names.js";
+import {
+  OccurrencesJobError,
+  withOccurrencesJobErrorContainment,
+  type FailedParentRef,
+} from "./occurrences-job-error.js";
 
 // Rolling window per docs/ARCHITECTURE.md: "Never materialize infinite
 // rows. Expand a rolling 90-day window into occurrences."
@@ -80,6 +88,31 @@ async function upsertOccurrences(
 export async function expandDueDateWindowJob(db: Db): Promise<void> {
   const now = new Date();
 
+  // PER-PARENT CONTAINMENT (Checkpoint 9.0).
+  //
+  // The two loops below used to run bare, so one parent whose rule could not be
+  // expanded -- a corrupt RRULE, an exdate the library rejects, a timezone Intl
+  // no longer knows -- threw out of the whole job, and every parent AFTER it in
+  // iteration order was silently not expanded that night. pg-boss then retried
+  // the identical sweep three times, hit the identical parent, and gave up with
+  // no dead-letter queue to give up INTO; the nightly cron re-ran it the next
+  // night and the same parent stopped it again. A persistent per-item fault
+  // was therefore invisible forever while degrading every other recurring
+  // item, which is the exact opposite of the isolation a sweep should have.
+  //
+  // Now each parent is attempted independently. A failure is recorded (ids and
+  // an error token only -- never the rule text the underlying error message
+  // interpolates) and the sweep continues. The job still FAILS at the end when
+  // anything failed, on purpose: a retry re-runs the idempotent sweep (every
+  // insert is ON CONFLICT DO NOTHING), a transient fault heals, and a
+  // persistent one exhausts the retries and reaches
+  // occurrences.expand-window.dead, which alerts. The thrown error carries
+  // counts and a bounded list of failed parent IDS only, so pgboss.job.output
+  // names the parent an operator must look at without ever holding a raw
+  // message.
+  const failures: FailedParentRef[] = [];
+  let attempted = 0;
+
   const dueDateTasks = await db
     .select()
     .from(tasks)
@@ -94,16 +127,26 @@ export async function expandDueDateWindowJob(db: Db): Promise<void> {
 
   for (const task of dueDateTasks) {
     if (!task.rrule || !task.recurrenceTimezone || !task.dueAt) continue;
-    const rule = buildRule({
-      rrule: task.rrule,
-      recurrenceTimezone: task.recurrenceTimezone,
-      anchorInstant: task.dueAt,
-      recurrenceUntil: task.recurrenceUntil,
-      recurrenceCount: task.recurrenceCount,
-      recurrenceExdates: task.recurrenceExdates,
-    });
-    const generated = expandDueDateWindow(rule, WINDOW_DAYS, now);
-    await upsertOccurrences(db, "task", task.id, generated);
+    attempted += 1;
+    try {
+      const rule = buildRule({
+        rrule: task.rrule,
+        recurrenceTimezone: task.recurrenceTimezone,
+        anchorInstant: task.dueAt,
+        recurrenceUntil: task.recurrenceUntil,
+        recurrenceCount: task.recurrenceCount,
+        recurrenceExdates: task.recurrenceExdates,
+      });
+      const generated = expandDueDateWindow(rule, WINDOW_DAYS, now);
+      await upsertOccurrences(db, "task", task.id, generated);
+    } catch (err) {
+      failures.push({ parentType: "task", parentId: task.id });
+      log.warn("occurrences.expand_window.parent_failed", {
+        parentType: "task",
+        parentId: task.id,
+        error: errorToken(err),
+      });
+    }
   }
 
   const recurringEvents = await db
@@ -112,26 +155,71 @@ export async function expandDueDateWindowJob(db: Db): Promise<void> {
     .where(and(isNotNull(events.rrule), isNull(events.archivedAt)));
 
   for (const event of recurringEvents) {
-    // Canonical shared builder (packages/core/src/recurrence/event-recurrence.ts)
-    // -- handles both timed events (dtstart from starts_at, byte-identical to
-    // the previous local buildRule usage) and all-day events (dtstart anchored
-    // at local noon on start_date, since EventCreateSchema forces all-day rows
-    // to have starts_at NULL / start_date set). Returns null when the row
-    // can't yet produce a rule (e.g. all-day with no start_date), which is the
-    // only skip condition now -- no more blanket `!event.startsAt` guard that
-    // silently dropped every all-day recurring series.
-    const rule = buildEventRecurrenceRule({
-      rrule: event.rrule,
-      recurrenceTimezone: event.recurrenceTimezone,
-      allDay: event.allDay,
-      startsAt: event.startsAt,
-      startDate: event.startDate,
-      recurrenceUntil: event.recurrenceUntil,
-      recurrenceCount: event.recurrenceCount,
-      recurrenceExdates: event.recurrenceExdates,
-    });
-    if (!rule) continue;
-    const generated = expandDueDateWindow(rule, WINDOW_DAYS, now);
-    await upsertOccurrences(db, "event", event.id, generated);
+    attempted += 1;
+    try {
+      // Canonical shared builder (packages/core/src/recurrence/event-recurrence.ts)
+      // -- handles both timed events (dtstart from starts_at, byte-identical to
+      // the previous local buildRule usage) and all-day events (dtstart anchored
+      // at local noon on start_date, since EventCreateSchema forces all-day rows
+      // to have starts_at NULL / start_date set). Returns null when the row
+      // can't yet produce a rule (e.g. all-day with no start_date), which is the
+      // only skip condition now -- no more blanket `!event.startsAt` guard that
+      // silently dropped every all-day recurring series.
+      const rule = buildEventRecurrenceRule({
+        rrule: event.rrule,
+        recurrenceTimezone: event.recurrenceTimezone,
+        allDay: event.allDay,
+        startsAt: event.startsAt,
+        startDate: event.startDate,
+        recurrenceUntil: event.recurrenceUntil,
+        recurrenceCount: event.recurrenceCount,
+        recurrenceExdates: event.recurrenceExdates,
+      });
+      if (!rule) continue;
+      const generated = expandDueDateWindow(rule, WINDOW_DAYS, now);
+      await upsertOccurrences(db, "event", event.id, generated);
+    } catch (err) {
+      failures.push({ parentType: "event", parentId: event.id });
+      log.warn("occurrences.expand_window.parent_failed", {
+        parentType: "event",
+        parentId: event.id,
+        error: errorToken(err),
+      });
+    }
   }
+
+  // One summary line per sweep, whatever the outcome, so "did it run and how
+  // much of it worked" is answerable from the log without counting rows.
+  log.info("occurrences.expand_window.completed", {
+    tasks: dueDateTasks.length,
+    events: recurringEvents.length,
+    attempted,
+    failed: failures.length,
+  });
+
+  if (failures.length > 0) {
+    throw new OccurrencesJobError(OCCURRENCES_EXPAND_WINDOW_QUEUE, null, {
+      failed: failures,
+      totalParents: attempted,
+    });
+  }
+}
+
+/**
+ * The pg-boss registration for the nightly sweep (Checkpoint 9.0).
+ *
+ * A factory rather than the inline arrow index.ts used to register, so the
+ * containment guard (queue-containment.test.ts) can resolve it and see the
+ * wrapper. The wrapper adds nothing on the counts-only path -- an
+ * `OccurrencesJobError` passes through it unchanged -- and matters for the
+ * one thing the per-parent loop cannot contain: the two parent SELECTs
+ * themselves, whose failure would otherwise persist a raw `pg` error.
+ */
+export function createExpandDueDateWindowHandler(db: Db): (jobs: Job[]) => Promise<void> {
+  // No explicit type argument on the wrapper call: the containment guard
+  // matches the wrapper's call expression textually, so `<Job>` between the
+  // name and the paren would hide a real wrapper from it.
+  return withOccurrencesJobErrorContainment(OCCURRENCES_EXPAND_WINDOW_QUEUE, async () => {
+    await expandDueDateWindowJob(db);
+  });
 }

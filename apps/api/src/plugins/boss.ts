@@ -16,6 +16,7 @@ import {
   MONITOR_RUN_QUEUE,
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
   NOTIFICATIONS_DISPATCH_QUEUE,
+  OCCURRENCES_GENERATE_LAZY_DEAD_QUEUE,
   OCCURRENCES_GENERATE_LAZY_QUEUE,
   PTT_TRANSCRIBE_DEAD_QUEUE,
   PTT_TRANSCRIBE_QUEUE,
@@ -85,10 +86,20 @@ export async function registerBoss(app: FastifyInstance): Promise<void> {
       deadLetter: CAPTURE_PARSE_DEAD_QUEUE,
     });
     await boss.updateQueue(CAPTURE_PARSE_QUEUE, { deadLetter: CAPTURE_PARSE_DEAD_QUEUE });
-    await boss.createQueue(
-      OCCURRENCES_GENERATE_LAZY_QUEUE,
-      QUEUE_RETRY_OPTIONS[OCCURRENCES_GENERATE_LAZY_QUEUE],
-    );
+    // Checkpoint 9.0: the same three steps for occurrences.generate-lazy, which
+    // this process sends to from the occurrence complete/skip routes. The
+    // handler for the dead queue lives in the worker
+    // (jobs/occurrences-dead-letter.ts); this process only guarantees the
+    // queue exists and is attached whichever process boots first. The
+    // expand-window queue is worker-only and is not created here.
+    await boss.createQueue(OCCURRENCES_GENERATE_LAZY_DEAD_QUEUE);
+    await boss.createQueue(OCCURRENCES_GENERATE_LAZY_QUEUE, {
+      ...QUEUE_RETRY_OPTIONS[OCCURRENCES_GENERATE_LAZY_QUEUE],
+      deadLetter: OCCURRENCES_GENERATE_LAZY_DEAD_QUEUE,
+    });
+    await boss.updateQueue(OCCURRENCES_GENERATE_LAZY_QUEUE, {
+      deadLetter: OCCURRENCES_GENERATE_LAZY_DEAD_QUEUE,
+    });
     // The dead-letter queue must exist before its primary queue because
     // pg-boss enforces a foreign key from queue.dead_letter to queue.name.
     // API and worker both create these identically so startup order cannot

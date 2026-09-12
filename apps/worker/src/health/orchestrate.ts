@@ -43,6 +43,7 @@ import {
   type GoogleHealthClient,
   type HealthLimiter,
   type HealthMetricDefinition,
+  type Rejection,
   type SampleRow,
   type SessionRow,
 } from "@personal-os/health-providers";
@@ -71,6 +72,7 @@ import {
   type RefreshFn,
 } from "./token.js";
 import { env } from "../env.js";
+import { log } from "../logger.js";
 
 // The Google Health sync pass: one connection, all of its enabled streams,
 // foreground first and then a bounded slice of backfill.
@@ -331,12 +333,69 @@ async function fetchChunk(
 // Translation
 // ---------------------------------------------------------------------------
 
+/**
+ * One distinct way records in a chunk were rejected, with how many hit it.
+ *
+ * Every field is code-authored: `code` is one of the closed literals in
+ * @personal-os/health-providers' extract.ts / translate.ts, `keyPath` is the
+ * container/leaf name from OUR value spec (or a documented envelope field
+ * name), and `sawType` is a JSON kind. None of the three can carry a health
+ * value, an id or a date -- `jsonKindOf` exists precisely so a rejection can
+ * describe a payload's shape without quoting it.
+ */
+interface RejectionDetail {
+  code: string;
+  keyPath: string;
+  sawType: string;
+  count: number;
+}
+
+/**
+ * Distinct rejection shapes recorded per chunk. A chunk is at most one
+ * metric over one window, so a wrong spec produces the SAME shape for every
+ * record; a handful of slots is plenty, and the bound keeps a pathological
+ * payload from growing an unbounded list in memory or in the log.
+ */
+const REJECTION_DETAILS_MAX = 8;
+
 interface TranslatedChunk {
   dailyRows: DailyMetricRow[];
   sessionRows: SessionRow[];
   observedDates: Set<string>;
   rejections: number;
+  rejectionDetails: RejectionDetail[];
   collapsed: number;
+}
+
+/**
+ * Counts a rejection AND keeps its shape (Checkpoint 9.0).
+ *
+ * Before 9.0 the `Rejection` object was dropped here and only the count
+ * survived, so a run row could say `value_shape_violation` but never WHICH
+ * violation -- `leaf_missing` on `dailyHeartRateVariability.rootMeanSquare…`
+ * versus a type mismatch versus a missing container. That is exactly the
+ * information the HRV incident needed and did not have: the stream tripped
+ * its breaker five times with an identical rejection, the worker log that
+ * held the response shape was discarded by a container recreation, and
+ * re-observing the shape needed a live probe against production. The shape
+ * is now logged (below, at run close) and its code is persisted as a token
+ * in `health_sync_runs.error_message`, so the next wrong declaration is
+ * diagnosable from the run row alone.
+ */
+function noteRejection(out: TranslatedChunk, rejection: Rejection): void {
+  out.rejections += 1;
+  const existing = out.rejectionDetails.find(
+    (d) =>
+      d.code === rejection.code &&
+      d.keyPath === rejection.keyPath &&
+      d.sawType === rejection.sawType,
+  );
+  if (existing) {
+    existing.count += 1;
+    return;
+  }
+  if (out.rejectionDetails.length >= REJECTION_DETAILS_MAX) return;
+  out.rejectionDetails.push({ ...rejection, count: 1 });
 }
 
 function translateChunk(
@@ -348,6 +407,7 @@ function translateChunk(
     sessionRows: [],
     observedDates: new Set<string>(),
     rejections: 0,
+    rejectionDetails: [],
     collapsed: 0,
   };
 
@@ -355,7 +415,7 @@ function translateChunk(
     for (const record of records) {
       const translated = translateSession(record, def);
       if (!translated.ok) {
-        out.rejections += 1;
+        noteRejection(out, translated.rejection);
         continue;
       }
       out.sessionRows.push(translated.row);
@@ -370,7 +430,7 @@ function translateChunk(
     for (const record of records) {
       const translated = translateSampleRecord(record, def, spec);
       if (!translated.ok) {
-        out.rejections += 1;
+        noteRejection(out, translated.rejection);
         continue;
       }
       samples.push(translated.row);
@@ -385,7 +445,7 @@ function translateChunk(
           ? translateRollupBucket(record, def, spec)
           : translateDailyListRecord(record, def, spec);
       if (!translated.ok) {
-        out.rejections += 1;
+        noteRejection(out, translated.rejection);
         continue;
       }
       out.dailyRows.push(translated.row);
@@ -751,6 +811,26 @@ async function syncChunk(ctx: PassContext, params: ChunkParams): Promise<ChunkOu
         : "value_shape_violation"
       : null;
 
+  // Checkpoint 9.0: say WHICH shape was rejected, in the two places that
+  // outlive the pass. One structured line per distinct shape (code, our own
+  // key path, the JSON kind seen -- never a value), and the rejection code
+  // upper-cased into the run row's `error_message` as a TOKEN, which is the
+  // only form `closeSyncRun` persists. `keyPath` stays out of the row on
+  // purpose: it is not a TOKEN and would be dropped anyway, and the log line
+  // already pairs it with the run id.
+  for (const detail of translated.rejectionDetails) {
+    log.warn("health.sync.rejection", {
+      runId,
+      metric: def.metric,
+      kind,
+      code: detail.code,
+      keyPath: detail.keyPath,
+      sawType: detail.sawType,
+      count: detail.count,
+    });
+  }
+  const rejectionTokens = translated.rejectionDetails.map((d) => d.code.toUpperCase());
+
   await closeSyncRun(ctx.db, runId, {
     status: succeeded ? "succeeded" : "failed",
     failureClass,
@@ -764,6 +844,7 @@ async function syncChunk(ctx: PassContext, params: ChunkParams): Promise<ChunkOu
     rowsCollapsed: counts.collapsed,
     expectedBucketCount: completeness.expectedBucketCount,
     receivedBucketCount: completeness.receivedBucketCount,
+    errorTokens: rejectionTokens,
   });
 
   if (succeeded) return { kind: "ok", authoritative };

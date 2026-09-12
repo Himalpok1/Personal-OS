@@ -19,12 +19,17 @@ import {
   createCalendarSyncCalendarHandler,
   enqueueCalendarSyncForAllEnabledCalendars,
 } from "./jobs/calendar-sync-calendar.js";
-import { expandDueDateWindowJob } from "./jobs/expand-due-date-window.js";
+import { createExpandDueDateWindowHandler } from "./jobs/expand-due-date-window.js";
 import {
   createHealthSyncConnectionHandler,
   enqueueHealthSyncForAllActiveConnections,
 } from "./jobs/health-sync-connection.js";
 import { createGenerateLazyOccurrenceHandler } from "./jobs/generate-lazy-occurrence.js";
+import {
+  attachOccurrencesDeadLetterQueues,
+  createExpandDueDateWindowDeadLetterHandler,
+  createGenerateLazyOccurrenceDeadLetterHandler,
+} from "./jobs/occurrences-dead-letter.js";
 import { createGoogleHealthClient } from "@personal-os/health-providers";
 import { createGmailClient } from "@personal-os/mail-providers";
 import {
@@ -63,7 +68,9 @@ import {
   MONITOR_RUN_QUEUE,
   NOTIFICATIONS_DISPATCH_DEAD_QUEUE,
   NOTIFICATIONS_DISPATCH_QUEUE,
+  OCCURRENCES_EXPAND_WINDOW_DEAD_QUEUE,
   OCCURRENCES_EXPAND_WINDOW_QUEUE,
+  OCCURRENCES_GENERATE_LAZY_DEAD_QUEUE,
   OCCURRENCES_GENERATE_LAZY_QUEUE,
   PTT_TRANSCRIBE_DEAD_QUEUE,
   PTT_TRANSCRIBE_QUEUE,
@@ -188,21 +195,35 @@ async function main(): Promise<void> {
   await boss.work(CAPTURE_PARSE_DEAD_QUEUE, createCaptureParseDeadLetterHandler(db));
   await boss.work(CAPTURE_PARSE_QUEUE, createCaptureParseHandler(db, boss));
 
-  await boss.createQueue(
-    OCCURRENCES_EXPAND_WINDOW_QUEUE,
-    QUEUE_RETRY_OPTIONS[OCCURRENCES_EXPAND_WINDOW_QUEUE],
+  // Checkpoint 9.0: both occurrences queues gain a dead-letter queue. The
+  // create -> create-with-deadLetter -> updateQueue sequence (dead queue first,
+  // then the primary, then the UPDATE that makes it stick on a database where
+  // the primary already exists -- every deployed one) lives in
+  // jobs/occurrences-dead-letter.ts so a test can run the production sequence
+  // against a real pg-boss schema; see the capture.parse block above for why
+  // updateQueue is not redundant. The work() registrations stay here, where
+  // the containment and parity guards read them.
+  await attachOccurrencesDeadLetterQueues(boss);
+  // `includeMetadata: true` so the dead job exposes `createdOn` -- the durable
+  // timestamp the handler buckets its once-per-night alert key on (ADR-058: a
+  // discriminator from durable state, never a clock read at send time) -- and
+  // `output`, the exhausted sweep's contained error, from which it re-logs
+  // the failed parents' ids. `sourceCreatedOn` is deliberately not the key:
+  // pg-boss drops every source_* column on the dead job's own first retry.
+  await boss.work(
+    OCCURRENCES_EXPAND_WINDOW_DEAD_QUEUE,
+    { includeMetadata: true },
+    createExpandDueDateWindowDeadLetterHandler(db, boss),
   );
-  await boss.work(OCCURRENCES_EXPAND_WINDOW_QUEUE, async () => {
-    await expandDueDateWindowJob(db);
-  });
+  await boss.work(OCCURRENCES_EXPAND_WINDOW_QUEUE, createExpandDueDateWindowHandler(db));
   // 3am server-local trigger time; the *content* of the expansion (each
   // occurrence's instant) is governed by each rule's own recurrence_timezone,
   // which matters far more than the cron trigger's timezone.
   await boss.schedule(OCCURRENCES_EXPAND_WINDOW_QUEUE, "0 3 * * *");
 
-  await boss.createQueue(
-    OCCURRENCES_GENERATE_LAZY_QUEUE,
-    QUEUE_RETRY_OPTIONS[OCCURRENCES_GENERATE_LAZY_QUEUE],
+  await boss.work(
+    OCCURRENCES_GENERATE_LAZY_DEAD_QUEUE,
+    createGenerateLazyOccurrenceDeadLetterHandler(db, boss),
   );
   await boss.work(OCCURRENCES_GENERATE_LAZY_QUEUE, createGenerateLazyOccurrenceHandler(db));
 
@@ -237,7 +258,7 @@ async function main(): Promise<void> {
   await boss.schedule(SWEEP_ORPHAN_AUDIO_QUEUE, "0 * * * *");
 
   // expireInSeconds is generous (1h, versus pg-boss's 15-minute default)
-  // because every one of the five deletes is an unbatched, untimed
+  // because every one of the seven deletes is an unbatched, untimed
   // full-table scan by design (see retention-cleanup.ts) -- pg-boss's own
   // active-job expiry would otherwise redeliver this exact job into the
   // same worker process while the first pass is still genuinely running,

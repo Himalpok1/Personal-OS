@@ -8,6 +8,12 @@ export const CAPTURE_PARSE_QUEUE = "capture.parse";
 // production queue, where createQueue is a silent no-op).
 export const CAPTURE_PARSE_DEAD_QUEUE = "capture.parse.dead";
 export const OCCURRENCES_GENERATE_LAZY_QUEUE = "occurrences.generate-lazy";
+// Checkpoint 9.0 -- the occurrence complete/skip routes send to the primary,
+// so this process must create the dead queue, then the primary with
+// `deadLetter`, then updateQueue, exactly as for capture.parse. The
+// expand-window queue and its dead queue are worker-only and have no
+// counterpart here.
+export const OCCURRENCES_GENERATE_LAZY_DEAD_QUEUE = "occurrences.generate-lazy.dead";
 export const PTT_TRANSCRIBE_QUEUE = "ptt.transcribe";
 export const PTT_TRANSCRIBE_DEAD_QUEUE = "ptt.transcribe.dead";
 export const NOTIFICATIONS_DISPATCH_QUEUE = "notifications.dispatch";

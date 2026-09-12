@@ -177,10 +177,13 @@ export interface TombstoneMailMessagesParams {
  *     later pass will discover it -- absence is not evidence here either way;
  *   * a bounded full resync does NOT tombstone, because listing is not a
  *     deletion signal;
- *   * and the marker is soft and reversible: the row is retained indefinitely
- *     and `upsertMailMessages` clears `deleted_at` on reappearance. Nothing is
- *     pruned here, so ADR-054's permitted prune remains a separate, explicit
- *     decision.
+ *   * and the marker is soft and reversible: `upsertMailMessages` clears
+ *     `deleted_at` on reappearance. Nothing is pruned HERE. ADR-054's
+ *     permitted-and-required prune exists since Checkpoint 8.6C as the
+ *     worker's daily `retention.cleanup` job (jobs/retention-cleanup.ts), and
+ *     it is a separate axis: it deletes on the age of `internal_date` alone,
+ *     tombstoned or not, so "retained indefinitely" stopped being true the
+ *     moment that job shipped -- a tombstoned row lives until it ages out.
  */
 export async function tombstoneMailMessages(
   db: Db,

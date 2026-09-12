@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { scrubSensitiveQueryParams, SENSITIVE_QUERY_PARAMS } from "./scrub-url.js";
+import {
+  scrubQueryForUnknownRoute,
+  scrubSensitiveQueryParams,
+  SENSITIVE_QUERY_PARAMS,
+} from "./scrub-url.js";
 
 describe("scrubSensitiveQueryParams", () => {
   // Checkpoint 8.6A. `q` is the /search query string. Not a credential -- it is
@@ -85,6 +89,31 @@ describe("scrubSensitiveQueryParams", () => {
     expect(scrubSensitiveQueryParams("/cb?%63ode=secret")).not.toContain("secret");
   });
 
+  // Checkpoint 9.0 Part B review. find-my-way splits the query on `#` as well
+  // as `?` (lib/url-sanitizer.js), so `/search#q=x` is routed to /search AND
+  // executed with q=x. A scrubber that only knew `?` treated the whole string
+  // as a path and logged the search text verbatim -- bypassing the 8.6A scrub.
+  it("scrubs a query introduced by # exactly as one introduced by ?", () => {
+    expect(scrubSensitiveQueryParams("/search#q=SECRET&limit=5")).toBe(
+      "/search#q=[redacted]&limit=5",
+    );
+    expect(scrubSensitiveQueryParams("/cb#code=SECRET")).toBe("/cb#code=[redacted]");
+  });
+
+  it("takes the earliest delimiter when both ? and # appear", () => {
+    // `#` first: everything after it is query, so the later `?x=1` is part of
+    // `code`'s VALUE (exactly as the querystring parser sees it) and dies
+    // with it.
+    expect(scrubSensitiveQueryParams("/cb#code=SECRET?x=1")).toBe("/cb#code=[redacted]");
+    // `?` first: the `#` is inside `x`'s VALUE as far as the querystring
+    // parser is concerned, so there is no parameter named `code` here and the
+    // name-based policy leaves it -- the same way it leaves any other
+    // non-sensitive value on a known route.
+    expect(scrubSensitiveQueryParams("/cb?x=1#code=v&code=SECRET")).toBe(
+      "/cb?x=1#code=v&code=[redacted]",
+    );
+  });
+
   // REVERSED AT CHECKPOINT 8.6A. This previously pinned exactly
   // ["access_token", "code", "state"]. `q` (the /search query string) was added
   // because Fastify's request serializer emits `url` on every request, so the
@@ -94,5 +123,52 @@ describe("scrubSensitiveQueryParams", () => {
   // what gets redacted in production.
   it("covers exactly code, state, access_token and q", () => {
     expect([...SENSITIVE_QUERY_PARAMS].sort()).toEqual(["access_token", "code", "q", "state"]);
+  });
+});
+
+describe("scrubQueryForUnknownRoute", () => {
+  // Checkpoint 9.0 Part B. A route that does not exist can carry any parameter
+  // name, so the name list above can never enumerate what to hide for it; the
+  // whole query goes, and only the path plus a "there was a query" marker stays.
+  it("destroys every parameter, including one no list has heard of", () => {
+    const out = scrubQueryForUnknownRoute("/does-not-exist?anything=NOVEL&code=SECRET");
+    expect(out).not.toContain("NOVEL");
+    expect(out).not.toContain("SECRET");
+    expect(out).not.toContain("anything");
+    expect(out).toBe("/does-not-exist?[redacted]");
+  });
+
+  it("keeps the path so a 404 remains diagnosable", () => {
+    expect(scrubQueryForUnknownRoute("/health-connections/google/callbak?code=x")).toBe(
+      "/health-connections/google/callbak?[redacted]",
+    );
+  });
+
+  it("passes a bare path through, and an empty query too", () => {
+    expect(scrubQueryForUnknownRoute("/nope")).toBe("/nope");
+    expect(scrubQueryForUnknownRoute("/nope?")).toBe("/nope?");
+  });
+
+  // A value containing a second `?` must not let anything after it survive.
+  it("treats everything after the first ? as query", () => {
+    expect(scrubQueryForUnknownRoute("/a?b=c?d=SECRET")).toBe("/a?[redacted]");
+  });
+
+  // Same router fact as above: `#` starts the query to find-my-way, so
+  // `/nope#code=x` is a 404 on `/nope` carrying `code=x` -- and it must not be
+  // logged as if `#code=x` were part of the path.
+  it("destroys a query introduced by # and keeps the delimiter as sent", () => {
+    expect(scrubQueryForUnknownRoute("/nope#code=SECRET")).toBe("/nope#[redacted]");
+    expect(scrubQueryForUnknownRoute("/nope#")).toBe("/nope#");
+    expect(scrubQueryForUnknownRoute("/nope#a=1?code=SECRET")).toBe("/nope#[redacted]");
+    expect(scrubQueryForUnknownRoute("/nope?a=1#code=SECRET")).toBe("/nope?[redacted]");
+  });
+
+  // `;` is a PATH character to the router unless `useSemicolonDelimiter` is
+  // on (Fastify default: off, and this API never sets it), so it is kept --
+  // the policy is "keep what the router treats as the path", not "hide
+  // anything that looks like a parameter".
+  it("leaves a ;-separated pseudo-parameter alone, because the router does", () => {
+    expect(scrubQueryForUnknownRoute("/nope;code=x")).toBe("/nope;code=x");
   });
 });

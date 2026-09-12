@@ -12,14 +12,25 @@ import {
 // the value and exactly what JSON type that field has. It is a declaration, not
 // a discovery: nothing here inspects a payload looking for "the numeric leaf".
 //
-// Of the 18 in-scope metrics, only FOUR have ever been observed carrying real
-// data on the development account -- `steps`, `distance`, `total-calories` and
-// `floors` (6.2P, 7-day window, 2026-08-18..24). The account has no wearable
-// paired, so the remaining fourteen returned supported-but-empty.
+// Of the 18 in-scope metrics, only FOUR had been observed carrying real data
+// on the development account at merge -- `steps`, `distance`, `total-calories`
+// and `floors` (6.2P, 7-day window, 2026-08-18..24). `heart-rate` followed at
+// 6.3L, and `daily-heart-rate-variability` at Checkpoint 9.0 -- the first
+// `list`-type daily vital this account ever returned, and the first time an
+// UNVERIFIED declaration met real data. It was wrong, and it failed exactly as
+// designed: five identical `value_shape_violation` runs, zero rows stored, the
+// breaker tripped, one alert raised. See the LEAF_DECLS entry for what was
+// actually observed.
 //
-// The other fourteen specs below are therefore transcribed from Google's
-// documented data-type table and are UNVERIFIED AT MERGE. That is stated
-// plainly rather than papered over, because the failure mode matters:
+// The remaining twelve specs below are transcribed from Google's documented
+// data-type table and are UNVERIFIED. That is stated plainly rather than
+// papered over, because the failure mode matters. The 9.0 review re-read that
+// table (developers.google.com/health/reference/rest/v4/users.dataTypes.dataPoints,
+// 2026-09-12) against every unobserved entry and corrected the ones that
+// matched nothing -- a documented name is strictly better evidence than a
+// guess the HRV incident just proved can be wrong -- while leaving `observed:
+// false` on each, because the documentation was ALSO the source of the HRV
+// guess and only a live record settles it:
 //
 //   * Where a declaration is WRONG, extractValue rejects loudly and the run
 //     fails. It cannot store a wrong number, because it never searches for a
@@ -34,12 +45,20 @@ import {
 //
 // The two judgement calls worth naming individually:
 //
-//   * `weight` is declared int64 on `weightGrams`. Grams is a fine-grained
-//     integer metric unit in the same family as `millimeters`, and the API
-//     bakes the unit into the field name precisely so no conversion is implied
-//     (ADR-047). If Google in fact returns a fractional gram, this rejects
-//     rather than truncates -- which is the correct way to be wrong.
-//   * `active-zone-minutes` is the only metric declaring breakdown leaves.
+//   * `weight` was declared int64 on `weightGrams` at merge, reasoning that
+//     grams is a fine-grained integer unit like `millimeters`. The reference
+//     types `Weight.weightGrams` as `number`, so it is now declared double:
+//     double accepts every int64 encoding as well, and a fractional gram is a
+//     correct value stored at full precision (canonicalNumeric never rounds),
+//     not a corrupted one. The two documented-int64 daily leaves
+//     (`daily-resting-heart-rate.beatsPerMinute`,
+//     `daily-respiratory-rate.averageBreathsPerMinute`) stay double for the
+//     same reason in the other direction: int64 would buy only the ability to
+//     REJECT a fractional average, which would be a plausible value rather
+//     than a shape defect, and this file's job is to never store a wrong
+//     number -- not to fail a run over a type annotation.
+//   * `active-zone-minutes` is the only UNOBSERVED metric declaring breakdown
+//     leaves (heart-rate's Min/Max and HRV's deep-sleep RMSSD were seen live).
 //     Those three field names come from the documented zone split and are the
 //     least certain thing in this file. Their failure mode is benign: an absent
 //     breakdown leaf is simply omitted, never a rejection, so a wrong name
@@ -152,26 +171,102 @@ const LEAF_DECLS: Readonly<Record<string, LeafDecl>> = {
   },
 
   // --- Precomputed daily vitals, list --------------------------------------
-  // UNVERIFIED. These are `list` records, not rollups, so they should carry the
-  // bare unit field with NO aggregation suffix -- but none has ever been seen.
+  // These are `list` records, not rollups, so no aggregation suffix applies.
+  // But the 9.0 HRV observation below disproved the other half of the old
+  // assumption here -- that the leaf is "the bare unit field". The leaf is the
+  // DOCUMENTED MESSAGE FIELD NAME of the Daily* type, which is neither the
+  // catalog `unit` string (a display key) nor derivable from it. Every
+  // `observed: false` entry in this group was therefore re-checked against the
+  // reference at the 9.0 review; the leaf names below are the DOCUMENTED ones,
+  // which is the best evidence short of a record, and each stays `observed:
+  // false` because a wrong documented name fails loudly rather than storing a
+  // wrong number -- exactly as the guessed one did.
+  //
+  // Documented `beatsPerMinute` (int64). Declared double; see the header for
+  // why the two documented-int64 daily averages are not narrowed.
   "daily-resting-heart-rate": { leaf: "beatsPerMinute", leafType: "double", observed: false },
+
+  // OBSERVED 2026-09-12 (Checkpoint 9.0), from a live read-only shape probe
+  // over the exact window the five failed hot runs used (2026-09-09..14): the
+  // one record carries `dailyHeartRateVariability.{date,
+  // averageHeartRateVariabilityMilliseconds, deepSleepRootMeanSquareOf
+  // SuccessiveDifferencesMilliseconds}`, both leaves JSON numbers. Google's
+  // reference for the DailyHeartRateVariability message agrees, and lists two
+  // further OPTIONAL siblings this record did not carry: `entropy` (number)
+  // and `nonRemHeartRateBeatsPerMinute` (int64 string). They are deliberately
+  // NOT allowlisted: the extractor ignores undeclared fields, so omitting them
+  // costs nothing, whereas declaring an unobserved type would reintroduce the
+  // exact rejection risk this entry just paid for. Add them when observed.
+  //
+  // The previous declaration, `rootMeanSquareOfSuccessiveDifferencesMilliseconds`,
+  // was the catalog unit string mistaken for a field name. It matched nothing,
+  // extractValue returned `leaf_missing`, and the run was classified
+  // `value_shape_violation` -- five times, identically, until the breaker
+  // disabled the stream. No row was ever written.
+  //
+  // The daily average is the primary value, in the `heart-rate` precedent
+  // (Avg primary, Min/Max in the breakdown): the deep-sleep RMSSD is a
+  // sibling detail of the same day, not a second stream. Documentation states
+  // "at least one of" the four value fields must be set, so a record carrying
+  // only a deep-sleep or entropy value is expressible upstream and would be
+  // rejected here as `leaf_missing`. That is a known, loud gap rather than a
+  // silent one, and it is not widened speculatively.
   "daily-heart-rate-variability": {
-    leaf: "rootMeanSquareOfSuccessiveDifferencesMilliseconds",
+    leaf: "averageHeartRateVariabilityMilliseconds",
+    leafType: "double",
+    breakdown: [
+      { name: "deepSleepRootMeanSquareOfSuccessiveDifferencesMilliseconds", type: "double" },
+    ],
+    observed: true,
+  },
+  // CORRECTED at the 9.0 review, UNOBSERVED. The merge-time leaf was
+  // `percentage` -- the catalog unit string again, the same mistake as HRV.
+  // The DailyOxygenSaturation message documents `averagePercentage` (number)
+  // as the value, alongside `lowerBoundPercentage` / `upperBoundPercentage`
+  // (required) and `standardDeviationPercentage` (optional). The bounds are
+  // NOT allowlisted into the breakdown for the reason given on the HRV entry:
+  // an undeclared field costs nothing, an unobserved declaration can reject.
+  "daily-oxygen-saturation": {
+    leaf: "averagePercentage",
     leafType: "double",
     observed: false,
   },
-  "daily-oxygen-saturation": { leaf: "percentage", leafType: "double", observed: false },
-  "daily-respiratory-rate": { leaf: "breathsPerMinute", leafType: "double", observed: false },
+  // CORRECTED at the 9.0 review, UNOBSERVED. Merge-time leaf `breathsPerMinute`
+  // is the catalog unit; the DailyRespiratoryRate message documents
+  // `averageBreathsPerMinute` (int64, declared double per the header) with
+  // `standardDeviationBreathsPerMinute` optional and not allowlisted.
+  "daily-respiratory-rate": {
+    leaf: "averageBreathsPerMinute",
+    leafType: "double",
+    observed: false,
+  },
+  // KNOWN NOT TO MATCH, and left that way DELIBERATELY. The
+  // DailySleepTemperatureDerivations message documents no `celsiusDelta`; it
+  // carries `nightlyTemperatureCelsius` -- "the mean of skin temperature
+  // samples taken from the user's sleep", an ABSOLUTE temperature -- plus an
+  // optional `baselineTemperatureCelsius` (30-day median) and
+  // `relativeNightlyStddev30dCelsius`. The catalog unit `celsiusDelta` is the
+  // display key the mobile formatter renders as a SIGNED DELTA ("+0.3 °C"),
+  // so re-pointing this leaf at the documented field would store ~33 °C and
+  // render it as "+33.4 °C": a wrong-looking number, which is the one outcome
+  // this module exists to prevent. The honest value under the product's delta
+  // semantic is nightly MINUS baseline, a derivation the single-leaf spec
+  // model cannot express. Until that is decided (derive, or store the absolute
+  // and change the display key -- a mobile change), this entry matches
+  // nothing on purpose and the first real record fails loudly, as HRV did.
   "daily-sleep-temperature-derivations": {
     leaf: "celsiusDelta",
     leafType: "double",
     observed: false,
   },
+  // Documented `vo2Max` (number); agrees with the declaration.
   "daily-vo2-max": { leaf: "vo2Max", leafType: "double", observed: false },
 
   // --- Body samples, list ---------------------------------------------------
-  // UNVERIFIED.
-  weight: { leaf: "weightGrams", leafType: "int64", observed: false },
+  // UNVERIFIED. Both leaf names agree with the reference. `weightGrams` is
+  // documented as `number`, so the merge-time int64 declaration was corrected
+  // to double at the 9.0 review (see the header).
+  weight: { leaf: "weightGrams", leafType: "double", observed: false },
   "body-fat": { leaf: "percentage", leafType: "double", observed: false },
 
   // --- Sessions, list -------------------------------------------------------

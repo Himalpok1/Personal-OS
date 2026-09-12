@@ -19,7 +19,6 @@ import {
   isHealthConfigured,
   markNeedsReauth,
   resolveFreshAccessToken,
-  sweepExpiredOAuthStates,
 } from "./health-connection.js";
 
 const REDIRECT = "https://personal-os.tail62a68f.ts.net/health-connections/google/callback";
@@ -152,13 +151,9 @@ describe("OAuth state", () => {
     );
   });
 
-  it("sweeps expired states and leaves live ones", async () => {
-    await createOAuthState(app.db, REDIRECT);
-    await app.db.update(healthOauthStates).set({ expiresAt: new Date(Date.now() - 1000) });
-    await createOAuthState(app.db, REDIRECT);
-    expect(await sweepExpiredOAuthStates(app.db)).toBe(1);
-    expect(await app.db.select().from(healthOauthStates)).toHaveLength(1);
-  });
+  // Expired-state deletion is the worker's `retention.cleanup` job (Checkpoint
+  // 9.0 Part D) and is tested in apps/worker/src/jobs/retention-cleanup.test.ts
+  // -- there is no sweep function in this module any more.
 });
 
 describe("access-token refresh", () => {

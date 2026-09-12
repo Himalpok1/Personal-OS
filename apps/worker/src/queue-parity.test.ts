@@ -205,3 +205,109 @@ describe("dead-letter attach survives an existing queue", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// The same attach, for the two occurrences queues. Checkpoint 9.0.
+// ---------------------------------------------------------------------------
+//
+// Both primaries exist in production WITHOUT a dead letter (verified against
+// pgboss.queue before this checkpoint), so they are exactly the case the
+// capture.parse block above describes: createQueue with `deadLetter` is a
+// silent no-op there and only updateQueue attaches anything. The worker's
+// sequence lives in jobs/occurrences-dead-letter.ts (so a runtime test can
+// execute it against a real pg-boss schema -- see occurrences-queues.test.ts);
+// the api's lives inline in plugins/boss.ts. Both are scanned here because the
+// runtime test can only prove the worker's copy.
+const WORKER_OCCURRENCES_ATTACH = path.resolve(
+  import.meta.dirname,
+  "jobs/occurrences-dead-letter.ts",
+);
+
+describe("occurrences dead-letter attach survives an existing queue", () => {
+  it.each([
+    ["apps/worker/src/jobs/occurrences-dead-letter.ts", WORKER_OCCURRENCES_ATTACH],
+    ["apps/api/src/plugins/boss.ts", API_BOSS],
+  ])("%s calls updateQueue for occurrences.generate-lazy", (_label, file) => {
+    const source = readFileSync(file, "utf8").replace(/\s+/g, " ");
+    expect(source).toContain(
+      "updateQueue(OCCURRENCES_GENERATE_LAZY_QUEUE, { deadLetter: OCCURRENCES_GENERATE_LAZY_DEAD_QUEUE, })",
+    );
+  });
+
+  it("the worker calls updateQueue for occurrences.expand-window", () => {
+    // Worker-only: the api never creates the expand-window queue, so there is
+    // deliberately no api half to this assertion.
+    const source = readFileSync(WORKER_OCCURRENCES_ATTACH, "utf8").replace(/\s+/g, " ");
+    expect(source).toContain(
+      "updateQueue(OCCURRENCES_EXPAND_WINDOW_QUEUE, { deadLetter: OCCURRENCES_EXPAND_WINDOW_DEAD_QUEUE, })",
+    );
+  });
+
+  it.each([
+    [
+      "apps/worker/src/jobs/occurrences-dead-letter.ts",
+      WORKER_OCCURRENCES_ATTACH,
+      "OCCURRENCES_GENERATE_LAZY",
+    ],
+    [
+      "apps/worker/src/jobs/occurrences-dead-letter.ts",
+      WORKER_OCCURRENCES_ATTACH,
+      "OCCURRENCES_EXPAND_WINDOW",
+    ],
+    ["apps/api/src/plugins/boss.ts", API_BOSS, "OCCURRENCES_GENERATE_LAZY"],
+  ])("%s creates the %s dead queue BEFORE the primary (FK ordering)", (_label, file, base) => {
+    const source = readFileSync(file, "utf8");
+    const dead = source.indexOf(`createQueue(${base}_DEAD_QUEUE)`);
+    const primary = source.indexOf(`createQueue(${base}_QUEUE`);
+    expect(dead).toBeGreaterThan(-1);
+    expect(primary).toBeGreaterThan(-1);
+    expect(dead).toBeLessThan(primary);
+  });
+
+  it("the api does not create the worker-only expand-window queues", () => {
+    // If it ever did, it would need the identical options AND the identical
+    // attach sequence, and the parity sweep above would then need to cover it.
+    const source = readFileSync(API_BOSS, "utf8");
+    expect(source).not.toContain("OCCURRENCES_EXPAND_WINDOW");
+  });
+
+  it("index.ts registers both dead-letter handlers on the dead queues, not the primaries", () => {
+    // Matched as a whitespace- and trailing-comma-tolerant pattern rather than
+    // a literal of prettier's current line breaking: a rename that lets a call
+    // fit on one line must not fail a guard whose subject is WHICH queue a
+    // handler is bound to. The negatives use the same shape, so a multi-line
+    // mis-binding cannot slip past a single-line literal either.
+    const source = readFileSync(WORKER_INDEX, "utf8");
+    const bound = (queue: string, handler: string, options = ""): RegExp =>
+      new RegExp(`work\\(\\s*${queue},\\s*${options}${handler}\\(db,\\s*boss\\),?\\s*\\)`);
+    expect(source).toMatch(
+      bound(
+        "OCCURRENCES_GENERATE_LAZY_DEAD_QUEUE",
+        "createGenerateLazyOccurrenceDeadLetterHandler",
+      ),
+    );
+    expect(source).toMatch(
+      bound(
+        "OCCURRENCES_EXPAND_WINDOW_DEAD_QUEUE",
+        "createExpandDueDateWindowDeadLetterHandler",
+        "\\{\\s*includeMetadata:\\s*true,?\\s*\\},\\s*",
+      ),
+    );
+    expect(source).not.toMatch(
+      bound("OCCURRENCES_GENERATE_LAZY_QUEUE", "createGenerateLazyOccurrenceDeadLetterHandler"),
+    );
+    expect(source).not.toMatch(
+      bound("OCCURRENCES_EXPAND_WINDOW_QUEUE", "createExpandDueDateWindowDeadLetterHandler"),
+    );
+    expect(source).not.toMatch(
+      bound(
+        "OCCURRENCES_EXPAND_WINDOW_QUEUE",
+        "createExpandDueDateWindowDeadLetterHandler",
+        "\\{\\s*includeMetadata:\\s*true,?\\s*\\},\\s*",
+      ),
+    );
+    // And the attach itself is actually invoked -- an exported function that
+    // nothing calls attaches nothing.
+    expect(source).toMatch(/await attachOccurrencesDeadLetterQueues\(boss\);/);
+  });
+});

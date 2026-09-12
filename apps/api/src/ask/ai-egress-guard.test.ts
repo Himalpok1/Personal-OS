@@ -170,6 +170,14 @@ const EXPECTED_BODY_READERS = new Set([
   "apps/api/src/routes/tasks.ts",
   "apps/worker/src/jobs/expand-due-date-window.ts",
   "apps/worker/src/jobs/generate-lazy-occurrence.ts",
+  // Checkpoint 9.0: the generate-lazy dead-letter handler reads the parent
+  // task row to re-check its state (status, archive axis, recurrence anchor)
+  // and to name the task in the alert push by its TITLE -- control-stripped
+  // and capped at 80 characters, never the body, never the rule. The title
+  // reaches Expo Push exactly as the Phase 3 confirmation push already sends
+  // a capture's full raw text; no model ever sees it. Reviewed here rather
+  // than widened silently, which is what this ratchet is for.
+  "apps/worker/src/jobs/occurrences-dead-letter.ts",
 ]);
 
 const BODY_TABLE_REFERENCE = /\.from\(notes|\.from\(tasks|db\.query\.notes|db\.query\.tasks/;

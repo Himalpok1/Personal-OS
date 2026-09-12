@@ -7,10 +7,10 @@
 //
 // AND THE HONEST CAVEAT, because it decides what a green suite is worth: these
 // shapes are transcribed from the same documentation as value-spec.ts. They are
-// therefore fixture/spec SELF-CONSISTENCY, not evidence about Google. Of the
-// in-scope metrics only steps, distance, total-calories and floors have ever
-// been seen carrying live data, and no session or body-sample payload has been
-// observed at all.
+// therefore fixture/spec SELF-CONSISTENCY, not evidence about Google -- except
+// where a builder says otherwise. The rollup builders and the sleep session
+// follow shapes observed live at 6.3L, and heartRateVariabilityRecord follows
+// the shape observed at 9.0. No body-sample payload has been observed at all.
 
 /** A google.type.Date from "YYYY-MM-DD". */
 export function googleDate(localDate: string): { year: number; month: number; day: number } {
@@ -69,6 +69,45 @@ export function restingHeartRateRecord(
 ): Record<string, unknown> {
   return {
     dailyRestingHeartRate: { date: googleDate(localDate), beatsPerMinute: bpm },
+  };
+}
+
+/**
+ * A Google-precomputed DailyHeartRateVariability record, in the EXACT shape
+ * observed live on 2026-09-12 (Checkpoint 9.0) -- field names and JSON kinds
+ * only; every value below is invented.
+ *
+ * The observed record carried `averageHeartRateVariabilityMilliseconds` and
+ * `deepSleepRootMeanSquareOfSuccessiveDifferencesMilliseconds`, both JSON
+ * numbers, plus a `dataSource` whose `platform` sits at the dataSource ROOT
+ * (not under `application`, where readSourceIdentity looks) alongside
+ * `application.packageName` and `device.manufacturer`. The dataSource is
+ * reproduced faithfully so a test can prove the daily path ignores it, and
+ * so the observed provenance shape is on record for the session/sample paths
+ * that do read it. `deepSleepRmssd` may be omitted to model a record carrying
+ * the average alone.
+ */
+export function heartRateVariabilityRecord(opts: {
+  localDate: string;
+  averageRmssd: number | string;
+  deepSleepRmssd?: number | string;
+  extra?: Record<string, unknown>;
+}): Record<string, unknown> {
+  const container: Record<string, unknown> = {
+    date: googleDate(opts.localDate),
+    averageHeartRateVariabilityMilliseconds: opts.averageRmssd,
+  };
+  if (opts.deepSleepRmssd !== undefined) {
+    container["deepSleepRootMeanSquareOfSuccessiveDifferencesMilliseconds"] = opts.deepSleepRmssd;
+  }
+  return {
+    dailyHeartRateVariability: { ...container, ...(opts.extra ?? {}) },
+    dataSource: {
+      application: { packageName: "com.example.wearable" },
+      device: { manufacturer: "Example" },
+      platform: "ANDROID",
+      recordingMethod: "AUTOMATICALLY_RECORDED",
+    },
   };
 }
 

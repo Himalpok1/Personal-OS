@@ -15,7 +15,7 @@ import {
   revokeHealthToken,
   type GoogleHealthClient,
 } from "@personal-os/health-providers";
-import { and, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { env } from "../env.js";
 
 // The single internal service both the GET callback and any manual completion
@@ -169,14 +169,13 @@ export async function consumeOAuthState(
   }
 }
 
-/** Deletes states that can no longer be used. Operational metadata only. */
-export async function sweepExpiredOAuthStates(db: Db, now: Date = new Date()): Promise<number> {
-  const rows = await db
-    .delete(healthOauthStates)
-    .where(lt(healthOauthStates.expiresAt, now))
-    .returning();
-  return rows.length;
-}
+// Expired states are deleted by the worker's daily `retention.cleanup` job
+// (apps/worker/src/jobs/retention-cleanup.ts, Checkpoint 9.0 Part D), on the
+// row's own `expires_at` alone. The sweep function that used to live here had
+// no production caller from Checkpoint 6.2 through the Phase 8 closeout
+// (ADR-057 #1, ADR-061) and was removed rather than wired, because
+// apps/worker may never import from apps/api and one DELETE should have one
+// implementation.
 
 function encryptedColumns(secret: EncryptedSecret) {
   return { ciphertext: secret.ciphertext, iv: secret.iv, authTag: secret.authTag };

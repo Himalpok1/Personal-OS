@@ -10,7 +10,7 @@ import {
   revokeGmailToken,
   type MailClient,
 } from "@personal-os/mail-providers";
-import { and, eq, isNull, lt } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { env } from "../env.js";
 
 // The Gmail connection lifecycle (ADR-052/053, Checkpoint 7.2).
@@ -175,14 +175,12 @@ export async function consumeMailOAuthState(
   }
 }
 
-/** Deletes states that can no longer be used. Operational metadata only. */
-export async function sweepExpiredMailOAuthStates(db: Db, now: Date = new Date()): Promise<number> {
-  const rows = await db
-    .delete(mailOauthStates)
-    .where(lt(mailOauthStates.expiresAt, now))
-    .returning();
-  return rows.length;
-}
+// Expired states are deleted by the worker's daily `retention.cleanup` job
+// (apps/worker/src/jobs/retention-cleanup.ts, Checkpoint 9.0 Part D), on the
+// row's own `expires_at` alone -- the same arrangement as health_oauth_states.
+// The sweep function that used to live here was never referenced anywhere,
+// not even by a test (ADR-057 #1 as sharpened by the 8.6 decision record), and
+// was removed rather than wired for the reason given in health-connection.ts.
 
 type MailConnectionRow = typeof mailConnections.$inferSelect;
 
@@ -345,10 +343,13 @@ export async function completeGmailConnection(
  * calendar_connections use, so connection history survives. Revocation failure
  * never blocks the local clearing: a user must always be able to disconnect.
  *
- * NOTHING ELSE IS DELETED. `mail_messages` rows are untouched (ADR-054 forbids
- * automatic deletion of stored mail), and unlike the Health disconnect there
- * are no per-stream flags to disable -- see reconnect semantics in the route
- * module for why that absence is deliberate rather than incidental.
+ * NOTHING ELSE IS DELETED HERE. `mail_messages` rows are untouched by a
+ * disconnect: the only automatic deletion of stored mail is the bounded,
+ * age-based prune ADR-054 permits and requires, which lives in the worker's
+ * `retention.cleanup` job (Checkpoint 8.6C) and keys on `internal_date`, never
+ * on connection status. Unlike the Health disconnect there are no per-stream
+ * flags to disable -- see reconnect semantics in the route module for why that
+ * absence is deliberate rather than incidental.
  */
 export async function disconnectGmailConnection(
   db: Db,
