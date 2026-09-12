@@ -14,7 +14,7 @@ Read these files in this order:
 Do not begin implementation until you understand the locked decisions and current phase.
 
 **`docs/STATUS.md` is present state only.** As of Checkpoint 8.0 it no longer contains the
-checkpoint history — that lives in `docs/history/phase-0.md` … `phase-7.md`, verbatim and
+checkpoint history — that lives in `docs/history/phase-0.md` … `phase-8.md`, verbatim and
 unaltered. Read a phase file only when you need the detail behind a completed checkpoint; do not
 load them by default. `docs/PHASE-0-CHECKLIST.md` is a closed Phase 0 artifact and is no longer
 required reading.
@@ -43,7 +43,7 @@ Do not silently replace or reinterpret these decisions.
 ## Repository layout
 
 This is the layout as it exists today, not a plan. Five packages were added after this section was
-first written and are listed here as of Checkpoint 8.0.
+first written and are listed here as of Checkpoint 8.0; the layout is unchanged at the Phase 8 closeout.
 
 ```text
 apps/
@@ -69,7 +69,7 @@ docs/
   WORKFLOW.md
   PHASE-0-CHECKLIST.md     # closed Phase 0 artifact
   history/                 # closed-phase records, verbatim, not auto-loaded
-    phase-0.md … phase-7.md
+    phase-0.md … phase-8.md
     superseded-present-state.md
 ```
 
@@ -142,14 +142,13 @@ The project is phase-gated.
 
 **`docs/STATUS.md` is the canonical statement of the current phase and of what is approved next. Read it before assuming scope.** This section states the rule; it does not track the phase number.
 
-As of Checkpoint 8.0 (2026-09-02): Phases 0–7 are complete and production-deployed at migration
-level 16. **Phase 8 — Consolidation & adoption — is approved and scoped by ADR-056**: make Personal
-OS a daily driver. It is explicitly **not** an AI capability phase — no semantic search, no
-embeddings, no retrieval layer, no write-capable agent, and no new external integration. Checkpoint
-8.0 (documentation, source durability and record maintenance only) is the current work.
-
-**Checkpoint 7.9 is still OPEN** and is a Phase 7 closure requirement. No Phase 8 runtime, API,
-worker or mobile deployment may occur before it is formally closed.
+As of the Phase 8 closeout (2026-09-12): **Phases 0–8 are complete and production-deployed at
+migration level 17.** Phase 8 (ADR-056) closed under ADR-061; its record is `docs/history/phase-8.md`
+and its closure evidence plus the Phase 9 starting brief are in `docs/PHASE-8-CLOSEOUT.md`.
+**Phase 9 is not started and no Phase 9 checkpoint is approved.** ADR-056's standing rules carry
+forward regardless of phase: read-only intelligence before write-capable intelligence, no
+unrestricted full-content cloud egress, no pgvector or Postgres image change without its own
+infrastructure ADR, and every new alert producer carries an occurrence-scoped dedupe key (ADR-058).
 
 Do not start the next checkpoint until the current one is complete, verified, and explicitly approved. Checkpoints marked with a stop are hard gates; for closed phases those markers are in the relevant
 `docs/history/phase-N.md`.

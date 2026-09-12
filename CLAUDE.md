@@ -11,7 +11,7 @@
 Load these on demand only — they are deliberately outside the import set above so that agent
 context stays workable:
 
-- `docs/history/phase-0.md` … `docs/history/phase-7.md` — the verbatim record of every closed
+- `docs/history/phase-0.md` … `docs/history/phase-8.md` — the verbatim record of every closed
   checkpoint. Open the relevant phase file when you need detail behind completed work.
 - `docs/history/superseded-present-state.md` — prior revisions of `docs/STATUS.md`'s present-state
   sections.
