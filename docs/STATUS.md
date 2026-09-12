@@ -21,7 +21,10 @@ prohibited.** Its baseline survives as dated historical measurement. Record: **`
 **8.6B — Ask / Cloud Data Boundary — IMPLEMENTED AND DEPLOYED (2026-09-11); acceptance PASSED.**
 Design: **`docs/CHECKPOINT-8.6B-DESIGN.md`**. D1/D1a–D1d/D1f approved and implemented as designed;
 **D1e (device-token auth on `/ai/*` writes) deferred, not implemented** — see the 8.6B record below
-for the reasoning. 8.6C gated on retention windows; 8.6D on evidence.
+for the reasoning.
+**8.6D — Monitor target CRUD — is COMPLETE and DEPLOYED (2026-09-12); acceptance PASSED.**
+Create/read/update/enable-disable/archive, migration `0016` (level 16 → 17). 8.6C remains gated on
+retention-window decisions.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -54,22 +57,23 @@ what is true *now*, it is in this file.
 
 | | |
 |---|---|
-| Migration level | **16** (`0000`–`0015`); local and production agree |
-| Serving commit | api **`b773fce`** · worker **`b773fce`** · web **`b773fce`** (Checkpoint 8.6B, 2026-09-11) |
-| Rabbit R1 | `com.himal.personalos` **versionCode 11**, built from `b773fce`, installed in place 2026-09-11 |
+| Migration level | **17** (`0000`–`0016`); local and production agree |
+| Serving commit | api **`ca04e57`** · web **`ca04e57`** (Checkpoint 8.6D, 2026-09-12) · worker **`b773fce`** (8.6B — deliberately not rebuilt, see 8.6D record) |
+| Rabbit R1 | `com.himal.personalos` **versionCode 11**, built from `b773fce`, installed in place 2026-09-11. **Does not yet include 8.6D's Monitor CRUD UI** — no new APK was built this checkpoint; the web client already serves it. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · **Android share sheet (8.4)** · **launcher shortcut (8.4)**. Notification-shade capture **deferred** — see 8.4 Lane 3. |
 | Integrations | Google Health **active** · Google Calendar **active** · Gmail **active** |
 | Calendar sync | **2 of 5 calendars enabled** — the owner's real primary (enabled at 8.2) and the dedicated test calendar. **98 events** ingested, all from the primary. |
-| Monitoring | 5 targets seeded, including both Tailscale Serve routes |
+| Monitoring | 5 targets seeded, including both Tailscale Serve routes. **Full CRUD (create/read/update/enable-disable/archive) live (8.6D)** — see the 8.6D record. |
 | AI task routes | `capture_parser`, `daily_brief`, `mail_digest`, `voice_transcribe` — all on the existing `gpt-4.1` row. **`ask` (Cloud Ask, 8.6B) is create/delete-only and OFF by default** — verified live end to end at 8.6B acceptance, then explicitly disabled again; the owner enables it from Settings when ready. |
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
 | Backups | **None, by design** (ADR-024) |
 | Source durability | **`origin` = `https://github.com/Himalpok1/Personal-OS` — PRIVATE, established 2026-09-02.** `main` + `phase-8-consolidation` pushed and hash-verified. No CI, no Actions workflow, no repository secret. |
-| Test baseline | **3,547 tests across 12 packages** (8.6B; see *Last verification*) |
+| Test baseline | **3,643 tests across 12 packages** (8.6D; see *Last verification*) |
 | `capture.parse` DLQ | **`capture.parse.dead`, live in production** — attached to the pre-existing queue via `updateQueue`, consumer bound (8.6A) |
 | Search / export | `GET /search` and `GET /export` live, perimeter-only, no migration (ADR-059) |
 | Confirm contract | An uncommittable confirm is refused **409** before enqueueing; corrections are validated and stored in the shape the worker reads (8.4) |
 | Cloud Ask | `POST /ask`, `GET/POST/DELETE /ai/task-routes` live, perimeter-only, **no migration** (8.6B). Switch is the `ask` route's presence; off by default. |
+| Monitor target CRUD | `GET/POST /monitor/targets`, `GET/PATCH /monitor/targets/:id`, `POST /monitor/targets/:id/{enable,disable,archive}` live (8.6D). Migration `0016` adds `archived_at`; archive is the CRUD "delete" — never a hard delete. |
 
 ---
 
@@ -1370,6 +1374,118 @@ checkpoint's implementation, deployment or acceptance work.
 
 ---
 
+### Checkpoint 8.6D — Monitor target CRUD (COMPLETE, 2026-09-12)
+
+Full CRUD for monitor targets on top of the **existing** monitoring architecture — no redesign of
+worker probing, incident lifecycle, or routing conventions. Migration `0016` adds
+`monitor_targets.archived_at` (nullable `timestamptz`); level 16 → **17**.
+
+**Delete/archive semantics.** Never a hard delete: `monitor_checks`/`monitor_incidents` both cascade
+from `monitor_targets`, and ADR-024 means there is no backup to recover an accidental one from.
+`POST /monitor/targets/:id/archive` sets `archived_at` **and** `enabled = false` in one statement,
+reusing the worker's pre-existing enable/disable suppression check — no worker or probe code
+changed. Archiving removes a target from the default `GET /monitor/targets` list; it stays reachable
+with `?include_archived=true` or by direct id. Idempotent; **no unarchive path**, matching `tasks`'
+own precedent. `deleteMonitorTarget` (a true hard delete) already existed in the service layer and is
+deliberately left **unwired to any route**.
+
+**Open-incident behavior.** Disabling or archiving a target with an open incident does **not**
+auto-resolve it — no further check ever runs to confirm recovery, and auto-resolving would record a
+recovery that was never observed. Editing `url`/`kind` while an incident is open is refused
+(`409 target_has_active_incident`, via a dedicated `MonitorTargetActiveIncidentError`) rather than
+silently rewriting what the open incident is "about"; every other field stays editable. The mobile
+detail screen warns before disabling a target with an open incident, but the API enforces nothing
+there by design — disabling never resolves history regardless of the caller.
+
+**Runtime reload behavior.** No restart required for any CRUD change, verified live: the worker's
+`monitor.run` cron reads `monitor_targets` fresh every pass (no per-target pg-boss schedule), so
+create/edit/enable/disable/archive all take effect on the next tick. Editing a target cannot create
+duplicate scheduling — there is nothing to duplicate.
+
+**Security.** Narrow URL validation added to the pre-existing arbitrary-http-target model: blocks
+`169.254.0.0/16` (the cloud-metadata SSRF payload) on create/update, does **not** block private IPs,
+localhost, or Docker hostnames — production's own seeded targets are exactly those shapes, and a
+blanket block would reject the system's real configuration. This is the same narrow-block precedent
+`packages/calendar-providers/src/caldav/ssrf.ts` already established.
+
+**API.** `GET /monitor/targets` (now takes `include_archived`, ADR-059's convention) ·
+`GET /monitor/targets/:id` · `POST /monitor/targets` · `PATCH /monitor/targets/:id` (never `enabled`
+or archiving — ADR-039's dedicated-endpoint rule) ·
+`POST /monitor/targets/:id/{enable,disable,archive}`. All reuse existing
+Zod validation (`MonitorTargetCreateSchema` re-validates the full merged row on every PATCH, so the
+update path can never drift from create's invariants) and the existing perimeter; **D1e was not
+reopened**.
+
+**UI.** Mobile gained a create screen and a detail/edit screen (reached by tapping a target card on
+the existing monitor list, which also gained a header "+ Add"): an `Enabled` `Switch` wired directly
+to `/enable`/`/disable`, and an `Archive` action gated by the app's existing `confirmDestructive`
+dialog. `kind` is read-only after creation (deliberate deviation from the design's "your call" —
+changing what a target measures is treated as archive-and-recreate). Maintenance windows and
+`muted_until` are omitted from both forms to keep this the smallest complete CRUD.
+
+#### Verification actually run
+
+Build **23/23** · typecheck **23/23** · `eslint .` clean · `prettier --check .` clean · `gitleaks`
+clean. Full suite, uncached and serialized (`pnpm test --force`): **3,643 tests across 12 packages,
+zero failing** (baseline 3,547) — api **815** (+26) · mobile **673** (+26) · monitoring **151** (+19)
+· schema **322** (+16) · api-client **146** (+13) · db **79** (unchanged; +1 journal-guard entry) ·
+core/health-providers/mail-providers/ai-providers/**calendar-providers 76** (zero-drift canary, held
+exactly) · worker **439** (unchanged — no worker source touched). No package decreased.
+
+**A real bug was found by the tests, not by review.** `isUniqueViolation` in
+`apps/api/src/routes/monitor.ts` checked `err.code` directly, but drizzle-orm wraps the underlying
+`pg` error under `err.cause` — the same extraction `apps/worker/src/jobs/generate-lazy-occurrence.ts`
+already has to do for the identical reason. A duplicate-name create/rename returned a bare `500`
+instead of `409 name_already_exists` until fixed; both route tests for it now pass.
+
+#### Deployment
+
+Frozen order followed to `/home/himallinux/personal-os-8.6d-release` (via `git archive` over SSH; no
+`.env`, no `google-services.json`). Rollback images tagged **by resolved digest** as
+`:rollback-pre-8.6d` for **api and web only**. **`worker` was deliberately NOT rebuilt or recreated**:
+`apps/worker/src` has zero changes this checkpoint, and the one function its probe loop calls
+(`listTargetsOfKind`) is unmodified — archiving suppresses probing entirely through the pre-existing
+`enabled` column, which the worker has always read. New api image verified to contain 17 migrations
+(`0000`–`0016`) before anything running was touched. Migration ran via `drizzle-kit migrate` from the
+new image with `--no-deps`, `MIGRATIONS_DATABASE_URL` forwarded with `-e` (never printed); applied
+`0016` cleanly (16 → 17), confirmed by re-reading the tracking table and by `archived_at` appearing in
+`information_schema.columns`. **`api` and `web` were each recreated in their own separate
+`up --no-deps --no-build --force-recreate` invocation.** Post-deploy: all four containers
+`restarts=0`; api `(healthy)`; worker's serving image digest unchanged; monitoring recorded **zero**
+`down` checks through either recreation.
+
+#### Production acceptance — PASSED
+
+All against real production, using one harmless smoke target (`checkpoint-8.6d-smoke` /
+`-renamed`), archived afterward and left as lineage (Gate H precedent — no hard-delete route exists
+to remove it, by design):
+
+| Step | Evidence |
+|---|---|
+| Create | `POST /monitor/targets` → `201`; worker began probing on its **next natural cron tick**, no restart |
+| Edit | `PATCH` renamed it and changed `interval_seconds`; applied live |
+| Disable → checks stop | Check count held at **1** across ~90 s (≥1 full cron tick) while `enabled: false` |
+| Re-enable → checks resume, no duplicate | Exactly **one** new check row appeared (count 1 → 2), same target, no double-execution |
+| Archive | Excluded from default `GET /monitor/targets`; present under `?include_archived=true`; `enabled` flipped `false` alongside `archived_at` |
+| History preserved | Both check rows survived the archive; `monitor_incidents` stayed at **0** (target never went down, so correctly no incident was ever opened) |
+| No regression | All 5 pre-existing targets kept checking on schedule through the whole window (`max(checked_at)` current for each) |
+| No restart loop | `RestartCount` **0** on all four containers, before and after |
+| No unrelated failures | Zero `pgboss.job` rows in `failed` state created during the window; zero error-level lines in either container log |
+
+**Content mutation from this checkpoint:** one archived smoke monitor target
+(`45fcb10d-e92a-4481-916e-13e426c13206`), left as lineage. No other row in any table was created,
+updated, or deleted.
+
+**Not done this checkpoint, and recorded as a deliberate scope decision rather than an oversight:** no
+new Android APK was built. `apps/mobile`'s Monitor CRUD screens ship in the **web** client (already
+verified deployed and serving) but not yet on the physical Rabbit R1, which still runs the 8.6B
+build (`versionCode 11`). Every checkpoint acceptance criterion in the owner's spec was verifiable
+through the API layer the mobile UI itself calls; an EAS cloud build plus a physical reinstall is a
+separately costed step (the project's own standing debt: *"every client change needs a full APK"*)
+and was not required to prove correctness here.
+
+---
+
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
 **Phase 7 is closed.** Checkpoints 7.0–7.8B and the full Checkpoint 7.9 record — the open
@@ -1719,9 +1835,8 @@ an intentionally-logged field — are recorded in the ledger below.
 
 ## Current objective
 
-**Await the 8.6C/8.6D decisions.** 8.6A and 8.6B are both implemented, deployed and accepted.
-8.6C is gated on retention-window decisions; 8.6D is gated on evidence. No checkpoint proceeds
-without explicit approval.
+**Await the 8.6C decision.** 8.6A, 8.6B and 8.6D are all implemented, deployed and accepted.
+8.6C remains gated on retention-window decisions. No checkpoint proceeds without explicit approval.
 
 ---
 
@@ -1741,70 +1856,62 @@ the one-line summary is:
 | **6** | Server-side Google Health cloud integration, daily aggregates + sessions, health dashboard (ADR-046). |
 | **7** | Gmail `gmail.metadata` integration, incremental sync with cursor recovery, AI mail digest, service-monitoring platform with incident lifecycle. **Deployed 2026-09-01; CLOSED 2026-09-02.** |
 
-**Production is at migration level 16** and serves images built from `a5bbc48`. All three Google
-integrations are active. Monitoring runs against five seeded targets including both Tailscale Serve
-routes.
+**Production is at migration level 17** and serves api/web images built from `ca04e57` (worker still
+`b773fce` — deliberately not rebuilt, see the 8.6D record). All three Google integrations are active.
+Monitoring runs against five seeded targets including both Tailscale Serve routes, now with full CRUD.
 
 ## Current work
 
-**None in progress.** 8.6B (Cloud Ask) implemented, deployed and accepted 2026-09-11 — see the
-Checkpoint 8.6B implementation record above. Production is healthy, Cloud Ask ships **off** by
-default, and no further work is in flight.
+**None in progress.** 8.6D (Monitor target CRUD) implemented, deployed and accepted 2026-09-12 — see
+the Checkpoint 8.6D record above. Production is healthy, and no further work is in flight.
 
 ---
 
 ## Last verification
 
-**Phase 8 Checkpoint 8.6B (2026-09-11).** Branch `phase-8-consolidation`, from `af36fee`.
+**Phase 8 Checkpoint 8.6D (2026-09-12).** Branch `phase-8-consolidation`, from `dd140d8`.
 
-Baseline **re-measured first-hand in a temporary git worktree at the design-gate commit**, not
-assumed: api 689 · worker 452 · core 447 · schema 294 · mobile 582 (3,340 total, matching 8.6A's own
-recorded figure exactly). After the checkpoint, the same per-package runs give **3,547 tests across
-12 packages, zero failing**: api **789** (+100) · worker **439** (net **−13**, explained below) ·
-core **486** (+39) · schema **310** (+16) · mobile **647** (+65) · db 79 · health-providers 315 ·
-mail-providers 116 · **calendar-providers 76** (zero-drift canary; unchanged since 8.6A) ·
-api-client 133 · ai-providers 25 · monitoring 132.
+Baseline was the recorded 8.6B figure (3,547 tests). After the checkpoint, the same per-package runs
+give **3,643 tests across 12 packages, zero failing**: api **815** (+26) · mobile **673** (+26) ·
+monitoring **151** (+19) · schema **322** (+16) · api-client **146** (+13) · core 486 ·
+health-providers 315 · mail-providers 116 · **calendar-providers 76** (zero-drift canary; unchanged
+since 8.6B) · db 79 · ai-providers 25 · worker **439** (unchanged — no worker source touched). No
+package decreased.
 
-**Worker's decrease is a relocation, not a loss**: porting the guarded logger to
-`packages/core/src/logging/logger.ts` moved its ~18 test cases there (where core's count already
-reflects them) and reduced `apps/worker/src/logger.test.ts` to a 1-test pin that the re-export shim
-forwards every binding unchanged. Net across the two packages, tests increased.
+Build **23/23** (all 12 packages, build+typecheck), `eslint .` clean, `prettier --check .` clean,
+`gitleaks protect --staged` clean.
 
-Build **35/35** (all 12 packages, build+typecheck+test, forced/uncached), `eslint .` clean,
-`prettier --check .` clean, `gitleaks protect --staged` clean on both commits.
+**A real bug was found by the route tests, not by review**: `isUniqueViolation` checked `err.code`
+directly, missing that drizzle-orm wraps the underlying `pg` error under `.cause` — a duplicate-name
+create/rename returned a bare `500` instead of `409 name_already_exists` until fixed, using the same
+extraction `apps/worker/src/jobs/generate-lazy-occurrence.ts` already needed for the identical reason.
 
-**Mutation-verified**: the new `ai-egress-guard.test.ts` hardening check was proven to actually catch
-a regression by deliberately deleting `maxRetries: 0` from `capture-parse.ts` — the first, unstripped
-version of the check kept passing (it was matching an explanatory *comment* naming the literal, not
-the real code), so the check now strips `//` comments before searching, reproven against the same
-mutation. The logger's new field-name denylist entries were checked against the exact `ai.usage`
-field names (`sourceCount`, `contextChars`) to prove no self-shadowing, after a first draft using
-`context`/`source` as fragments was found to do exactly that before it ever ran anywhere real.
+Migration invariant: **17 `.sql` / 17 journal entries**, highest `0016_monitor_target_archive`,
+`packages/db` diff against `dd140d8` limited to the new migration file, the schema column and the
+journal-guard test's allowlist entry. Production tracking table **17** after deployment (16 before).
 
-Migration invariant: **16 `.sql` / 16 journal entries**, `0016` absent, `packages/db` byte-unchanged,
-production tracking table **16** before and after deployment.
-
-**Production acceptance passed live**, over Tailscale HTTPS and on the physical Rabbit R1
-(versionCode 11, built from the exact commit deployed to the server) — see the Checkpoint 8.6B
-implementation record above for the full evidence: the switch, the immutability guard, a real
-end-to-end Ask against harmless smoke content on both the server and the device, zero log leakage,
-and Cloud Ask left **off** afterward.
+**Production acceptance passed live** over SSH to the production host (not Tailscale HTTPS this
+time — a direct host-local check was faster and equally authoritative for API-level CRUD
+correctness): create, edit, disable (checks stop), re-enable (checks resume, no duplicate
+execution), archive (excluded from the default list, included with `?include_archived=true`, history
+preserved, zero incidents ever opened), zero restarts, zero new failed jobs, zero regressions on the
+5 pre-existing targets — see the Checkpoint 8.6D record above for the full evidence table. **No new
+Android build**: the Rabbit R1 still runs the 8.6B APK (versionCode 11) and was not part of this
+checkpoint's acceptance — see that record's closing note for the reasoning.
 
 ## Next action
 
-**Await 8.6C and 8.6D.** Both remain gated exactly as before this checkpoint:
+**Await 8.6C.** It remains gated exactly as before this checkpoint:
 
 1. **8.6C** — retention windows (the unimplemented mail prune from ADR-054/ADR-057 finding #2, and
    the two dead OAuth-state sweep functions from ADR-057 finding #1) — gated on the owner choosing a
    window, since ADR-024 makes deletion irreversible.
-2. **8.6D** — monitor target CRUD — gated on evidence from actual use.
-3. **D1e** (device-token auth on `/ai/*` writes) remains open, deliberately not implemented this
-   pass — see the 8.6B record's own reasoning. Revisit only if a concrete reason to prioritize it
-   surfaces.
+2. **D1e** (device-token auth on `/ai/*` writes) remains open, deliberately not implemented at 8.6B
+   — see that record's own reasoning. Revisit only if a concrete reason to prioritize it surfaces.
+3. A Rabbit R1 APK build carrying 8.6D's (and 8.6B's already-shipped) mobile UI, whenever the owner
+   next wants a physical build — not gated on anything, just not done opportunistically this pass.
 
 **Still flagged, still not absorbed:** `occurrences.generate-lazy` (the same missing-DLQ defect
 `capture.parse` had before 8.6A, worse outcome, no logging) and the `basic404` unscrubbed-URL path.
 
-Deliberately **not** started this checkpoint: 8.6C, 8.6D, migration `0016`, the parser's own
-telemetry/retry posture beyond what Part A already hardens, any embeddings or retrieval work, and
-Phase 9.
+Deliberately **not** started this checkpoint: 8.6C, any embeddings or retrieval work, and Phase 9.
