@@ -185,6 +185,117 @@ describe("calendar-connections routes", () => {
     });
   });
 
+  describe("GET /calendar-connections/:id/calendars", () => {
+    // This is the route the bug report names directly: before it existed,
+    // the mobile "persisted calendars" query had nothing to call and
+    // hardcoded an empty array, so every calendar rendered its sync toggle
+    // as OFF on cold launch even when it was enabled in the database
+    // (docs/STATUS.md: "No GET /calendar-connections/:id/calendars endpoint").
+
+    it("returns an empty array for a connection with no calendar rows yet", async () => {
+      const connectResponse = await connectViaApi(app);
+      const connectionId = connectResponse.json<CalendarConnection>().id;
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/calendar-connections/${connectionId}/calendars`,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json<CalendarConnectionCalendar[]>()).toEqual([]);
+    });
+
+    it("returns persisted rows with their real sync_enabled state, independent of any prior PATCH response", async () => {
+      const connectResponse = await connectViaApi(app);
+      const connectionId = connectResponse.json<CalendarConnection>().id;
+
+      // Persist state via PATCH (as the toggle UI does), then read it back
+      // through GET as a cold-launch client would -- with no PATCH response
+      // and no client-side cache to fall back on.
+      await app.inject({
+        method: "PATCH",
+        url: `/calendar-connections/${connectionId}/calendars`,
+        payload: [
+          { google_calendar_id: "primary", sync_enabled: true },
+          { google_calendar_id: "work@group.calendar.google.com", sync_enabled: false },
+        ],
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/calendar-connections/${connectionId}/calendars`,
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<CalendarConnectionCalendar[]>();
+      expect(body).toHaveLength(2);
+
+      // Two-calendar isolation: each row must carry its OWN sync_enabled --
+      // no cross-contamination between rows on the same connection.
+      const byGoogleId = new Map(body.map((row) => [row.google_calendar_id, row]));
+      expect(byGoogleId.get("primary")?.sync_enabled).toBe(true);
+      expect(byGoogleId.get("work@group.calendar.google.com")?.sync_enabled).toBe(false);
+    });
+
+    it("404s for an unknown connection", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/calendar-connections/00000000-0000-0000-0000-000000000000/calendars",
+      });
+      expect(response.statusCode).toBe(404);
+    });
+
+    it("never returns another connection's rows -- a regression that dropped the connectionId filter would still pass every single-connection test above", async () => {
+      const connectionAResponse = await connectViaApi(app, "google-sub-a", "a@example.com");
+      const connectionAId = connectionAResponse.json<CalendarConnection>().id;
+      await app.inject({
+        method: "PATCH",
+        url: `/calendar-connections/${connectionAId}/calendars`,
+        payload: [{ google_calendar_id: "cal-a-1", sync_enabled: true }],
+      });
+
+      const connectionBResponse = await connectViaApi(app, "google-sub-b", "b@example.com");
+      const connectionBId = connectionBResponse.json<CalendarConnection>().id;
+      await app.inject({
+        method: "PATCH",
+        url: `/calendar-connections/${connectionBId}/calendars`,
+        payload: [{ google_calendar_id: "cal-b-1", sync_enabled: false }],
+      });
+
+      const responseA = await app.inject({
+        method: "GET",
+        url: `/calendar-connections/${connectionAId}/calendars`,
+      });
+      const bodyA = responseA.json<CalendarConnectionCalendar[]>();
+      expect(bodyA).toHaveLength(1);
+      expect(bodyA[0]?.google_calendar_id).toBe("cal-a-1");
+      expect(bodyA[0]?.sync_enabled).toBe(true);
+
+      const responseB = await app.inject({
+        method: "GET",
+        url: `/calendar-connections/${connectionBId}/calendars`,
+      });
+      const bodyB = responseB.json<CalendarConnectionCalendar[]>();
+      expect(bodyB).toHaveLength(1);
+      expect(bodyB[0]?.google_calendar_id).toBe("cal-b-1");
+      expect(bodyB[0]?.sync_enabled).toBe(false);
+    });
+
+    it("matches PATCH's response shape exactly -- a bare array, not { items: ... }", async () => {
+      const connectResponse = await connectViaApi(app);
+      const connectionId = connectResponse.json<CalendarConnection>().id;
+      await app.inject({
+        method: "PATCH",
+        url: `/calendar-connections/${connectionId}/calendars`,
+        payload: [{ google_calendar_id: "primary", sync_enabled: true }],
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/calendar-connections/${connectionId}/calendars`,
+      });
+      expect(Array.isArray(response.json())).toBe(true);
+    });
+  });
+
   describe("PATCH /calendar-connections/:id/calendars", () => {
     it("creates new calendar_connection_calendars rows and updates existing ones", async () => {
       const connectResponse = await connectViaApi(app);

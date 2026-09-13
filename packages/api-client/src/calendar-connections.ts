@@ -81,6 +81,17 @@ export async function listAvailableCalendars(
   );
 }
 
+export async function listCalendarConnectionCalendars(
+  baseUrl: string,
+  connectionId: string,
+): Promise<CalendarConnectionCalendar[]> {
+  return fetchJson(
+    baseUrl,
+    `/calendar-connections/${connectionId}/calendars`,
+    CalendarConnectionCalendarListResponseSchema,
+  );
+}
+
 export async function updateCalendarConnectionCalendars(
   baseUrl: string,
   connectionId: string,

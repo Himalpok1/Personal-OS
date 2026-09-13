@@ -483,19 +483,31 @@ function GoogleCalendarRow({
 }
 
 // One card per active Google connection: the live available-calendars list
-// merged against whatever this session has learned about persisted
-// sync_enabled state (see usePersistedCalendarConnectionCalendars's comment
-// -- there's no GET for that data, so it's only known after a toggle or a
-// sync-now response in the current session).
+// merged against the connection's persisted sync_enabled state (Checkpoint
+// 9.1: a real GET, not a hardcoded empty stub -- see
+// usePersistedCalendarConnectionCalendars's comment).
 function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConnection }) {
   const { data: available, isLoading, isError, refetch } = useAvailableGoogleCalendars(connection.id);
-  const { data: persisted } = usePersistedCalendarConnectionCalendars(connection.id);
+  const {
+    data: persisted,
+    isLoading: isPersistedLoading,
+    isError: isPersistedError,
+    refetch: refetchPersisted,
+  } = usePersistedCalendarConnectionCalendars(connection.id);
   const updateCalendars = useUpdateCalendarConnectionCalendars();
   const syncNow = useSyncCalendarConnectionNow();
   const disconnect = useDisconnectCalendarConnection();
   const [syncResult, setSyncResult] = useState<string | null>(null);
 
   const merged = mergeAvailableCalendars(available ?? [], persisted ?? []);
+  // Neither query is gated on the other, so `available` can resolve a real
+  // calendar list before `persisted` has (or vice versa) -- rendering
+  // toggles in that window is the SAME hazard as the error case just below:
+  // mergeAvailableCalendars defaults sync_enabled to false for anything with
+  // no matching persisted row, and toggling one calendar PATCHes the full
+  // merged set, so a toggle made during this window would silently disable
+  // every OTHER real calendar too.
+  const persistedNotYetReady = isPersistedLoading || isPersistedError;
 
   const toggle = (googleCalendarId: string, next: boolean) => {
     // Always PATCH the full desired set, not just the changed item -- the
@@ -517,7 +529,9 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
       </Text>
       <Text className="mb-2 text-xs text-neutral-500">Google Calendar · connected</Text>
 
-      {isLoading ? <Text className="text-neutral-500">Loading calendars…</Text> : null}
+      {isLoading || isPersistedLoading ? (
+        <Text className="text-neutral-500">Loading calendars…</Text>
+      ) : null}
       {isError ? (
         <View className="mb-2 items-start gap-2">
           <Text className="text-red-600">Couldn&apos;t load Google calendars.</Text>
@@ -533,18 +547,50 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
         </View>
       ) : null}
 
-      {merged.map((cal) => (
-        <GoogleCalendarRow
-          key={cal.key}
-          calendar={cal}
-          disabled={updateCalendars.isPending}
-          onToggle={(next) => {
-            if (cal.google_calendar_id) {
-              toggle(cal.google_calendar_id, next);
-            }
-          }}
-        />
-      ))}
+      {/* A failed persisted-state fetch must NOT fall through to rendering
+          every toggle as OFF -- mergeAvailableCalendars defaults
+          sync_enabled to false for anything with no matching persisted row,
+          which is indistinguishable from "really disabled" and is exactly
+          the bug this checkpoint fixed, just triggered by a transient
+          failure instead of a hardcoded stub. Suppress the (misleading)
+          toggle list and show a distinct retry affordance instead. */}
+      {isPersistedError ? (
+        <View className="mb-2 items-start gap-2">
+          <Text className="text-red-600">
+            Couldn&apos;t load your saved sync settings -- toggles below may not reflect reality.
+          </Text>
+          <Pressable
+            onPress={() => void refetchPersisted()}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading saved sync settings"
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          >
+            <Text className="text-sm font-medium text-white">Retry</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {/* Suppressed for the WHOLE window the persisted query is not yet
+          settled with real data, not only on error -- `available` and
+          `persisted` are two independent, unsynchronized fetches, and
+          `available` resolving first would otherwise render every real
+          calendar as OFF (persisted ?? [] is empty) for however long
+          `persisted` takes to catch up. */}
+      {persistedNotYetReady
+        ? null
+        : merged.map((cal) => (
+            <GoogleCalendarRow
+              key={cal.key}
+              calendar={cal}
+              disabled={updateCalendars.isPending}
+              onToggle={(next) => {
+                if (cal.google_calendar_id) {
+                  toggle(cal.google_calendar_id, next);
+                }
+              }}
+            />
+          ))}
 
       <Pressable
         onPress={async () => {
@@ -587,13 +633,20 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
 
 function CaldavCalendarConnectionCard({ connection }: { connection: CalendarConnection }) {
   const { data: available, isLoading, isError, refetch } = useAvailableCalendars(connection.id);
-  const { data: persisted } = usePersistedCalendarConnectionCalendars(connection.id);
+  const {
+    data: persisted,
+    isLoading: isPersistedLoading,
+    isError: isPersistedError,
+    refetch: refetchPersisted,
+  } = usePersistedCalendarConnectionCalendars(connection.id);
   const updateCalendars = useUpdateCalendarConnectionCalendars();
   const syncNow = useSyncCalendarConnectionNow();
   const disconnect = useDisconnectCalendarConnection();
   const [syncResult, setSyncResult] = useState<string | null>(null);
 
   const merged = mergeAvailableCalendars(available ?? [], persisted ?? []);
+  // See the identical guard in GoogleCalendarConnectionCard.
+  const persistedNotYetReady = isPersistedLoading || isPersistedError;
 
   const toggle = (caldavCalendarUrl: string, next: boolean) => {
     updateCalendars.mutate({
@@ -612,7 +665,9 @@ function CaldavCalendarConnectionCard({ connection }: { connection: CalendarConn
       </Text>
       <Text className="mb-2 text-xs text-neutral-500">CalDAV · connected</Text>
 
-      {isLoading ? <Text className="text-neutral-500">Loading calendars…</Text> : null}
+      {isLoading || isPersistedLoading ? (
+        <Text className="text-neutral-500">Loading calendars…</Text>
+      ) : null}
       {isError ? (
         <View className="mb-2 items-start gap-2">
           <Text className="text-red-600">Couldn&apos;t load CalDAV calendars.</Text>
@@ -628,28 +683,50 @@ function CaldavCalendarConnectionCard({ connection }: { connection: CalendarConn
         </View>
       ) : null}
 
-      {merged.map((cal) => (
-        <View key={cal.key} className="flex-row items-center justify-between py-2">
-          <View className="mr-2 flex-1">
-            <Text className="text-black dark:text-white">{cal.summary}</Text>
-            {cal.last_successful_sync_at ? (
-              <Text className="text-xs text-neutral-500">
-                Last synced {new Date(cal.last_successful_sync_at).toLocaleString()}
-              </Text>
-            ) : null}
-          </View>
-          <Switch
-            value={cal.sync_enabled}
-            onValueChange={(next) => {
-              if (cal.caldav_calendar_url) {
-                toggle(cal.caldav_calendar_url, next);
-              }
-            }}
-            disabled={updateCalendars.isPending}
-            accessibilityLabel={`Sync ${cal.summary}`}
-          />
+      {/* See the identical guard in GoogleCalendarConnectionCard: a failed
+          persisted-state fetch must not fall through to rendering every
+          toggle as OFF. */}
+      {isPersistedError ? (
+        <View className="mb-2 items-start gap-2">
+          <Text className="text-red-600">
+            Couldn&apos;t load your saved sync settings -- toggles below may not reflect reality.
+          </Text>
+          <Pressable
+            onPress={() => void refetchPersisted()}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading saved sync settings"
+            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
+          >
+            <Text className="text-sm font-medium text-white">Retry</Text>
+          </Pressable>
         </View>
-      ))}
+      ) : null}
+
+      {persistedNotYetReady
+        ? null
+        : merged.map((cal) => (
+            <View key={cal.key} className="flex-row items-center justify-between py-2">
+              <View className="mr-2 flex-1">
+                <Text className="text-black dark:text-white">{cal.summary}</Text>
+                {cal.last_successful_sync_at ? (
+                  <Text className="text-xs text-neutral-500">
+                    Last synced {new Date(cal.last_successful_sync_at).toLocaleString()}
+                  </Text>
+                ) : null}
+              </View>
+              <Switch
+                value={cal.sync_enabled}
+                onValueChange={(next) => {
+                  if (cal.caldav_calendar_url) {
+                    toggle(cal.caldav_calendar_url, next);
+                  }
+                }}
+                disabled={updateCalendars.isPending}
+                accessibilityLabel={`Sync ${cal.summary}`}
+              />
+            </View>
+          ))}
 
       <Pressable
         onPress={async () => {

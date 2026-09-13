@@ -270,6 +270,30 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
     },
   );
 
+  // Persisted per-calendar state (sync_enabled, project_id, etc.) for a
+  // connection. Distinct from GET .../available-calendars, which is a live
+  // provider listing with no persisted sync_enabled at all. Before this
+  // route existed, the mobile app's "persisted calendars" query had nothing
+  // to call and hardcoded an empty result, so every calendar rendered its
+  // sync toggle as OFF on cold launch regardless of actual database state
+  // (docs/STATUS.md). Response shape matches PATCH .../calendars exactly --
+  // a bare array, not `{ items: ... }` -- so the client's query cache slots
+  // straight in from either write path with zero transformation.
+  app.get<{ Params: { id: string } }>(
+    "/calendar-connections/:id/calendars",
+    async (request, reply) => {
+      const connection = await findConnection(app, request.params.id);
+      if (!connection) return reply.code(404).send({ error: "not_found" });
+
+      const rows = await app.db
+        .select()
+        .from(calendarConnectionCalendars)
+        .where(eq(calendarConnectionCalendars.connectionId, connection.id));
+
+      return rows.map(toCalendarResponse);
+    },
+  );
+
   app.patch<{ Params: { id: string } }>(
     "/calendar-connections/:id/calendars",
     async (request, reply) => {

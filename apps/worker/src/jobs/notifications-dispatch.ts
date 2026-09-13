@@ -37,6 +37,42 @@ const NOTIFY_COLUMN_BY_CATEGORY = {
   digest: devices.notifyDigests,
 } as const;
 
+/**
+ * Android notification channels each category is delivered on.
+ *
+ * Checkpoint 9.1 (ADR-062 follow-up), replacing what Checkpoint 8.1 shipped
+ * here. Before this, "alert" hardcoded the id of the *reminders* channel --
+ * justified at the time as THE ONLY CHANNEL THAT EXISTED ON THE DEVICE, with
+ * every other category sent with no channelId at all (Android's implicit
+ * default channel). That justification is now false, and leaving it standing
+ * would be worse than no comment (see ADR-058's discussion of exactly this
+ * failure mode in the mail digest's `output.ts`): apps/mobile now creates a
+ * dedicated taxonomy in src/notifications/channel.ts --
+ *
+ *   - "alerts"  (HIGH importance)    -- integration/monitor alerts
+ *   - "updates" (DEFAULT importance) -- capture confirmations + mail digest
+ *   - "reminders" (MAX importance)   -- locally-scheduled task/event
+ *                                        reminders only; never touches this
+ *                                        queue, never receives a category
+ *                                        push
+ *
+ * so muting Reminders no longer also mutes "your integration stopped", and a
+ * routine digest no longer competes with an urgent alert for the same mute
+ * switch.
+ *
+ * MUST MATCH `ALERTS_CHANNEL_ID` / `UPDATES_CHANNEL_ID` in
+ * apps/mobile/src/notifications/channel.ts. Duplicated rather than imported
+ * because apps/worker cannot depend on apps/mobile, and a shared package for
+ * two string literals would be worse than this comment. A mismatch is not a
+ * crash: Android silently ignores an unknown channelId and falls back to the
+ * default channel, which is precisely the failure mode these constants exist
+ * to avoid -- so both are asserted in notifications-dispatch.test.ts against
+ * the mobile source, the same guard Checkpoint 8.1 used for the single
+ * "reminders" id this replaces.
+ */
+const ANDROID_ALERTS_CHANNEL_ID = "alerts";
+const ANDROID_UPDATES_CHANNEL_ID = "updates";
+
 // Expo ticket error codes that are structurally permanent -- retrying them
 // changes nothing about the outcome. Everything else (a thrown network
 // error, an HTTP-level failure from Expo's own API, or an unrecognized
@@ -44,19 +80,6 @@ const NOTIFY_COLUMN_BY_CATEGORY = {
 // Check this set against Expo's current documented ticket errors at
 // implementation-review time; it reflects what's documented as of this
 // pass, not a guaranteed-exhaustive enumeration.
-/**
- * The Android notification channel alerts are delivered on.
- *
- * MUST MATCH `REMINDERS_CHANNEL_ID` in apps/mobile/src/notifications/channel.ts.
- * It is duplicated rather than imported because apps/worker cannot depend on
- * apps/mobile, and a shared package for one string literal would be worse than
- * this comment. A mismatch is not a crash: Android silently ignores an unknown
- * channelId and falls back to the default channel, which is precisely the
- * failure mode this constant exists to avoid -- so it is asserted in
- * notifications-dispatch.test.ts against the mobile source.
- */
-const ANDROID_ALERT_CHANNEL_ID = "reminders";
-
 const PERMANENT_TICKET_ERRORS = new Set([
   "DeviceNotRegistered",
   "MessageTooBig",
@@ -159,31 +182,22 @@ export function createNotificationsDispatchHandler(db: Db) {
         title: data.title,
         body: data.body,
         data: data.data,
-        // ANDROID DELIVERY FOR ALERTS (Checkpoint 8.1, Lane F).
+        // ANDROID CHANNEL ROUTING (Checkpoint 8.1, replaced Checkpoint 9.1).
         //
-        // The payload previously set neither, so every push landed on the app's
-        // implicit default channel at default importance -- which on Android
-        // means no heads-up display and eligibility for batching. For a
-        // "your integration has stopped" alert that is the wrong delivery, and
-        // it silently undercut the only channel this system has for telling the
-        // user something needs them.
-        //
-        // `reminders` is used rather than a new `alerts` channel BECAUSE IT IS
-        // THE ONLY CHANNEL THAT EXISTS ON THE DEVICE. apps/mobile creates
-        // exactly one (`ensureReminderChannel`, id "reminders",
-        // AndroidImportance.MAX), and a channelId Android does not know is
-        // ignored -- so inventing "alerts" here would have been a no-op that
-        // read like a fix. A dedicated channel needs a mobile change, therefore
-        // a new APK and a versionCode bump, which is out of this checkpoint's
-        // scope; the tradeoff is that muting Reminders also mutes alerts, and
-        // that is recorded as debt rather than hidden.
-        //
-        // Applied to ALERTS ONLY. A digest or a capture confirmation arriving
-        // with high priority on a MAX-importance channel would be exactly the
-        // over-notification this project has avoided so far.
-        ...(data.category === "alert"
-          ? { channelId: ANDROID_ALERT_CHANNEL_ID, priority: "high" as const }
-          : {}),
+        // Every category now gets an explicit channelId -- see the constants
+        // above for the taxonomy and why the old single-channel "reminders"
+        // hack was replaced. `alert` additionally sets `priority: "high"`,
+        // matching what Checkpoint 8.1 shipped: the channel's own HIGH
+        // importance already implies a heads-up display on modern Android,
+        // but setting it explicitly here keeps delivery behavior unchanged
+        // rather than depending solely on channel configuration.
+        // `confirmation`/`digest` deliberately carry no explicit priority --
+        // the "updates" channel's DEFAULT importance is what keeps them
+        // quiet, and forcing `priority: "high"` on the message would fight
+        // the channel rather than express the "not urgent" intent.
+        channelId:
+          data.category === "alert" ? ANDROID_ALERTS_CHANNEL_ID : ANDROID_UPDATES_CHANNEL_ID,
+        ...(data.category === "alert" ? { priority: "high" as const } : {}),
       }));
 
       let tickets: ExpoPushTicket[];

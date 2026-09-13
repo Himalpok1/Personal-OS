@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { devices, notificationDispatchLog, type Db } from "@personal-os/db";
 import { eq } from "drizzle-orm";
+import type { ExpoPushMessage } from "expo-server-sdk";
 import type { Job } from "pg-boss";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestDb, truncateTestTables } from "../test/build-test-db.js";
@@ -322,6 +325,58 @@ describe("notifications.dispatch", () => {
     ]);
   });
 
+  describe("Android channel routing (Checkpoint 9.1)", () => {
+    it("category 'alert' is delivered on the alerts channel at high priority", async () => {
+      await insertDevice(db);
+      sendPushNotificationsAsyncMock.mockResolvedValue([
+        { status: "ok", id: "receipt-alert-chan" },
+      ]);
+
+      await createNotificationsDispatchHandler(db)([
+        fakeJob({ category: "alert", title: "t", body: "b", dedupeKey: "alert:channel-check" }),
+      ]);
+
+      expect(sendPushNotificationsAsyncMock).toHaveBeenCalledWith([
+        expect.objectContaining({ channelId: "alerts", priority: "high" }),
+      ]);
+    });
+
+    it("category 'confirmation' is delivered on the updates channel with no explicit priority", async () => {
+      await insertDevice(db);
+      sendPushNotificationsAsyncMock.mockResolvedValue([
+        { status: "ok", id: "receipt-confirmation-chan" },
+      ]);
+
+      await createNotificationsDispatchHandler(db)([
+        fakeJob({
+          category: "confirmation",
+          title: "t",
+          body: "b",
+          dedupeKey: "confirmation:channel-check",
+        }),
+      ]);
+
+      const [[message]] = sendPushNotificationsAsyncMock.mock.calls.at(-1)! as [[ExpoPushMessage]];
+      expect(message.channelId).toBe("updates");
+      expect(message.priority).toBeUndefined();
+    });
+
+    it("category 'digest' is delivered on the updates channel with no explicit priority", async () => {
+      await insertDevice(db);
+      sendPushNotificationsAsyncMock.mockResolvedValue([
+        { status: "ok", id: "receipt-digest-chan" },
+      ]);
+
+      await createNotificationsDispatchHandler(db)([
+        fakeJob({ category: "digest", title: "t", body: "b", dedupeKey: "digest:channel-check" }),
+      ]);
+
+      const [[message]] = sendPushNotificationsAsyncMock.mock.calls.at(-1)! as [[ExpoPushMessage]];
+      expect(message.channelId).toBe("updates");
+      expect(message.priority).toBeUndefined();
+    });
+  });
+
   describe("quiet hours", () => {
     beforeEach(() => {
       // 2026-08-16T15:00:00Z = 10:00 America/Chicago (CDT, UTC-5).
@@ -415,5 +470,57 @@ describe("notifications.dispatch dead-letter handler", () => {
 
     const row = await dispatchLogRow(db, `confirmation:inbox-12:${deviceId}`);
     expect(row?.status).toBe("accepted");
+  });
+});
+
+// Android channel-id parity with apps/mobile (Checkpoint 9.1).
+//
+// apps/worker cannot depend on apps/mobile (docs/ARCHITECTURE.md), so
+// notifications-dispatch.ts keeps its own literal copies of the channel ids
+// apps/mobile/src/notifications/channel.ts creates. Nothing type-checks that
+// the two agree, and a mismatch is not a crash on either side -- Android
+// silently ignores a channelId it doesn't recognize and falls back to its own
+// default channel, which is precisely the failure mode this guard exists to
+// catch. This mirrors the established cross-file text-assertion pattern in
+// this codebase (apps/worker/src/queue-parity.test.ts for apps/api, and
+// apps/mobile/src/capture-intent/native-contract.test.ts for the Kotlin/TS/
+// plugin native contract): read both files as TEXT and compare the literals,
+// rather than importing either side into the other's module graph.
+describe("Android channel id parity with apps/mobile (Checkpoint 9.1)", () => {
+  const WORKER_SOURCE = readFileSync(
+    path.resolve(import.meta.dirname, "notifications-dispatch.ts"),
+    "utf8",
+  );
+  const MOBILE_CHANNEL_SOURCE = readFileSync(
+    path.resolve(import.meta.dirname, "../../../mobile/src/notifications/channel.ts"),
+    "utf8",
+  );
+
+  function firstMatch(source: string, pattern: RegExp): string {
+    const found = pattern.exec(source);
+    expect(found, `no match for ${String(pattern)}`).not.toBeNull();
+    return found![1]!;
+  }
+
+  it("ANDROID_ALERTS_CHANNEL_ID matches apps/mobile's ALERTS_CHANNEL_ID", () => {
+    const worker = firstMatch(WORKER_SOURCE, /const ANDROID_ALERTS_CHANNEL_ID = "([^"]+)"/);
+    const mobile = firstMatch(MOBILE_CHANNEL_SOURCE, /export const ALERTS_CHANNEL_ID = "([^"]+)"/);
+    expect(worker).toBe(mobile);
+    expect(worker).toBe("alerts");
+  });
+
+  it("ANDROID_UPDATES_CHANNEL_ID matches apps/mobile's UPDATES_CHANNEL_ID", () => {
+    const worker = firstMatch(WORKER_SOURCE, /const ANDROID_UPDATES_CHANNEL_ID = "([^"]+)"/);
+    const mobile = firstMatch(MOBILE_CHANNEL_SOURCE, /export const UPDATES_CHANNEL_ID = "([^"]+)"/);
+    expect(worker).toBe(mobile);
+    expect(worker).toBe("updates");
+  });
+
+  it("does not resurrect the retired single-channel 'reminders' alert hack", () => {
+    // Checkpoint 8.1 hardcoded alerts onto "reminders" specifically because it
+    // was the only channel that existed; Checkpoint 9.1 replaced that. If this
+    // identifier reappears in notifications-dispatch.ts, the replacement has
+    // been silently reverted (e.g. by a bad merge).
+    expect(WORKER_SOURCE).not.toContain("ANDROID_ALERT_CHANNEL_ID");
   });
 });

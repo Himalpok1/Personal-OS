@@ -2,6 +2,10 @@ import * as Notifications from "expo-notifications";
 import { useRouter, type Href } from "expo-router";
 import { useEffect, useRef } from "react";
 import { Platform } from "react-native";
+import { isDeviceIdentityPaired } from "@/device-identity/paired-state";
+import { isCaptureShortcutNotification } from "./capture-shortcut-notification";
+import { emitCaptureShortcutTap } from "./capture-shortcut-signal";
+import { postCaptureShortcutNotification } from "./use-capture-shortcut-notification";
 import { resolveNotificationRoute } from "./resolve-notification-route";
 
 type MinimalRouter = Pick<ReturnType<typeof useRouter>, "canDismiss" | "dismissAll" | "navigate">;
@@ -20,7 +24,8 @@ type MinimalRouter = Pick<ReturnType<typeof useRouter>, "canDismiss" | "dismissA
 // call site itself, which would violate react-hooks/rules-of-hooks) keeps
 // every render's hook-call order identical while still never reaching the
 // throwing path on web.
-const useLastNotificationResponseForPlatform: () => Notifications.NotificationResponse | null | undefined =
+const useLastNotificationResponseForPlatform: () =>
+  Notifications.NotificationResponse | null | undefined =
   Platform.OS === "web" ? () => null : Notifications.useLastNotificationResponse;
 
 /**
@@ -59,7 +64,39 @@ export function handleNotificationResponse(
   if (handledIdRef.current === identifier) return;
   handledIdRef.current = identifier;
 
-  const route = resolveNotificationRoute(response.notification.request.content.data);
+  const data = response.notification.request.content.data;
+
+  // The capture-shortcut notification (Checkpoint 9.1) has no destination
+  // for resolveNotificationRoute to resolve -- the composer is a global
+  // Modal, not a route (see plugins/withCaptureShortcut.ts) -- so it must be
+  // recognised and handled BEFORE resolveNotificationRoute ever sees the
+  // payload, not routed through it. A tap here opens the same composer a
+  // `kind: "compose"` CaptureIntent already does, via
+  // useCaptureIntent()/capture-shortcut-signal.ts, never a router.navigate.
+  if (isCaptureShortcutNotification(data)) {
+    emitCaptureShortcutTap();
+    // REARM immediately -- but only while still paired. The identifier just
+    // handled is now "seen" by both useLastNotificationResponse's own
+    // dedupe and handledIdRef above, so without SOME repost the persistent
+    // shortcut would only ever fire once per process (see
+    // capture-shortcut-notification.ts's header comment). This function is
+    // a plain, non-hook export (deliberately, so it stays testable with
+    // plain vitest) and so cannot call useDeviceIdentity() itself to gate
+    // on pairing the way useCaptureShortcutNotification's own mount/
+    // foreground path does -- isDeviceIdentityPaired() is the synchronous,
+    // always-current snapshot that closes that gap: a tap processed after
+    // the device has been unpaired (or while pairing state is still
+    // resolving from SecureStore) must not repost a shortcut whose next tap
+    // can only ever be a dead end.
+    if (isDeviceIdentityPaired()) {
+      void postCaptureShortcutNotification().catch((error: unknown) => {
+        console.warn("Failed to rearm the capture-shortcut notification after a tap", error);
+      });
+    }
+    return;
+  }
+
+  const route = resolveNotificationRoute(data);
   if (route === null) return;
 
   // A pushed screen (Settings, a task detail) sits on top of the root

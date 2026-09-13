@@ -57,6 +57,32 @@ describe("mergeAvailableCalendars", () => {
     ]);
   });
 
+  it("isolates two calendars on the same connection -- one enabled, one disabled, no cross-contamination", () => {
+    const result = mergeAvailableCalendars(
+      [
+        { google_calendar_id: "primary", summary: "Primary", primary: true },
+        { google_calendar_id: "work@group.calendar.google.com", summary: "Work", primary: false },
+      ],
+      [
+        persistedCalendar({
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          google_calendar_id: "primary",
+          sync_enabled: true,
+        }),
+        persistedCalendar({
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          google_calendar_id: "work@group.calendar.google.com",
+          sync_enabled: false,
+        }),
+      ],
+    );
+
+    expect(result).toHaveLength(2);
+    const byKey = new Map(result.map((cal) => [cal.key, cal]));
+    expect(byKey.get("primary")?.sync_enabled).toBe(true);
+    expect(byKey.get("work@group.calendar.google.com")?.sync_enabled).toBe(false);
+  });
+
   it("merges CalDAV collections matching by caldav_calendar_url", () => {
     const result = mergeAvailableCalendars(
       [

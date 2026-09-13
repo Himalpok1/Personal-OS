@@ -1,5 +1,4 @@
 import type {
-  CalendarConnectionCalendar,
   CalendarConnectionCalendarUpdate,
   ConnectCaldavCalendarRequest,
   ConnectGoogleCalendarRequest,
@@ -17,14 +16,37 @@ const availableCalendarsKey = (connectionId: string) =>
 const persistedCalendarsKey = (connectionId: string) =>
   ["calendar-connections", connectionId, "calendars"] as const;
 
-export function usePersistedCalendarConnectionCalendars(connectionId: string | undefined) {
-  return useQuery({
+/**
+ * Exported as a plain function (same convention as `askCloudMutationOptions`
+ * in `./ask.ts`) so the queryFn is unit-testable without a render harness --
+ * this app has none, and `useQuery` itself needs a live `QueryClientProvider`
+ * tree to run at all.
+ *
+ * Before Checkpoint 9.1 this hook's queryFn was `() => Promise.resolve([])`
+ * unconditionally -- it never called the backend at all. The only place this
+ * query's cache was ever populated with real data was
+ * `useUpdateCalendarConnectionCalendars`'s `onSuccess`, via `setQueryData`.
+ * So on a cold launch (or any time before a toggle had been made THIS
+ * session), every persisted calendar looked unpersisted, and
+ * `mergeAvailableCalendars` defaults `sync_enabled` to `false` for anything
+ * with no matching persisted row -- rendering every calendar's sync toggle
+ * as OFF regardless of the database. `staleTime`/`gcTime: Infinity` are kept:
+ * react-query still performs the first fetch when there is no cached data
+ * yet (exactly the cold-launch case here), and the mutation's `setQueryData`
+ * already keeps the cache current after every toggle.
+ */
+export function persistedCalendarConnectionCalendarsQueryOptions(connectionId: string | undefined) {
+  return {
     queryKey: persistedCalendarsKey(connectionId ?? ""),
-    queryFn: () => Promise.resolve([] as CalendarConnectionCalendar[]),
+    queryFn: () => api.listCalendarConnectionCalendars(connectionId!),
     enabled: connectionId !== undefined,
     staleTime: Infinity,
     gcTime: Infinity,
-  });
+  };
+}
+
+export function usePersistedCalendarConnectionCalendars(connectionId: string | undefined) {
+  return useQuery(persistedCalendarConnectionCalendarsQueryOptions(connectionId));
 }
 
 export function useCalendarConnections() {

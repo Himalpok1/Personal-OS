@@ -1,11 +1,11 @@
 # Project Status
 
 **Project:** Personal OS — single-user, self-hosted life dashboard.
-**Current phase:** **Phase 9 — OPEN.** **Checkpoint 9.0 (reliability & privacy housekeeping) is
-IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-12).** Decision: **ADR-062**. Phase 8 closed the same
-day (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail `docs/history/phase-8.md`).
-**No Phase 9 checkpoint beyond 9.0 is approved.** The Phase 9 product-theme decision is the owner's
-(see *Next action*).
+**Current phase:** **Phase 9 — OPEN.** Checkpoint 9.0 (reliability & privacy housekeeping) is
+IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-12, ADR-062). **Checkpoint 9.1 (daily-use: notification-
+shade capture, a dedicated alerts channel, the Rabbit calendar-toggle fix) is IMPLEMENTED — see
+below for deployment/acceptance status.** Phase 8 closed the same day Checkpoint 9.0 shipped
+(ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail `docs/history/phase-8.md`).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -148,7 +148,106 @@ only worker warn lines are the synthetic exercise's own.
 
 ---
 
-## Phase 8 — Consolidation & adoption (CLOSED 2026-09-12, ADR-056 / ADR-061)
+### Checkpoint 9.1 — Daily-use: notification-shade capture, alerts channel, calendar-toggle fix (2026-09-12/13)
+
+**Theme shift, per owner direction.** Infrastructure reliability is no longer the primary Phase 9
+driver; this checkpoint targets the daily capture/reminder loop directly, ahead of a future 21-day
+adoption soak. Three deliverables, built by three parallel implementation lanes, then adversarially
+reviewed twice (a first pass found two blockers and one real bug; a second pass, after fixes,
+confirmed the blockers closed and found two further narrow real bugs, also fixed and re-verified).
+**Zero migrations — level stays 17.**
+
+**A — Notification-shade capture.** Goal: pull down the shade, tap a Personal OS action, get the
+existing Quick Capture composer, without opening the app first. **No new native Kotlin code and no
+`expo-task-manager`** — both were live candidates going in; `expo-notifications@57.0.12`'s
+`NotificationContentInput.sticky`/`.autoDismiss` (Android's `isOngoing`/`setAutoCancel`, confirmed
+against the real v57.0.0 docs and the installed native source, not just type comments) already give a
+persistent, tappable local notification with zero native additions, and ADR-060 had already
+established that Android direct-reply is not durably viable without `expo-task-manager` — this
+feature never needed direct-reply at all, since a tap just opens the composer. Tapping the shortcut
+synthesizes the SAME `kind: "compose"` `CaptureIntent` shape the Checkpoint 8.4 launcher shortcut
+already produces, so it re-enters the identical capture pipeline (composer → `capture.mutate` →
+outbox on failure → `source: "web"`) with zero changes to `quick-add-fab.tsx`, the capture API, or
+`CaptureSourceSchema` — no new capture source, no migration.
+
+Two blockers surfaced by the first adversarial review, both fixed and re-verified by the second:
+(1) reposting under one constant notification `identifier` (needed so Android's `notify(tag,id)`
+replaces rather than duplicates) meant `expo-notifications`' own `useLastNotificationResponse` and
+this app's `handledIdRef` — both dedupe by `identifier` — could only ever deliver ONE tap per app
+process; fixed by rotating the identifier on every post (`makeCaptureShortcutNotificationIdentifier`)
+and rearming (repost + dismiss-the-stale-one-by-content-marker, via `getPresentedNotificationsAsync`
++ `isCaptureShortcutNotification`, never by a remembered identifier — a fresh process has no memory
+of what a prior process posted) immediately after handling a tap. (2) A genuine cold launch can
+deliver the launching tap (`useLastNotificationResponse`'s synchronous `useLayoutEffect`) before
+`QuickAddFab` — and its `useCaptureIntent` subscription — has mounted, since that's gated behind an
+async SecureStore read; fixed by buffering an unattended tap (`capture-shortcut-signal.ts`'s
+`pendingTap`) and consuming it immediately on the next subscribe, mirroring the native
+`CaptureIntentModule`'s own "pending slot is the source of truth" pattern. A third finding — the
+shortcut was never gated on device pairing, so it could offer a tap with nothing mounted to receive
+it — is closed for the hook's own mount/foreground path via `useDeviceIdentity()`
+(`useCaptureShortcutNotification`), and, since the tap-driven REARM call is a plain non-hook function
+that can't call a hook, via a small synchronous snapshot (`device-identity/paired-state.ts`) the
+provider keeps in lockstep. Accepted trade-off, unchanged from the original design: no
+`BOOT_COMPLETED` receiver — the shortcut is reposted on mount and on every `AppState`→`"active"`
+transition, not restored automatically after a reboot with the app never opened.
+
+**B — Dedicated alerts channel.** `apps/mobile/src/notifications/channel.ts` now creates four Android
+channels instead of one: `reminders` (MAX, unchanged, local scheduled reminders only — never touches
+`notifications.dispatch`), `alerts` (HIGH, new — every `category: "alert"` push: calendar/mail
+reauth, health-sync breakage, monitor incidents, occurrence dead-letters), `updates` (DEFAULT, new —
+`confirmation` + `digest` pushes), and `capture` (LOW, new, Part A's local-only shortcut, never
+routed through the dispatch log). `apps/worker/src/jobs/notifications-dispatch.ts` now sets an
+explicit `channelId` for every category instead of only for `alert` (which previously hardcoded the
+*reminders* channel id specifically because it was the only channel that existed — that premise is
+now false and the comment explaining it was rewritten rather than left stale, per the ADR-058
+precedent for exactly this failure mode). A same-repo cross-file text-assertion test (mirroring
+`queue-parity.test.ts`'s established pattern) pins the worker's channel-id literals against
+`channel.ts`'s, so a future edit to either side that drifts from the other fails the suite rather
+than silently falling back to Android's default channel. **ADR-058's dedupe-key contract is
+completely untouched** — verified line-for-line unchanged outside the payload-construction block, by
+two independent reviews.
+
+**C — Rabbit calendar-toggle bug.** Root cause, confirmed by reading the code (not assumed):
+`apps/mobile/src/queries/calendar-connections.ts`'s `usePersistedCalendarConnectionCalendars` had
+`queryFn: () => Promise.resolve([])` — hardcoded, never called the backend at all — so on cold
+launch every calendar's `sync_enabled` fell back to `mergeAvailableCalendars`'s `false` default,
+regardless of the real database state. Fixed with a new `GET /calendar-connections/:id/calendars`
+route (`apps/api/src/routes/calendar-connections.ts`, bare-array response shape matching the existing
+PATCH route exactly) and a real client call replacing the stub. A regression test proves the fix:
+reverting the `queryFn` back to the old stub was confirmed to fail the new tests before restoring it.
+Both Google and CalDAV Settings cards use the identical hook/merge pair (no separate CalDAV-side bug).
+Two further real bugs, both found by adversarial review and fixed: a failed persisted-state fetch
+previously fell through to rendering every toggle as (misleadingly) OFF with no error indication —
+now surfaced with its own retry banner, and the toggle list is suppressed entirely while unresolved,
+because the toggle handler always PATCHes the FULL merged set and would otherwise silently disable
+every *other* calendar too; and the identical hazard existed during ordinary *loading* (not just
+error), since `available` and `persisted` are two independent, unsynchronized queries and one can
+resolve before the other — now guarded by the same suppression, gated on `isLoading || isError` for
+the persisted query, not error alone.
+
+**Files changed:** `apps/api/src/routes/calendar-connections.ts`, `packages/api-client/src/{calendar-connections,index}.ts`,
+`apps/mobile/src/queries/calendar-connections.ts`, `apps/mobile/src/app/settings.tsx`,
+`apps/mobile/src/app/_layout.tsx`, `apps/mobile/src/notifications/{channel,push-token,use-reminder-reconciliation,use-notification-lifecycle}.ts`,
+`apps/mobile/src/capture-intent/use-capture-intent.ts`, `apps/mobile/src/device-identity/provider.tsx`,
+`apps/worker/src/jobs/notifications-dispatch.ts`, plus new files
+`apps/mobile/src/notifications/{capture-shortcut-notification,capture-shortcut-signal,use-capture-shortcut-notification}.ts`
+and `apps/mobile/src/device-identity/paired-state.ts`, each with a matching test file.
+
+**Verification:** `pnpm typecheck` 21/21 · `pnpm build` 11/11 · `eslint .` clean · `prettier --check .`
+clean · `git diff --check` clean · `gitleaks detect` — the same 18 pre-existing findings in ignored,
+untracked files (`.env`, `google-services.json`, `apps/mobile/.expo/dev/logs/export.log`), no new
+leaks · `pnpm test --force --concurrency=1` (turbo), run against the shared `personalos_test`
+database as integrator after each parallel lane and each review round used its own isolated clone
+(per the established `CREATE DATABASE ... TEMPLATE personalos_test` workaround) — **21/21 tasks,
+3,853 tests across 12 packages, zero failing** (api 848 · mobile 727 · worker 545 · core 486 ·
+schema 322 · health-providers 332 · api-client 146 · mail-providers 116 · monitoring 151 ·
+calendar-providers 76 · db 79 · ai-providers 25).
+
+**Deployment status: implemented and tested, not yet deployed as of this commit.** Backend changes
+(the new calendar-connections GET route, the worker channel-routing change) require an api/worker
+rebuild and redeploy under the frozen order; the mobile changes require a new EAS
+`production-internal` build (auto-incrementing versionCode from 12) and an in-place Rabbit R1
+install. See the deployment/acceptance record that follows this entry once that work completes.
 
 **Phase 8 is closed.** The full checkpoint record — 8.0 foundation, 8.1 failure visibility, 8.2 the
 real calendar, 8.3 search + export, 8.4 capture front doors, the owner-terminated 8.5 soak, the 8.6
@@ -572,8 +671,11 @@ an intentionally-logged field — are recorded in the ledger below.
 
 ## Current objective
 
-**Checkpoint 9.0 is complete and accepted; nothing is in flight.** The next step is the owner's
-Phase 9 product-theme decision (see *Next action*). No further Phase 9 checkpoint is approved.
+**Checkpoint 9.1 is implemented and fully tested (this commit); deployment is in progress in the
+same working session.** Remaining before acceptance: rebuild/redeploy `api` + `worker` under the
+frozen order, build and install a new Rabbit R1 APK (EAS `production-internal`, versionCode 12→13),
+and physical-device acceptance of all three deliverables. See the deployment/acceptance record that
+follows this entry once complete.
 
 ---
 
@@ -603,7 +705,9 @@ expired `health_oauth_states`/`mail_oauth_states`. Every retrying pg-boss queue 
 
 ## Current work
 
-**None in progress.**
+**Checkpoint 9.1 deployment in progress**, same session as implementation: api/worker rebuild and
+redeploy, EAS APK build (versionCode 12→13) and in-place Rabbit R1 install, then physical-device
+acceptance. See the Checkpoint 9.1 entry above for what shipped.
 
 ---
 

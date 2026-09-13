@@ -67,6 +67,18 @@ describe("mail digests (Checkpoint 7.6)", () => {
   });
 });
 
+describe("capture-shortcut notification (Checkpoint 9.1)", () => {
+  // The capture-shortcut notification is intercepted in
+  // use-notification-lifecycle.ts BEFORE resolveNotificationRoute ever sees
+  // it (see isCaptureShortcutNotification/capture-shortcut-notification.ts).
+  // This is a defensive backstop only: even if that interception were ever
+  // bypassed, the payload must not resolve to a route -- there is no
+  // "/capture" route to send it to.
+  it("has no destination of its own", () => {
+    expect(resolveNotificationRoute({ captureShortcut: true })).toBeNull();
+  });
+});
+
 describe("precedence is preserved for existing payloads", () => {
   // The two new keys are appended, so no notification that already worked
   // changes destination. An alert and a reminder never co-occur in practice,

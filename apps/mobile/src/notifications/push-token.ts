@@ -1,6 +1,6 @@
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
-import { ensureNotificationPermission, ensureReminderChannel } from "./channel";
+import { ensureNotificationChannels, ensureNotificationPermission } from "./channel";
 
 // Remote push (Expo Push) is for capture confirmations / alerts / digests
 // only, per docs/ARCHITECTURE.md's routing table -- NOT scheduled reminders
@@ -13,7 +13,7 @@ import { ensureNotificationPermission, ensureReminderChannel } from "./channel";
 // that, not an assumption. See docs/STATUS.md's Checkpoint 4 entry for the
 // real result on the physical device.
 export async function registerForPushNotifications(): Promise<string> {
-  await ensureReminderChannel();
+  await ensureNotificationChannels();
   const granted = await ensureNotificationPermission();
   if (!granted) {
     throw new Error("Notification permission was not granted.");

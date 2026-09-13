@@ -111,7 +111,7 @@ const apiMock = vi.hoisted(() => ({
 vi.mock("@/queries/client", () => ({ api: apiMock }));
 
 const channelMock = vi.hoisted(() => ({
-  ensureReminderChannel: vi.fn(),
+  ensureNotificationChannels: vi.fn(),
   ensureNotificationPermission: vi.fn(),
 }));
 vi.mock("./channel", () => channelMock);
@@ -230,7 +230,7 @@ beforeEach(() => {
     throw new Error(`unexpected queryKey in test: ${String(key)}`);
   });
 
-  channelMock.ensureReminderChannel.mockResolvedValue(undefined);
+  channelMock.ensureNotificationChannels.mockResolvedValue(undefined);
   channelMock.ensureNotificationPermission.mockResolvedValue(true);
   exactAlarmMock.ensureExactAlarmPermission.mockReturnValue(true);
   schedulerMock.applyReminderReconciliation.mockResolvedValue(undefined);
@@ -366,7 +366,7 @@ describe("useReminderReconciliation", () => {
     await flush();
 
     expect(schedulerMock.cancelOwnedReminders).not.toHaveBeenCalled();
-    expect(channelMock.ensureReminderChannel).toHaveBeenCalledTimes(1);
+    expect(channelMock.ensureNotificationChannels).toHaveBeenCalledTimes(1);
     expect(channelMock.ensureNotificationPermission).toHaveBeenCalledTimes(1);
     expect(schedulerMock.applyReminderReconciliation).toHaveBeenCalledTimes(1);
     expect(schedulerMock.applyReminderReconciliation).toHaveBeenCalledWith(tasks, true);

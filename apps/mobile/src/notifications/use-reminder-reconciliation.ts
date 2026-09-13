@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
 import { useDeviceIdentity } from "@/device-identity/provider";
 import { api } from "@/queries/client";
-import { ensureNotificationPermission, ensureReminderChannel } from "./channel";
+import { ensureNotificationChannels, ensureNotificationPermission } from "./channel";
 import { ensureExactAlarmPermission } from "./exact-alarm";
 import { applyReminderReconciliation, cancelOwnedReminders } from "./scheduler";
 
@@ -91,7 +91,7 @@ export function useReminderReconciliation(): void {
 
     let cancelled = false;
     void (async () => {
-      await ensureReminderChannel();
+      await ensureNotificationChannels();
       const permissionGranted = await ensureNotificationPermission();
       if (!permissionGranted || cancelled) return;
       // Prompts once per run when the permission is missing, then schedules

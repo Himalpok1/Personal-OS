@@ -5,6 +5,7 @@ import { DeviceIdentityProvider, useDeviceIdentity } from "@/device-identity/pro
 import { PairingScreen } from "@/device-identity/pairing-screen";
 import { useReminderReconciliation } from "@/notifications/use-reminder-reconciliation";
 import { useNotificationLifecycle } from "@/notifications/use-notification-lifecycle";
+import { useCaptureShortcutNotification } from "@/notifications/use-capture-shortcut-notification";
 import { usePushTokenRegistration } from "@/notifications/use-push-token-registration";
 import { useOutboxFlushOnReconnect } from "@/outbox/use-outbox-flush-on-reconnect";
 import { PttButton } from "@/ptt/ptt-button";
@@ -62,6 +63,7 @@ function ProductionContent() {
   // available (see use-reminder-reconciliation.ts).
   useReminderReconciliation();
   useNotificationLifecycle();
+  useCaptureShortcutNotification();
   usePushTokenRegistration();
   useOutboxFlushOnReconnect();
   useQueryLifecycle();

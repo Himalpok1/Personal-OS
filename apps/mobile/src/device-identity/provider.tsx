@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { setDeviceIdentityPaired } from "./paired-state";
 import {
   clearDeviceCredentials,
   getStoredDeviceCredentials,
@@ -24,6 +25,12 @@ const DeviceIdentityContext = createContext<DeviceIdentityContextValue | null>(n
 export function DeviceIdentityProvider({ children }: { children: ReactNode }) {
   const [identity, setIdentityState] = useState<StoredDeviceCredentials | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Keeps paired-state.ts's module-level snapshot in lockstep -- see that
+  // file's header comment for the one call site that needs it.
+  useEffect(() => {
+    setDeviceIdentityPaired(identity !== null);
+  }, [identity]);
 
   useEffect(() => {
     let cancelled = false;
