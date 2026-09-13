@@ -1,11 +1,11 @@
 # Project Status
 
 **Project:** Personal OS — single-user, self-hosted life dashboard.
-**Current phase:** **Phase 8 — Consolidation & adoption — is CLOSED (2026-09-12).** Closure record:
-**`docs/PHASE-8-CLOSEOUT.md`** (with the Phase 9 starting brief). Checkpoint detail for 8.0–8.6 is
-archived verbatim in **`docs/history/phase-8.md`**. Decision: **ADR-061**.
-**Phase 9 is NOT started.** No Phase 9 checkpoint is approved; the first Phase 9 decision gate is the
-owner's to open (see *Next action*).
+**Current phase:** **Phase 9 — OPEN.** **Checkpoint 9.0 (reliability & privacy housekeeping) is
+IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-12).** Decision: **ADR-062**. Phase 8 closed the same
+day (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail `docs/history/phase-8.md`).
+**No Phase 9 checkpoint beyond 9.0 is approved.** The Phase 9 product-theme decision is the owner's
+(see *Next action*).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -38,27 +38,113 @@ what is true *now*, it is in this file.
 
 ## Production state at a glance
 
-Verified first-hand at the Phase 8 closeout, 2026-09-12 ~15:05Z, read-only.
+Verified first-hand at the Checkpoint 9.0 acceptance, 2026-09-12 ~23:59Z.
 
 | | |
 |---|---|
 | Migration level | **17** (`0000`–`0016`); local and production agree |
-| Serving commit | api **`ca04e57`** · web **`ca04e57`** (Checkpoint 8.6D, 2026-09-12) · worker **`6913f78`** (Checkpoint 8.6C, 2026-09-12). Provenance is by compose `working_dir` (api/web → `personal-os-8.6d-release`, worker → `personal-os-8.6c-release`); the images carry no commit label. |
+| Serving commit | api **`6ff3287`** · worker **`6ff3287`** (Checkpoint 9.0, 2026-09-12) · web **`ca04e57`** (Checkpoint 8.6D — not rebuilt by 9.0; `apps/mobile` and every package the web image depends on were untouched). Provenance is by compose `working_dir` (api/worker → `personal-os-9.0-release`, web → `personal-os-8.6d-release`); the images carry no commit label. Rollback images `personal-os-{api,worker}:rollback-pre-9.0`, tagged by resolved digest. |
 | Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30; `GET /health` → `ok` / `connected` / `stale:false` |
 | Rabbit R1 | `com.himal.personalos` **versionCode 12**, built from `81662ff` (EAS `ba38b032…`), installed in place 2026-09-12 with SecureStore credential, primary-device row, exact-alarm appop and `firstInstallTime` all preserved. Carries the Cloud Ask (8.6B) and Monitor CRUD (8.6D) UI — the device is now at parity with source. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4). Notification-shade capture **deferred on evidence** (8.4 Lane 3). |
-| Integrations | Google Health **active** · Google Calendar **active** · Gmail **active**. **Health stream `daily-heart-rate-variability` is breaker-disabled since 2026-09-12T03:00Z** (`value_shape_violation`, an unverified value spec meeting first real data — see the debt ledger). |
+| Integrations | Google Health **active** · Google Calendar **active** · Gmail **active**. Health stream `daily-heart-rate-variability` **re-enabled 2026-09-12T23:58Z** after 9.0 corrected its value spec from a live shape observation: `available_in_window`, `first_data_date 2026-09-11`, one stored row with the deep-sleep RMSSD in `breakdown`, 24/24 streams succeeded on the acceptance pass. |
 | Calendar sync | 2 of 5 calendars enabled (owner's real primary + the dedicated test calendar). 98 events. |
 | Monitoring | 5 active targets (+1 archived 8.6D smoke target); **0 incidents ever, 0 open**; full CRUD live (8.6D) |
 | AI task routes | `capture_parser`, `daily_brief`, `mail_digest`, `voice_transcribe` — all on the existing `gpt-4.1` row. **`ask` (Cloud Ask, 8.6B) absent — OFF**, as shipped; the owner enables it from Settings. |
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
 | Backups | **None, by design** (ADR-024) |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE**. No CI, no Actions workflow, no repository secret. |
-| Test baseline | **3,668 tests across 12 packages**, reproduced exactly at closeout (see *Last verification*) |
-| pg-boss | 27 queues, 10 schedules. DLQs on `capture.parse`, `ptt.transcribe`, `notifications.dispatch` and the three calendar queues. **`occurrences.generate-lazy` and `occurrences.expand-window` retry without one** (open debt). |
-| Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC (8.6C): `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d. Two manual acceptance runs completed; **the first scheduled run is 2026-09-13T04:00Z** and had not yet occurred at closeout. |
-| Alert keys | Occurrence-scoped (ADR-058). **First live emission confirmed at closeout**: `health-sync-alert:…:breaker:daily-heart-rate-variability:2026-09-12:…` accepted 2026-09-12T03:00:14Z. |
+| Test baseline | **3,788 tests across 12 packages** (9.0; was 3,668 at the Phase 8 closeout — see *Last verification*) |
+| pg-boss | **29 queues** (`worker.started` count; `pgboss.queue` reads 30 with the internal `__pgboss__send-it`), 10 schedules. DLQs on `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues and — since 9.0 — **`occurrences.generate-lazy` → `.dead` and `occurrences.expand-window` → `.dead`**, both verified attached in production `pgboss.queue` and both consumed by registered workers. Every retrying queue now has a dead-letter queue. |
+| Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C, windows unchanged) · **`health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now`, no window constant (9.0)**. 9.0 acceptance: 9 + 1 expired states deleted exactly as preflighted, rerun deleted 0. **The first scheduled run is 2026-09-13T04:00Z** and had not yet occurred. |
+| Alert keys | Occurrence-scoped (ADR-058). First live emission `health-sync-alert:…:breaker:daily-heart-rate-variability:2026-09-12:…` accepted 2026-09-12T03:00:14Z. 9.0 adds two producers, unexercised in production by design: `occurrences.generate-lazy.dead:<occurrenceId>` and `occurrences.expand-window.dead:<UTC date>`. |
 | Search / export / Ask / Monitor CRUD | `GET /search`, `GET /export`, `POST /ask`, `GET/POST/DELETE /ai/task-routes`, `/monitor/targets` CRUD — all live, perimeter-only |
+| 404 logging | **Unknown routes never log or echo their query string (9.0).** A `setNotFoundHandler` replaces Fastify's `basic404`; the `req` serializer drops the whole query for `request.is404`, for every `OPTIONS` (served by `@fastify/cors`'s `OPTIONS *`), and for malformed URLs (`frameworkErrors`). Verified live with four sentinel values: 0 occurrences in the api log; body `{"error":"not_found"}`. |
+
+---
+
+## Phase 9 — OPEN (2026-09-12)
+
+### Checkpoint 9.0 — Reliability & privacy housekeeping: IMPLEMENTED, DEPLOYED, ACCEPTED (2026-09-12)
+
+Four items carried out of Phase 8, closed in one bounded pass. Commit **`6ff3287`** on branch
+`phase-9-reliability` (from `b41f8f0`); **no migration, level stays 17, `packages/db` byte-unchanged**.
+Decision record: **ADR-062**. Built by four parallel implementation lanes on per-lane clones of the
+test database, seven adversarial review lenses (0 blockers, 6 majors — all fixed or routed and
+resolved), then integrator verification.
+
+**A — occurrences reliability.** Both `occurrences.*` queues have dead-letter queues, attached with
+the 8.6A `createQueue → createQueue(deadLetter) → updateQueue` sequence so the attach lands on the
+already-existing production rows (the api's startup attached `generate-lazy` before the worker was
+even recreated). **Durable failure semantics:** exhaustion alerts through the existing
+`notifications.dispatch` router with an occurrence-scoped key — `occurrences.generate-lazy.dead:<occurrenceId>`
+/ `occurrences.expand-window.dead:<UTC date of the dead job>` — leaving a permanent
+`notification_dispatch_log` row (queue, occurrence id or date, `attempted_at`, delivery status) plus
+one structured log line per failure. This is the only zero-migration durable record available:
+`occurrences.status` and `tasks.status` are CHECKed closed vocabularies with no jsonb, and it
+presupposes ≥1 device eligible for alerts (alerts on, notifications on, not revoked, push token) —
+production has one, and the same precondition every alert producer already has; with none, the log
+line still records the exhaustion and `alert: no_targets`. The generate-lazy dead handler is
+idempotent on CURRENT state (occurrence missing / task closed / not completion-anchored / an open
+occurrence already exists → no-op with a closed `reason`), makes **one** further idempotent
+regeneration attempt (the realistic exhaustion cause is a transient outage that has healed), and
+alerts only if that throws — with the task's control-stripped, 80-char-capped title in the body and
+ids only in `data`. `expandDueDateWindowJob` now has **per-parent containment**: one bad rule no
+longer stops expansion for every parent after it; the contained `OccurrencesJobError` carries counts
+and a bounded (≤20) list of failed parent ids, never raw error text, and the dead handler re-logs
+those ids at dead-letter time. `generate-lazy`'s four `console.warn`s are structured logs and its
+rethrows are token-only. Guards: real pg-boss runtime tests prove the attach against a pre-existing
+queue in **both** processes; `queue-parity`/`queue-containment` cover the new queues and are no
+longer satisfiable by a comment.
+
+**B — 404 privacy.** Contract in the production-state table above. Regression coverage runs the
+real `buildServer` with a captured pino stream (`apps/api/src/server.not-found.test.ts`, 19 tests)
+including OPTIONS, HEAD, `#`-delimited queries and malformed percent-encoding. Known routes are
+byte-for-byte unchanged (name-based scrubbing of `code`/`state`/`access_token`/`q`).
+
+**C — Health HRV.** Root cause: the `daily-heart-rate-variability` leaf was the catalog unit string
+mistaken for a field name (`observed: false`). A read-only, value-free shape probe (field names and
+JSON kinds only) run from a throwaway container on the current api image observed the real record:
+`dailyHeartRateVariability.{averageHeartRateVariabilityMilliseconds, deepSleepRootMeanSquareOfSuccessiveDifferencesMilliseconds}`,
+corroborated by Google's reference. Spec corrected (`observed: true`, deep-sleep RMSSD in the
+allowlisted breakdown), the old shape pinned as rejected, fixture added. The same review corrected
+three still-unobserved specs to their documented names (SpO2 `averagePercentage`, respiratory rate
+`averageBreathsPerMinute`, weight `int64 → double` — strictly more permissive; weight is live and
+kept syncing). **Sync runs now record WHICH shape was rejected**: the rejection code as a token in
+`health_sync_runs.error_message` (e.g. `value_shape_violation LEAF_MISSING`) and one value-free
+`health.sync.rejection` line per distinct `{code, keyPath, sawType, count}` — the information whose
+absence forced this checkpoint's live probe. Re-enabled through `PATCH /health-connections/:id/streams`
+only after the fixed worker was serving (the breaker reads the last five runs); the manual pass
+succeeded 24/24.
+
+**D — OAuth-state sweeps.** Wired, not deleted-as-dead: ADR-047 records the intent that expired
+states are swept. The two zero-caller `apps/api` functions were deleted and the cleanup lives in the
+existing `retention.cleanup` job as two further independent DELETEs on `expires_at < now` (the pass's
+single captured instant; no window constant because the row carries its own 10-minute TTL;
+`consumed_at` not consulted). A live in-flight state has `expires_at` strictly in the future and
+cannot match; a deleted row changes only which `InvalidStateError` message branch a later consume
+throws (same class, same `400 invalid_state`). Irreversible under ADR-024.
+
+**Deployment** (frozen order): `git archive` of `6ff3287` to `/home/himallinux/personal-os-9.0-release`
+(855 tracked files; no `.env`, no `google-services.json`) · rollback images tagged by resolved digest
+`:rollback-pre-9.0` for api and worker · api + worker built · new images verified (17 migrations,
+highest `0016`; every 9.0 artifact present) · `drizzle-kit migrate` from the new api image with
+`--no-deps` applied nothing (17 → 17) · `api` recreated alone → `(healthy)` · `worker` recreated alone →
+`worker.started queues:29 schedules:10`. Web untouched.
+
+**Production acceptance — PASSED.** *occurrences*: both `dead_letter` columns non-null, both dead
+queues exist; a safe synthetic exercise through the real handlers — `generate-lazy` and
+`generate-lazy.dead` with a non-existent occurrence id, plus a normal `expand-window` sweep — all
+three `completed` within seconds, the dead handler logged `reason: occurrence_missing` and alerted
+nobody (0 `occurrences.*` dispatch-log rows), the sweep expanded 2 events / 0 failed. A synthetic
+`expand-window.dead` job was deliberately **not** sent: it would push a real alert and burn that
+date's key; retry-exhaustion routing is proven by the real-pg-boss test suite, not live. *404*: four
+sentinel values against unknown routes, an OAuth-callback typo and `?q=` — **0 occurrences** in the
+api log, path/method/`route_not_found` preserved, known routes unchanged. *HRV*: above. *OAuth
+sweeps*: preflight 9 + 1 eligible, run 1 deleted 9 + 1 (`tablesOk:7`), run 2 deleted 0; every log
+line counts-only. Post-acceptance: all four containers `restarts=0`, `/health` `ok`/`stale:false`,
+three integrations `active`, 0 incidents, 0 failed/retry/active jobs, 0 api error/warn lines; the
+only worker warn lines are the synthetic exercise's own.
 
 ---
 
@@ -374,9 +460,11 @@ an intentionally-logged field — are recorded in the ledger below.
 
 - ~~**The API logs the search query string (8.3).**~~ — **CLOSED by Checkpoint 8.6A.** `q` is in
   `SENSITIVE_QUERY_PARAMS` (`apps/api/src/logging/scrub-url.ts`) and every request's `req.url` is
-  scrubbed. **Residual:** the scrub is bound to the pino `req` serializer only; Fastify's default
-  404 handler (the `basic404` path) logs and echoes the raw URL outside it, so a mistyped OAuth
-  callback carrying `?code=` would still land in the log. Security/privacy debt, Phase 9 candidate.
+  scrubbed. ~~**Residual:** the `basic404` path logs and echoes the raw URL outside the serializer.~~
+  — **CLOSED by Checkpoint 9.0** (see the 404 logging row in the production-state table).
+  Remaining residuals, recorded: Fastify's `FST_ERR_REP_ALREADY_SENT` warn embeds the raw URL and is
+  reachable only by a double-send handler bug (none exists); `;` is not treated as a query delimiter
+  because `useSemicolonDelimiter` is off.
 - **Search does not cover `events` or `projects` (8.3, deliberate).** Events are excluded because
   8.2 put real third-party text there and it is **still unbounded at write**; projects were left out
   because production holds zero of them and adding an entity is a contract change (ADR-059). Both
@@ -418,12 +506,11 @@ an intentionally-logged field — are recorded in the ledger below.
   channel, and a fix to the identifier-based dedupe in `use-notification-lifecycle.ts` that would
   otherwise swallow every reply after the first.
 - ~~**`capture.parse` still has no dead-letter queue (8.4).**~~ — **CLOSED by Checkpoint 8.6A**
-  (`capture.parse.dead`, live in production, with a durable `status: "failed"` record). The "only
-  retrying queue without one" clause was also wrong: **`occurrences.generate-lazy` (retry 5) and
-  `occurrences.expand-window` (retry 3) still have no DLQ.** `generate-lazy` is the worse case — a
-  completed completion-anchored task whose successor job exhausts retries silently never spawns it,
-  with `console.warn`-only logging and no durable failure state. **Reliability debt; recommended
-  first Phase 9 reliability item.** `expand-window` is nightly-cron-retried and loses nothing per item.
+  (`capture.parse.dead`, live in production, with a durable `status: "failed"` record).
+  ~~**`occurrences.generate-lazy` (retry 5) and `occurrences.expand-window` (retry 3) still have no
+  DLQ.**~~ — **CLOSED by Checkpoint 9.0** (ADR-062): both have DLQs, occurrence-scoped alerts and
+  structured logs; `expand-window` additionally gained per-parent containment. Two adjacent gaps
+  found by the 9.0 review remain open and are listed below.
 - **Kotlin correctness is only ever verified by the EAS cloud build (8.4).** This machine has no
   JVM, so neither the new `CaptureIntentModule.kt` nor any future native module can be compiled or
   unit-tested locally. The `native-contract.test.ts` guard pins the cross-file strings but cannot
@@ -442,21 +529,39 @@ an intentionally-logged field — are recorded in the ledger below.
   invisible; the `inbox_items` row is not archivable and stays, matching the Gate H smoke-note
   precedent. It is searchable.
 
-- **Google Health `daily-heart-rate-variability` stream is breaker-disabled (found at the Phase 8
-  closeout, 2026-09-12).** Five consecutive hourly `hot` runs from 2026-09-11T23:00Z failed with
-  `value_shape_violation` after 294 successes; the stream is now `sync_enabled=false`,
-  `capability_status=provider_error`. Cause: it is one of the twelve value specs Checkpoint 6.3
-  recorded as `unverified_no_account_data` (`packages/health-providers/src/sync/value-spec.ts`,
-  leaf `rootMeanSquareOfSuccessiveDifferencesMilliseconds`, `observed: false`); the account produced
-  its first HRV record and the guessed leaf did not match. ADR-047 behaved as designed — loud
-  failure, no wrong number stored — and the 8.1 alert fired. The raw response shape was in the
-  worker log the 8.6C recreation discarded, so the fix is: re-observe the shape (the 6.2P probe),
-  correct the spec, re-enable the stream. **Operational housekeeping; not a Phase 8 defect.**
+- ~~**Google Health `daily-heart-rate-variability` stream is breaker-disabled (found at the Phase 8
+  closeout, 2026-09-12).**~~ — **CLOSED by Checkpoint 9.0.** Shape re-observed live (value-free),
+  spec corrected and `observed: true`, stream re-enabled, one row stored, no bad row ever written.
+  Original finding preserved in `docs/history/` via the closeout record. **New, from the same
+  review:** `daily-sleep-temperature-derivations` is now KNOWN to match nothing on purpose — Google
+  documents an absolute `nightlyTemperatureCelsius`, while the catalog unit `celsiusDelta` is what
+  the mobile formatter renders as a signed delta; pointing the leaf at the documented field would
+  display "+33.4 °C". It needs an owner product decision (derive nightly − baseline, or store the
+  absolute and change the display key — a mobile change) and will trip its breaker loudly on first
+  data until then. Two documented-int64 daily leaves (`daily-resting-heart-rate`,
+  `daily-respiratory-rate`) are declared `double` by choice (tolerance over strictness; reasoning in
+  the file header). Observed `dataSource` envelope puts `platform` at the ROOT while
+  `readSourceIdentity` reads `application.platform` — irrelevant to the daily path (no provenance
+  stored), relevant to session/sample identity; unchanged, no session record observed.
 - **ADR-054's retention window is explicit and recorded but not configurable (found at the Phase 8
   closeout).** The five windows are constants in `apps/worker/src/jobs/retention-cleanup.ts`; no
   env key exists. The owner chose the windows (8.6C D3–D6), so the decision is satisfied in
   substance; the "configurable" clause is recorded as unmet rather than silently reinterpreted.
   Intentionally deferred.
+- **The generate-lazy dead alert's advertised repair has no seed path (found by the 9.0 review).**
+  `PATCH /tasks/:id` seeds a lazy occurrence only on an anchor CHANGE (`!hadRecurrence ||
+  oldAnchor === 'due_date'`), so re-saving a completion-anchored task's rule after a dead-lettered
+  successor creates nothing; the only repairs today are the dead handler's one retry, or completing/
+  skipping a manually inserted occurrence. The alert body deliberately says "review its repeat
+  settings" rather than promising an edit will fix it. Product-contract change; Phase 9 candidate.
+- **`POST /occurrences/:id/complete|skip` with `!app.bossReady` returns 200 and enqueues nothing
+  (pre-existing, surfaced by the 9.0 review).** The occurrence is marked done/skipped and the
+  successor is silently never generated — a real loss no DLQ can see because no job exists. Only
+  reachable while pg-boss is down at the API. Returning 503 (or refusing the completion) is a
+  contract change; recorded as reliability debt.
+- **Health-connection `resolveFreshAccessToken` (API) still writes token columns without re-checking
+  `status`** — already recorded above; the 9.0 shape probe exercised exactly that path (a refresh
+  landed 35 s before the hourly pass, harmlessly). Unchanged.
 - **8.6D's monitor URL guard is a literal-hostname regex.** `169.254.0.0/16` is blocked only when
   written as a dotted IPv4 literal; a DNS name resolving there, decimal/hex IPv4 or an IPv6
   link-local literal passes. The probe stores no response body or error text, so the oracle is
@@ -467,8 +572,8 @@ an intentionally-logged field — are recorded in the ledger below.
 
 ## Current objective
 
-**None. Phase 8 is closed and Phase 9 is not started.** The next step is the owner opening the first
-Phase 9 decision gate, for which `docs/PHASE-8-CLOSEOUT.md` §"Phase 9 starting brief" is the input.
+**Checkpoint 9.0 is complete and accepted; nothing is in flight.** The next step is the owner's
+Phase 9 product-theme decision (see *Next action*). No further Phase 9 checkpoint is approved.
 
 ---
 
@@ -488,11 +593,13 @@ the one-line summary is:
 | **6** | Server-side Google Health cloud integration, daily aggregates + sessions, health dashboard (ADR-046). |
 | **7** | Gmail `gmail.metadata` integration, incremental sync with cursor recovery, AI mail digest, service-monitoring platform with incident lifecycle. **Deployed 2026-09-01; CLOSED 2026-09-02.** |
 | **8** | Consolidation & adoption: failure visibility, real calendar, search + export, capture front doors, owner-terminated soak, `capture.parse` DLQ, Cloud Ask (OFF by default), monitor CRUD, retention cleanup. **CLOSED 2026-09-12** (ADR-061). |
+| **9.0** | Reliability & privacy housekeeping: occurrences DLQs + durable failure evidence, 404 query scrub, HRV spec re-observed and re-enabled, OAuth-state sweep wired into retention. **Deployed and accepted 2026-09-12** (ADR-062). |
 
-**Production is at migration level 17** and serves api/web images built from `ca04e57` and a worker
-image built from `6913f78`. All three Google integrations are active. Monitoring runs against five
+**Production is at migration level 17** and serves api/worker images built from `6ff3287` and a web
+image built from `ca04e57`. All three Google integrations are active. Monitoring runs against five
 active targets including both Tailscale Serve routes, with full CRUD. A daily retention cron bounds
-`monitor_checks`/`mail_messages`/`mail_digests`/`mail_sync_runs`/`health_sync_runs`.
+`monitor_checks`/`mail_messages`/`mail_digests`/`mail_sync_runs`/`health_sync_runs` and sweeps
+expired `health_oauth_states`/`mail_oauth_states`. Every retrying pg-boss queue has a dead-letter queue.
 
 ## Current work
 
@@ -502,44 +609,43 @@ active targets including both Tailscale Serve routes, with full CRUD. A daily re
 
 ## Last verification
 
-**Phase 8 closeout (2026-09-12).** Branch `phase-8-consolidation`, HEAD `81662ff` at the start of
-the closeout (clean, equal to `origin/phase-8-consolidation`). Six read-only audit lanes ran in
-parallel — repository consistency, production state, debt classification, quality baseline,
-adversarial phase-close review, Phase 9 inputs — and every load-bearing claim below was then
-re-checked by the integrator. Full evidence: `docs/PHASE-8-CLOSEOUT.md`.
+**Checkpoint 9.0 (2026-09-12).** Branch `phase-9-reliability`, HEAD `6ff3287` (from `b41f8f0`, the
+Phase 8 closeout HEAD, verified clean and equal to origin before mutation). Four implementation
+lanes ran in parallel on per-lane clones of `personalos_test` (`personalos_test_a…e`, created with
+`CREATE DATABASE … TEMPLATE`, dropped afterwards), seven adversarial review lenses, four fixer
+passes; the integrator then ran every gate on the shared database, serially.
 
 - **Quality gates, rerun uncached:** `eslint .` zero output · `prettier --check .` clean ·
-  `git diff --check` clean · `gitleaks` no leaks · `pnpm typecheck` 21/21 · `pnpm test --force`
-  (turbo `--concurrency=1`, api/worker never overlapping) **21/21 tasks, 0 cached, 3,668 tests
-  across 12 packages, zero failing** — api 815 · mobile 673 · worker 464 · core 486 · schema 322 ·
-  health-providers 315 · monitoring 151 · api-client 146 · mail-providers 116 · db 79 ·
-  calendar-providers 76 (zero-drift canary held) · ai-providers 25. `git status --porcelain` empty
-  before and after; no generated artifact dirtied.
-- **Migration invariant:** 17 `.sql` / 17 journal entries, highest `0016_monitor_target_archive`;
-  production `drizzle.__drizzle_migrations` count 17; `monitor_targets.archived_at` present.
-- **Production (read-only, ~15:05Z):** all four containers `RestartCount=0`; api `(healthy)`;
-  `/health` `ok`/`connected`/`stale:false`, heartbeat ≈58 s old; Calendar/Health/Gmail all `active`
-  with no connection error; Gmail 96/96 syncs in 24 h; monitoring 0 incidents ever; pg-boss 0
-  failed/retry/active jobs; no `ask` route; Postgres publishes no host port; 0 error- and 0
-  warn-level lines in either app container's log.
-- **Adversarial review:** no blocker. Source-scanning guard suites (`queue-containment`,
-  `queue-parity`, `mobile-inert-rendering`, `mobile-bundle-boundary`, `no-raw-console`,
-  `ai-egress-guard`) 37/37 pass; exactly five AI SDK call sites repo-wide, all hardened; no
-  `embed(` anywhere; the only `tools:` passed to a model is the parser's execute-less tool set;
-  Postgres image `postgres:17-alpine`.
+  `git diff --check` clean · `gitleaks detect` (git history) no leaks — the working-tree scan's 18
+  hits are all in ignored, untracked files (`.env`, `google-services.json` per ADR-032, the
+  `export.log` already in this ledger) · `pnpm typecheck` 21/21 · `pnpm build --force` 11/11 ·
+  `pnpm test --force` (turbo `--concurrency=1`) **21/21 tasks, 0 cached, 3,788 tests across 12
+  packages, zero failing** — api 843 · mobile 673 · worker 539 · core 486 · schema 322 ·
+  health-providers 332 · monitoring 151 · api-client 146 · mail-providers 116 · db 79 ·
+  calendar-providers 76 · ai-providers 25. Pre-commit gitleaks hook passed on the commit.
+- **Migration invariant:** 17 `.sql` / 17 journal entries, highest `0016`; `packages/db` byte-unchanged;
+  production `drizzle.__drizzle_migrations` count 17 before and after a proven no-op `migrate`.
+- **Production acceptance:** recorded in full under *Phase 9 → Checkpoint 9.0* above.
+
+**Phase 8 closeout (2026-09-12)** — retained for reference: HEAD `81662ff`, 3,668 tests, all gates
+clean; full evidence in `docs/PHASE-8-CLOSEOUT.md`.
 
 ## Next action
 
-**Phase 8 is closed. Nothing is in flight.** The owner's next decision is whether to open Phase 9 and
-on what first gate; the recommendation in `docs/PHASE-8-CLOSEOUT.md` is a short **reliability
-closure checkpoint first** (DLQ + durable failure state for `occurrences.generate-lazy` and
-`occurrences.expand-window`, the `basic404` scrub, the HRV value-spec re-observe) before any product
-work, because those are the last known gaps in the Phase 8 failure-visibility contract.
+**Checkpoint 9.0 is closed. Nothing is in flight.** The reliability-closure checkpoint the Phase 8
+closeout recommended is done; the owner's next decision is the **Phase 9 product theme**. The
+integrator's recommendation, from the evidence of the last two checkpoints: the failure-visibility
+contract is now complete (every retrying queue has a DLQ and a durable, visible failure record), so
+Phase 9 should be a **product checkpoint that puts user-authored data into the core** — production
+still holds a handful of tasks and notes against hundreds of synced rows — with the 8.5 soak
+re-run for its full 21 days as the acceptance criterion, rather than another infrastructure pass.
+Candidates that unblock that: the notification-shade capture path (needs `expo-task-manager`), the
+dedicated `alerts` Android channel, and the Settings calendar-toggle display bug on the Rabbit.
 
-Open, non-blocking, carried into Phase 9 with their classification in the closeout record: D1e,
-the two `occurrences.*` DLQs, `basic404`, the two unwired OAuth-state sweeps, the HRV stream, the
-monitor URL guard, event text unbounded at write, the dedicated alerts channel, and the standing
-"every client change needs an APK" property.
+Open, non-blocking, carried forward: D1e; the generate-lazy repair-path and `bossReady` silent-loss
+gaps (9.0 review); `daily-sleep-temperature-derivations` needs a product decision; the monitor URL
+guard; event text unbounded at write; the dedicated alerts channel; the standing "every client
+change needs an APK" property; the unwired-sweep half of ADR-057 #1 is now closed.
 
-Deliberately **not** started: Phase 9 implementation, any embeddings or retrieval work, any
+Deliberately **not** started: any Phase 9 product work, any embeddings or retrieval work, any
 write-capable AI lane, any Postgres image change.
