@@ -2,12 +2,14 @@
 
 **Project:** Personal OS — single-user, self-hosted life dashboard.
 **Current phase:** **Phase 9 — OPEN.** Checkpoint 9.0 (reliability & privacy housekeeping) is
-IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-12, ADR-062). **Checkpoint 9.1 (daily-use: notification-
+IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-12, ADR-062). Checkpoint 9.1 (daily-use: notification-
 shade capture, a dedicated alerts channel, the Rabbit calendar-toggle fix) is IMPLEMENTED, DEPLOYED
-and ACCEPTED (2026-09-13), with physical Rabbit R1 verification of all three deliverables.** No
-further Phase 9 checkpoint is approved; the product-theme decision for what comes after 9.1 is the
-owner's (see *Next action*). Phase 8 closed the same day Checkpoint 9.0 shipped (ADR-061; record
-`docs/PHASE-8-CLOSEOUT.md`, checkpoint detail `docs/history/phase-8.md`).
+and ACCEPTED (2026-09-13), with physical Rabbit R1 verification of all three deliverables.
+**Checkpoint 9.2 — the 21-day adoption soak — is RUNNING: `SOAK_START 2026-09-14T01:28:10.274Z`,
+`SOAK_END 2026-10-05T01:28:10.274Z`. Adoption-critical surfaces are frozen; no adoption conclusion
+may be drawn before `SOAK_END`.** Record: `docs/SOAK-9.2.md`. Phase 8 closed the same day
+Checkpoint 9.0 shipped (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail
+`docs/history/phase-8.md`).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -285,6 +287,67 @@ table above).
 `state in ('failed','retry')` in `pgboss.job`; 0 `warn`/`error` API log lines in the 20 minutes
 following the redeploy; three integrations still `active`; no `FATAL`/crash lines in the Rabbit R1's
 logcat for the app process since install.
+
+### Checkpoint 9.2 — 21-day adoption soak: RUNNING (started 2026-09-13 20:28 CDT)
+
+**Purpose.** With the daily-use friction of 8.1–9.1 removed, observe — never manufacture — whether
+Personal OS becomes part of the owner's real workflow over a sustained 21-day period. This is a
+product-observation checkpoint; its deliverable is evidence. It is the first valid long-form
+adoption observation: the 8.5 soak was terminated after 9.1 hours and produced none, and the two
+runs are never compared as equivalent experiments.
+
+**Window.** `SOAK_START = 2026-09-14T01:28:10.274Z` (the production database clock at the baseline
+observation; 2026-09-13 20:28 CDT) · `SOAK_END = 2026-10-05T01:28:10.274Z` (2026-10-04 20:28 CDT),
+exactly 21 × 24 h. The window touches 22 Chicago calendar dates, the first and last partial.
+
+**Pre-start.** `902b568` pushed to `origin` (was 2 ahead); local and remote identical. Baseline
+taken with the frozen read-only observer; production `GREEN` on every check condition. Full
+baseline, frozen metric definitions, frozen surfaces, incident classes and the monitoring method are
+in **`docs/SOAK-9.2.md`** — deliberately outside the auto-loaded set so 21 days of readings do not
+inflate agent context.
+
+**Tooling (read-only, counts only, no analytics SDK, nothing added to production):**
+`scripts/soak/soak-9.2-observe.sql` (one statement, 118 keys — counts, dates, status tokens and
+8-char id prefixes; never a title, body, subject, address, value or log line) and
+`scripts/soak/soak-9.2-observe.sh` (`baseline` / `observe` / `final` / `check`). Observations go to
+`~/.personal-os-soak/9.2/` on the development machine, outside the repository. Before the baseline
+locked the definitions, five adversarial review lenses (SQL correctness, privacy, metric
+definitions, shell robustness, check thresholds) found and the integrator fixed: a locally-authored
+event discriminator that would have counted a third party's meeting cancellation as an owner action
+(closed by the sync-archive signature `updated_at < archived_at` plus slot-matched instance rows); an
+un-allowlisted free-text dedupe-key prefix and task-name column reaching the record; a check mode
+that re-graded yesterday's line as GREEN when today's run failed, cascaded on an `ok:false` line,
+and never read the freshness, dispatch-failure, device-eligibility, stream-count or monitor-volume
+signals the SQL already computed; cumulative counters that would have re-alarmed daily (now delta-
+based, with standing counts as `INFO`); and `SOAK_START` depending on the scheduler's environment
+(now defaulted from `baseline.json`).
+
+**Automation.** Two desktop scheduled tasks: `soak-9-2-daily-observer` (06:23 America/Chicago
+daily, effective ~06:29 with dispatch delay) runs `observe` + `check` and pushes **only on RED** or
+when the observer itself cannot run — GREEN/YELLOW/INFO are logged locally, never pushed; and
+`soak-9-2-day-21-final-snapshot` (one-shot at `SOAK_END`) takes the `final` snapshot and notifies
+that the analysis is ready. Caveat recorded: both run only while the Claude desktop app is open on
+the development machine; a missed day runs on next launch, the gap is visible in
+`observations.jsonl`, and every adoption metric is recomputed from durable production data at Day
+21 regardless.
+
+**Active day (frozen):** a Chicago calendar day with ≥1 of: capture · direct task creation · task
+completion · note creation · local calendar action · review completion · project creation · Cloud
+Ask (log-only, attributed to the previous date). Reads never count.
+
+**Baseline (starting point, NOT evidence):** 11 captures (`web` 6 · `ptt` 4 · `share` 1; 3
+`needs_confirm`, all `unclear`) · 7 tasks (0 open unarchived, 0 live future reminders) · 6 notes ·
+0 projects · 98 events (all sync-ingested) · 1 occurrence · 1 review · 2 briefs · Cloud Ask OFF ·
+1 active device (primary, reminder-eligible) · 3 integrations `active` · 0 incidents ever ·
+migration 17 · all containers `RestartCount=0`.
+
+**Pre-existing caveats (Class A, do not block):** Google Health `daily-respiratory-rate` was
+breaker-disabled 2026-09-13T05:00Z on first real data (`value_shape_violation LEAF_MISSING`, one
+occurrence-scoped alert accepted) — 17 of 19 streams enabled at baseline; the 3 `unclear` inbox
+items keep Today's attention counter non-zero; the web image still predates 9.1; and all
+already-classified non-blocking debt (D1e, sleep-temperature spec, capture-shortcut repost race,
+buffered-tap expiry, successor seed path, `bossReady` loss, unbounded event text, monitor URL
+guard) is carried unchanged.
 
 **Phase 8 is closed.** The full checkpoint record — 8.0 foundation, 8.1 failure visibility, 8.2 the
 real calendar, 8.3 search + export, 8.4 capture front doors, the owner-terminated 8.5 soak, the 8.6
@@ -715,8 +778,9 @@ an intentionally-logged field — are recorded in the ledger below.
 
 ## Current objective
 
-**Checkpoint 9.1 is complete and accepted; nothing is in flight.** No adoption conclusion is drawn
-from this checkpoint — see *Next action* for the owner's open decisions.
+**Checkpoint 9.2 — the 21-day adoption soak — is running until `2026-10-05T01:28:10.274Z`.**
+Observe real usage; keep the adoption-critical surfaces frozen; classify any incident (A/B/C) before
+acting; draw no conclusion before the boundary. Interim statements are descriptive only.
 
 ---
 
@@ -738,6 +802,7 @@ the one-line summary is:
 | **8** | Consolidation & adoption: failure visibility, real calendar, search + export, capture front doors, owner-terminated soak, `capture.parse` DLQ, Cloud Ask (OFF by default), monitor CRUD, retention cleanup. **CLOSED 2026-09-12** (ADR-061). |
 | **9.0** | Reliability & privacy housekeeping: occurrences DLQs + durable failure evidence, 404 query scrub, HRV spec re-observed and re-enabled, OAuth-state sweep wired into retention. **Deployed and accepted 2026-09-12** (ADR-062). |
 | **9.1** | Daily-use: notification-shade capture (no new native code), dedicated `alerts`/`updates`/`capture` Android channels, the Rabbit calendar-toggle fix. **Deployed and accepted 2026-09-13**, all three verified on the physical Rabbit R1. |
+| **9.2** | 21-day adoption soak. **RUNNING** — `2026-09-14T01:28:10.274Z` → `2026-10-05T01:28:10.274Z`. Read-only observer + daily scheduled check; no code deployed; record in `docs/SOAK-9.2.md`. |
 
 **Production is at migration level 17** and serves api/worker images built from `77ea112` and a web
 image built from `ca04e57`. All three Google integrations are active. Monitoring runs against five
@@ -748,7 +813,10 @@ The Rabbit R1 runs `com.himal.personalos` versionCode 13, built from the same `7
 
 ## Current work
 
-**None in progress.**
+**Checkpoint 9.2 adoption soak — observation in progress.** Nothing is being built. Permitted
+during the soak: backend maintenance that does not change user-visible behaviour, documentation,
+tests, internal tooling, isolated infrastructure cleanup, provably behaviour-identical refactors.
+Deferred past `SOAK_END`: anything that could plausibly make the app easier or harder to use daily.
 
 ---
 
@@ -802,15 +870,17 @@ clean; full evidence in `docs/PHASE-8-CLOSEOUT.md`.
 
 ## Next action
 
-**Checkpoint 9.1 is closed. Nothing is in flight. No adoption conclusion is drawn from this
-checkpoint** — 8.5's soak-evidence rule stands: three daily-use frictions are removed, but that is
-not itself adoption evidence. The three concrete candidates Checkpoint 9.0 named for "unblocking a
-product checkpoint" — notification-shade capture, the dedicated alerts channel, and the calendar-
-toggle display bug — are now **all shipped and physically verified**, which was this checkpoint's
-entire purpose. The owner's next decision is **when to run the deferred 21-day adoption soak** (the
-8.5 soak was terminated after 9.1 hours; re-running it against this now-stabler daily loop is the
-integrator's standing recommendation, unchanged from Checkpoint 9.0) — and separately, whether any
-further Phase 9 checkpoint is wanted before that, or whether the soak starts now.
+**Let the soak run to `2026-10-05T01:28:10.274Z`.** The owner uses Personal OS when it is genuinely
+useful — no quota, no prompting. The daily observer pushes only on RED. At the boundary, the
+one-shot task takes the final snapshot; the end-of-soak analysis then compares it to the baseline
+under the frozen definitions in `docs/SOAK-9.2.md` (frequency, breadth, follow-through,
+persistence, friction, reliability; weeks 1/2/3; burst vs sustained) and produces exactly one of
+`meaningful adoption demonstrated` / `mixed / inconclusive adoption` / `weak adoption demonstrated`,
+plus the product-learning output and a recommended 9.3 direction. Phase 9.3 does not begin
+automatically.
+
+Optional, non-blocking, safe during the soak (Class A): correct the `daily-respiratory-rate` value
+spec (a worker-only change plus deployment; health is passive and off every frozen surface).
 
 Open, non-blocking, carried forward: D1e; the generate-lazy repair-path and `bossReady` silent-loss
 gaps (9.0 review); `daily-sleep-temperature-derivations` needs a product decision; the monitor URL
