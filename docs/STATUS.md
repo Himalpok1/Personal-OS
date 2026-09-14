@@ -1,16 +1,15 @@
 # Project Status
 
 **Project:** Personal OS — single-user, self-hosted life dashboard.
-**Current phase:** **Phase 9 — OPEN, accelerated operating model.** 9.0 (reliability & privacy) and
-9.1 (daily-use) are deployed and accepted. **9.2 (21-day adoption soak) was OWNER-TERMINATED BEFORE
-MINIMUM DURATION** at `2026-09-14T01:53:37.600Z`, 25 minutes in — no adoption conclusion is
-permitted (`docs/SOAK-9.2.md`). **Checkpoint 9.3 — Close the capture→task loop — is IMPLEMENTED,
-DEPLOYED and ACCEPTED (2026-09-14)**: in-app filing of unclear captures, inbox dismiss, task
-complete/reopen/snooze, recurrence integrity. **Checkpoint 9.4 — Dependable recurring tasks and
-reminders — is IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-14)**: repeat presets, one successor
-rule for every writer, occurrence snooze/reopen, per-occurrence reminders with Done / Snooze 1h /
-Tomorrow 9am actions, nightly lazy repair; migration level **19** (`0018`); Rabbit R1 versionCode
-**15** (ADR-063). No further Phase 9 checkpoint is selected yet. Phase 8 closed the same day
+**Current phase:** **Phase 9 — OPEN, accelerated operating model.** 9.0 (reliability & privacy),
+9.1 (daily-use), 9.3 (capture→task loop) and 9.4 (dependable recurring tasks and reminders) are
+deployed and accepted. **9.2 (21-day adoption soak) was OWNER-TERMINATED BEFORE MINIMUM DURATION** —
+no adoption conclusion is permitted (`docs/SOAK-9.2.md`). **Checkpoint 9.5 — Calendar as an
+authoring surface — is IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-14)**: explicit event ownership
+(`events.origin`), Personal OS-authored events created/edited/cancelled on the Rabbit R1 and synced
+outward to a write-eligible connected calendar through a durable, idempotent push path, whole-series
+recurrence presets, imported events read-only; migration level **20** (`0019`); Rabbit R1 versionCode
+**16** (ADR-064). No further Phase 9 checkpoint is selected yet. Phase 8 closed the same day
 Checkpoint 9.0 shipped (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail
 `docs/history/phase-8.md`).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
@@ -50,24 +49,24 @@ Verified first-hand at the Checkpoint 9.4 acceptance, 2026-09-14 ~07:31Z (Checkp
 
 | | |
 |---|---|
-| Migration level | **19** (`0000`–`0018`); local and production agree; `0018` = `occurrences.snoozed_until` (9.4), byte-pattern of `0016`/`0017` |
-| Serving commit | api, worker **and web** all **`e7b195e`** (Checkpoint 9.4, 2026-09-14T07:09Z). Provenance is by compose `working_dir` (`personal-os-9.4-release` for all three); the images carry no commit label. Rollback images `personal-os-{api,worker,web}:rollback-pre-9.4`, tagged by resolved digest (earlier `rollback-pre-*` tags preserved underneath). |
+| Migration level | **20** (`0000`–`0019`); local and production agree; `0019` = `events.origin` + CHECK, `events.client_uuid` + partial unique index, `calendar_connection_calendars.access_role` (9.5) |
+| Serving commit | api, worker **and web** all **`91d744c`** (Checkpoint 9.5, 2026-09-14T11:57Z). Provenance is by compose `working_dir` (`personal-os-9.5-release` for all three); the images carry no commit label. Rollback images `personal-os-{api,worker,web}:rollback-pre-9.5`, tagged by resolved digest (earlier `rollback-pre-*` tags preserved underneath). |
 | Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30; `GET /health` → `ok` / `connected` / `stale:false` |
-| Rabbit R1 | `com.himal.personalos` **versionCode 15**, built from `e7b195e` (EAS build `eea50789…`), installed in place 2026-09-14 02:1x CDT with SecureStore credential, primary-device row, exact-alarm appop, `POST_NOTIFICATIONS` and `firstInstallTime` (2026-08-19) all preserved — no re-pair. Carries the 9.4 Repeat field, task-detail recurrence summary / Next line / Skip / Undo, occurrence snooze, and the `reminder` notification category. |
+| Rabbit R1 | `com.himal.personalos` **versionCode 17**, built from `4d1b565` (EAS build `4e377e86…`; versionCode 16 from `91d744c` was installed first and superseded the same session after the date-picker off-by-one was found), installed in place 2026-09-14 with SecureStore credential, primary-device row, exact-alarm appop, `POST_NOTIFICATIONS` and `firstInstallTime` (2026-08-19) all preserved — no re-pair. Carries the 9.5 event composer and editor, calendar target picker, event Repeat presets, the read-only view for imported events, and the corrected Material date pickers. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · **notification-shade capture (9.1)** — a persistent local "Capture" notification on its own channel, tap opens the same composer; verified live on the Rabbit R1 across two sequential taps (the rearm-with-a-fresh-identifier fix), producing a real `inbox_items` row (`source: "web"`, parsed as a task, archived after verification). |
 | Reminders (9.4) | Scheduled by the primary device from **`GET /reminders`** — one item per one-off task with a reminder and one per open occurrence of a recurring task (derived from the parent's `remind_at` wall clock and its day-offset from `due_at`, in `recurrence_timezone`; `snoozed_until` overrides). Deterministic identifiers `reminder:<key>:<instant>`, exact alarms (`window=0 exactAllowReason=permission`, verified in `dumpsys alarm`), category `reminder` with **Done / Snooze 1h / Tomorrow 9am** — all `opensAppToForeground: true` (a non-foregrounding action is lost when the process is dead; verified in the installed expo-notifications source). Verified live on the Rabbit R1 with the app process killed (`am kill`, not force-stop — force-stop puts the package in Android's stopped state, which cancels every alarm): both a Snooze 1h and a Done from the shade opened the app to the task with the outcome banner, mutated the right occurrence, dismissed the notification and re-armed the next alarm. |
 | Notification channels (9.1) | `reminders` (MAX, unchanged, local reminders only) · `alerts` (HIGH, new — integration/monitor alerts) · `updates` (DEFAULT, new — confirmations + mail digest) · `capture` (LOW, new — the local shortcut only, never through `notifications.dispatch`). All four verified independently listed and toggleable in Android's per-app notification settings on the Rabbit R1; a live test alert (via the existing `notifications.dispatch` job, `category: "alert"`) delivered on the `alerts` channel at `importance=4`. |
 | Integrations | Google Health **active** · Google Calendar **active** · Gmail **active**. Health stream `daily-heart-rate-variability` **re-enabled 2026-09-12T23:58Z** after 9.0 corrected its value spec from a live shape observation: `available_in_window`, `first_data_date 2026-09-11`, one stored row with the deep-sleep RMSSD in `breakdown`, 24/24 streams succeeded on the acceptance pass. |
-| Calendar sync | 2 of 5 calendars enabled (owner's real primary + the dedicated test calendar). 98 events. **The Rabbit R1 Settings screen now renders this correctly (9.1)** — verified live, before and after a force-stop + cold relaunch, where it previously showed all five as OFF regardless of real state. |
+| Calendar sync | 2 of 5 calendars enabled (owner's real primary + the dedicated test calendar). 98 imported events, all `origin='external'` (read-only). **Calendar authoring (9.5):** `POST /events` with `calendar` → durable `pending_push` link → worker push with a link-derived Google id → inbound adoption; `GET /calendar-targets` offers the two write-eligible calendars (roles `owner`; the holidays calendar is `reader` and excluded). Roles and display names are refreshed by the worker's five-minute calendar cron (first tick 2026-09-14T12:00Z: `updated:5 cleared:0`). |
 | Monitoring | 5 active targets (+1 archived 8.6D smoke target); **0 incidents ever, 0 open**; full CRUD live (8.6D) |
 | AI task routes | `capture_parser`, `daily_brief`, `mail_digest`, `voice_transcribe` — all on the existing `gpt-4.1` row. **`ask` (Cloud Ask, 8.6B) absent — OFF**, as shipped; the owner enables it from Settings. |
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
 | Backups | **None, by design** (ADR-024) |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE**. No CI, no Actions workflow, no repository secret. |
-| Test baseline | **4,636 tests across 12 packages** (9.4; was 4,141 at 9.3, 3,853 at 9.1, 3,788 at 9.0, 3,668 at the Phase 8 closeout — see *Last verification*) |
+| Test baseline | **5,062 tests across 12 packages** (9.5 at `4d1b565`: 5,060 at `91d744c` + 2 picker tests; was 4,636 at 9.4, 4,141 at 9.3, 3,853 at 9.1, 3,788 at 9.0, 3,668 at the Phase 8 closeout — see *Last verification*) |
 | pg-boss | **29 queues** (`worker.started` count; `pgboss.queue` reads 30 with the internal `__pgboss__send-it`), 10 schedules. DLQs on `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues and — since 9.0 — **`occurrences.generate-lazy` → `.dead` and `occurrences.expand-window` → `.dead`**, both verified attached in production `pgboss.queue` and both consumed by registered workers. Every retrying queue now has a dead-letter queue. **`occurrences.expand-window` has a phase 2 since 9.4**: idempotent repair of any completion-anchored parent left with no open occurrence, per-parent contained, failures (including an insert collision that leaves no open row, `reason: collision`) counted into the same `OccurrencesJobError` → dead letter → alert. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C, windows unchanged) · **`health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now`, no window constant (9.0)**. 9.0 acceptance: 9 + 1 expired states deleted exactly as preflighted, rerun deleted 0. **The first scheduled run is 2026-09-13T04:00Z** and had not yet occurred. |
-| Alert keys | Occurrence-scoped (ADR-058). First live emission `health-sync-alert:…:breaker:daily-heart-rate-variability:2026-09-12:…` accepted 2026-09-12T03:00:14Z. 9.0 adds two producers, unexercised in production by design: `occurrences.generate-lazy.dead:<occurrenceId>` and `occurrences.expand-window.dead:<UTC date>` — the latter now also covers a failed phase-2 lazy repair (9.4; body wording "could not be expanded or repaired overnight"). No new producer in 9.4. |
+| Alert keys | Occurrence-scoped (ADR-058). 9.5 adds `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (unexercised in production by design). First live emission `health-sync-alert:…:breaker:daily-heart-rate-variability:2026-09-12:…` accepted 2026-09-12T03:00:14Z. 9.0 adds two producers, unexercised in production by design: `occurrences.generate-lazy.dead:<occurrenceId>` and `occurrences.expand-window.dead:<UTC date>` — the latter now also covers a failed phase-2 lazy repair (9.4; body wording "could not be expanded or repaired overnight"). No new producer in 9.4. |
 | Search / export / Ask / Monitor CRUD | `GET /search`, `GET /export`, `POST /ask`, `GET/POST/DELETE /ai/task-routes`, `/monitor/targets` CRUD — all live, perimeter-only |
 | Recurrence routes (9.4) | `POST /occurrences/:id/snooze` (task-only, ≤ 31 days, `409 occurrence_not_open` / `occurrence_not_task`, `400 validation_failed` path `until`) · `POST /occurrences/:id/reopen` (latest terminal only; withdraws the open successor of a completion-anchored parent; `409 occurrence_not_reopenable` / `task_not_open` / `occurrence_not_task`) · `GET /occurrences?order=asc|desc` · `GET /reminders?horizon_days=` · `due_date` rules validated at `POST/PATCH /tasks` (`400 validation_failed`, token-only `unsupported_frequency` / `embedded_until_count` / `invalid_rrule`) · `POST /tasks/:id/complete` redirects to the earliest **effective** open occurrence (`greatest(occurs_at, snoozed_until)`). All verified live through real routes on 2026-09-14 (smoke rows archived). |
 | 404 logging | **Unknown routes never log or echo their query string (9.0).** A `setNotFoundHandler` replaces Fastify's `basic404`; the `req` serializer drops the whole query for `request.is404`, for every `OPTIONS` (served by `@fastify/cors`'s `OPTIONS *`), and for malformed URLs (`frameworkErrors`). Verified live with four sentinel values: 0 occurrences in the api log; body `{"error":"not_found"}`. |
@@ -681,6 +680,160 @@ root `eslint .` gate ignores `apps/mobile/**`).
 
 ---
 
+### Checkpoint 9.5 — Calendar as an authoring surface: IMPLEMENTED, DEPLOYED, ACCEPTED (2026-09-14)
+
+**Objective (owner-directed).** Personal OS originates and manages its own calendar events on the
+Rabbit R1 — create, edit, cancel, recurring — synced outward to a chosen writable connected
+calendar, with imported events protected. Commit **`91d744c`** on `phase-9-reliability` (from
+`44c2ebd`); one migration, **`0019_event_authoring`** (`events.origin`, `events.client_uuid`,
+`calendar_connection_calendars.access_role`; level **20**); decision record **ADR-064**;
+architecture section "Event ownership and outbound sync". Three parallel read-only audits
+(ownership/sync, provider write path, recurrence + mobile), foundation by the integrator, four
+parallel implementation lanes (api, provider+worker, mobile, semantics tests) on per-lane database
+clones, six adversarial review lenses, three fixer passes, a second review round of two lenses,
+integrator gates, frozen-order deployment, EAS build, in-place install, physical acceptance — one
+session (interrupted once by a usage limit; the three fixers resumed from their transcripts).
+
+**What the audits found first.** Phase 4 had built genuine two-way sync, so after the first push an
+imported event and an authored one were byte-identical in the database — archiving an imported
+event deleted it from the owner's Google calendar and editing one wrote back to a calendar of
+unknown writability; the Google write body carried no `recurrence` (a linked series landed as one
+event); inserts were not idempotent on retry; a second edit inside a ten-second `singletonKey`
+window was silently dropped; `accessRole` was discarded at the client boundary; `POST /events`
+never validated its rule; Today/Agenda were not invalidated after an event mutation. Consent was
+already sufficient (`calendar.events`, read-write) — no scope change anywhere.
+
+**Contract shipped (detail in ADR-064).** *Ownership:* `origin` `local` | `external`, DB default
+`external` (fails safe; every local writer sets `local` explicitly); external → `409
+event_not_owned` on PATCH / archive / detach / cancel-occurrence / link-calendar and a read-only card
+on the device. *Write-eligible target:* sync-enabled, active connection, Google role owner/writer
+(NULL = unknown = never); CalDAV by PUT. `GET /calendar-targets`. Roles are refreshed by the
+Settings listing, at the toggle-on insert, and by the worker's five-minute calendar cron (which
+also NULLs roles for calendars no longer listed and refreshes display names — closing the 8.2
+"summary stores the id" cosmetic debt). *Durable intent:* event + occurrence window + `pending_push`
+link in one transaction; every mutation flips the link in-transaction; enqueue after commit; lost
+enqueues re-driven from the rows every five minutes; `client_uuid` idempotency (200 on retry).
+*Provider idempotency:* Google id derived from the link id and sent on insert (`409 duplicate` →
+update); deterministic CalDAV UID/href (`412` → conditional re-PUT of the CURRENT body); inbound
+sync ADOPTS a pending link whose derived id matches; full-sync reconcile archives only links
+synced before the listing began; race-safe final write (ids unconditional, `synced` only if the
+link's `updated_at` is unchanged). *Recurrence:* `localRecurrenceToGoogle` ↔
+`googleRecurrenceToLocal`, round-trip-tested; `validateEventRecurrenceRule` shared by POST/PATCH and
+capture commit (`hasCommittableRecurrence` now refuses uncommittable event rules at confirm);
+whole-series editing only — detach on a linked series, and linking a series that has detached
+children, are refused (`409 linked_series_detach_unsupported`); cancel-occurrence (EXDATE) is
+supported; inbound all-day UNTIL resolves to end of local day and a linked row's zones are never
+overwritten with UTC; `recurrence_until` floored to whole seconds so the round trip is a no-op.
+*Failure semantics:* dead-letter alert `calendar.push-event.dead:<eventId>:<link updated_at>`
+(ADR-058; flip and alert one transaction, pinned to the `updated_at` the key was built from);
+permanent errors (`missing_scope`/`invalid_request`/`not_found`, CalDAV 403/405) surface on the
+event screen without retry; an inactive connection leaves the link `pending_push`.
+*Mobile:* new/edit event screens on the 9.4 pattern — Material date/time pickers, a new date-only
+`DateField`, calendar picker (hidden with zero targets; a fetch error shows a note and never blocks
+creation), `EventRepeatField` = the task chips minus the completion anchor, end defaults to start
++ 1 h, `client_uuid` minted once per mount and regenerated only for an edit after a failed attempt,
+read-only view for external events, sync status line with honest copy (nothing promises a retry
+that does not exist), "+ Event" on Today, Today routes recurring instances with `occursAt`, every
+event mutation invalidates Today/Agenda.
+
+**Adversarial review (six lenses + two second-round lenses; every finding fixed in-checkpoint
+with a test that fails on the old code).** *Blockers (found independently by two lenses):* inbound
+sync imported our own just-pushed event as a read-only twin during the retry window, after which
+every retry hit the unique index and dead-lettered — closed by pending-link adoption; CalDAV
+inserts minted a fresh UID per attempt — closed by link-derived identity. *Majors:* the legacy
+`link-calendar` route bypassed write-eligibility; a calendar toggled on in Settings had no role
+until Settings re-opened (and every production calendar was NULL on day one) — closed by the
+worker refresh + the toggle-time listing; archive after a lost insert orphaned the remote event;
+`connection_inactive` was terminal; full-sync reconcile could archive a just-pushed local event;
+inbound all-day UNTIL at UTC midnight dropped the last instance and overwrote a local row's zones;
+"Edit this occurrence" on a linked series silently removed the occurrence from Google; the push
+sent `start.timeZone` from a different zone than the EXDATEs; the 412-adopt re-used the previous
+attempt's body; the all-day read-only card showed the series template's date. *Minors:* Google
+409 reason check; dead-flip ordering and `updated_at` pin; CalDAV permanent errors; role clamp;
+empty listing must not NULL every role; detached children inherit the parent's origin; conflict
+copy; `client_uuid` after an edit; sync copy that promised a retry.
+
+**Verification (integrator, shared database, serial):** `pnpm build --force` 11/11 · `pnpm typecheck`
+21/21 · `eslint .` clean · `prettier --check .` clean · `git diff --check` clean · `gitleaks` — the
+same 18 pre-existing findings in ignored, untracked files, git history clean · **`pnpm test --force`
+21/21 tasks, 5,060 tests across 12 packages, zero failing** (api 1,143 · mobile 1,152 · core 771 ·
+worker 687 · schema 334 · health-providers 332 · api-client 157 · monitoring 151 · mail-providers 116
+· calendar-providers 113 · db 79 · ai-providers 25; was 4,636 at 9.4). **Migration invariant:** 20
+`.sql` / 20 journal entries, highest `0019`; the reconcile script proved all five statements on a
+probe clone (5/5); the journal `when` was corrected once after the future-date guard caught it;
+forward-compatible with the serving images (defaults/nullable), so rollback stays image-only.
+
+**Deployment — COMPLETE (2026-09-14T11:57Z), frozen order.** `91d744c` pushed to `origin` first.
+`git archive` shipped to `/home/himallinux/personal-os-9.5-release` (969 tracked files; no `.env`,
+no `google-services.json`). Rollback images tagged by resolved digest `:rollback-pre-9.5` for api
+(`703d81ae…`), worker (`af376c54…`) and web (`16890956…`). All three built with the running
+containers untouched (verified by digest). New api image verified to carry
+`0019_event_authoring.sql`, `calendar-targets.js`, `event_not_owned` and
+`linked_series_detach_unsupported`; worker image carries `calendar-push-redrive`,
+`calendar-role-refresh` and `adoptPendingGoogleLink`. `drizzle-kit migrate` from the new api image
+with `--no-deps` and the explicit `MIGRATIONS_DATABASE_URL` pass-through: **19 → 20**; all 98
+existing events `external`. `api` recreated alone → `(healthy)`, `GET /calendar-targets` 200;
+`worker` recreated alone → `worker.started queues:29 schedules:10`, `calendar.google.push-event`
+dead letter attached; `web` recreated alone → 200 on Tailscale Serve `:8443`. `postgres` never
+named. **Rollout-window ownership check:** 0 rows `external` without a link (none created in the
+migrate→recreate window). First worker cron tick: `role_refresh updated:5 cleared:0`, two targets
+offered (the owner's primary and the Gate H test calendar), the holidays calendar correctly
+`reader`.
+
+**Production API acceptance — PASSED (through real routes, on the dedicated "Personal OS Gate H
+Test" calendar; every smoke row archived afterwards, none deleted).** Timed event with `calendar` +
+`client_uuid` → `201`, `origin local`, link `pending_push` → `synced` within seconds with
+`google_event_id = replace(link.id,'-','')` and an etag, `push_event.pushed operation:insert`;
+the SAME body again → `200` with the same id, one row. Agenda for the day shows it. PATCH title +
+time → `pending_push` → `synced`, `operation:update`. All-day one-day and three-day (`starts_at`
+NULL, dates preserved), weekly `BYDAY=TU` (13 occurrences) and **monthly `BYMONTHDAY=-1` — accepted
+by Google** (the one review question that needed live proof) all pushed and `synced`; inverted
+all-day span → `400`, `FREQ=HOURLY` → `400 unsupported_frequency`. Detach on the linked weekly →
+`409 linked_series_detach_unsupported`; cancel-occurrence → exdate stored, `operation:update`, the
+instance absent from `/events/range` and Agenda. **The 12:15Z inbound sync changed nothing**: each
+title exactly one row, all `local`, rrule / exdates / dates / zones byte-identical, 0 adoption or
+conflict lines, 0 failed jobs. Archive ×5 → `push_event.deleted` ×5, 0 links remain, re-archive
+idempotent `200`; **the 12:30Z inbound sync resurrected nothing** (5 rows still archived, 0 new).
+The imported event `538c6d08…`: PATCH / archive / cancel-occurrence / detach all `409
+event_not_owned`, `updated_at` untouched; its `sync` projection carries only connection id, calendar
+identity and a null error.
+
+**Physical Rabbit R1 acceptance — PASSED (2026-09-14 07:18–07:53 CDT), first-hand.** EAS build
+`b7068196…` from `91d744c` → versionCode 16, installed in place (`adb install -r` → `Success`,
+signature `ad63266e` unchanged, `firstInstallTime` 2026-08-19 preserved, exact-alarm appop `allow`,
+`POST_NOTIFICATIONS` granted, no re-pair); cold launch → Today renders with "+ Event", 0 crash lines.
+**A real defect surfaced on the first date pick and was fixed in the same session**: the Material
+date dialog highlighted Sep 18 but the field read Sep 17 — Material3's `selectedDateMillis` is UTC
+midnight of the chosen day (verified in `@expo/ui`'s `DatePickerView.kt`) and both
+`combineDateAndTime` (8.4, `DateTimeField`, so task due dates and reminders since 8.4) and the new
+`serializePickedDate` (9.5, `DateField`) read it with local getters — the previous day in every
+zone west of UTC. Fixed in `4d1b565` (UTC components; dialogs open on UTC midnight of the local
+day; tests model the dialog's real output), EAS build `4e377e86…` → **versionCode 17**, installed in
+place with the same preservation. Then, on 17: "+ Event" → title, "Personal OS Gate H Test" chip,
+Starts via the pickers (picked Sep 18 → **field reads Sep 18**), End defaulted to start + 1 h,
+Repeat "Weekly" → summary "Weekly on Fri" → Create → server row `local`, `FREQ=WEEKLY;BYDAY=FR`,
+`recurrence_timezone America/Chicago`, `client_uuid` set, 07:46 CDT on the 18th, link `synced`
+with the derived id, 13 occurrences. Edit screen shows "Synced to Personal OS Gate H Test", the
+Repeat chips, Save changes / Delete event; edited the title → Save → server updated → push
+`operation:update` → `synced`. All-day switch → Start date / End date via the date-only `DateField`
+(picked Sep 21 and Sep 23 → fields read exactly those) → Create → `all_day`, `start_date 2026-09-21`,
+`end_date 2026-09-23`, `starts_at NULL`, `synced`. Calendar tab month grid: the weekly on Fri 18 and
+25, the all-day banner across 21–23, one card per instance, nothing for the bare parent. Delete
+event → "Delete this event?" → DELETE → back to Calendar; both rows archived, links removed,
+`push_event.deleted` for each. An imported event opened by deep link renders the read-only card
+("From <calendar> · read-only", title, time, location, description as inert text) with no Save /
+Delete / Link and no occurrence modal. Test-method note, recorded: uiautomator taps land on the soft
+keyboard when it is up — dismiss it (BACK) before tapping form controls, or the tap types into the
+focused field.
+
+**Post-acceptance production health:** `/health` `ok`/`connected`/`stale:false`; all four containers
+`RestartCount=0`; 0 pg-boss jobs failed/retry; migration 20; three integrations `active`; 0 open
+incidents; 0 unarchived `local` events (all smoke rows archived); 0 `calendar.push-event.dead`
+dispatch rows; **0 api and 0 worker warn/error lines in the two hours since the redeploy**; 0 crash
+lines on the Rabbit R1.
+
+**Recorded, not fixed (debt):** see *Next action*.
+
 **Phase 8 is closed.** The full checkpoint record — 8.0 foundation, 8.1 failure visibility, 8.2 the
 real calendar, 8.3 search + export, 8.4 capture front doors, the owner-terminated 8.5 soak, the 8.6
 decision gate and 8.6A/B/C/D — is archived verbatim in **`docs/history/phase-8.md`**. The closure
@@ -1114,13 +1267,13 @@ an intentionally-logged field — are recorded in the ledger below.
 audit → parallel implementation → integration → adversarial review → fixes → full tests →
 deployment → production acceptance. No soak or observation wait between checkpoints; no separate
 planning-only checkpoints when implementation is clear; reversible decisions are not owner gates.
-Production mutations remain serialized and every standing guardrail holds. **Checkpoint 9.4 is
+Production mutations remain serialized and every standing guardrail holds. **Checkpoint 9.5 is
 complete; the next checkpoint is not yet selected.** From the 9.3 ranking's next tier, A3 (recurring
-reminders) is now done inside 9.4; the remaining candidates in order are C2 Rabbit-native event
-authoring, B1/C4 search term matching + event text bounds, and E2 health trend context. The
-highest-value next step on the evidence of this checkpoint is **C2 (event authoring on the Rabbit)**:
-the task loop is now closed end to end, while events remain the one core entity with hand-typed ISO
-fields and no recurrence field on the device.
+reminders) closed in 9.4 and C2 (Rabbit-native event authoring) closed in 9.5; the remaining ranked
+candidates are B1/C4 (search term matching + **event text bounded at write** — now more pressing,
+since 9.5 makes event text owner-authored on the device as well as third-party) and E2 health trend
+context. All four core entities (tasks, notes, events, inbox) can now be authored and managed on the
+Rabbit; the recommended next step is **B1/C4**, which also closes the last ADR-057 #3 residual.
 
 ---
 
@@ -1144,23 +1297,42 @@ the one-line summary is:
 | **9.1** | Daily-use: notification-shade capture (no new native code), dedicated `alerts`/`updates`/`capture` Android channels, the Rabbit calendar-toggle fix. **Deployed and accepted 2026-09-13**, all three verified on the physical Rabbit R1. |
 | **9.2** | 21-day adoption soak. **OWNER-TERMINATED after 25 min** (`2026-09-14T01:28:10.274Z` → `2026-09-14T01:53:37.600Z`; intended end `2026-10-05T01:28:10.274Z`). **No adoption conclusion.** Reviewed read-only observer tooling retained in `scripts/soak/`; record in `docs/SOAK-9.2.md`. |
 | **9.3** | Close the capture→task loop: `/inbox/[id]` file-as/dismiss screen, capture follow-through, task complete/reopen/snooze, direct occurrence completion, recurrence integrity (in-transaction successor, validated rules, closed-parent guard), inbox archive (migration `0017`), Brief priority scalars. **Deployed (api/worker/web) and accepted on the Rabbit R1 (versionCode 14) 2026-09-14.** |
+| **9.5** | Calendar as an authoring surface: explicit event ownership (`events.origin`, migration `0019`), Personal OS-authored events created/edited/cancelled on the Rabbit and synced outward through a durable, idempotent push path (link-derived remote ids, pending-link adoption, race-safe flips, five-minute redrive), write-eligibility from provider roles, whole-series recurrence presets with a round-trip-tested conversion layer, imported events read-only. **Deployed (api/worker/web, level 20) and accepted on the Rabbit R1 (versionCode 17) 2026-09-14** (ADR-064). |
 | **9.4** | Dependable recurring tasks and reminders: repeat presets, one strictly-after wall-clock successor rule for every writer, nightly lazy repair, occurrence snooze (migration `0018`) and reopen, per-occurrence reminders with Done / Snooze 1h / Tomorrow 9am actions, Today never buckets a recurring parent. **Deployed (api/worker/web, level 19) and accepted on the Rabbit R1 (versionCode 15) 2026-09-14** (ADR-063). |
 
-**Production is at migration level 19** and serves api, worker and web images built from `e7b195e`. All three Google integrations are active. Monitoring runs against five
+**Production is at migration level 20** and serves api, worker and web images built from `91d744c`. All three Google integrations are active. Monitoring runs against five
 active targets including both Tailscale Serve routes, with full CRUD. A daily retention cron bounds
 `monitor_checks`/`mail_messages`/`mail_digests`/`mail_sync_runs`/`health_sync_runs` and sweeps
 expired `health_oauth_states`/`mail_oauth_states`. Every retrying pg-boss queue has a dead-letter queue.
-The Rabbit R1 runs `com.himal.personalos` versionCode 15, built from the same `e7b195e`.
+Calendar events authored in Personal OS sync outward to the owner's chosen writable calendar; imported
+events are read-only. The Rabbit R1 runs `com.himal.personalos` versionCode 17, built from `4d1b565`.
 
 ## Current work
 
-**None in progress.** Checkpoint 9.4 closed 2026-09-14.
+**None in progress.** Checkpoint 9.5 closed 2026-09-14.
 
 ---
 
 ## Last verification
 
-**Checkpoint 9.4 (2026-09-14).** Branch `phase-9-reliability`, HEAD `e7b195e` (from `c8ad0c0`, the
+**Checkpoint 9.5 (2026-09-14).** Branch `phase-9-reliability`, HEAD `4d1b565` (`91d744c` = the
+checkpoint; `4d1b565` = the date-picker fix found at physical acceptance; both from `44c2ebd`, the
+9.4 acceptance record, verified clean and equal to origin). Foundation (migration, Drizzle columns,
+wire schemas, api-client bindings, shared core validation) by the integrator; four parallel
+implementation lanes on per-lane clones of `personalos_test` (`personalos_test_a…f`, `CREATE
+DATABASE … TEMPLATE`, dropped afterwards); six adversarial review lenses, three fixer passes, two
+second-round lenses, two direct integrator fixes; integrator gates on the shared database, serially:
+`pnpm build --force` 11/11 · `pnpm typecheck` 21/21 · `eslint .` clean · `prettier --check .` clean ·
+`git diff --check` clean · `gitleaks` — the same 18 pre-existing findings in ignored, untracked
+files, git history clean · `pnpm test --force` **21/21 tasks, 5,060 tests across 12 packages, zero
+failing** at `91d744c` (api 1,143 · mobile 1,152 · core 771 · worker 687 · schema 334 ·
+health-providers 332 · api-client 157 · monitoring 151 · mail-providers 116 · calendar-providers 113 ·
+db 79 · ai-providers 25), mobile 1,154 at `4d1b565` (+2, the picker tests). **Migration invariant:**
+20 `.sql` / 20 journal entries, highest `0019`; production `drizzle.__drizzle_migrations` 19 → 20 by
+a migrate run from the new api image. Production and physical-device acceptance: recorded in full
+under *Phase 9 → Checkpoint 9.5* above.
+
+**Checkpoint 9.4 (2026-09-14)** — retained for reference. Branch `phase-9-reliability`, HEAD `e7b195e` (from `c8ad0c0`, the
 9.3 acceptance record, verified clean and equal to origin). Foundation (migration, wire schemas,
 api-client bindings) by the integrator; one core lane; four parallel implementation lanes on
 per-lane clones of `personalos_test` (`personalos_test_a…f`, `CREATE DATABASE … TEMPLATE`, dropped
@@ -1238,11 +1410,24 @@ clean; full evidence in `docs/PHASE-8-CLOSEOUT.md`.
 
 ## Next action
 
-Select the next Phase 9 checkpoint from the remaining ranked tier — recommended **C2, Rabbit-native
-event authoring** (Material pickers and the Repeat field on `events/new.tsx` / `events/[id].tsx`,
-reusing 9.4's task-repeat building blocks) — and begin implementation in the same session under the
-accelerated operating model. Pause for the owner only on a product-direction tie at significant
-scope.
+Select the next Phase 9 checkpoint from the remaining ranked tier — recommended **B1/C4: search
+term matching + event text bounded at write** (the `events.title/description/location` `.max()` +
+truncate-at-write discipline ADR-054 set for mail, then events and projects in `/search`) — and
+begin implementation in the same session under the accelerated operating model. Pause for the owner
+only on a product-direction tie at significant scope.
+
+Open, non-blocking, carried forward from 9.5: no `If-Match` on Google update (inbound
+`decideConflict` is the guard); `singletonKey` inert under pg-boss `standard` policy (duplicate
+pushes are idempotent by design); full-sync reconcile no longer archives a link in `error`/`conflict`
+whose remote event was deleted (incremental sync still does; a later edit then lands `not_found`);
+`listCalendars` reads one page (a calendar beyond the first 100, or hidden in Google's sidebar, is
+not offered); a remote un-delete of a locally deleted event re-imports as a new external row; an
+ambiguous-failure edit-and-resubmit mints a new `client_uuid` (a duplicate is the accepted cost of
+never losing an edit); a `reader` calendar's imported events show "From connected calendar" rather
+than its name; `POST /occurrences/:id/complete|skip` is now `409 event_not_owned` for external event
+occurrences (mobile never calls it); the `_layout` title stays "Event" for the read-only view; the
+primary calendar's Google summary is the account address and is shown as the calendar name on the
+device.
 
 Open, non-blocking, carried forward from 9.4: the spring-forward early-resolution note; the 90/91-row
 fall-back window; completion-anchored monthly drift to the 28th; unbounded reminder titles; the
