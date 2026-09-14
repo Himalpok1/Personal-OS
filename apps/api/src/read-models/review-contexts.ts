@@ -37,6 +37,7 @@ import {
 } from "@personal-os/schema";
 import { and, asc, count, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { assembleEventRange } from "./event-range.js";
+import { effectiveOccursAt } from "./occurrence-effective.js";
 import { collectRecentlyCompleted } from "./recent-completed.js";
 import { computeProjectSummaries } from "./project-summaries.js";
 
@@ -73,12 +74,16 @@ interface TodayTaskRow {
   parentTaskId: string | null;
   status: string;
   occurrenceId?: string;
+  /** Occurrence rows only (Checkpoint 9.4): the snooze, when set. */
+  snoozedUntil?: Date | null;
 }
 
 interface TodayOccurrenceRow {
   id: string;
   parentId: string;
-  occursAt: Date;
+  snoozedUntil: Date | null;
+  /** greatest(occurs_at, snoozed_until) -- the instant this row buckets on (occurrence-effective.ts). */
+  effectiveAt: Date;
   parentTitle: string;
   parentProjectId: string | null;
   parentProjectName: string | null;
@@ -86,6 +91,7 @@ interface TodayOccurrenceRow {
   parentRrule: string | null;
   parentTimezone: string;
   parentRemindAt: Date | null;
+  parentStatus: string;
 }
 
 function toTodayTaskItem(row: TodayTaskRow): TodayTaskItem {
@@ -100,7 +106,12 @@ function toTodayTaskItem(row: TodayTaskRow): TodayTaskItem {
     project_name: row.projectName ?? null,
     rrule: row.rrule,
     parent_task_id: row.parentTaskId,
-    ...(row.occurrenceId !== undefined ? { occurrence_id: row.occurrenceId } : {}),
+    ...(row.occurrenceId !== undefined
+      ? {
+          occurrence_id: row.occurrenceId,
+          snoozed_until: row.snoozedUntil ? row.snoozedUntil.toISOString() : null,
+        }
+      : {}),
   };
 }
 
@@ -213,7 +224,10 @@ async function collectInboxAttentionSection(db: Db): Promise<ReviewInboxAttentio
 // Open tasks via archived-null status inbox/active + scheduled occurrences of
 // their recurring parents, merged with the same actionability semantics as
 // /today (scheduled occurrences are THE actionable representation of their
-// parent; undated open work lands in due_today).
+// parent; undated open work lands in due_today). Mirrors today.ts exactly
+// (Checkpoint 9.4): non-recurring tasks only in the task query, recurring
+// parents synthesised from their occurrence rows, and occurrences filtered,
+// ordered and bucketed on their EFFECTIVE instant (occurrence-effective.ts).
 async function collectTaskActionability(
   db: Db,
   tz: string,
@@ -240,6 +254,7 @@ async function collectTaskActionability(
     .where(
       and(
         isNull(tasks.archivedAt),
+        isNull(tasks.rrule),
         inArray(tasks.status, ["inbox", "active"]),
         or(isNull(tasks.dueAt), lt(tasks.dueAt, horizonEndUtc)),
       ),
@@ -250,7 +265,8 @@ async function collectTaskActionability(
     .select({
       id: occurrences.id,
       parentId: occurrences.parentId,
-      occursAt: occurrences.occursAt,
+      snoozedUntil: occurrences.snoozedUntil,
+      effectiveAt: effectiveOccursAt,
       parentTitle: tasks.title,
       parentProjectId: tasks.projectId,
       parentProjectName: projects.name,
@@ -258,6 +274,7 @@ async function collectTaskActionability(
       parentRrule: tasks.rrule,
       parentTimezone: tasks.timezone,
       parentRemindAt: tasks.remindAt,
+      parentStatus: tasks.status,
     })
     .from(occurrences)
     .innerJoin(tasks, eq(occurrences.parentId, tasks.id))
@@ -268,27 +285,46 @@ async function collectTaskActionability(
         eq(occurrences.status, "scheduled"),
         isNull(tasks.archivedAt),
         inArray(tasks.status, ["inbox", "active"]),
-        lt(occurrences.occursAt, horizonEndUtc),
+        lt(effectiveOccursAt, horizonEndUtc),
       ),
     )
-    .orderBy(asc(occurrences.occursAt));
+    .orderBy(asc(effectiveOccursAt));
+
+  const mergedTaskRowsById = new Map<string, TodayTaskRow>();
+  for (const row of taskRows) mergedTaskRowsById.set(row.id, row);
+  for (const occ of occurrenceRows) {
+    if (mergedTaskRowsById.has(occ.parentId)) continue;
+    mergedTaskRowsById.set(occ.parentId, {
+      id: occ.parentId,
+      title: occ.parentTitle,
+      dueAt: occ.effectiveAt,
+      remindAt: occ.parentRemindAt,
+      timezone: occ.parentTimezone,
+      priority: occ.parentPriority,
+      projectId: occ.parentProjectId,
+      projectName: occ.parentProjectName,
+      rrule: occ.parentRrule,
+      parentTaskId: null,
+      status: occ.parentStatus,
+    });
+  }
 
   return buildActionableView<TodayTaskRow, TodayOccurrenceRow>({
     effectiveNow,
     window,
     horizonEndUtc,
-    tasks: taskRows,
+    tasks: [...mergedTaskRowsById.values()],
     occurrences: occurrenceRows,
     taskKey: (t) => t.id,
     occParentKey: (o) => o.parentId,
     occKey: (o) => o.id,
     occStatus: () => "scheduled",
-    occOccursAt: (o) => o.occursAt,
+    occOccursAt: (o) => o.effectiveAt,
     actionableInstantOfTask: (t) => t.dueAt,
     mergeIntoOccurrence: (parent, occ) => ({
       id: parent.id,
       title: parent.title,
-      dueAt: occ.occursAt,
+      dueAt: occ.effectiveAt,
       remindAt: parent.remindAt,
       timezone: parent.timezone,
       priority: parent.priority,
@@ -298,6 +334,7 @@ async function collectTaskActionability(
       parentTaskId: parent.id,
       status: parent.status,
       occurrenceId: occ.id,
+      snoozedUntil: occ.snoozedUntil,
     }),
   });
 }

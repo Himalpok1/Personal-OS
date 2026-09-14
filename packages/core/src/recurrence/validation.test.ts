@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { validateRecurrenceRule } from "./validation.js";
+import {
+  TaskDueDateRuleError,
+  validateRecurrenceRule,
+  validateTaskDueDateRule,
+} from "./validation.js";
 
 describe("validateRecurrenceRule", () => {
   describe("Valid rules", () => {
@@ -359,5 +363,108 @@ describe("validateRecurrenceRule", () => {
         ).toThrow(/completion-anchored recurrence rules may only use FREQ\/INTERVAL/);
       });
     });
+  });
+});
+
+// Checkpoint 9.4: the write-time gate for a task's due_date rule. Two rules
+// on top of validateRecurrenceRule, both with token-only messages so a route
+// can echo them without reproducing request text.
+describe("validateTaskDueDateRule (9.4)", () => {
+  it("accepts every preset the task Repeat field can emit, and the last-day monthly rule", () => {
+    for (const rrule of [
+      "FREQ=DAILY",
+      "FREQ=DAILY;INTERVAL=3",
+      "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+      "FREQ=WEEKLY;BYDAY=WE",
+      "FREQ=MONTHLY;BYMONTHDAY=15",
+      "FREQ=MONTHLY;BYMONTHDAY=-1",
+      "FREQ=MONTHLY;BYMONTHDAY=31",
+      "FREQ=YEARLY",
+      "RRULE:FREQ=WEEKLY;BYDAY=MO",
+      "freq=daily;interval=2",
+    ]) {
+      expect(() => validateTaskDueDateRule(rrule, "America/Chicago")).not.toThrow();
+    }
+  });
+
+  it("defaults the zone to UTC when the caller only has the rule", () => {
+    expect(() => validateTaskDueDateRule("FREQ=DAILY")).not.toThrow();
+  });
+
+  it("rejects FREQ=SECONDLY / MINUTELY / HOURLY with a token-only message", () => {
+    for (const freq of ["SECONDLY", "MINUTELY", "HOURLY", "hourly"]) {
+      const rrule = `FREQ=${freq};INTERVAL=5`;
+      let caught: unknown;
+      try {
+        validateTaskDueDateRule(rrule, "America/Chicago");
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(TaskDueDateRuleError);
+      const error = caught as TaskDueDateRuleError;
+      expect(error.code).toBe("unsupported_frequency");
+      expect(error.message).toContain("unsupported_frequency");
+      expect(error.message).not.toContain(rrule);
+      expect(error.message).not.toContain("INTERVAL=5");
+    }
+  });
+
+  it("rejects an embedded UNTIL or COUNT with a token-only message, before the rule is quoted", () => {
+    for (const rrule of [
+      "FREQ=DAILY;UNTIL=20261231T000000Z",
+      "FREQ=DAILY;COUNT=5",
+      "RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=3",
+      "FREQ=DAILY;count=2",
+    ]) {
+      let caught: unknown;
+      try {
+        validateTaskDueDateRule(rrule, "America/Chicago");
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(TaskDueDateRuleError);
+      const error = caught as TaskDueDateRuleError;
+      expect(error.code).toBe("embedded_until_count");
+      expect(error.message).toContain("embedded_until_count");
+      expect(error.message).not.toContain(rrule);
+    }
+  });
+
+  it("still runs validateRecurrenceRule for everything else (syntax, FREQ, INTERVAL, zone)", () => {
+    expect(() => validateTaskDueDateRule("FREQ=WEEKLYY", "America/Chicago")).toThrow(
+      /invalid RRULE syntax/,
+    );
+    expect(() => validateTaskDueDateRule("INTERVAL=2", "America/Chicago")).toThrow(
+      /FREQ is required/,
+    );
+    expect(() => validateTaskDueDateRule("FREQ=DAILY;INTERVAL=0", "America/Chicago")).toThrow(
+      /INTERVAL must be a positive integer/,
+    );
+    expect(() => validateTaskDueDateRule("FREQ=DAILY", "Not/AZone")).toThrow(
+      /invalid recurrence timezone/,
+    );
+    expect(() => validateTaskDueDateRule("FREQ=DAILY;INTERVAL=0", "America/Chicago")).not.toThrow(
+      TaskDueDateRuleError,
+    );
+  });
+
+  it("passes the separate until/count/exdate columns through to validateRecurrenceRule", () => {
+    expect(() =>
+      validateTaskDueDateRule("FREQ=DAILY", "America/Chicago", {
+        recurrenceUntil: new Date("2026-12-31T00:00:00.000Z"),
+        recurrenceCount: 3,
+      }),
+    ).toThrow(/mutually exclusive/);
+    expect(() =>
+      validateTaskDueDateRule("FREQ=DAILY", "America/Chicago", {
+        recurrenceExdates: ["2026/10/01"],
+      }),
+    ).toThrow(/invalid exdate/);
+    expect(() =>
+      validateTaskDueDateRule("FREQ=DAILY", "America/Chicago", {
+        recurrenceCount: 3,
+        recurrenceExdates: ["2026-10-01"],
+      }),
+    ).not.toThrow();
   });
 });

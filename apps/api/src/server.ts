@@ -39,6 +39,7 @@ import inboxRoutes from "./routes/inbox.js";
 import notesRoutes from "./routes/notes.js";
 import searchRoutes from "./routes/search.js";
 import occurrencesRoutes from "./routes/occurrences.js";
+import remindersRoutes from "./routes/reminders.js";
 import projectsRoutes from "./routes/projects.js";
 import reviewsRoutes from "./routes/reviews.js";
 import tasksRoutes from "./routes/tasks.js";
@@ -235,6 +236,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await app.register(captureRoutes);
   await app.register(inboxRoutes);
   await app.register(occurrencesRoutes);
+  await app.register(remindersRoutes);
   await app.register(tasksRoutes);
   await app.register(notesRoutes);
   await app.register(projectsRoutes);

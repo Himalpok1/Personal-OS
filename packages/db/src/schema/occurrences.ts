@@ -27,6 +27,21 @@ export const occurrences = pgTable(
     // nightly due-date window expansion job.
     lazyGenerated: boolean("lazy_generated").notNull().default(false),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    /**
+     * Checkpoint 9.4 (migration 0018). A snooze on a RECURRING task acts on
+     * its occurrence, never on the rule or the parent: `occurs_at` is the
+     * row's identity (occurrences_parent_occurs_at_key -- the nightly window
+     * job re-inserts on it), so moving it would resurrect the original
+     * instant as a duplicate, and PATCHing the parent's due_at re-anchors
+     * the whole series (branch A in apps/api/src/routes/tasks.ts). The
+     * effective instant of a scheduled occurrence is therefore
+     * `coalesce(snoozed_until, occurs_at)` -- one shared SQL helper in
+     * apps/api/src/read-models feeds Today, Agenda, reviews and reminders.
+     * Terminal rows ignore it; reopen clears it. Bounded at write to
+     * MAX_SNOOZE_DAYS (packages/schema). Snoozed rows deleted by a rule edit
+     * lose the snooze with the row -- deliberate, the edit regenerates them.
+     */
+    snoozedUntil: timestamp("snoozed_until", { withTimezone: true }),
   },
   (table) => [
     check("occurrences_parent_type", sql`${table.parentType} in ('task','event')`),

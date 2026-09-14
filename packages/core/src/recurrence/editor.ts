@@ -20,6 +20,16 @@ const RFC5545_FREQUENCIES = new Set([
 
 const RFC5545_WEEKDAYS = new Set(["MO", "TU", "WE", "TH", "FR", "SA", "SU"]);
 
+// Upper bound on INTERVAL for a completion-anchored rule (Checkpoint 9.4
+// review). rrule caps iteration at MAXYEAR (9999): a YEARLY rule with
+// INTERVAL in the thousands, or any rule whose `after` bound has to step
+// several intervals (lazy-next-occurrence.ts), can run off the end of that
+// range and get `null` back from `after()` downstream -- a throw at the
+// moment the owner completes the task. A thousand of anything is already
+// far beyond a chore; the bound makes the null unreachable rather than
+// merely handled.
+export const MAX_COMPLETION_ANCHORED_INTERVAL = 1000;
+
 /**
  * Write-time validation of a completion-anchored rule (Checkpoint 9.3).
  *
@@ -35,7 +45,8 @@ const RFC5545_WEEKDAYS = new Set(["MO", "TU", "WE", "TH", "FR", "SA", "SU"]);
  *   - every part is `KEY=VALUE`, no empty parts, no duplicate keys;
  *   - only FREQ / INTERVAL / WKST may appear (the existing BY* rejection);
  *   - FREQ is required and must be an RFC 5545 frequency;
- *   - INTERVAL, if present, is a positive integer;
+ *   - INTERVAL, if present, is a positive integer no greater than
+ *     MAX_COMPLETION_ANCHORED_INTERVAL (9.4);
  *   - WKST, if present, is a weekday code.
  *
  * A rule that passes cannot be rejected by rrulestr, and a rule rrulestr
@@ -87,6 +98,11 @@ export function validateCompletionAnchoredRule(rrule: string): void {
       `completion-anchored recurrence rule INTERVAL must be a positive integer, got "${interval}" in "${rrule}"`,
     );
   }
+  if (interval !== undefined && Number(interval) > MAX_COMPLETION_ANCHORED_INTERVAL) {
+    throw new Error(
+      `completion-anchored recurrence rule INTERVAL must be at most ${MAX_COMPLETION_ANCHORED_INTERVAL}, got "${interval}" in "${rrule}"`,
+    );
+  }
 
   const wkst = seen.get("WKST");
   if (wkst !== undefined && !RFC5545_WEEKDAYS.has(wkst.toUpperCase())) {
@@ -102,11 +118,26 @@ export type RecurrenceWeekday = (typeof SUPPORTED_WEEKDAYS)[number];
 
 export type RecurrenceEndMode = "never" | "until" | "count";
 
+/**
+ * `BYMONTHDAY` value the editor understands: a calendar day 1..31, or -1 for
+ * "the last day of the month" (Checkpoint 9.4). `-1` matters because rrule
+ * gives `FREQ=MONTHLY;BYMONTHDAY=31` -- and a bare `FREQ=MONTHLY` anchored on
+ * the 31st -- RFC 5545's literal semantics: months WITHOUT a 31st are skipped,
+ * not clamped. Only `BYMONTHDAY=-1` means "last day" in every month, so the
+ * monthly task preset (recurrence/task-presets.ts) emits it whenever the due
+ * date is the last day of its month. Other negative values (-2 ... -31) stay
+ * custom: they are valid RFC 5545 but nothing in the product writes them.
+ */
+export type RecurrenceMonthDay = number;
+
+export const LAST_DAY_OF_MONTH = -1;
+
 export interface RecurrenceEditorState {
   frequency: RecurrenceFrequency;
   interval: number;
   weekdays: RecurrenceWeekday[];
-  monthDay: number | null;
+  /** 1..31, `LAST_DAY_OF_MONTH` (-1), or null for "same day as DTSTART". */
+  monthDay: RecurrenceMonthDay | null;
   endMode: RecurrenceEndMode;
   untilDate: string | null; // Inclusive local calendar date YYYY-MM-DD
   count: number | null;
@@ -296,7 +327,7 @@ export function parseRRuleStringToEditorState(
       isCustom = true;
     } else {
       const num = Number(map.get("BYMONTHDAY"));
-      if (Number.isInteger(num) && num >= 1 && num <= 31) {
+      if (Number.isInteger(num) && ((num >= 1 && num <= 31) || num === LAST_DAY_OF_MONTH)) {
         monthDay = num;
       } else {
         isCustom = true;
@@ -503,7 +534,12 @@ export function formatRecurrenceSummary(stateOrFields: RecurrenceSummaryInput): 
     }
 
     case "MONTHLY":
-      if (state.monthDay != null) {
+      if (state.monthDay === LAST_DAY_OF_MONTH) {
+        summary =
+          state.interval === 1
+            ? "Monthly on the last day"
+            : `Every ${state.interval} months on the last day`;
+      } else if (state.monthDay != null) {
         summary =
           state.interval === 1
             ? `Monthly on day ${state.monthDay}`

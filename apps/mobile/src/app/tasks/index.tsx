@@ -1,4 +1,5 @@
 import type { Task, TaskStatus } from "@personal-os/schema";
+import { describeTaskRepeat } from "@personal-os/core/recurrence/task-presets";
 import { confirmDestructive } from "@/components/confirm-destructive";
 import { classifyTaskActionError, completionTarget } from "@/components/task-actions-state";
 import { useCompleteOccurrence } from "@/queries/occurrences";
@@ -100,13 +101,21 @@ function TaskRow({ task }: { task: Task }) {
         <Text className="text-base text-black dark:text-white" numberOfLines={2}>
           {task.title}
         </Text>
-        {task.due_at ? (
+        {/* A recurring task's `due_at` is the SERIES ANCHOR (contract §0) --
+            always persisted since 9.4, never advanced -- so on a rule that
+            has been running for a month it would read as a due date a month
+            overdue, forever. The repeat line below is the honest summary;
+            the actual next instance lives on the detail screen's "Next:"
+            line (components/task-actions.tsx). */}
+        {task.due_at && !task.rrule ? (
           <Text className="text-xs text-neutral-500">
             Due {new Date(task.due_at).toLocaleString()}
           </Text>
         ) : null}
         {task.rrule ? (
-          <Text className="text-xs text-neutral-500 dark:text-neutral-400">Recurring</Text>
+          <Text className="text-xs text-neutral-500 dark:text-neutral-400" numberOfLines={1}>
+            ⟲ {describeTaskRepeat(task)}
+          </Text>
         ) : null}
         {error ? (
           <Text className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</Text>

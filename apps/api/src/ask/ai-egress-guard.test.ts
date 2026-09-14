@@ -167,6 +167,13 @@ const EXPECTED_BODY_READERS = new Set([
   "apps/api/src/routes/notes.ts",
   "apps/api/src/routes/occurrences.ts",
   "apps/api/src/routes/projects.ts",
+  // Checkpoint 9.4: GET /reminders joins tasks to derive one reminder per
+  // occurrence. It selects the TITLE (the primary device puts it in the local
+  // notification, exactly as the pre-9.4 GET /tasks feed already did), the
+  // instants and the timezone -- never `body`, and the response is parsed
+  // through the strict RemindersResponseSchema, which has no body field. No
+  // model is involved. Reviewed here rather than widened silently.
+  "apps/api/src/routes/reminders.ts",
   "apps/api/src/routes/tasks.ts",
   "apps/worker/src/jobs/expand-due-date-window.ts",
   "apps/worker/src/jobs/generate-lazy-occurrence.ts",

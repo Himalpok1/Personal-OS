@@ -77,7 +77,10 @@ async function collectProjectComputeds(
             ),
           doneCount: sql<number>`count(*) filter (where ${tasks.status} = 'done')`.mapWith(Number),
           overdueCount:
-            sql<number>`count(*) filter (where ${tasks.status} in ('inbox','active') and (${tasks.dueAt} < ${effectiveNow} or exists (select 1 from occurrences oc where oc.parent_type = 'task' and oc.parent_id = "tasks"."id" and oc.status = 'scheduled' and oc.occurs_at < ${effectiveNow})))`.mapWith(
+            // Same rule as today.ts (Checkpoint 9.4): a recurring parent is
+            // overdue only through an open occurrence whose effective instant
+            // has passed, never through its own anchor due_at.
+            sql<number>`count(*) filter (where ${tasks.status} in ('inbox','active') and ((${tasks.rrule} is null and ${tasks.dueAt} < ${effectiveNow}) or exists (select 1 from occurrences oc where oc.parent_type = 'task' and oc.parent_id = "tasks"."id" and oc.status = 'scheduled' and greatest(oc.occurs_at, oc.snoozed_until) < ${effectiveNow})))`.mapWith(
               Number,
             ),
         })

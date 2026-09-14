@@ -25,6 +25,7 @@ const HAND_WRITTEN_WITHOUT_SNAPSHOT = new Set([
   "0015_service_monitoring",
   "0016_monitor_target_archive",
   "0017_inbox_item_archive",
+  "0018_occurrence_snooze",
 ]);
 
 interface JournalEntry {

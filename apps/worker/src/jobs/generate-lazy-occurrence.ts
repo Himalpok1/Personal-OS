@@ -2,6 +2,7 @@ import {
   computeNextLazyOccurrence,
   validateCompletionAnchoredRule,
   wallClockToNaiveDate,
+  wallTimeOfNaiveTimestamp,
 } from "@personal-os/core";
 import { occurrences, tasks, type Db } from "@personal-os/db";
 import { and, eq } from "drizzle-orm";
@@ -28,6 +29,41 @@ function pgErrorCode(err: unknown): string | undefined {
 }
 
 const UNIQUE_VIOLATION = "23505";
+
+/**
+ * The insert of a successor hit a unique index, and no scheduled occurrence
+ * exists for the parent afterwards -- so nothing is open and the series has
+ * stopped. Thrown (rather than reported as `successor_exists`) so pg-boss
+ * retries and, on exhaustion, dead-letters and alerts; see generateOne.
+ * Ids only: `errorToken` emits the class name, and the message carries no
+ * rule text or row detail.
+ */
+export class LazySuccessorCollisionError extends Error {
+  readonly taskId: string;
+  readonly occurrenceId: string;
+
+  constructor(taskId: string, occurrenceId: string) {
+    super("lazy successor collided on a unique index and no open occurrence exists");
+    this.name = "LazySuccessorCollisionError";
+    this.taskId = taskId;
+    this.occurrenceId = occurrenceId;
+  }
+}
+
+async function findOpenOccurrence(db: Db, taskId: string): Promise<{ id: string } | undefined> {
+  const [open] = await db
+    .select({ id: occurrences.id })
+    .from(occurrences)
+    .where(
+      and(
+        eq(occurrences.parentType, "task"),
+        eq(occurrences.parentId, taskId),
+        eq(occurrences.status, "scheduled"),
+      ),
+    )
+    .limit(1);
+  return open;
+}
 
 /**
  * What one attempt at a successor came to. `generated` and `successor_exists`
@@ -115,17 +151,7 @@ export async function generateOne(
   // (jobs/occurrences-dead-letter.ts): a completion-anchored task never has
   // pre-expanded rows, so an open one can only be the initial occurrence or a
   // successor, and either way the user has something to act on.
-  const [open] = await db
-    .select({ id: occurrences.id })
-    .from(occurrences)
-    .where(
-      and(
-        eq(occurrences.parentType, "task"),
-        eq(occurrences.parentId, task.id),
-        eq(occurrences.status, "scheduled"),
-      ),
-    )
-    .limit(1);
+  const open = await findOpenOccurrence(db, task.id);
   if (open) {
     log.info("occurrences.generate_lazy.skipped", {
       occurrenceId: data.occurrenceId,
@@ -144,11 +170,27 @@ export async function generateOne(
   // which alerts the owner (jobs/occurrences-dead-letter.ts).
   validateCompletionAnchoredRule(task.rrule);
 
+  // `fromInstant` is the completion instant the API stamped, so the successor's
+  // DATE anchors from when the owner actually acted; `wallTime` is the
+  // completed occurrence's own time of day, so its TIME does not (Checkpoint
+  // 9.4); `after` is the completed occurrence's own instant, so a row
+  // completed INTERVAL days or more EARLY still gets a successor strictly
+  // after itself instead of a candidate at or before its own occurs_at, which
+  // `occurrences_parent_occurs_at_key` would reject (9.4 review). All three
+  // are read from the source row, never from this process's clock or zone,
+  // and they are the identical inputs the API's transitionOccurrence used for
+  // its in-transaction insert -- which is what makes this re-check land on
+  // the same instant and collapse on the unique index instead of scheduling
+  // a second, different successor.
   const fromInstant = occurrence.completedAt ?? new Date();
   const next = computeNextLazyOccurrence(
     { rrule: task.rrule, recurrenceTimezone: task.recurrenceTimezone },
     fromInstant,
     data.fromStatus,
+    {
+      wallTime: wallTimeOfNaiveTimestamp(occurrence.occursLocal),
+      after: occurrence.occursAt,
+    },
   );
 
   try {
@@ -161,21 +203,37 @@ export async function generateOne(
       lazyGenerated: true,
     });
   } catch (err) {
-    // one_open_occurrence_per_lazy_parent is the real safety net under
-    // pg-boss's at-least-once delivery: a duplicate job run hitting this
-    // constraint means the successor already exists, which is success, not
-    // an error to retry. The state read above makes this the RACE path only
-    // (two deliveries passing the read before either inserts); it must stay,
-    // because the read and the insert are not atomic.
-    if (pgErrorCode(err) === UNIQUE_VIOLATION) {
+    if (pgErrorCode(err) !== UNIQUE_VIOLATION) throw err;
+    // A 23505 on its own proves only that SOME row holds the key -- not that
+    // an open one does. Two indexes can raise it: one_open_occurrence_per_lazy_parent
+    // (a concurrent delivery won the race between the state read above and
+    // this insert -- the successor exists, success) and
+    // occurrences_parent_occurs_at_key (a row already sits at the computed
+    // instant -- which, if that row is done or skipped, means NOTHING is open
+    // and the series has silently stopped). Before the 9.4 review both were
+    // reported as `successor_exists`, so the second case completed the job
+    // with nobody told. The only honest test is the state itself: re-read
+    // after the fact, and report success only when a scheduled occurrence
+    // actually exists. When none does, throw -- pg-boss retries (a retry
+    // recomputes the same instant, so a persistent collision reaches
+    // occurrences.generate-lazy.dead, whose handler makes one more attempt
+    // and then alerts), and the outcome is a push rather than a false success.
+    const openAfter = await findOpenOccurrence(db, task.id);
+    if (openAfter) {
       log.info("occurrences.generate_lazy.skipped", {
         occurrenceId: data.occurrenceId,
         taskId: task.id,
         reason: "successor_exists",
+        openOccurrenceId: openAfter.id,
       });
       return "successor_exists";
     }
-    throw err;
+    log.warn("occurrences.generate_lazy.collision", {
+      occurrenceId: data.occurrenceId,
+      taskId: task.id,
+      reason: "collision_no_open_occurrence",
+    });
+    throw new LazySuccessorCollisionError(task.id, data.occurrenceId);
   }
   return "generated";
 }

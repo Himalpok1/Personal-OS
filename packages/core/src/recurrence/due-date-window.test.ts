@@ -111,6 +111,57 @@ describe("expandDueDateWindow", () => {
       false,
     );
   });
+
+  // 9.4 review: resolveSeriesAnchor floors the anchor to a whole second and
+  // POST /tasks persists it as due_at; the window must then include that
+  // anchor as the series' first row even when the job's own `now` carries
+  // milliseconds -- previously `occursAt >= now` dropped it.
+  it("includes a series anchored at exactly floor(now) as its first row (FREQ=DAILY, 90 days)", () => {
+    const anchorInstant = new Date("2026-06-01T14:00:00.000Z"); // 09:00 CDT
+    const now = new Date(anchorInstant.getTime() + 750); // the ms-bearing clock read
+    const rows = expandDueDateWindow(
+      {
+        rrule: "FREQ=DAILY",
+        recurrenceTimezone: "America/Chicago",
+        dtstart: { year: 2026, month: 6, day: 1, hour: 9, minute: 0, second: 0 },
+      },
+      90,
+      now,
+    );
+    expect(rows[0]?.occursAt.getTime()).toBe(anchorInstant.getTime());
+    // Both bounds are inclusive and exactly 90 days apart, so the anchor plus
+    // one row per day through anchor + 90 d: 91 rows.
+    expect(rows).toHaveLength(91);
+    expect(rows.at(-1)?.occursAt.getTime()).toBe(
+      anchorInstant.getTime() + 90 * 24 * 60 * 60 * 1000,
+    );
+    // Identical to a whole-second `now`: the ms never change the window.
+    expect(
+      expandDueDateWindow(
+        {
+          rrule: "FREQ=DAILY",
+          recurrenceTimezone: "America/Chicago",
+          dtstart: { year: 2026, month: 6, day: 1, hour: 9, minute: 0, second: 0 },
+        },
+        90,
+        anchorInstant,
+      ),
+    ).toEqual(rows);
+  });
+
+  it("still excludes an occurrence one full second before now", () => {
+    const now = new Date("2026-06-01T14:00:01.250Z");
+    const rows = expandDueDateWindow(
+      {
+        rrule: "FREQ=DAILY",
+        recurrenceTimezone: "America/Chicago",
+        dtstart: { year: 2026, month: 6, day: 1, hour: 9, minute: 0, second: 0 },
+      },
+      3,
+      now,
+    );
+    expect(rows[0]?.occursAt.toISOString()).toBe("2026-06-02T14:00:00.000Z");
+  });
 });
 
 describe("expandRecurrenceInRange", () => {

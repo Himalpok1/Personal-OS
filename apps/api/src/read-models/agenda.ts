@@ -19,6 +19,7 @@ import {
 } from "@personal-os/schema";
 import { and, eq, gte, inArray, isNull, lt } from "drizzle-orm";
 import { assembleEventRange } from "./event-range.js";
+import { effectiveOccursAt } from "./occurrence-effective.js";
 
 // Front padding on the event-range query, identical in spirit to today.ts's
 // EVENT_RANGE_FRONT_PADDING_MS: keeps all-day/multi-day events that START
@@ -60,7 +61,8 @@ interface AgendaTaskRow {
 interface AgendaOccurrenceRow {
   id: string;
   parentId: string;
-  occursAt: Date;
+  /** greatest(occurs_at, snoozed_until) -- the instant this row is placed on (Checkpoint 9.4, occurrence-effective.ts). */
+  effectiveAt: Date;
   parentTitle: string;
   parentProjectId: string | null;
   parentProjectName: string | null;
@@ -299,12 +301,15 @@ export async function buildAgendaResponse(db: Db, query: AgendaQuery): Promise<A
   // recurring parent (frozen dedupe rule). Only status='scheduled';
   // done/skipped excluded. Project filter applies to the PARENT task's own
   // project_id (occurrences carry no project column of their own), same
-  // join pattern project-summaries.ts uses.
+  // join pattern project-summaries.ts uses. Range membership and placement
+  // use the EFFECTIVE instant (occurrence-effective.ts): a snoozed instance
+  // appears on the day it was snoozed to, and its `occurs_at` on the wire
+  // is that effective instant (no shape change -- contract, Checkpoint 9.4).
   const occurrenceRows: AgendaOccurrenceRow[] = await db
     .select({
       id: occurrences.id,
       parentId: occurrences.parentId,
-      occursAt: occurrences.occursAt,
+      effectiveAt: effectiveOccursAt,
       parentTitle: tasks.title,
       parentProjectId: tasks.projectId,
       parentProjectName: projects.name,
@@ -322,8 +327,8 @@ export async function buildAgendaResponse(db: Db, query: AgendaQuery): Promise<A
         eq(occurrences.status, "scheduled"),
         isNull(tasks.archivedAt),
         inArray(tasks.status, ["inbox", "active"]),
-        gte(occurrences.occursAt, rangeStartUtc),
-        lt(occurrences.occursAt, rangeEndUtc),
+        gte(effectiveOccursAt, rangeStartUtc),
+        lt(effectiveOccursAt, rangeEndUtc),
         projectFilter,
       ),
     );
@@ -345,7 +350,7 @@ export async function buildAgendaResponse(db: Db, query: AgendaQuery): Promise<A
     mergedTaskRowsById.set(occ.parentId, {
       id: occ.parentId,
       title: occ.parentTitle,
-      dueAt: occ.occursAt,
+      dueAt: occ.effectiveAt,
       remindAt: occ.parentRemindAt,
       timezone: occ.parentTimezone,
       priority: occ.parentPriority,
@@ -377,12 +382,12 @@ export async function buildAgendaResponse(db: Db, query: AgendaQuery): Promise<A
     occParentKey: (o) => o.parentId,
     occKey: (o) => o.id,
     occStatus: () => "scheduled",
-    occOccursAt: (o) => o.occursAt,
+    occOccursAt: (o) => o.effectiveAt,
     actionableInstantOfTask: (t) => t.dueAt,
     mergeIntoOccurrence: (parent, occ) => ({
       id: parent.id,
       title: parent.title,
-      dueAt: occ.occursAt,
+      dueAt: occ.effectiveAt,
       remindAt: parent.remindAt,
       timezone: parent.timezone,
       priority: parent.priority,

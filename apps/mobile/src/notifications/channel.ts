@@ -1,5 +1,6 @@
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
+import { REMINDER_CATEGORY_ID, buildReminderCategoryActions } from "./reminder-actions";
 
 export const REMINDERS_CHANNEL_ID = "reminders";
 // Checkpoint 9.1 (ADR-062 follow-up): actionable, user-facing integration/
@@ -62,15 +63,31 @@ export async function ensureCaptureChannel(): Promise<void> {
   });
 }
 
-// Creates every channel this app uses. Idempotent -- Android no-ops a
-// repeat call with the same id and settings, so this is safe to call from
-// every cold launch and every one of the pre-existing call sites that used
-// to call ensureReminderChannel() alone.
+// Checkpoint 9.4: the action buttons (Done / Snooze 1h / Tomorrow 9am) a
+// scheduled reminder carries via `categoryIdentifier: REMINDER_CATEGORY_ID`
+// (see scheduler.ts). A category must exist before a notification that
+// references it is scheduled, so this runs alongside the channels, from the
+// same call sites. Idempotent: setNotificationCategoryAsync replaces a
+// category with the same identifier. The action definitions live in
+// reminder-actions.ts so the lifecycle's handler and the tests share them.
+export async function ensureReminderCategory(): Promise<void> {
+  if (Platform.OS !== "android") return;
+  await Notifications.setNotificationCategoryAsync(
+    REMINDER_CATEGORY_ID,
+    buildReminderCategoryActions(),
+  );
+}
+
+// Creates every channel this app uses, plus the reminder action category.
+// Idempotent -- Android no-ops a repeat call with the same id and settings,
+// so this is safe to call from every cold launch and every one of the
+// pre-existing call sites that used to call ensureReminderChannel() alone.
 export async function ensureNotificationChannels(): Promise<void> {
   await ensureReminderChannel();
   await ensureAlertsChannel();
   await ensureUpdatesChannel();
   await ensureCaptureChannel();
+  await ensureReminderCategory();
 }
 
 export async function ensureNotificationPermission(): Promise<boolean> {

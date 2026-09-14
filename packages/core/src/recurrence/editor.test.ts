@@ -466,3 +466,66 @@ describe("formatRecurrenceSummary", () => {
     ).toBe("Custom (FREQ=MONTHLY;BYDAY=2MO), ending after 3 occurrences");
   });
 });
+
+// Checkpoint 9.4: `BYMONTHDAY=-1` ("last day of the month") is a first-class
+// editor value rather than a custom rule, because the monthly task preset
+// emits it for a due date that is the last day of its month (rrule skips
+// shorter months for BYMONTHDAY=29..31, so -1 is the only way to say "every
+// month end").
+describe("BYMONTHDAY=-1 (last day of the month, 9.4)", () => {
+  it("parses BYMONTHDAY=-1 as monthDay -1 without falling back to custom", () => {
+    const state = parseRRuleStringToEditorState("FREQ=MONTHLY;BYMONTHDAY=-1");
+    expect(state.isCustom).toBe(false);
+    expect(state.rawRrule).toBeNull();
+    expect(state.frequency).toBe("MONTHLY");
+    expect(state.monthDay).toBe(-1);
+  });
+
+  it("still treats other negative BYMONTHDAY values as custom", () => {
+    for (const rrule of ["FREQ=MONTHLY;BYMONTHDAY=-2", "FREQ=MONTHLY;BYMONTHDAY=-31"]) {
+      const state = parseRRuleStringToEditorState(rrule);
+      expect(state.isCustom).toBe(true);
+      expect(state.rawRrule).toBe(rrule);
+      expect(state.monthDay).toBeNull();
+    }
+  });
+
+  it("serializes monthDay -1 back to BYMONTHDAY=-1", () => {
+    const state: RecurrenceEditorState = {
+      enabled: true,
+      frequency: "MONTHLY",
+      interval: 1,
+      weekdays: [],
+      monthDay: -1,
+      endMode: "never",
+      untilDate: null,
+      count: null,
+      anchor: "due_date",
+      timezone: "America/Chicago",
+      isCustom: false,
+      rawRrule: null,
+    };
+    expect(serializeEditorStateToRRule(state).rrule).toBe("FREQ=MONTHLY;BYMONTHDAY=-1");
+    expect(serializeEditorStateToRRule({ ...state, interval: 2 }).rrule).toBe(
+      "FREQ=MONTHLY;INTERVAL=2;BYMONTHDAY=-1",
+    );
+  });
+
+  it("round-trips parse → serialize byte-exactly", () => {
+    const rrule = "FREQ=MONTHLY;BYMONTHDAY=-1";
+    const state = parseRRuleStringToEditorState(rrule, { recurrenceTimezone: "UTC" });
+    expect(serializeEditorStateToRRule(state).rrule).toBe(rrule);
+  });
+
+  it("summarises as 'on the last day'", () => {
+    expect(formatRecurrenceSummary({ rrule: "FREQ=MONTHLY;BYMONTHDAY=-1" })).toBe(
+      "Monthly on the last day",
+    );
+    expect(formatRecurrenceSummary({ rrule: "FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=-1" })).toBe(
+      "Every 3 months on the last day",
+    );
+    expect(
+      formatRecurrenceSummary({ rrule: "FREQ=MONTHLY;BYMONTHDAY=-1", recurrence_count: 6 }),
+    ).toBe("Monthly on the last day, ending after 6 occurrences");
+  });
+});

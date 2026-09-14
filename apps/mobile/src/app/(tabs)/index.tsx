@@ -159,6 +159,11 @@ function TaskRow({ item }: { item: TodayTaskItem }) {
           {item.rrule ? (
             <Text className="text-xs text-neutral-500 dark:text-neutral-400">⟲</Text>
           ) : null}
+          {/* Checkpoint 9.4: `due_at` on an occurrence row is already the
+              snoozed instant; this only says WHY it differs from the rule. */}
+          {item.snoozed_until ? (
+            <Text className="text-xs text-neutral-500 dark:text-neutral-400">snoozed</Text>
+          ) : null}
         </View>
         {error ? (
           <Text className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</Text>

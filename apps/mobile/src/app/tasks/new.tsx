@@ -2,12 +2,15 @@ import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { usePlaceholderColor } from "@/components/placeholder-color";
 import { DateTimeField } from "@/components/datetime-field";
-import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
+import { deviceTimezone } from "@/components/datetime-field-state";
+import { TaskRepeatField } from "@/components/recurrence/task-repeat-field";
+import { applyDueDateChange } from "@/components/recurrence/task-repeat-state";
 import { coerceProjectIdParam, useProjects } from "@/queries/projects";
 import { useCreateTask } from "@/queries/tasks";
 import {
   serializeEditorStateToRRule,
   type RecurrenceEditorState,
+  type SerializedRecurrenceRule,
 } from "@personal-os/core/recurrence/editor";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
@@ -25,6 +28,9 @@ export default function NewTaskScreen() {
   const [body, setBody] = useState("");
   const [dueAt, setDueAt] = useState<string | null>(null);
   const [remindAt, setRemindAt] = useState<string | null>(null);
+  // A client-side refusal (an unserializable repeat rule); server failures
+  // still read from createTask.isError below.
+  const [formError, setFormError] = useState<string | null>(null);
   // Preselected via /tasks/new?projectId=<uuid> (project detail "+ Task").
   const [projectId, setProjectId] = useState<string | undefined>(() =>
     coerceProjectIdParam(params.projectId),
@@ -39,17 +45,37 @@ export default function NewTaskScreen() {
     untilDate: null,
     count: null,
     anchor: "due_date",
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timezone: deviceTimezone(),
     isCustom: false,
     rawRrule: null,
   });
 
+  // A Weekly/Monthly repeat follows the due date's weekday / day of month
+  // (components/recurrence/task-repeat-state.ts), so the two fields are kept
+  // in step here, from the due field's own onChange -- never from an effect.
+  const onDueAtChange = (value: string | null) => {
+    setDueAt(value);
+    setRecurrence((state) =>
+      applyDueDateChange(state, { dueAt: value, timezone: deviceTimezone() }),
+    );
+  };
+
   const submit = () => {
     if (!title.trim()) return;
-    const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    setFormError(null);
+    const userTimezone = deviceTimezone();
     let recurrenceFields = {};
     if (recurrence.enabled) {
-      const serialized = serializeEditorStateToRRule(recurrence);
+      // The serializer throws on what the inline advanced editor can hold
+      // (a half-typed until date); that is a validation outcome for the
+      // banner, not an unhandled throw from a Save tap.
+      let serialized: SerializedRecurrenceRule;
+      try {
+        serialized = serializeEditorStateToRRule(recurrence);
+      } catch {
+        setFormError("That repeat rule isn't supported.");
+        return;
+      }
       recurrenceFields = {
         rrule: serialized.rrule,
         recurrence_timezone: serialized.recurrence_timezone ?? userTimezone,
@@ -108,7 +134,14 @@ export default function NewTaskScreen() {
         className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
 
-      <DateTimeField label="Due date (optional)" value={dueAt} onChange={setDueAt} />
+      <DateTimeField label="Due date (optional)" value={dueAt} onChange={onDueAtChange} />
+
+      <TaskRepeatField
+        value={recurrence}
+        onChange={setRecurrence}
+        dueAt={dueAt}
+        timezone={deviceTimezone()}
+      />
 
       <DateTimeField
         label="Reminder (optional)"
@@ -139,12 +172,11 @@ export default function NewTaskScreen() {
         ))}
       </View>
 
-      <View className="mb-4">
-        <Text className="mb-1 text-sm text-neutral-500">Recurrence</Text>
-        <RecurrenceEditor value={recurrence} onChange={setRecurrence} isTask={true} />
-      </View>
-
-      {createTask.isError ? (
+      {formError ? (
+        <Text className="mb-2 text-red-600" accessibilityRole="alert">
+          {formError}
+        </Text>
+      ) : createTask.isError ? (
         <Text className="mb-2 text-red-600">Couldn&apos;t create that task.</Text>
       ) : null}
 

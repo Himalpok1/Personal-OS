@@ -1,4 +1,4 @@
-import { computeNextLazyOccurrence } from "@personal-os/core";
+import { computeNextLazyOccurrence, wallTimeOfNaiveTimestamp } from "@personal-os/core";
 import { occurrences, tasks } from "@personal-os/db";
 import type { Project, Task } from "@personal-os/schema";
 import { and, eq } from "drizzle-orm";
@@ -542,10 +542,14 @@ describe("tasks routes", () => {
 
         const open = await scheduledOf(task.id);
         expect(open).toHaveLength(1);
+        // Checkpoint 9.4: the seed keeps the done row's occurs_local time of
+        // day and lands strictly after its occurs_at -- the same options
+        // every other writer of a lazy successor passes.
         const expected = computeNextLazyOccurrence(
           { rrule: "FREQ=DAILY;INTERVAL=5", recurrenceTimezone: rule.tz },
           lastDone,
           "completed",
+          { wallTime: wallTimeOfNaiveTimestamp(staleDue), after: staleDue },
         );
         expect(open[0]!.occursAt.getTime()).toBe(expected.occursAt.getTime());
         // The done row is untouched.
@@ -640,6 +644,8 @@ describe("tasks routes", () => {
           { rrule: "FREQ=WEEKLY;INTERVAL=1", recurrenceTimezone: rule.tz },
           lastDone,
           "completed",
+          // Checkpoint 9.4: same options as every other lazy-successor writer.
+          { wallTime: wallTimeOfNaiveTimestamp(lastDone), after: lastDone },
         );
         expect(scheduled[0]!.occursAt.getTime()).toBe(expected.occursAt.getTime());
         expect(scheduled[0]!.occursAt.getTime()).not.toBe(oldNext.occursAt.getTime());

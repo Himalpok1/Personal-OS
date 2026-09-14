@@ -229,20 +229,54 @@ describe("commitParsedEntity -- create_task recurrence materialization (9.3)", (
     );
 
     const task = await taskRow(result.committed.entityId);
-    expect(task.dueAt).toBeNull();
+    // Checkpoint 9.4: the commit's effectiveNow is the series anchor, and it is
+    // PERSISTED as due_at (as POST /tasks does), so the nightly job, PATCH and
+    // the reminder derivation read the same DTSTART back rather than
+    // reconstructing it from the earliest occurrence.
+    expect(task.dueAt).not.toBeNull();
+    // Floored to the second by resolveSeriesAnchor (9.4 review), so compare
+    // against the floored `before`.
+    expect(task.dueAt!.getTime()).toBeGreaterThanOrEqual(Math.floor(before / 1000) * 1000);
+    expect(task.dueAt!.getTime()).toBeLessThanOrEqual(Date.now());
     expect(task.recurrenceAnchor).toBe("due_date");
     const rows = await occurrencesFor(result.committed.entityId);
-    expect(rows.length).toBeGreaterThanOrEqual(44);
+    // Every other day from the anchor: days 0, 2, ..., 90 -- 46 rows, or 45
+    // when the next 90 days in America/Chicago cross a fall-back transition
+    // and the wall-clock day-90 instance lands an hour past the absolute
+    // horizon (the UTC case below is exact). Day 0 is always present: the
+    // anchor IS the window's own floor.
+    expect(rows.length).toBeGreaterThanOrEqual(45);
     expect(rows.length).toBeLessThanOrEqual(46);
     const sorted = [...rows].sort((a, b) => a.occursAt.getTime() - b.occursAt.getTime());
-    // The rule is anchored at the commit instant (seconds precision -- the
-    // wall-clock anchor drops milliseconds, so the anchor instance itself
-    // sits a fraction of a second before `now` and expandDueDateWindow's
-    // now-floor excludes it, exactly as it does for POST /tasks). The first
-    // materialized instance is therefore one INTERVAL out, never earlier
-    // than the commit and never later than the interval allows.
-    expect(sorted[0]!.occursAt.getTime()).toBeGreaterThanOrEqual(before);
-    expect(sorted[0]!.occursAt.getTime()).toBeLessThanOrEqual(Date.now() + 2 * DAY_MS);
+    // The rule is anchored at the commit instant floored to the second
+    // (resolveSeriesAnchor), and expandDueDateWindow floors its `now` the
+    // same way, so the anchor instance is the FIRST materialized row and is
+    // the very instant persisted as due_at -- the series is completable the
+    // moment it is committed. Before the 9.4 review the anchor kept its
+    // milliseconds, sat a fraction of a second before the window's floor,
+    // and the first instance was silently one INTERVAL out.
+    expect(sorted[0]!.occursAt.getTime()).toBe(task.dueAt!.getTime());
+    expect(sorted[0]!.occursAt.getUTCMilliseconds()).toBe(0);
+  });
+
+  it("a DAILY capture with no due_at materializes 91 rows, the first at exactly due_at (9.4)", async () => {
+    // UTC on purpose: the window is 90 × 24 h of absolute time while the
+    // series steps in wall-clock days, so in a zone whose next 90 days cross
+    // a DST transition the day-90 instance lands an hour past the horizon
+    // (fall-back) and the count is 90. In UTC the anchor and days 1..90 are
+    // all inside the window, inclusive at both ends, whatever today's date.
+    const result = await commitParsedEntity(
+      db,
+      { tool: "create_task", args: { title: "Stretch", rrule: "FREQ=DAILY" } },
+      { timezone: "UTC" },
+    );
+    const task = await taskRow(result.committed.entityId);
+    const rows = await occurrencesFor(result.committed.entityId);
+    const sorted = [...rows].sort((a, b) => a.occursAt.getTime() - b.occursAt.getTime());
+    // Days 0 through 90 inclusive, anchored at floor(effectiveNow).
+    expect(sorted).toHaveLength(91);
+    expect(sorted[0]!.occursAt.getTime()).toBe(task.dueAt!.getTime());
+    expect(task.dueAt!.getUTCMilliseconds()).toBe(0);
   });
 
   it("stores occurs_local as the recurrence timezone's wall clock, honouring an explicit recurrence_timezone", async () => {
@@ -292,6 +326,111 @@ describe("commitParsedEntity -- create_task recurrence materialization (9.3)", (
     expect(rows[0]!.status).toBe("scheduled");
     const task = await taskRow(result.committed.entityId);
     expect(task.recurrenceAnchor).toBe("completion_date");
+    // Checkpoint 9.4: with no parsed due_at, the seeded first occurrence IS the
+    // series' start, and the parent's due_at records exactly that instant.
+    expect(task.dueAt).not.toBeNull();
+    expect(task.dueAt!.toISOString()).toBe(rows[0]!.occursAt.toISOString());
+  });
+
+  // Checkpoint 9.4: due_at = the series anchor for every recurring task the
+  // parser commits without one, so no writer of a series leaves the parent's
+  // due_at null -- the one shared rule (resolveSeriesAnchor) resolves to
+  // due_at first, and every later reader (the nightly job, PATCH /tasks/:id,
+  // the per-occurrence reminder derivation) starts from the fact rather than
+  // from a reconstruction. The nightly re-expansion must therefore reproduce
+  // the commit's own instants exactly.
+  describe("persists due_at as the series anchor when the parser resolved none (9.4)", () => {
+    it("a due_date series: due_at is the commit's effectiveNow, and the nightly job re-expands to the identical instants", async () => {
+      const before = Date.now();
+      const result = await commitParsedEntity(
+        db,
+        { tool: "create_task", args: { title: "Stretch", rrule: "FREQ=DAILY;INTERVAL=2" } },
+        { timezone: TZ },
+      );
+      const task = await taskRow(result.committed.entityId);
+      expect(task.dueAt).not.toBeNull();
+      // Floored to the second (resolveSeriesAnchor), so compare against the
+      // floored `before`.
+      expect(task.dueAt!.getTime()).toBeGreaterThanOrEqual(Math.floor(before / 1000) * 1000);
+      expect(task.dueAt!.getTime()).toBeLessThanOrEqual(Date.now());
+      // The anchor's wall clock (seconds precision) is what every occurrence
+      // keeps: same time of day, every other day.
+      const { toWallClockComponents } = await import("@personal-os/core");
+      const anchorWall = toWallClockComponents(task.dueAt!, TZ);
+      const seeded = await occurrencesFor(result.committed.entityId);
+      for (const row of seeded) {
+        const wall = toWallClockComponents(row.occursAt, TZ);
+        expect([wall.hour, wall.minute, wall.second]).toEqual([
+          anchorWall.hour,
+          anchorWall.minute,
+          anchorWall.second,
+        ]);
+      }
+
+      // The nightly job anchors on due_at (resolveSeriesAnchor) and must add
+      // nothing inside the window the commit already materialized.
+      const { expandDueDateWindowJob } = await import("./jobs/expand-due-date-window.js");
+      await expandDueDateWindowJob(db);
+      const after = await occurrencesFor(result.committed.entityId);
+      const seededInstants = new Set(seeded.map((r) => r.occursAt.getTime()));
+      for (const row of after) expect(row.occursLocal.getUTCHours()).toBe(anchorWall.hour);
+      // Every seeded row survived and the job re-derived the same instants
+      // (a re-anchoring off by the dropped milliseconds would double the set).
+      expect(after.filter((r) => seededInstants.has(r.occursAt.getTime()))).toHaveLength(
+        seeded.length,
+      );
+      expect(after.length).toBeLessThanOrEqual(seeded.length + 1);
+      // And the commit's first row IS the persisted anchor (9.4 review).
+      const first = [...seeded].sort((a, b) => a.occursAt.getTime() - b.occursAt.getTime())[0]!;
+      expect(first.occursAt.getTime()).toBe(task.dueAt!.getTime());
+    });
+
+    it("a due_date series with a parsed due_at keeps that due_at, byte for byte", async () => {
+      const dueAt = new Date(Date.now() + DAY_MS);
+      dueAt.setUTCMilliseconds(0);
+      const result = await commitParsedEntity(
+        db,
+        {
+          tool: "create_task",
+          args: { title: "Stretch", due_at: dueAt.toISOString(), rrule: "FREQ=DAILY" },
+        },
+        { timezone: TZ },
+      );
+      const task = await taskRow(result.committed.entityId);
+      expect(task.dueAt!.toISOString()).toBe(dueAt.toISOString());
+    });
+
+    it("a completion_date series: due_at is the seeded first occurrence's instant", async () => {
+      const before = Date.now();
+      const result = await commitParsedEntity(
+        db,
+        {
+          tool: "create_task",
+          args: {
+            title: "Water the plants",
+            rrule: "FREQ=DAILY;INTERVAL=3",
+            recurrence_anchor: "completion_date",
+          },
+        },
+        { timezone: TZ },
+      );
+      const task = await taskRow(result.committed.entityId);
+      const [seed] = await occurrencesFor(result.committed.entityId);
+      expect(task.dueAt!.toISOString()).toBe(seed!.occursAt.toISOString());
+      expect(task.dueAt!.getTime()).toBeGreaterThanOrEqual(before);
+      expect(task.dueAt!.getTime()).toBeLessThanOrEqual(Date.now());
+    });
+
+    it("a one-off task with no due_at still has none -- there is no series to anchor", async () => {
+      const result = await commitParsedEntity(
+        db,
+        { tool: "create_task", args: { title: "Call the insurance guy" } },
+        { timezone: TZ },
+      );
+      const task = await taskRow(result.committed.entityId);
+      expect(task.dueAt).toBeNull();
+      expect(await occurrencesFor(result.committed.entityId)).toHaveLength(0);
+    });
   });
 
   it("still refuses a BY* part on a completion-anchored rule at write time", async () => {

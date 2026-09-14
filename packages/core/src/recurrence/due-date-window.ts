@@ -182,13 +182,22 @@ export class RecurrenceExpansionLimitError extends Error {
 // occurrences table and must not leak into expandRecurrenceInRange above --
 // so it's re-applied here, on top of the general-purpose range result,
 // rather than being baked into the shared helper.
+//
+// `now` is compared at whole-SECOND precision (9.4 review). Occurrences are
+// whole seconds (wall-clock components carry no milliseconds), so a series
+// anchored at exactly floor(now) -- which is what resolveSeriesAnchor hands
+// POST /tasks for a due-at-less rule -- must include its anchor as the first
+// row; comparing against a ms-bearing `now` dropped it, and the task's own
+// first instance was never materialised. Both bounds move together so the
+// window stays exactly windowDays wide.
 export function expandDueDateWindow(
   rule: DueDateRecurrenceRule,
   windowDays: number,
   now: Date,
 ): ExpandedOccurrence[] {
-  const windowEndReal = new Date(now.getTime() + windowDays * MS_PER_DAY);
-  return expandRecurrenceBetween(rule, now, windowEndReal).filter(
-    (occurrence) => occurrence.occursAt.getTime() >= now.getTime(),
+  const nowFloored = new Date(Math.floor(now.getTime() / 1000) * 1000);
+  const windowEndReal = new Date(nowFloored.getTime() + windowDays * MS_PER_DAY);
+  return expandRecurrenceBetween(rule, nowFloored, windowEndReal).filter(
+    (occurrence) => occurrence.occursAt.getTime() >= nowFloored.getTime(),
   );
 }

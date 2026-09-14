@@ -41,6 +41,10 @@ export const TodayTaskItemSchema = TodayTaskItemBaseSchema.extend({
   // absent/null for a one-off task. Same presence-flavored pattern as
   // EventRangeItemSchema's parent_event_id/original_start_at.
   occurrence_id: z.string().uuid().nullable().optional(),
+  // Checkpoint 9.4: set only on occurrence rows whose instance was snoozed;
+  // `due_at` already carries the effective (snoozed) instant, this only lets
+  // a client label the row. Optional so every existing payload still parses.
+  snoozed_until: z.string().datetime({ offset: true }).nullable().optional(),
 })
   .refine((item) => item.occurrence_id == null || item.parent_task_id !== null, {
     message: "an occurrence representation must carry its parent_task_id",

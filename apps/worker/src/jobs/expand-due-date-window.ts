@@ -1,15 +1,19 @@
 import {
   buildEventRecurrenceRule,
+  computeNextLazyOccurrence,
   expandDueDateWindow,
+  resolveSeriesAnchor,
   toWallClockComponents,
   wallClockToNaiveDate,
+  wallTimeOfNaiveTimestamp,
   type DueDateRecurrenceRule,
 } from "@personal-os/core";
 import { events, occurrences, tasks, type Db } from "@personal-os/db";
-import { and, eq, isNotNull, isNull, min, ne } from "drizzle-orm";
+import { and, desc, eq, exists, inArray, isNotNull, isNull, min, ne, notExists } from "drizzle-orm";
 import type { Job } from "pg-boss";
 import { errorToken, log } from "../logger.js";
 import { OCCURRENCES_EXPAND_WINDOW_QUEUE } from "../queue-names.js";
+import { LazySuccessorCollisionError } from "./generate-lazy-occurrence.js";
 import {
   OccurrencesJobError,
   withOccurrencesJobErrorContainment,
@@ -157,11 +161,22 @@ export async function expandDueDateWindowJob(db: Db): Promise<void> {
       // A series with no occurrence at all (a row written before the
       // creation-time materialization existed) still has no anchor and is
       // still skipped -- there is nothing to anchor on.
-      const anchorInstant = task.dueAt ?? (await earliestOccurrenceOf(db, task.id));
-      if (!anchorInstant) {
+      //
+      // Checkpoint 9.4: the precedence itself -- due_at, then the earliest
+      // occurrence, then now -- is `resolveSeriesAnchor`, shared with PATCH
+      // /tasks/:id, POST /tasks and the capture commit so no two writers can
+      // anchor one series differently again. Its `now` fallback is deliberately
+      // NOT taken here: a sweep that re-anchored an unanchored series on the
+      // night it happened to run would mint instants nothing else agrees on,
+      // so the skip is decided BEFORE the helper is consulted. The earliest
+      // occurrence is only read when due_at is null, since the helper never
+      // looks past a present due_at.
+      const earliestOccursAt = task.dueAt ? null : await earliestOccurrenceOf(db, task.id);
+      if (!task.dueAt && !earliestOccursAt) {
         unanchored += 1;
         continue;
       }
+      const anchorInstant = resolveSeriesAnchor({ dueAt: task.dueAt, earliestOccursAt, now });
       const rule = buildRule({
         rrule: task.rrule,
         recurrenceTimezone: task.recurrenceTimezone,
@@ -231,12 +246,225 @@ export async function expandDueDateWindowJob(db: Db): Promise<void> {
     failed: failures.length,
   });
 
+  const lazy = await reconcileLazyParents(db, failures, now);
+
   if (failures.length > 0) {
     throw new OccurrencesJobError(OCCURRENCES_EXPAND_WINDOW_QUEUE, null, {
       failed: failures,
-      totalParents: attempted,
+      // Both phases' parents, so "N of M parents failed" in job.output stays
+      // an honest fraction of everything the sweep attempted.
+      totalParents: attempted + lazy.candidates,
     });
   }
+}
+
+/**
+ * PHASE 2 -- lazy reconciliation (Checkpoint 9.4).
+ *
+ * A completion-anchored task is supposed to hold exactly one open occurrence
+ * at all times (docs/ARCHITECTURE.md). Since 9.3 the API inserts the successor
+ * in the same transaction as the completion, and generate-lazy re-checks it,
+ * so the invariant is kept on every path that RUNS -- but not on the ones that
+ * do not: a successor computation that failed under the API's savepoint and
+ * then exhausted generate-lazy's retries (dead-lettered and alerted, never
+ * repaired); a completion recorded while pg-boss was unreachable at the API
+ * (the `bossReady` debt in docs/STATUS.md -- no job exists for any queue to
+ * see); an occurrence closed by hand. Each leaves a task with a terminal
+ * history and nothing open, which the rest of the system reads as "never
+ * recurs again", silently. This pass is the nightly repair for that state:
+ * the successor the completion should have produced, computed from the SAME
+ * inputs the two on-line writers use -- the latest terminal row's
+ * `completed_at` for the date, its `occurs_local` time of day for the
+ * wall clock, the parent's rule and zone -- so a row the API or the worker
+ * did manage to write at that instant is the no-op the unique index makes it.
+ *
+ * It is a REPAIR, not a second generation strategy: it never touches a parent
+ * that already has any open occurrence, and it never invents a start for a
+ * parent with no terminal history (a lazy task with no history and no open
+ * row is one whose seed was never written -- a different fault, and one this
+ * pass has no instant to anchor from). `inbox` counts as open, as it does for
+ * every other reader of task status; `dropped`, `done` and archived parents
+ * recur no further, matching phase 1 and generate-lazy's `parent_closed`.
+ *
+ * Containment is per parent, exactly as in phase 1: a failure is counted, its
+ * id recorded, the token logged, and the sweep continues; the failures join
+ * the same `OccurrencesJobError`, so a persistent fault reaches
+ * occurrences.expand-window.dead and alerts through the existing handler. A
+ * successor the unique index refuses while the parent still has nothing open
+ * is a failure too (9.4 review), not a quiet "nothing to do" -- the parent is
+ * exactly as stuck as before the pass ran. A rerun is idempotent -- a repaired
+ * parent has an open occurrence and is no longer a candidate.
+ */
+async function reconcileLazyParents(
+  db: Db,
+  failures: FailedParentRef[],
+  now: Date,
+): Promise<{ candidates: number; repaired: number; failed: number }> {
+  const openOccurrence = db
+    .select({ id: occurrences.id })
+    .from(occurrences)
+    .where(
+      and(
+        eq(occurrences.parentType, "task"),
+        eq(occurrences.parentId, tasks.id),
+        eq(occurrences.status, "scheduled"),
+      ),
+    );
+  const terminalHistory = db
+    .select({ id: occurrences.id })
+    .from(occurrences)
+    .where(
+      and(
+        eq(occurrences.parentType, "task"),
+        eq(occurrences.parentId, tasks.id),
+        inArray(occurrences.status, ["done", "skipped"]),
+        isNotNull(occurrences.completedAt),
+      ),
+    );
+  const candidates = await db
+    .select({
+      id: tasks.id,
+      rrule: tasks.rrule,
+      recurrenceTimezone: tasks.recurrenceTimezone,
+    })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.recurrenceAnchor, "completion_date"),
+        isNotNull(tasks.rrule),
+        isNotNull(tasks.recurrenceTimezone),
+        inArray(tasks.status, ["inbox", "active"]),
+        isNull(tasks.archivedAt),
+        notExists(openOccurrence),
+        exists(terminalHistory),
+      ),
+    );
+
+  let repaired = 0;
+  let failed = 0;
+  for (const task of candidates) {
+    if (!task.rrule || !task.recurrenceTimezone) continue;
+    try {
+      // The latest terminal row by completion instant -- not by occurs_at,
+      // since a late completion of an older occurrence is still the most
+      // recent thing the owner did with this task, and completion anchoring
+      // means the next one is due relative to THAT.
+      const [latest] = await db
+        .select({
+          id: occurrences.id,
+          status: occurrences.status,
+          completedAt: occurrences.completedAt,
+          occursAt: occurrences.occursAt,
+          occursLocal: occurrences.occursLocal,
+        })
+        .from(occurrences)
+        .where(
+          and(
+            eq(occurrences.parentType, "task"),
+            eq(occurrences.parentId, task.id),
+            inArray(occurrences.status, ["done", "skipped"]),
+            isNotNull(occurrences.completedAt),
+          ),
+        )
+        .orderBy(desc(occurrences.completedAt), desc(occurrences.occursAt))
+        .limit(1);
+      // Selected by the same predicate as the candidate query; absent only if
+      // the row went away between the two reads, in which case there is no
+      // longer anything to repair from.
+      if (!latest || !latest.completedAt) continue;
+
+      // The same three inputs the API and generate-lazy pass: the completion
+      // instant for the date, the closed row's own time of day for the wall
+      // clock, and its own occurs_at as the exclusive lower bound so an
+      // early completion still yields a successor strictly after it (9.4
+      // review) -- identical inputs, identical instant, one row.
+      const next = computeNextLazyOccurrence(
+        { rrule: task.rrule, recurrenceTimezone: task.recurrenceTimezone },
+        latest.completedAt,
+        latest.status === "done" ? "completed" : "skipped",
+        { wallTime: wallTimeOfNaiveTimestamp(latest.occursLocal), after: latest.occursAt },
+      );
+      // No conflict target, so BOTH unique indexes make this a no-op: an open
+      // lazy row written between the candidate read and here (a completion
+      // committing under the sweep) and a row already sitting at this instant.
+      const inserted = await db
+        .insert(occurrences)
+        .values({
+          parentType: "task",
+          parentId: task.id,
+          occursAt: next.occursAt,
+          occursLocal: wallClockToNaiveDate(next.occursLocal),
+          status: "scheduled",
+          lazyGenerated: true,
+        })
+        .onConflictDoNothing()
+        .returning({ id: occurrences.id });
+      if (inserted.length > 0) {
+        repaired += 1;
+        log.info("occurrences.reconcile_lazy.repaired", {
+          taskId: task.id,
+          occurrenceId: inserted[0]!.id,
+          // Whether the repaired successor is already in the past -- true
+          // whenever the completion it anchors from is older than the rule's
+          // interval, which for a nightly repair of a days-old gap it usually
+          // is. A flag, so an operator can tell "caught up, now overdue" from
+          // "caught up, still ahead" without reading the row.
+          overdue: next.occursAt.getTime() < now.getTime(),
+        });
+        continue;
+      }
+      // Nothing inserted. ON CONFLICT DO NOTHING covers two indexes, and only
+      // one of them means the parent is now fine: a scheduled lazy row landed
+      // between the candidate read and the insert (the partial index), which
+      // is the repair having happened under the sweep. The other -- a done or
+      // skipped row already at the computed instant (the parent/occurs_at
+      // key) -- means the parent STILL has nothing open and the sweep has
+      // just declined to change that. Before the 9.4 review both counted as
+      // "not repaired, not failed", so the job completed with
+      // `repaired:0 failed:0` and the dead-letter/alert path never fired for
+      // a parent it exists for. Re-read the state and count the second case
+      // as a failure, so the job throws and the alert is honest.
+      const [open] = await db
+        .select({ id: occurrences.id })
+        .from(occurrences)
+        .where(
+          and(
+            eq(occurrences.parentType, "task"),
+            eq(occurrences.parentId, task.id),
+            eq(occurrences.status, "scheduled"),
+          ),
+        )
+        .limit(1);
+      if (open) {
+        log.info("occurrences.reconcile_lazy.skipped", {
+          taskId: task.id,
+          reason: "successor_exists",
+          openOccurrenceId: open.id,
+        });
+        continue;
+      }
+      throw new LazySuccessorCollisionError(task.id, latest.id);
+    } catch (err) {
+      failed += 1;
+      failures.push({ parentType: "task", parentId: task.id });
+      log.warn("occurrences.reconcile_lazy.parent_failed", {
+        parentType: "task",
+        parentId: task.id,
+        reason: err instanceof LazySuccessorCollisionError ? "collision" : "error",
+        error: errorToken(err),
+      });
+    }
+  }
+
+  // Counts only -- the per-parent lines above carry the ids. Named with the
+  // logger's token grammar (a hyphen is redacted as a non-token event name),
+  // mirroring occurrences.expand_window.completed.
+  log.info("occurrences.reconcile_lazy.completed", {
+    candidates: candidates.length,
+    repaired,
+    failed,
+  });
+  return { candidates: candidates.length, repaired, failed };
 }
 
 /**

@@ -1,5 +1,5 @@
 import { ApiClientError } from "@personal-os/api-client";
-import type { Device, Task } from "@personal-os/schema";
+import type { Device, ReminderItem, RemindersResponse } from "@personal-os/schema";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Minimal hooks harness --------------------------------------------------
@@ -106,7 +106,7 @@ vi.mock("@tanstack/react-query", () => ({ useQuery: queryMock.useQuery }));
 
 const apiMock = vi.hoisted(() => ({
   getDevice: vi.fn(),
-  listTasks: vi.fn(),
+  listReminders: vi.fn(),
 }));
 vi.mock("@/queries/client", () => ({ api: apiMock }));
 
@@ -153,29 +153,26 @@ function device(overrides: Partial<Device> = {}): Device {
   };
 }
 
-function task(overrides: Partial<Task> = {}): Task {
+const TASK_ID = "11111111-1111-4111-8111-111111111111";
+const OCC_ID = "22222222-2222-4222-8222-222222222222";
+
+// Checkpoint 9.4: the hook reads `GET /reminders`, not a page of tasks.
+function reminderItem(overrides: Partial<ReminderItem> = {}): ReminderItem {
   return {
-    id: "task-1",
+    key: `task:${TASK_ID}`,
+    task_id: TASK_ID,
+    occurrence_id: null,
     title: "Call the insurance guy",
-    body: null,
-    status: "active",
-    due_at: null,
     remind_at: "2026-08-18T09:00:00.000Z",
+    due_at: "2026-08-18T09:00:00.000Z",
     timezone: "America/Chicago",
-    priority: null,
-    project_id: null,
-    completed_at: null,
-    rrule: null,
-    recurrence_anchor: null,
-    recurrence_timezone: null,
-    recurrence_until: null,
-    recurrence_count: null,
-    recurrence_exdates: null,
-    archived_at: null,
-    created_at: "2026-08-01T00:00:00.000Z",
-    updated_at: "2026-08-01T00:00:00.000Z",
+    recurring: false,
     ...overrides,
   };
+}
+
+function feed(items: ReminderItem[]): RemindersResponse {
+  return { items, horizon_days: 45 };
 }
 
 // --- Query-result plumbing ---------------------------------------------------
@@ -189,7 +186,8 @@ interface QueryResult {
 }
 
 let deviceQueryResult: QueryResult;
-let tasksQueryResult: QueryResult;
+let remindersQueryResult: QueryResult;
+let remindersQueryOptions: { enabled?: boolean } | undefined;
 
 function idle(): QueryResult {
   return { data: undefined, error: null };
@@ -222,13 +220,19 @@ beforeEach(() => {
   });
 
   deviceQueryResult = idle();
-  tasksQueryResult = idle();
-  queryMock.useQuery.mockImplementation((options: { queryKey: readonly unknown[] }) => {
-    const key = options.queryKey[0];
-    if (key === "devices") return deviceQueryResult;
-    if (key === "tasks") return tasksQueryResult;
-    throw new Error(`unexpected queryKey in test: ${String(key)}`);
-  });
+  remindersQueryResult = idle();
+  remindersQueryOptions = undefined;
+  queryMock.useQuery.mockImplementation(
+    (options: { queryKey: readonly unknown[]; enabled?: boolean }) => {
+      const key = options.queryKey[0];
+      if (key === "devices") return deviceQueryResult;
+      if (key === "reminders") {
+        remindersQueryOptions = options;
+        return remindersQueryResult;
+      }
+      throw new Error(`unexpected queryKey in test: ${String(key)}`);
+    },
+  );
 
   channelMock.ensureNotificationChannels.mockResolvedValue(undefined);
   channelMock.ensureNotificationPermission.mockResolvedValue(true);
@@ -240,7 +244,7 @@ beforeEach(() => {
 describe("useReminderReconciliation", () => {
   it("cancels owned reminders when the device has been revoked", async () => {
     deviceQueryResult = { data: device({ revoked_at: "2026-08-17T00:00:00.000Z" }), error: null };
-    tasksQueryResult = { data: [task()], error: null };
+    remindersQueryResult = { data: feed([reminderItem()]), error: null };
 
     render();
     await flush();
@@ -251,7 +255,7 @@ describe("useReminderReconciliation", () => {
 
   it("cancels owned reminders when notifications_enabled is false", async () => {
     deviceQueryResult = { data: device({ notifications_enabled: false }), error: null };
-    tasksQueryResult = { data: [task()], error: null };
+    remindersQueryResult = { data: feed([reminderItem()]), error: null };
 
     render();
     await flush();
@@ -262,7 +266,7 @@ describe("useReminderReconciliation", () => {
 
   it("cancels owned reminders when this device is not the primary reminder device", async () => {
     deviceQueryResult = { data: device({ is_primary_reminder_device: false }), error: null };
-    tasksQueryResult = { data: [task()], error: null };
+    remindersQueryResult = { data: feed([reminderItem()]), error: null };
 
     render();
     await flush();
@@ -273,7 +277,7 @@ describe("useReminderReconciliation", () => {
 
   it("treats a 401 from getDevice as authoritative and cancels owned reminders", async () => {
     deviceQueryResult = { data: undefined, error: new ApiClientError(401, "invalid_token") };
-    tasksQueryResult = { data: [task()], error: null };
+    remindersQueryResult = { data: feed([reminderItem()]), error: null };
 
     render();
     await flush();
@@ -288,7 +292,7 @@ describe("useReminderReconciliation", () => {
     // unreachable" rule (use-reminder-reconciliation.ts's own top-of-file
     // comment) and the single most important assertion in this suite.
     deviceQueryResult = { data: undefined, error: new Error("network request failed") };
-    tasksQueryResult = { data: undefined, error: new Error("network request failed") };
+    remindersQueryResult = { data: undefined, error: new Error("network request failed") };
 
     render();
     await flush();
@@ -301,7 +305,7 @@ describe("useReminderReconciliation", () => {
     // A non-401 ApiClientError (e.g. a real 500) must not be treated as
     // authoritative revocation either -- only 401 is.
     deviceQueryResult = { data: undefined, error: new ApiClientError(500, "internal_error") };
-    tasksQueryResult = { data: [task()], error: null };
+    remindersQueryResult = { data: feed([reminderItem()]), error: null };
 
     render();
     await flush();
@@ -319,7 +323,7 @@ describe("useReminderReconciliation", () => {
       clearIdentity: vi.fn(),
     });
     deviceQueryResult = { data: device(), error: null };
-    tasksQueryResult = { data: [task()], error: null };
+    remindersQueryResult = { data: feed([reminderItem()]), error: null };
     render();
     await flush();
     expect(schedulerMock.cancelOwnedReminders).not.toHaveBeenCalled();
@@ -334,7 +338,7 @@ describe("useReminderReconciliation", () => {
       clearIdentity: vi.fn(),
     });
     deviceQueryResult = idle();
-    tasksQueryResult = idle();
+    remindersQueryResult = idle();
     render();
     await flush();
 
@@ -356,10 +360,18 @@ describe("useReminderReconciliation", () => {
     expect(schedulerMock.cancelOwnedReminders).not.toHaveBeenCalled();
   });
 
-  it("reconciles an eligible device: applyReminderReconciliation is called with the task list", async () => {
-    const tasks = [task({ id: "task-1" }), task({ id: "task-2", remind_at: null })];
+  it("reconciles an eligible device: applyReminderReconciliation is called with the feed projected to ReminderTasks", async () => {
+    const items = [
+      reminderItem(),
+      reminderItem({
+        key: `occ:${OCC_ID}`,
+        occurrence_id: OCC_ID,
+        title: "Water the plants",
+        recurring: true,
+      }),
+    ];
     deviceQueryResult = { data: device(), error: null };
-    tasksQueryResult = { data: tasks, error: null };
+    remindersQueryResult = { data: feed(items), error: null };
     exactAlarmMock.ensureExactAlarmPermission.mockReturnValue(true);
 
     render();
@@ -369,12 +381,53 @@ describe("useReminderReconciliation", () => {
     expect(channelMock.ensureNotificationChannels).toHaveBeenCalledTimes(1);
     expect(channelMock.ensureNotificationPermission).toHaveBeenCalledTimes(1);
     expect(schedulerMock.applyReminderReconciliation).toHaveBeenCalledTimes(1);
-    expect(schedulerMock.applyReminderReconciliation).toHaveBeenCalledWith(tasks, true);
+    expect(schedulerMock.applyReminderReconciliation).toHaveBeenCalledWith(
+      [
+        {
+          key: `task:${TASK_ID}`,
+          taskId: TASK_ID,
+          occurrenceId: null,
+          title: "Call the insurance guy",
+          remindAt: "2026-08-18T09:00:00.000Z",
+          dueAt: "2026-08-18T09:00:00.000Z",
+          recurring: false,
+        },
+        {
+          key: `occ:${OCC_ID}`,
+          taskId: TASK_ID,
+          occurrenceId: OCC_ID,
+          title: "Water the plants",
+          remindAt: "2026-08-18T09:00:00.000Z",
+          dueAt: "2026-08-18T09:00:00.000Z",
+          recurring: true,
+        },
+      ],
+      true,
+    );
   });
 
-  it("does not reconcile while the tasks query has not resolved yet, even for an eligible device", async () => {
+  it("reads the feed through the stable [\"reminders\"] key, gated on pairing", async () => {
     deviceQueryResult = { data: device(), error: null };
-    tasksQueryResult = idle();
+    remindersQueryResult = { data: feed([]), error: null };
+
+    render();
+    await flush();
+
+    expect(remindersQueryOptions?.enabled).toBe(true);
+
+    deviceIdentityMock.useDeviceIdentity.mockReturnValue({
+      identity: null,
+      isLoading: false,
+      setIdentity: vi.fn(),
+      clearIdentity: vi.fn(),
+    });
+    render();
+    expect(remindersQueryOptions?.enabled).toBe(false);
+  });
+
+  it("does not reconcile while the reminders query has not resolved yet, even for an eligible device", async () => {
+    deviceQueryResult = { data: device(), error: null };
+    remindersQueryResult = idle();
 
     render();
     await flush();
@@ -385,7 +438,7 @@ describe("useReminderReconciliation", () => {
 
   it("does not reconcile or cancel when notification permission is denied", async () => {
     deviceQueryResult = { data: device(), error: null };
-    tasksQueryResult = { data: [task()], error: null };
+    remindersQueryResult = { data: feed([reminderItem()]), error: null };
     channelMock.ensureNotificationPermission.mockResolvedValue(false);
 
     render();

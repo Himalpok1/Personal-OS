@@ -1,31 +1,14 @@
 import { ApiClientError } from "@personal-os/api-client";
-import type { Task } from "@personal-os/schema";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
 import { useDeviceIdentity } from "@/device-identity/provider";
 import { api } from "@/queries/client";
+import { useReminders } from "@/queries/reminders";
 import { ensureNotificationChannels, ensureNotificationPermission } from "./channel";
 import { ensureExactAlarmPermission } from "./exact-alarm";
+import { toReminderTask } from "./reconcile";
 import { applyReminderReconciliation, cancelOwnedReminders } from "./scheduler";
-
-const REMINDER_PAGE_SIZE = 200;
-
-async function listAllReminderTasks(): Promise<Task[]> {
-  const items: Task[] = [];
-  let offset = 0;
-
-  for (;;) {
-    const page = await api.listTasks({
-      status: ["inbox", "active"],
-      limit: REMINDER_PAGE_SIZE,
-      offset,
-    });
-    items.push(...page.items);
-    offset += page.items.length;
-    if (page.items.length === 0 || offset >= page.total) return items;
-  }
-}
 
 // Existing OS schedules remain authoritative while the API or tailnet is
 // unavailable. They are cancelled only when device state authoritatively
@@ -43,13 +26,10 @@ export function useReminderReconciliation(): void {
     refetchInterval: 60_000,
   });
 
-  const tasksQuery = useQuery({
-    queryKey: ["tasks", "reminders"],
-    queryFn: listAllReminderTasks,
-    enabled: identity !== null && Platform.OS !== "web",
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-  });
+  // Checkpoint 9.4: the server-derived per-occurrence feed replaces paging
+  // `listTasks` -- see queries/reminders.ts. Query key ["reminders"] is what
+  // every task/occurrence mutation invalidates.
+  const remindersQuery = useReminders({ enabled: identity !== null });
 
   useEffect(() => {
     if (Platform.OS === "web") return;
@@ -87,7 +67,8 @@ export function useReminderReconciliation(): void {
 
     // Generic fetch failures intentionally preserve already-scheduled
     // alarms so reminders still work while the server is unreachable.
-    if (!device || !tasksQuery.data || !device.is_primary_reminder_device) return;
+    if (!device || !remindersQuery.data || !device.is_primary_reminder_device) return;
+    const reminders = remindersQuery.data.items.map(toReminderTask);
 
     let cancelled = false;
     void (async () => {
@@ -98,7 +79,7 @@ export function useReminderReconciliation(): void {
       // with whatever capability is actually available -- an inexact
       // reminder still beats no reminder.
       const exactAlarmCapable = ensureExactAlarmPermission();
-      await applyReminderReconciliation(tasksQuery.data, exactAlarmCapable);
+      await applyReminderReconciliation(reminders, exactAlarmCapable);
     })().catch((error: unknown) => {
       console.warn("Local reminder reconciliation failed", error);
     });
@@ -111,6 +92,6 @@ export function useReminderReconciliation(): void {
     deviceQuery.error,
     foregroundEpoch,
     identity,
-    tasksQuery.data,
+    remindersQuery.data,
   ]);
 }

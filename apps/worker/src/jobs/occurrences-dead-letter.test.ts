@@ -225,8 +225,10 @@ describe("occurrences dead-letter handlers", () => {
         .where(and(eq(occurrences.parentId, taskId), eq(occurrences.status, "scheduled")));
       expect(open).toHaveLength(1);
       expect(open[0]).toMatchObject({ lazyGenerated: true });
-      // Three days after the completion instant, in the rule's zone.
-      expect(open[0]!.occursAt.toISOString()).toBe("2026-09-14T02:30:00.000Z");
+      // Three days after the completion's LOCAL DATE (2026-09-10 in Chicago),
+      // at the completed occurrence's own wall-clock time -- 09:00 CDT, not the
+      // 21:30 the owner tapped Done at (Checkpoint 9.4 wallTime).
+      expect(open[0]!.occursAt.toISOString()).toBe("2026-09-13T14:00:00.000Z");
       expect(
         records.find((r) => r["event"] === "occurrences.generate_lazy.dead_letter_recovered"),
       ).toMatchObject({ level: "info", occurrenceId, taskId, outcome: "generated" });
@@ -446,7 +448,9 @@ describe("occurrences dead-letter handlers", () => {
       });
       // Counts, so a one-parent fault is never narrated as "schedules could
       // not be expanded", and no promise that it will heal on its own.
-      expect(payload!.body).toContain("1 of 14 recurring items could not be expanded overnight");
+      expect(payload!.body).toContain(
+        "1 of 14 recurring items could not be expanded or repaired overnight",
+      );
       expect(payload!.body).not.toContain("until it succeeds");
       expect(payload!.body).not.toContain(TASK_A);
       expect(
@@ -530,7 +534,9 @@ describe("occurrences dead-letter handlers", () => {
         }),
       ]);
       for (const payload of sentPayloads()) {
-        expect(payload.body).toContain("Some recurring items could not be expanded overnight");
+        expect(payload.body).toContain(
+          "Some recurring items could not be expanded or repaired overnight",
+        );
         expect(payload.data).not.toHaveProperty("taskId");
       }
       expect(

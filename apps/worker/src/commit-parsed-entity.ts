@@ -3,6 +3,7 @@ import {
   parseFlexibleDatetime,
   resolveInstantToLocalUntil,
   resolveParsedTaskRecurrence,
+  resolveSeriesAnchor,
   toWallClockComponents,
   validateParsedTaskRecurrence,
   wallClockToNaiveDate,
@@ -105,6 +106,18 @@ export async function commitParsedEntity(
         : undefined;
       const effectiveNow = new Date();
 
+      // The due_at the task row is written with (Checkpoint 9.4). For a
+      // one-off task it is exactly what the parser resolved, or nothing. For
+      // a RECURRING task with no parsed due_at it becomes the series anchor,
+      // so the parent's due_at is never null for a series: the nightly
+      // window job, PATCH /tasks/:id and the reminder derivation all read the
+      // anchor back out of due_at (via resolveSeriesAnchor, the one shared
+      // rule), and a series that carried none was re-anchored on its earliest
+      // occurrence -- a reconstruction, where this is the fact. POST /tasks
+      // persists the same instant under the same condition, so every writer
+      // of a series agrees on where it starts. Assigned per branch below.
+      let persistedDueAt: Date | undefined = dueAt;
+
       type OccurrenceSeed = { occursAt: Date; occursLocal: Date; lazyGenerated: boolean };
       let seeds: OccurrenceSeed[] = [];
       if (recurrence) {
@@ -124,6 +137,9 @@ export async function commitParsedEntity(
           // explicit, different recurrence_timezone seeded the first occurrence
           // at a different instant from the task's own due date.
           const firstOccursAt = dueAt ?? effectiveNow;
+          // The seeded first occurrence IS the series' start, so it is what
+          // the parent's due_at records when the parser resolved none.
+          persistedDueAt = firstOccursAt;
           seeds = [
             {
               occursAt: firstOccursAt,
@@ -145,7 +161,17 @@ export async function commitParsedEntity(
           // ON CONFLICT DO NOTHING on (parent_type, parent_id, occurs_at) so a
           // pg-boss redelivery of the commit is idempotent against the rows
           // the first delivery wrote.
-          const ruleAnchor = dueAt ?? effectiveNow;
+          // A brand-new series has no occurrence yet, so the shared rule
+          // resolves to due_at or, failing that, to this commit's single
+          // effectiveNow -- and that instant is then persisted as the
+          // parent's due_at, so the fallback is taken exactly once per series
+          // and the nightly job re-expands from the very same DTSTART.
+          const ruleAnchor = resolveSeriesAnchor({
+            dueAt: dueAt ?? null,
+            earliestOccursAt: null,
+            now: effectiveNow,
+          });
+          persistedDueAt = ruleAnchor;
           const rule: DueDateRecurrenceRule = {
             rrule: recurrence.rrule,
             recurrenceTimezone: recurrence.recurrenceTimezone,
@@ -165,7 +191,7 @@ export async function commitParsedEntity(
           .values({
             title: toolCall.args.title,
             status: "inbox",
-            dueAt,
+            dueAt: persistedDueAt,
             remindAt,
             timezone: ctx.timezone,
             priority: toolCall.args.priority,

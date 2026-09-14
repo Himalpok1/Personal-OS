@@ -73,7 +73,14 @@ import {
 } from "./health.js";
 import { archiveInboxItem, confirmInboxItem, getInboxItem, listInbox } from "./inbox.js";
 import { archiveNote, createNote, getNote, listNotes, updateNote } from "./notes.js";
-import { completeOccurrence, listOccurrences, skipOccurrence } from "./occurrences.js";
+import {
+  completeOccurrence,
+  listOccurrences,
+  reopenOccurrence,
+  skipOccurrence,
+  snoozeOccurrence,
+} from "./occurrences.js";
+import { listReminders } from "./reminders.js";
 import {
   archiveProject,
   completeProject,
@@ -268,6 +275,9 @@ export function createApiClient(baseUrl: string) {
     listOccurrences: listOccurrences.bind(null, baseUrl),
     completeOccurrence: completeOccurrence.bind(null, baseUrl),
     skipOccurrence: skipOccurrence.bind(null, baseUrl),
+    snoozeOccurrence: snoozeOccurrence.bind(null, baseUrl),
+    reopenOccurrence: reopenOccurrence.bind(null, baseUrl),
+    listReminders: listReminders.bind(null, baseUrl),
 
     listReviews: listReviews.bind(null, baseUrl),
     getReview: getReview.bind(null, baseUrl),

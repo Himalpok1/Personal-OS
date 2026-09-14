@@ -1,5 +1,5 @@
 import { events, occurrences, tasks, type Db } from "@personal-os/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { setLogSink } from "../logger.js";
 import { buildTestDb, truncateTestTables } from "../test/build-test-db.js";
@@ -402,5 +402,497 @@ describe("expandDueDateWindowJob per-parent containment", () => {
     const caught = await createExpandDueDateWindowHandler(db)([]).catch((err: unknown) => err);
     expect(caught).toBeInstanceOf(OccurrencesJobError);
     expect((caught as OccurrencesJobError).failedParents).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2 -- lazy reconciliation. Checkpoint 9.4.
+// ---------------------------------------------------------------------------
+//
+// A completion-anchored task must hold exactly one open occurrence. The API's
+// in-transaction successor and generate-lazy's re-check keep that on every path
+// that runs; a completion recorded while pg-boss was down, or a successor that
+// dead-lettered, leaves a task with a terminal history and nothing open --
+// which nothing else ever repairs. The nightly sweep now does, from the same
+// inputs the on-line writers use, with the same per-parent containment.
+describe("expandDueDateWindowJob -- lazy reconciliation (9.4)", () => {
+  let db: Db;
+  let records: Record<string, unknown>[];
+  let restore: () => void;
+  const RULE = "FREQ=DAILY;INTERVAL=3";
+
+  beforeEach(async () => {
+    db = buildTestDb();
+    await truncateTestTables(db);
+    records = [];
+    restore = setLogSink({ write: (_level, record) => records.push(record) });
+    return () => restore();
+  });
+
+  afterAll(async () => {
+    await truncateTestTables(db);
+  });
+
+  async function insertLazyTask(overrides: Partial<typeof tasks.$inferInsert> = {}) {
+    return insertRecurringTask(db, {
+      title: "Water the plants",
+      dueAt: null,
+      rrule: RULE,
+      recurrenceAnchor: "completion_date",
+      ...overrides,
+    });
+  }
+
+  // A 09:00 CDT occurrence completed at 21:47 CDT the same day. The successor
+  // must be three days after the completion's local DATE at the occurrence's
+  // own wall time: 2026-09-13 09:00 CDT.
+  const OCCURS_AT = new Date("2026-09-10T14:00:00Z");
+  const OCCURS_LOCAL = new Date("2026-09-10T09:00:00Z");
+  const COMPLETED_AT = new Date("2026-09-11T02:47:00Z");
+  const EXPECTED_SUCCESSOR = "2026-09-13T14:00:00.000Z";
+
+  async function insertTerminal(
+    taskId: string,
+    overrides: Partial<typeof occurrences.$inferInsert> = {},
+  ): Promise<string> {
+    const [row] = await db
+      .insert(occurrences)
+      .values({
+        parentType: "task",
+        parentId: taskId,
+        occursAt: OCCURS_AT,
+        occursLocal: OCCURS_LOCAL,
+        status: "done",
+        lazyGenerated: true,
+        completedAt: COMPLETED_AT,
+        ...overrides,
+      })
+      .returning({ id: occurrences.id });
+    return row!.id;
+  }
+
+  async function rowsFor(taskId: string) {
+    return db
+      .select()
+      .from(occurrences)
+      .where(eq(occurrences.parentId, taskId))
+      .orderBy(occurrences.occursAt);
+  }
+
+  function summary() {
+    return records.find((r) => r["event"] === "occurrences.reconcile_lazy.completed");
+  }
+
+  it("repairs a lazy parent with no open occurrence: successor at completed_at + interval, at the completed row's wall time", async () => {
+    const taskId = await insertLazyTask();
+    await insertTerminal(taskId);
+
+    await expect(expandDueDateWindowJob(db)).resolves.toBeUndefined();
+
+    const rows = await rowsFor(taskId);
+    expect(rows).toHaveLength(2);
+    const successor = rows[1]!;
+    expect(successor.status).toBe("scheduled");
+    expect(successor.lazyGenerated).toBe(true);
+    expect(successor.occursAt.toISOString()).toBe(EXPECTED_SUCCESSOR);
+    // 09:00, not 21:47.
+    expect(successor.occursLocal.getUTCHours()).toBe(9);
+    expect(successor.occursLocal.getUTCMinutes()).toBe(0);
+    expect(summary()).toMatchObject({ level: "info", candidates: 1, repaired: 1, failed: 0 });
+    expect(records.find((r) => r["event"] === "occurrences.reconcile_lazy.repaired")).toMatchObject(
+      { taskId, occurrenceId: successor.id },
+    );
+  });
+
+  it("anchors a skipped row from its skip instant, exactly as the on-line writers do", async () => {
+    const taskId = await insertLazyTask();
+    await insertTerminal(taskId, { status: "skipped" });
+    await expandDueDateWindowJob(db);
+    const rows = await rowsFor(taskId);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]!.occursAt.toISOString()).toBe(EXPECTED_SUCCESSOR);
+  });
+
+  it("repairs from the LATEST terminal row by completed_at, not the latest by occurs_at", async () => {
+    const taskId = await insertLazyTask();
+    // An older occurrence completed late -- after the newer one was skipped.
+    await insertTerminal(taskId, {
+      occursAt: new Date("2026-09-04T14:00:00Z"),
+      occursLocal: new Date("2026-09-04T09:00:00Z"),
+      completedAt: new Date("2026-09-12T02:47:00Z"), // 09-11 21:47 CDT
+    });
+    await insertTerminal(taskId, {
+      status: "skipped",
+      completedAt: new Date("2026-09-11T02:47:00Z"), // 09-10 21:47 CDT
+    });
+
+    await expandDueDateWindowJob(db);
+
+    const open = (await rowsFor(taskId)).filter((r) => r.status === "scheduled");
+    expect(open).toHaveLength(1);
+    // Three days after 09-11 (the late completion), at 09:00 CDT.
+    expect(open[0]!.occursAt.toISOString()).toBe("2026-09-14T14:00:00.000Z");
+  });
+
+  it("does nothing when an open occurrence already exists, lazy or not", async () => {
+    for (const lazy of [true, false]) {
+      const taskId = await insertLazyTask();
+      await insertTerminal(taskId);
+      const [open] = await db
+        .insert(occurrences)
+        .values({
+          parentType: "task",
+          parentId: taskId,
+          occursAt: new Date("2026-09-20T14:00:00Z"),
+          occursLocal: new Date("2026-09-20T09:00:00Z"),
+          status: "scheduled",
+          lazyGenerated: lazy,
+        })
+        .returning({ id: occurrences.id });
+
+      await expandDueDateWindowJob(db);
+
+      const rows = await rowsFor(taskId);
+      expect(rows).toHaveLength(2);
+      expect(rows.filter((r) => r.status === "scheduled").map((r) => r.id)).toEqual([open!.id]);
+    }
+    expect(summary()).toMatchObject({ candidates: 0, repaired: 0, failed: 0 });
+  });
+
+  it("treats an inbox parent as open and repairs it", async () => {
+    const taskId = await insertLazyTask({ status: "inbox" });
+    await insertTerminal(taskId);
+    await expandDueDateWindowJob(db);
+    expect((await rowsFor(taskId)).filter((r) => r.status === "scheduled")).toHaveLength(1);
+  });
+
+  it.each([
+    ["dropped", { status: "dropped" as const }],
+    ["done", { status: "done" as const }],
+    ["archived", { archivedAt: new Date("2026-09-12T00:00:00Z") }],
+  ])("skips a %s parent entirely", async (_label, overrides) => {
+    const taskId = await insertLazyTask(overrides);
+    await insertTerminal(taskId);
+    await expandDueDateWindowJob(db);
+    expect(await rowsFor(taskId)).toHaveLength(1);
+    expect(summary()).toMatchObject({ candidates: 0 });
+  });
+
+  it("skips a parent with no terminal history -- there is no instant to repair from", async () => {
+    const taskId = await insertLazyTask();
+    // A terminal row with no completed_at is not history either.
+    await insertTerminal(taskId, { completedAt: null });
+    await expandDueDateWindowJob(db);
+    expect(await rowsFor(taskId)).toHaveLength(1);
+    expect(summary()).toMatchObject({ candidates: 0, repaired: 0 });
+  });
+
+  it("never touches a due_date parent, whatever its occurrence state", async () => {
+    const taskId = await insertRecurringTask(db, {
+      dueAt: null,
+      rrule: RULE,
+      recurrenceAnchor: "due_date",
+    });
+    // Only a terminal row, so phase 1 anchors on it and phase 2 must not.
+    await insertTerminal(taskId, { lazyGenerated: false });
+    await expandDueDateWindowJob(db);
+    const rows = await rowsFor(taskId);
+    expect(rows.some((r) => r.lazyGenerated)).toBe(false);
+    expect(summary()).toMatchObject({ candidates: 0 });
+  });
+
+  it("is idempotent: a second run repairs nothing and adds no row", async () => {
+    const taskId = await insertLazyTask();
+    await insertTerminal(taskId);
+    await expandDueDateWindowJob(db);
+    const first = await rowsFor(taskId);
+    records = [];
+
+    await expandDueDateWindowJob(db);
+
+    expect(await rowsFor(taskId)).toHaveLength(first.length);
+    expect(summary()).toMatchObject({ candidates: 0, repaired: 0, failed: 0 });
+  });
+
+  it("contains a malformed stored rule: counted, others still repaired, sweep fails with the id", async () => {
+    // A BY* part on a completion-anchored rule -- refused at write time now,
+    // but a row stored before that check existed is still in the table.
+    const badTaskId = await insertLazyTask({ rrule: "FREQ=DAILY;BYDAY=MO" });
+    await insertTerminal(badTaskId);
+    const goodTaskId = await insertLazyTask();
+    await insertTerminal(goodTaskId);
+    // Phase 1 still runs and still succeeds for its own parents.
+    const eventId = await insertRecurringEvent(db, {});
+
+    const caught = await expandDueDateWindowJob(db).catch((err: unknown) => err);
+
+    expect(caught).toBeInstanceOf(OccurrencesJobError);
+    expect((caught as OccurrencesJobError).failedParentRefs).toEqual([
+      { parentType: "task", parentId: badTaskId },
+    ]);
+    expect((caught as OccurrencesJobError).failedParents).toBe(1);
+    // One event in phase 1 plus two candidates in phase 2.
+    expect((caught as OccurrencesJobError).totalParents).toBe(3);
+    expect((caught as Error).message).toBe(
+      "occurrences.expand-window failed: 1 of 3 parents failed",
+    );
+    expect(await rowsFor(badTaskId)).toHaveLength(1);
+    expect((await rowsFor(goodTaskId)).filter((r) => r.status === "scheduled")).toHaveLength(1);
+    expect((await rowsFor(eventId)).length).toBeGreaterThan(0);
+    expect(summary()).toMatchObject({ candidates: 2, repaired: 1, failed: 1 });
+    expect(
+      records.find((r) => r["event"] === "occurrences.reconcile_lazy.parent_failed"),
+    ).toMatchObject({ level: "warn", parentType: "task", parentId: badTaskId, error: "Error" });
+  });
+
+  it("carries neither the rule, the title nor an error message anywhere", async () => {
+    const taskId = await insertLazyTask({
+      rrule: "FREQ=DAILY;BYDAY=MO",
+      title: "Pay the landlord",
+    });
+    await insertTerminal(taskId);
+
+    const caught = await expandDueDateWindowJob(db).catch((err: unknown) => err);
+
+    const thrown = JSON.stringify({
+      ...(caught as object),
+      message: (caught as Error).message,
+      stack: (caught as Error).stack,
+    });
+    const logged = JSON.stringify(records);
+    for (const forbidden of ["BYDAY", "FREQ=", "landlord", "may only use"]) {
+      expect(thrown).not.toContain(forbidden);
+      expect(logged).not.toContain(forbidden);
+    }
+  });
+
+  it("the pg-boss factory contains a phase-2 failure unchanged, with its counts", async () => {
+    const taskId = await insertLazyTask({ rrule: "FREQ=DAILY;BYDAY=MO" });
+    await insertTerminal(taskId);
+    const caught = await createExpandDueDateWindowHandler(db)([]).catch((err: unknown) => err);
+    expect(caught).toBeInstanceOf(OccurrencesJobError);
+    expect((caught as OccurrencesJobError).failedParents).toBe(1);
+    expect((caught as OccurrencesJobError).totalParents).toBe(1);
+  });
+
+  // 9.4 review: the repaired line says whether the successor it wrote is
+  // already in the past. A days-old gap repaired overnight usually is; a
+  // completion whose interval has not elapsed yet is not.
+  it.each([
+    ["overdue", COMPLETED_AT, true],
+    ["still ahead", new Date("2030-09-11T02:47:00Z"), false],
+  ])("flags the repaired successor as %s", async (_label, completedAt, overdue) => {
+    const taskId = await insertLazyTask();
+    await insertTerminal(taskId, { completedAt });
+    await expandDueDateWindowJob(db);
+    expect(records.find((r) => r["event"] === "occurrences.reconcile_lazy.repaired")).toMatchObject(
+      { taskId, overdue },
+    );
+  });
+
+  // 9.4 review repro, phase-2 edition: a Thursday 09:00 row completed the
+  // Monday before. +3 days from the completion IS the completed row's own
+  // instant, so without the exclusive `after` bound the insert conflicted
+  // with the row it was repairing from, ON CONFLICT DO NOTHING swallowed it,
+  // and the sweep reported `repaired:0 failed:0` for a parent still stuck.
+  it("repairs an early completion with a successor strictly after the completed row", async () => {
+    const taskId = await insertLazyTask();
+    const thursdayNineAm = new Date("2026-09-17T14:00:00Z");
+    await insertTerminal(taskId, {
+      occursAt: thursdayNineAm,
+      occursLocal: new Date("2026-09-17T09:00:00Z"),
+      completedAt: new Date("2026-09-14T16:20:00Z"), // Mon 11:20 CDT
+    });
+
+    await expect(expandDueDateWindowJob(db)).resolves.toBeUndefined();
+
+    const rows = await rowsFor(taskId);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]!.status).toBe("scheduled");
+    expect(rows[1]!.occursAt.getTime()).toBeGreaterThan(thursdayNineAm.getTime());
+    expect(rows[1]!.occursAt.toISOString()).toBe("2026-09-20T14:00:00.000Z");
+    expect(rows[1]!.occursLocal.getUTCHours()).toBe(9);
+    expect(summary()).toMatchObject({ candidates: 1, repaired: 1, failed: 0 });
+  });
+
+  // A closed row already at the computed instant: the insert is refused on
+  // (parent, occurs_at), the parent STILL has nothing open, and that is a
+  // failure the dead-letter/alert path must see -- not a quiet no-op.
+  it("counts a collision that leaves the parent with nothing open as a failure", async () => {
+    const taskId = await insertLazyTask();
+    await insertTerminal(taskId);
+    // The instant the pass computes, occupied by a skipped row with an OLDER
+    // completion so the source row above stays the latest terminal.
+    await insertTerminal(taskId, {
+      occursAt: new Date(EXPECTED_SUCCESSOR),
+      occursLocal: new Date("2026-09-13T09:00:00Z"),
+      status: "skipped",
+      completedAt: new Date("2026-09-09T00:00:00Z"),
+    });
+    const goodTaskId = await insertLazyTask();
+    await insertTerminal(goodTaskId);
+
+    const caught = await expandDueDateWindowJob(db).catch((err: unknown) => err);
+
+    expect(caught).toBeInstanceOf(OccurrencesJobError);
+    expect((caught as OccurrencesJobError).failedParentRefs).toEqual([
+      { parentType: "task", parentId: taskId },
+    ]);
+    expect((caught as OccurrencesJobError).failedParents).toBe(1);
+    expect((caught as OccurrencesJobError).totalParents).toBe(2);
+    expect((await rowsFor(taskId)).filter((r) => r.status === "scheduled")).toHaveLength(0);
+    expect((await rowsFor(goodTaskId)).filter((r) => r.status === "scheduled")).toHaveLength(1);
+    expect(summary()).toMatchObject({ candidates: 2, repaired: 1, failed: 1 });
+    expect(
+      records.find((r) => r["event"] === "occurrences.reconcile_lazy.parent_failed"),
+    ).toMatchObject({
+      level: "warn",
+      parentType: "task",
+      parentId: taskId,
+      reason: "collision",
+      error: "LazySuccessorCollisionError",
+    });
+    expect(
+      records.some(
+        (r) => r["event"] === "occurrences.reconcile_lazy.repaired" && r["taskId"] === taskId,
+      ),
+    ).toBe(false);
+    const logged = JSON.stringify(records);
+    expect(logged).not.toContain("Water");
+    expect(logged).not.toContain("FREQ");
+  });
+
+  // The other way the insert can return nothing: a completion committed its
+  // own successor between the candidate read and the insert, so the partial
+  // one_open_occurrence_per_lazy_parent index refuses the sweep's row. The
+  // parent is fine, and it must be counted as neither repaired nor failed.
+  // Made deterministic the same way generate-lazy-occurrence.test.ts does:
+  // an uncommitted transaction holds the key, the sweep's insert blocks on
+  // its XID, and it commits only once the sweep is observed waiting.
+  it("does not count a parent whose successor landed under the sweep as failed", async () => {
+    const taskId = await insertLazyTask();
+    await insertTerminal(taskId);
+
+    let releaseConcurrent!: () => void;
+    const gate = new Promise<void>((resolve) => (releaseConcurrent = resolve));
+    let concurrentInserted!: () => void;
+    const insertedGate = new Promise<void>((resolve) => (concurrentInserted = resolve));
+    let concurrentId = "";
+    const concurrent = db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(occurrences)
+        .values({
+          parentType: "task",
+          parentId: taskId,
+          occursAt: new Date("2026-09-25T14:00:00Z"),
+          occursLocal: new Date("2026-09-25T09:00:00Z"),
+          status: "scheduled",
+          lazyGenerated: true,
+        })
+        .returning({ id: occurrences.id });
+      concurrentId = row!.id;
+      concurrentInserted();
+      await gate;
+    });
+    await insertedGate;
+
+    const run = expandDueDateWindowJob(db);
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const { rows } = await db.execute<{ n: string }>(
+        sql`select count(*)::text as n from pg_stat_activity
+            where wait_event_type = 'Lock' and datname = current_database()`,
+      );
+      if (Number(rows[0]?.n ?? "0") > 0) break;
+      if (Date.now() > deadline) throw new Error("sweep never blocked on the lock");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    releaseConcurrent();
+    await concurrent;
+
+    await expect(run).resolves.toBeUndefined();
+    const open = (await rowsFor(taskId)).filter((r) => r.status === "scheduled");
+    expect(open).toHaveLength(1);
+    expect(open[0]!.id).toBe(concurrentId);
+    expect(summary()).toMatchObject({ candidates: 1, repaired: 0, failed: 0 });
+    expect(records.find((r) => r["event"] === "occurrences.reconcile_lazy.skipped")).toMatchObject({
+      taskId,
+      reason: "successor_exists",
+      openOccurrenceId: concurrentId,
+    });
+  });
+});
+
+// The shared anchor (Checkpoint 9.4): a due_at-less series must keep its
+// original wall-clock time when the nightly job re-expands it. resolveSeriesAnchor
+// puts the parent's earliest occurrence before `now`, so the re-expansion
+// reproduces the seed's instants rather than minting a parallel series at the
+// time the sweep happened to run.
+describe("expandDueDateWindowJob -- series anchor agreement (9.4)", () => {
+  const db = buildTestDb();
+
+  beforeEach(async () => {
+    await truncateTestTables(db);
+  });
+
+  it("a due_at-less series keeps its original wall time on re-expansion", async () => {
+    const taskId = await insertRecurringTask(db, { dueAt: null, rrule: "FREQ=DAILY;INTERVAL=1" });
+    // One seed only, at 07:30 America/Chicago, well inside the window so the
+    // sweep has both an anchor and room to continue the series.
+    const seedAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+    const { toWallClockComponents, wallClockToNaiveDate, resolveWallClockToInstant } =
+      await import("@personal-os/core");
+    const seedLocal = {
+      ...toWallClockComponents(seedAt, "America/Chicago"),
+      hour: 7,
+      minute: 30,
+      second: 0,
+    };
+    const seedInstant = resolveWallClockToInstant(seedLocal, "America/Chicago");
+    await db.insert(occurrences).values({
+      parentType: "task",
+      parentId: taskId,
+      occursAt: seedInstant,
+      occursLocal: wallClockToNaiveDate(seedLocal),
+      status: "scheduled",
+      lazyGenerated: false,
+    });
+
+    await expandDueDateWindowJob(db);
+
+    const rows = await db.select().from(occurrences).where(eq(occurrences.parentId, taskId));
+    expect(rows.length).toBeGreaterThan(30);
+    for (const row of rows) {
+      // Every instance -- including across the next DST transition -- is at
+      // 07:30 on the wall clock, which is what the seed established.
+      expect(row.occursLocal.getUTCHours()).toBe(7);
+      expect(row.occursLocal.getUTCMinutes()).toBe(30);
+      const local = toWallClockComponents(row.occursAt, "America/Chicago");
+      expect([local.hour, local.minute]).toEqual([7, 30]);
+    }
+    // The seed itself survived untouched (same instant, ON CONFLICT DO NOTHING).
+    expect(rows.filter((r) => r.occursAt.getTime() === seedInstant.getTime())).toHaveLength(1);
+  });
+
+  it("a series with a due_at anchors on it even when older occurrences exist", async () => {
+    const dueAt = new Date("2026-09-15T14:00:00Z"); // 09:00 CDT
+    const taskId = await insertRecurringTask(db, { dueAt, rrule: "FREQ=DAILY;INTERVAL=1" });
+    // A stray earlier row at a different wall time must NOT become the anchor.
+    await db.insert(occurrences).values({
+      parentType: "task",
+      parentId: taskId,
+      occursAt: new Date("2026-09-01T20:00:00Z"),
+      occursLocal: new Date("2026-09-01T15:00:00Z"),
+      status: "done",
+      lazyGenerated: false,
+      completedAt: new Date("2026-09-01T21:00:00Z"),
+    });
+
+    await expandDueDateWindowJob(db);
+
+    const rows = await db.select().from(occurrences).where(eq(occurrences.parentId, taskId));
+    const generated = rows.filter((r) => r.status === "scheduled");
+    expect(generated.length).toBeGreaterThan(0);
+    for (const row of generated) expect(row.occursLocal.getUTCHours()).toBe(9);
   });
 });

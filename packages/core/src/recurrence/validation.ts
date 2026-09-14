@@ -137,3 +137,82 @@ export function validateRecurrenceRule(params: ValidateRecurrenceRuleParams): vo
     validateCompletionAnchoredRule(rrule);
   }
 }
+
+// Frequencies a TASK's due-date rule may not use (Checkpoint 9.4). rrule
+// accepts them and the nightly window expansion would faithfully materialise
+// a 90-day window of them -- 7.7 million rows for FREQ=SECONDLY -- with no
+// budget at commit (the exposure 9.3 recorded as debt). The product offers
+// nothing finer than "daily", so anything below it is rejected at write time.
+const SUB_DAILY_FREQUENCIES = new Set(["SECONDLY", "MINUTELY", "HOURLY"]);
+
+/**
+ * Closed error tokens for validateTaskDueDateRule. They are the ONLY text the
+ * message carries besides a fixed phrase -- never the rule itself -- so a
+ * route can echo the message in a `400 validation_failed` without
+ * reproducing request text (the error-token discipline of ADR-060).
+ */
+export type TaskDueDateRuleErrorCode = "unsupported_frequency" | "embedded_until_count";
+
+export class TaskDueDateRuleError extends Error {
+  readonly code: TaskDueDateRuleErrorCode;
+  constructor(code: TaskDueDateRuleErrorCode, message: string) {
+    super(message);
+    this.name = "TaskDueDateRuleError";
+    this.code = code;
+  }
+}
+
+/**
+ * Write-time validation of a task's `due_date`-anchored rule, as used by
+ * POST /tasks and PATCH /tasks/:id (Checkpoint 9.4). Server-only -- it runs
+ * the full rrulestr-backed validateRecurrenceRule first, so it lives on the
+ * barrel and never on a client-safe subpath.
+ *
+ *   1. validateRecurrenceRule with `isTask: true` and the given zone: syntax,
+ *      FREQ present, positive INTERVAL, no compound sets. This already
+ *      rejects an embedded UNTIL/COUNT, but its message quotes the rule, so
+ *      the embedded case is caught BEFORE it here with a token-only message.
+ *   2. FREQ must be DAILY or coarser.
+ *
+ * Throws TaskDueDateRuleError (token-only message) for the two 9.4 rules and
+ * re-throws validateRecurrenceRule's own errors for everything else. The
+ * anchor check is the caller's: a completion-anchored rule goes through
+ * validateCompletionAnchoredRule instead.
+ */
+export function validateTaskDueDateRule(
+  rrule: string,
+  recurrenceTimezone: string = "UTC",
+  extras: Pick<
+    ValidateRecurrenceRuleParams,
+    "recurrenceUntil" | "recurrenceCount" | "recurrenceExdates"
+  > = {},
+): void {
+  if (/(?:^|[;:])(?:UNTIL|COUNT)=/i.test(rrule)) {
+    throw new TaskDueDateRuleError(
+      "embedded_until_count",
+      "task recurrence rule must not embed UNTIL or COUNT (embedded_until_count)",
+    );
+  }
+
+  validateRecurrenceRule({
+    rrule,
+    recurrenceTimezone,
+    recurrenceAnchor: "due_date",
+    isTask: true,
+    ...extras,
+  });
+
+  const freqPart = rrule
+    .trim()
+    .replace(/^RRULE:/i, "")
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => /^FREQ=/i.test(part));
+  const freq = freqPart?.slice("FREQ=".length).trim().toUpperCase() ?? "";
+  if (SUB_DAILY_FREQUENCIES.has(freq)) {
+    throw new TaskDueDateRuleError(
+      "unsupported_frequency",
+      "task recurrence rule frequency must be DAILY or coarser (unsupported_frequency)",
+    );
+  }
+}

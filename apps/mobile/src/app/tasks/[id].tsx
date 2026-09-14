@@ -2,14 +2,17 @@ import { confirmDestructive } from "@/components/confirm-destructive";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { DateTimeField } from "@/components/datetime-field";
-import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
+import { deviceTimezone } from "@/components/datetime-field-state";
+import { TaskRepeatField } from "@/components/recurrence/task-repeat-field";
+import { applyDueDateChange } from "@/components/recurrence/task-repeat-state";
 import { TaskActions } from "@/components/task-actions";
+import { buildTaskUpdatePatch } from "@/components/task-update-patch";
 import { useProjects } from "@/queries/projects";
 import { useArchiveTask, useTask, useUpdateTask } from "@/queries/tasks";
 import { ApiClientError } from "@personal-os/api-client";
+import type { TaskUpdate } from "@personal-os/schema";
 import {
   parseRRuleStringToEditorState,
-  serializeEditorStateToRRule,
   type RecurrenceEditorState,
 } from "@personal-os/core/recurrence/editor";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -112,27 +115,43 @@ export default function EditTaskScreen() {
     );
   }
 
+  // A Weekly/Monthly repeat follows the due date's weekday / day of month
+  // (components/recurrence/task-repeat-state.ts), so the two fields are kept
+  // in step here, from the due field's own onChange -- never from an effect,
+  // which would rewrite the loaded rule on mount before the owner touched it.
+  const onDueAtChange = (value: string | null) => {
+    setDueAt(value);
+    setRecurrence((state) =>
+      applyDueDateChange(state, { dueAt: value, timezone: deviceTimezone() }),
+    );
+  };
+
   const submit = () => {
     setSaveError(null);
-    const serialized = serializeEditorStateToRRule(recurrence);
+    // A diff against the loaded task (Checkpoint 9.4): the recurrence fields
+    // and due_at travel only when they changed, so a title edit never
+    // re-expands the series -- see components/task-update-patch.ts.
+    //
+    // Building the diff SERIALIZES the repeat state, and the serializer
+    // throws on what the inline advanced editor can hold -- a half-typed
+    // until date, say. That is a form-validation outcome, not a crash: it
+    // lands in the same banner a server-side rule rejection does.
+    let patch: TaskUpdate;
+    try {
+      patch = buildTaskUpdatePatch(task, {
+        title,
+        body,
+        dueAt,
+        remindAt,
+        projectId,
+        recurrence,
+      });
+    } catch {
+      setSaveError("That repeat rule isn't supported.");
+      return;
+    }
     updateTask.mutate(
-      {
-        id: task.id,
-        body: {
-          title: title.trim() || undefined,
-          body: body.trim(),
-          due_at: dueAt,
-          remind_at: remindAt,
-          project_id: projectId ?? null,
-          rrule: serialized.rrule,
-          recurrence_timezone: serialized.recurrence_timezone,
-          recurrence_anchor: serialized.recurrence_anchor,
-          recurrence_until: serialized.recurrence_until
-            ? serialized.recurrence_until.toISOString()
-            : null,
-          recurrence_count: serialized.recurrence_count,
-        },
-      },
+      { id: task.id, body: patch },
       {
         onSuccess: () => router.back(),
         // Never the raw message -- `ApiClientError.message` is the
@@ -140,7 +159,11 @@ export default function EditTaskScreen() {
         onError: (err) =>
           setSaveError(
             err instanceof ApiClientError && err.code === "validation_failed"
-              ? "Couldn't save those changes: something in the form isn't valid."
+              ? // The recurrence fields are in the body only when the repeat
+                // changed, so a 400 with an rrule present is about the rule.
+                patch.rrule
+                ? "That repeat rule isn't supported."
+                : "Couldn't save those changes: something in the form isn't valid."
               : err instanceof ApiClientError && err.status === 404
                 ? "This task couldn't be found."
                 : "Couldn't save those changes. Please try again.",
@@ -169,11 +192,6 @@ export default function EditTaskScreen() {
           without scrolling past the editor on a 480x640 screen. */}
       <TaskActions task={task} />
 
-      <View className="mb-4">
-        <Text className="mb-1 text-sm text-neutral-500">Recurrence</Text>
-        <RecurrenceEditor value={recurrence} onChange={setRecurrence} isTask={true} />
-      </View>
-
       <Text className="mb-1 text-sm text-neutral-500">Title</Text>
       <TextInput
         value={title}
@@ -189,7 +207,14 @@ export default function EditTaskScreen() {
         className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
 
-      <DateTimeField label="Due date" value={dueAt} onChange={setDueAt} />
+      <DateTimeField label="Due date" value={dueAt} onChange={onDueAtChange} />
+
+      <TaskRepeatField
+        value={recurrence}
+        onChange={setRecurrence}
+        dueAt={dueAt}
+        timezone={deviceTimezone()}
+      />
 
       <DateTimeField label="Reminder" value={remindAt} onChange={setRemindAt} warnIfPast />
 

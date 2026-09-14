@@ -46,6 +46,7 @@ import {
   sql,
 } from "drizzle-orm";
 import { assembleEventRange } from "./event-range.js";
+import { effectiveOccursAt } from "./occurrence-effective.js";
 
 const OVERDUE_ITEM_CAP = 20;
 const DUE_TODAY_ITEM_CAP = 25;
@@ -79,12 +80,17 @@ interface TodayTaskRow {
   parentTaskId: string | null;
   status: string;
   occurrenceId?: string;
+  /** Occurrence rows only (Checkpoint 9.4): the snooze, when set. */
+  snoozedUntil?: Date | null;
 }
 
 interface TodayOccurrenceRow {
   id: string;
   parentId: string;
   occursAt: Date;
+  snoozedUntil: Date | null;
+  /** greatest(occurs_at, snoozed_until) -- the instant this row buckets on (occurrence-effective.ts). */
+  effectiveAt: Date;
   parentTitle: string;
   parentProjectId: string | null;
   parentProjectName: string | null;
@@ -92,6 +98,7 @@ interface TodayOccurrenceRow {
   parentRrule: string | null;
   parentTimezone: string;
   parentRemindAt: Date | null;
+  parentStatus: string;
 }
 
 // Drizzle's raw sql<T> expressions bypass column mappers (it overrides the
@@ -114,7 +121,12 @@ function toTodayTaskItem(row: TodayTaskRow): TodayTaskItem {
     project_name: row.projectName ?? null,
     rrule: row.rrule,
     parent_task_id: row.parentTaskId,
-    ...(row.occurrenceId !== undefined ? { occurrence_id: row.occurrenceId } : {}),
+    ...(row.occurrenceId !== undefined
+      ? {
+          occurrence_id: row.occurrenceId,
+          snoozed_until: row.snoozedUntil ? row.snoozedUntil.toISOString() : null,
+        }
+      : {}),
   };
 }
 
@@ -203,6 +215,14 @@ export async function buildTodayResponse(
     addLocalDays(window.localDate, UPCOMING_DAY_COUNT),
   ).endUtcExclusive;
 
+  // Tasks: NON-RECURRING open tasks only (Checkpoint 9.4, Agenda's precedent
+  // at agenda.ts). A recurring parent's due_at is the series ANCHOR -- never
+  // advanced -- so once its occurrences move past the horizon the bare parent
+  // used to leak in here bucketed by that stale anchor: a monthly chore whose
+  // next instance is three weeks out rendered as overdue every day. Recurring
+  // parents enter the actionable set only through their occurrence rows
+  // below; the parent row buildActionableView needs is synthesised from the
+  // joined occurrence columns.
   const taskRows: TodayTaskRow[] = await db
     .select({
       id: tasks.id,
@@ -222,17 +242,23 @@ export async function buildTodayResponse(
     .where(
       and(
         isNull(tasks.archivedAt),
+        isNull(tasks.rrule),
         inArray(tasks.status, ["inbox", "active"]),
         or(isNull(tasks.dueAt), lt(tasks.dueAt, horizonEndUtc)),
       ),
     )
     .orderBy(sql`${tasks.dueAt} asc nulls last`);
 
+  // Occurrences bucket on their EFFECTIVE instant (Checkpoint 9.4,
+  // occurrence-effective.ts): a snoozed instance belongs to the day it was
+  // snoozed to, in the horizon filter, the ordering and the buckets alike.
   const occurrenceRows: TodayOccurrenceRow[] = await db
     .select({
       id: occurrences.id,
       parentId: occurrences.parentId,
       occursAt: occurrences.occursAt,
+      snoozedUntil: occurrences.snoozedUntil,
+      effectiveAt: effectiveOccursAt,
       parentTitle: tasks.title,
       parentProjectId: tasks.projectId,
       parentProjectName: projects.name,
@@ -240,6 +266,7 @@ export async function buildTodayResponse(
       parentRrule: tasks.rrule,
       parentTimezone: tasks.timezone,
       parentRemindAt: tasks.remindAt,
+      parentStatus: tasks.status,
     })
     .from(occurrences)
     .innerJoin(tasks, eq(occurrences.parentId, tasks.id))
@@ -250,10 +277,32 @@ export async function buildTodayResponse(
         eq(occurrences.status, "scheduled"),
         isNull(tasks.archivedAt),
         inArray(tasks.status, ["inbox", "active"]),
-        lt(occurrences.occursAt, horizonEndUtc),
+        lt(effectiveOccursAt, horizonEndUtc),
       ),
     )
-    .orderBy(asc(occurrences.occursAt));
+    .orderBy(asc(effectiveOccursAt));
+
+  // Synthesised parent rows (agenda.ts's pattern): every one of these has
+  // >= 1 scheduled occurrence by construction, so buildActionableView always
+  // suppresses it as a bare task and its placeholder dueAt never surfaces.
+  const mergedTaskRowsById = new Map<string, TodayTaskRow>();
+  for (const row of taskRows) mergedTaskRowsById.set(row.id, row);
+  for (const occ of occurrenceRows) {
+    if (mergedTaskRowsById.has(occ.parentId)) continue;
+    mergedTaskRowsById.set(occ.parentId, {
+      id: occ.parentId,
+      title: occ.parentTitle,
+      dueAt: occ.effectiveAt,
+      remindAt: occ.parentRemindAt,
+      timezone: occ.parentTimezone,
+      priority: occ.parentPriority,
+      projectId: occ.parentProjectId,
+      projectName: occ.parentProjectName,
+      rrule: occ.parentRrule,
+      parentTaskId: null,
+      status: occ.parentStatus,
+    });
+  }
 
   // Frozen dedupe (ADR-038 amendment 2): scheduled occurrences are THE
   // actionable representations of their recurring parent -- the bare parent
@@ -262,18 +311,18 @@ export async function buildTodayResponse(
     effectiveNow,
     window,
     horizonEndUtc,
-    tasks: taskRows,
+    tasks: [...mergedTaskRowsById.values()],
     occurrences: occurrenceRows,
     taskKey: (t) => t.id,
     occParentKey: (o) => o.parentId,
     occKey: (o) => o.id,
     occStatus: () => "scheduled",
-    occOccursAt: (o) => o.occursAt,
+    occOccursAt: (o) => o.effectiveAt,
     actionableInstantOfTask: (t) => t.dueAt,
     mergeIntoOccurrence: (parent, occ) => ({
       id: parent.id,
       title: parent.title,
-      dueAt: occ.occursAt,
+      dueAt: occ.effectiveAt,
       remindAt: parent.remindAt,
       timezone: parent.timezone,
       priority: parent.priority,
@@ -283,6 +332,7 @@ export async function buildTodayResponse(
       parentTaskId: parent.id,
       status: parent.status,
       occurrenceId: occ.id,
+      snoozedUntil: occ.snoozedUntil,
     }),
   });
 
@@ -411,8 +461,11 @@ export async function buildTodayResponse(
             sql<number>`count(*) filter (where ${tasks.status} in ('inbox','active') and ${tasks.archivedAt} is null)`.mapWith(
               Number,
             ),
+          // A recurring parent is overdue only through an open occurrence
+          // whose EFFECTIVE instant has passed (Checkpoint 9.4) -- its own
+          // due_at is the series anchor and would count it overdue forever.
           overdueCount:
-            sql<number>`count(*) filter (where ${tasks.status} in ('inbox','active') and ${tasks.archivedAt} is null and (${tasks.dueAt} < ${effectiveNow} or exists (select 1 from occurrences oc where oc.parent_type = 'task' and oc.parent_id = "tasks"."id" and oc.status = 'scheduled' and oc.occurs_at < ${effectiveNow})))`.mapWith(
+            sql<number>`count(*) filter (where ${tasks.status} in ('inbox','active') and ${tasks.archivedAt} is null and ((${tasks.rrule} is null and ${tasks.dueAt} < ${effectiveNow}) or exists (select 1 from occurrences oc where oc.parent_type = 'task' and oc.parent_id = "tasks"."id" and oc.status = 'scheduled' and greatest(oc.occurs_at, oc.snoozed_until) < ${effectiveNow})))`.mapWith(
               Number,
             ),
           doneCount:

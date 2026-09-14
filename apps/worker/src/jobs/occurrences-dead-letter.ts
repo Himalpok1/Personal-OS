@@ -469,9 +469,13 @@ export function createExpandDueDateWindowDeadLetterHandler(db: Db, boss: PgBoss)
       }
 
       const counted = sweep.failedParents !== null && sweep.totalParents !== null;
+      // "expanded or repaired": since Checkpoint 9.4 the sweep's second phase
+      // reconciles completion-anchored parents left with no open occurrence,
+      // and those failures arrive here in the same counts, so the wording
+      // covers both without naming either strategy to the owner.
       const body = counted
-        ? `${sweep.failedParents} of ${sweep.totalParents} recurring items could not be expanded overnight. Today and Agenda may be missing their upcoming occurrences.`
-        : "Some recurring items could not be expanded overnight. Today and Agenda may be missing their upcoming occurrences.";
+        ? `${sweep.failedParents} of ${sweep.totalParents} recurring items could not be expanded or repaired overnight. Today and Agenda may be missing their next occurrence.`
+        : "Some recurring items could not be expanded or repaired overnight. Today and Agenda may be missing their next occurrence.";
       const single = sweep.failedParentRefs.length === 1 ? sweep.failedParentRefs[0] : undefined;
       const data: Record<string, string> = { queue: OCCURRENCES_EXPAND_WINDOW_QUEUE, failureDate };
       if (single !== undefined && single.parentType === "task" && sweep.failedParents === 1) {

@@ -1,4 +1,4 @@
-import { computeNextLazyOccurrence } from "@personal-os/core";
+import { computeNextLazyOccurrence, wallTimeOfNaiveTimestamp } from "@personal-os/core";
 import { occurrences, tasks } from "@personal-os/db";
 import type { Occurrence } from "@personal-os/schema";
 import { asc, eq } from "drizzle-orm";
@@ -166,8 +166,9 @@ describe("POST /occurrences/:id/complete|skip", () => {
     expect(successor.status).toBe("scheduled");
     expect(successor.lazyGenerated).toBe(true);
     // Exactly what generateOne would compute from the recorded completion
-    // instant -- so the worker's belt-and-braces run collides on the unique
-    // index and reads as successor_exists, never as a second successor.
+    // instant AND the completed row's wall-clock time (Checkpoint 9.4) -- so
+    // the worker's belt-and-braces run collides on the unique index and
+    // reads as successor_exists, never as a second successor.
     const expected = computeNextLazyOccurrence(
       {
         rrule: completionAnchored.rrule,
@@ -175,6 +176,10 @@ describe("POST /occurrences/:id/complete|skip", () => {
       },
       completed.completedAt!,
       "completed",
+      // The same options the route and the worker pass (Checkpoint 9.4):
+      // the completed row's occurs_local time through the shared reader and
+      // its occurs_at as the exclusive lower bound.
+      { wallTime: wallTimeOfNaiveTimestamp(completed.occursLocal), after: completed.occursAt },
     );
     expect(successor.occursAt.getTime()).toBe(expected.occursAt.getTime());
 
@@ -311,6 +316,7 @@ describe("POST /occurrences/:id/complete|skip", () => {
       },
       completionInstant,
       "completed",
+      { wallTime: wallTimeOfNaiveTimestamp(open.occursLocal), after: open.occursAt },
     );
     await insertOpenOccurrence(task.id, false, expected.occursAt);
     vi.spyOn(app.boss, "send").mockResolvedValue(null);
