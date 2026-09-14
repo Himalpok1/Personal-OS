@@ -1,14 +1,13 @@
 # Project Status
 
 **Project:** Personal OS — single-user, self-hosted life dashboard.
-**Current phase:** **Phase 9 — OPEN.** Checkpoint 9.0 (reliability & privacy housekeeping) is
-IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-12, ADR-062). Checkpoint 9.1 (daily-use: notification-
-shade capture, a dedicated alerts channel, the Rabbit calendar-toggle fix) is IMPLEMENTED, DEPLOYED
-and ACCEPTED (2026-09-13), with physical Rabbit R1 verification of all three deliverables.
-**Checkpoint 9.2 — the 21-day adoption soak — was OWNER-TERMINATED BEFORE MINIMUM DURATION at
-`2026-09-14T01:53:37.600Z`, 25 minutes after `SOAK_START 2026-09-14T01:28:10.274Z` (intended end
-`2026-10-05T01:28:10.274Z`). NO ADOPTION CONCLUSION IS PERMITTED; the adoption-critical freeze is
-lifted; full development continues.** Record: `docs/SOAK-9.2.md`. Phase 8 closed the same day
+**Current phase:** **Phase 9 — OPEN, accelerated operating model.** 9.0 (reliability & privacy) and
+9.1 (daily-use) are deployed and accepted. **9.2 (21-day adoption soak) was OWNER-TERMINATED BEFORE
+MINIMUM DURATION** at `2026-09-14T01:53:37.600Z`, 25 minutes in — no adoption conclusion is
+permitted (`docs/SOAK-9.2.md`). **Checkpoint 9.3 — Close the capture→task loop — is IMPLEMENTED,
+DEPLOYED and ACCEPTED (2026-09-14)**: in-app filing of unclear captures, inbox dismiss, task
+complete/reopen/snooze, recurrence integrity; migration level **18**; Rabbit R1 versionCode **14**.
+No further Phase 9 checkpoint is selected yet. Phase 8 closed the same day
 Checkpoint 9.0 shipped (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail
 `docs/history/phase-8.md`).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
@@ -48,10 +47,10 @@ Verified first-hand at the Checkpoint 9.1 acceptance, 2026-09-13 ~02:05Z (Checkp
 
 | | |
 |---|---|
-| Migration level | **17** (`0000`–`0016`); local and production agree; unchanged by 9.1 |
-| Serving commit | api **`77ea112`** · worker **`77ea112`** (Checkpoint 9.1, 2026-09-13) · web **`ca04e57`** (Checkpoint 8.6D — not rebuilt by 9.1 either; the checkpoint's web-relevant change, the calendar-toggle fix, is not part of this deployment's scoped dependency impact). Provenance is by compose `working_dir` (api/worker → `personal-os-9.1-release`, web → `personal-os-8.6d-release`); the images carry no commit label. Rollback images `personal-os-{api,worker}:rollback-pre-9.1`, tagged by resolved digest (9.0's own `rollback-pre-9.0` tags are preserved underneath). |
+| Migration level | **18** (`0000`–`0017`); local and production agree; `0017` = `inbox_items.archived_at` (9.3) |
+| Serving commit | api, worker **and web** all **`8132f3b`** (Checkpoint 9.3, 2026-09-14T03:02Z). Provenance is by compose `working_dir` (`personal-os-9.3-release` for all three); the images carry no commit label. Rollback images `personal-os-{api,worker,web}:rollback-pre-9.3`, tagged by resolved digest (earlier `rollback-pre-*` tags preserved underneath). |
 | Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30; `GET /health` → `ok` / `connected` / `stale:false` |
-| Rabbit R1 | `com.himal.personalos` **versionCode 13**, built from `77ea112` (EAS build `4cea0ffd…`), installed in place 2026-09-13 with SecureStore credential, primary-device row, exact-alarm appop and `firstInstallTime` (2026-08-19) all preserved — no re-pair. Carries the Checkpoint 9.1 UI (notification-shade capture, the alerts/updates/capture channels, the calendar-toggle fix). |
+| Rabbit R1 | `com.himal.personalos` **versionCode 14**, built from `8132f3b` (EAS build `5357add1…`), installed in place 2026-09-13 22:19 CDT with SecureStore credential, primary-device row, exact-alarm appop and `firstInstallTime` (2026-08-19) all preserved — no re-pair. Carries the 9.1 UI plus the 9.3 inbox detail / file-as / dismiss screen, task actions and snooze. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · **notification-shade capture (9.1)** — a persistent local "Capture" notification on its own channel, tap opens the same composer; verified live on the Rabbit R1 across two sequential taps (the rearm-with-a-fresh-identifier fix), producing a real `inbox_items` row (`source: "web"`, parsed as a task, archived after verification). |
 | Notification channels (9.1) | `reminders` (MAX, unchanged, local reminders only) · `alerts` (HIGH, new — integration/monitor alerts) · `updates` (DEFAULT, new — confirmations + mail digest) · `capture` (LOW, new — the local shortcut only, never through `notifications.dispatch`). All four verified independently listed and toggleable in Android's per-app notification settings on the Rabbit R1; a live test alert (via the existing `notifications.dispatch` job, `category: "alert"`) delivered on the `alerts` channel at `importance=4`. |
 | Integrations | Google Health **active** · Google Calendar **active** · Gmail **active**. Health stream `daily-heart-rate-variability` **re-enabled 2026-09-12T23:58Z** after 9.0 corrected its value spec from a live shape observation: `available_in_window`, `first_data_date 2026-09-11`, one stored row with the deep-sleep RMSSD in `breakdown`, 24/24 streams succeeded on the acceptance pass. |
@@ -61,7 +60,7 @@ Verified first-hand at the Checkpoint 9.1 acceptance, 2026-09-13 ~02:05Z (Checkp
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
 | Backups | **None, by design** (ADR-024) |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE**. No CI, no Actions workflow, no repository secret. |
-| Test baseline | **3,853 tests across 12 packages** (9.1; was 3,788 at Checkpoint 9.0 and 3,668 at the Phase 8 closeout — see *Last verification*) |
+| Test baseline | **4,141 tests across 12 packages** (9.3; was 3,853 at 9.1, 3,788 at 9.0, 3,668 at the Phase 8 closeout — see *Last verification*) |
 | pg-boss | **29 queues** (`worker.started` count; `pgboss.queue` reads 30 with the internal `__pgboss__send-it`), 10 schedules. DLQs on `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues and — since 9.0 — **`occurrences.generate-lazy` → `.dead` and `occurrences.expand-window` → `.dead`**, both verified attached in production `pgboss.queue` and both consumed by registered workers. Every retrying queue now has a dead-letter queue. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C, windows unchanged) · **`health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now`, no window constant (9.0)**. 9.0 acceptance: 9 + 1 expired states deleted exactly as preflighted, rerun deleted 0. **The first scheduled run is 2026-09-13T04:00Z** and had not yet occurred. |
 | Alert keys | Occurrence-scoped (ADR-058). First live emission `health-sync-alert:…:breaker:daily-heart-rate-variability:2026-09-12:…` accepted 2026-09-12T03:00:14Z. 9.0 adds two producers, unexercised in production by design: `occurrences.generate-lazy.dead:<occurrenceId>` and `occurrences.expand-window.dead:<UTC date>`. |
@@ -366,7 +365,7 @@ already-classified non-blocking debt (D1e, sleep-temperature spec, capture-short
 buffered-tap expiry, successor seed path, `bossReady` loss, unbounded event text, monitor URL
 guard) is carried unchanged.
 
-### Checkpoint 9.3 — Close the capture→task loop: IMPLEMENTED, VERIFIED (2026-09-13 22:00 CDT) — deployment and acceptance below
+### Checkpoint 9.3 — Close the capture→task loop: IMPLEMENTED, DEPLOYED, ACCEPTED (2026-09-13/14)
 
 **Selection (parallel evidence-based ranking, same session as the 9.2 closure).** Six read-only
 area audits (tasks/reminders/recurrence · search/knowledge · calendar/planning · capture/inbox ·
@@ -457,6 +456,63 @@ image-only.
 no budget at commit — the same exposure `POST /tasks` already has; the `daily-respiratory-rate`
 spec still needs a live shape probe (unchanged); reminders still fire at most once per recurring
 task (A3, deferred).
+
+**Deployment — COMPLETE (2026-09-14T03:02Z), frozen order.** Commit **`8132f3b`** pushed to `origin`
+first. `git archive` of `8132f3b` shipped to `/home/himallinux/personal-os-9.3-release` (896 tracked
+files; no `.env`, no `google-services.json`, no `node_modules`). Rollback images tagged **by
+resolved digest** `:rollback-pre-9.3` for api (`5c8cd3e3…`), worker (`402e4e74…`) and web
+(`5f0a73a1…`). api + worker built (running containers untouched, verified by digest). New api image
+verified to carry `0017_inbox_item_archive.sql`, `/tasks/:id/reopen`, `/inbox/:id/archive`,
+`recurring_task_no_open_occurrence`; worker image carries `parent_closed`,
+`hasCommittableRecurrence` and the `unanchored` expansion path. `drizzle-kit migrate` from the new
+api image with `--no-deps` and the explicit `MIGRATIONS_DATABASE_URL` pass-through: **17 → 18**,
+`inbox_items.archived_at timestamptz` present. `api` recreated alone → `(healthy)`, `/health`
+`ok`/`connected`/`stale:false`; `worker` recreated alone → `worker.started queues:29 schedules:10`.
+**Web rebuilt and recreated alone as well** (first web deploy since 8.6D; it now carries the 9.1
+calendar-toggle fix and the 9.3 inbox/task screens), serving 200 on Tailscale Serve `:8443`.
+`postgres` never named. All four containers `RestartCount=0`.
+
+**Production API acceptance — PASSED (through real routes, smoke rows archived afterwards):**
+`POST /tasks` with a completion-anchored daily rule → direct `/complete` → `409
+recurring_task_use_occurrence` with the open occurrence id → `POST /occurrences/:id/complete` →
+`done` **and a `lazy_generated` successor at +3 days written in the same call** → a second complete
+→ idempotent `200 done` (no re-stamp) → the worker's re-check job `completed` with
+`generate_lazy.skipped` (successor exists) → `/reopen` on an active task `409 task_not_reopenable`
+→ `/drop` then `/reopen` → `active` → archived. `POST /capture` (source `web`) → parsed as a task →
+`POST /inbox/:id/archive` twice → identical `archived_at` both times (idempotent) → absent from
+`GET /inbox`, present with `include_archived=true`, absent from search results even with
+`include_archived=true` (`counts.inbox_item 0/0`), Today's `inbox_attention_total` unchanged (the
+smoke item was `parsed`, never counted) → committed task archived. **The owner's three stuck
+`needs_confirm` captures were deliberately left for the owner to file from the Rabbit** — deciding
+task-vs-note for their own captures is theirs, not the integrator's.
+
+**Rabbit R1 — EAS build `5357add1…` from `8132f3b`, versionCode 13 → 14 (auto-incremented,
+remote keystore reused).** Pre-install state recorded for the preservation check: versionCode 13,
+`firstInstallTime` 2026-08-19 16:26:10, exact-alarm appop `allow`, `POST_NOTIFICATIONS` granted,
+primary device row `c6c0b43d` unrevoked.
+
+**Physical Rabbit R1 acceptance — PASSED (2026-09-13 22:19–22:22 CDT), first-hand.** `adb install -r`
+of the 116 MB APK → `Success` (an in-place replace is refused by Android on a certificate mismatch,
+so the success is the signing-continuity proof, as in 8.4). After install: **versionCode 14**,
+signature hash unchanged (`ad63266e`), `firstInstallTime` 2026-08-19 preserved, exact-alarm appop
+still `allow`, `POST_NOTIFICATIONS` still granted, no re-pair. Cold launch → Today renders
+(`Inbox 3`), 0 crash lines in logcat. **Inbox:** the list shows human-readable summaries instead of
+JSON, "Tap to file" on the stuck row, and a "Show dismissed" toggle; tapping the stuck capture opens
+the new detail screen with the parse result in words, **File it as Task / Note / Event** and
+**Dismiss**; the Task form pre-fills the title with an optional due field. **The owner's three stuck
+captures were deliberately not filed or dismissed** — whether each is a task, a note or noise is the
+owner's decision; the screen is verified, the choice is not made for them. **Tasks:** on a smoke task
+the detail screen shows the status line, Complete / Drop and the snooze chips; *Tomorrow 9am* set
+`due_at` to 14:00Z (09:00 Chicago, DST-correct) on the server; *Complete* → `done` with
+`completed_at`, screen flipped to "Done · completed …" with **Reopen**; *Reopen* → `active`,
+`completed_at` cleared. Smoke task archived afterwards (all 9.3 smoke rows archived: tasks 2/2,
+inbox 1/1). One observation, pre-existing and not a 9.3 regression: a task created outside the app
+does not appear in the Tasks list until a cold relaunch (client query cache; in-app mutations
+invalidate, external writes do not).
+
+**Post-acceptance production health:** `/health` `ok`/`connected`/`stale:false`; all four containers
+`RestartCount=0`; 0 pg-boss jobs failed/retry/active; migration 18; three integrations `active`;
+0 open incidents; 0 api warn/error and 0 worker error lines since the redeploy.
 
 ---
 
@@ -893,10 +949,10 @@ an intentionally-logged field — are recorded in the ledger below.
 audit → parallel implementation → integration → adversarial review → fixes → full tests →
 deployment → production acceptance. No soak or observation wait between checkpoints; no separate
 planning-only checkpoints when implementation is clear; reversible decisions are not owner gates.
-Production mutations remain serialized and every standing guardrail holds (privacy boundaries,
-rollback, migration discipline, ADR invariants, durable failure semantics, full gates, no unrelated
-broad refactors). The first task is a short evidence-based opportunity ranking, then the selected
-implementation checkpoint (9.3).
+Production mutations remain serialized and every standing guardrail holds. **Checkpoint 9.3 is
+complete; the next checkpoint is not yet selected** (the 9.3 ranking's next tier, in order: C2
+Rabbit-native event authoring, B1/C4 search term matching + event text bounds, A3 recurring
+reminders, E2 health trend context).
 
 ---
 
@@ -919,6 +975,7 @@ the one-line summary is:
 | **9.0** | Reliability & privacy housekeeping: occurrences DLQs + durable failure evidence, 404 query scrub, HRV spec re-observed and re-enabled, OAuth-state sweep wired into retention. **Deployed and accepted 2026-09-12** (ADR-062). |
 | **9.1** | Daily-use: notification-shade capture (no new native code), dedicated `alerts`/`updates`/`capture` Android channels, the Rabbit calendar-toggle fix. **Deployed and accepted 2026-09-13**, all three verified on the physical Rabbit R1. |
 | **9.2** | 21-day adoption soak. **OWNER-TERMINATED after 25 min** (`2026-09-14T01:28:10.274Z` → `2026-09-14T01:53:37.600Z`; intended end `2026-10-05T01:28:10.274Z`). **No adoption conclusion.** Reviewed read-only observer tooling retained in `scripts/soak/`; record in `docs/SOAK-9.2.md`. |
+| **9.3** | Close the capture→task loop: `/inbox/[id]` file-as/dismiss screen, capture follow-through, task complete/reopen/snooze, direct occurrence completion, recurrence integrity (in-transaction successor, validated rules, closed-parent guard), inbox archive (migration `0017`), Brief priority scalars. **Deployed (api/worker/web) and accepted on the Rabbit R1 (versionCode 14) 2026-09-14.** |
 
 **Production is at migration level 17** and serves api/worker images built from `77ea112` and a web
 image built from `ca04e57`. All three Google integrations are active. Monitoring runs against five
@@ -929,11 +986,26 @@ The Rabbit R1 runs `com.himal.personalos` versionCode 13, built from the same `7
 
 ## Current work
 
-**Checkpoint 9.3 — implementation in progress** (five parallel lanes; see the 9.3 entry).
+**None in progress.** Checkpoint 9.3 closed 2026-09-14.
 
 ---
 
 ## Last verification
+
+**Checkpoint 9.3 (2026-09-13/14).** Branch `phase-9-reliability`, HEAD `8132f3b` (from `643a563`, the
+9.2 termination record, verified clean and equal to origin). Five parallel implementation lanes on
+per-lane clones of `personalos_test` (`personalos_test_a…e`, created with `CREATE DATABASE …
+TEMPLATE`, dropped afterwards), four adversarial review lenses, one fixer pass (3 majors, 5 minors,
+all closed with regression tests), integrator gates on the shared database, serially:
+`pnpm build --force` 11/11 · `pnpm typecheck` 21/21 · `eslint .` clean · `prettier --check .` clean ·
+`git diff --check` clean · `gitleaks` — the same 18 pre-existing findings in ignored, untracked files ·
+`pnpm test --force` **21/21 tasks, 4,141 tests across 12 packages, zero failing** (api 918 · mobile
+838 · worker 573 · core 545 · health-providers 332 · schema 331 · api-client 157 · monitoring 151 ·
+mail-providers 116 · db 79 · calendar-providers 76 · ai-providers 25). **Migration invariant:** 18
+`.sql` / 18 journal entries, highest `0017`; production `drizzle.__drizzle_migrations` 17 → 18 by a
+migrate run from the new api image. Production and physical-device acceptance: recorded in full
+under *Phase 9 → Checkpoint 9.3*.
+
 
 **Checkpoint 9.1 (2026-09-13).** Branch `phase-9-reliability`, HEAD `77ea112` (from `b695dba`, the
 Checkpoint 9.0 acceptance-record commit, verified clean and equal to origin before mutation). Three
