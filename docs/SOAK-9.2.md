@@ -1,6 +1,7 @@
 # Checkpoint 9.2 — 21-day adoption soak
 
-**Status: RUNNING. No adoption conclusion may be drawn before `SOAK_END` (see Window).** This file
+**Status: OWNER-TERMINATED BEFORE MINIMUM DURATION (2026-09-14T01:53:37.600Z). NO ADOPTION
+CONCLUSION IS PERMITTED.** See the termination record at the end of this file. This file
 is the checkpoint's record: window, baseline, frozen definitions, monitoring method, incident ledger,
 final snapshot and analysis. `docs/STATUS.md` carries only a summary, so that this file's growth does
 not inflate every agent context.
@@ -340,3 +341,86 @@ value without context.
 ## Conclusion — not before `2026-10-05T01:28:10.274Z`
 
 *(Empty.)*
+
+---
+
+## TERMINATION RECORD — 2026-09-14T01:53:37.600Z (2026-09-13 20:53 CDT)
+
+**CHECKPOINT 9.2 OWNER-TERMINATED BEFORE MINIMUM DURATION — NO ADOPTION CONCLUSION.**
+
+The owner elected to continue full Personal OS development immediately rather than hold the
+adoption-critical surfaces frozen for 21 days. **This is an intentional product/development-priority
+decision, not a technical failure and not a failed checkpoint.** Every health signal was GREEN at
+termination; no incident occurred; no code was deployed; no production write was made. The record
+follows the same discipline as the terminated 8.5 soak (`docs/SOAK-8.5.md`).
+
+| | |
+|---|---|
+| SOAK_START | `2026-09-14T01:28:10.274Z` (2026-09-13 20:28:10 CDT) |
+| Intended SOAK_END | `2026-10-05T01:28:10.274Z` (2026-10-04 20:28:10 CDT) |
+| **Actual termination** | **`2026-09-14T01:53:37.600Z`** — the production database clock of the final read-only observation (2026-09-13 20:53:37 CDT) |
+| **Elapsed** | **25 min 27 s (0.018 days)** |
+| Minimum valid window | 21 full days |
+| **Fraction of minimum reached** | **0.08 %** |
+| Milestones reached | none — DAY_7, DAY_14 and SOAK_END were all unreached |
+| Reason | owner chose development velocity over completing the observation window |
+
+### What may NOT be claimed from this checkpoint
+
+Hard prohibitions on every future document:
+
+- Adoption may not be classified as successful, failed, weak, mixed, meaningful, insufficient, or
+  anything else. The three fixed outcome labels in *Analysis* above are **void** for 9.2.
+- The partial window may never be reinterpreted as valid 21-day evidence, in whole or in part.
+- **Never write "the 9.2 soak showed…"** — it observed 25 minutes, overnight, on a Sunday.
+- 9.2 is not to be compared to 8.5 as an equivalent experiment; both are terminated runs with no
+  adoption evidence.
+
+### Observations collected (descriptive only, preserved verbatim)
+
+Two read-only observation lines exist, both `ok:true`, both `GREEN` on every check condition:
+the baseline at `01:28:10Z` and the termination observation at `01:53:37Z`. Between them, **zero
+window activity of any kind** was recorded (0 captures, 0 tasks created or completed, 0 notes,
+0 active days; 0 search/export/Ask requests; the api log epoch unchanged at 5 `GET /today`). That
+is what 25 overnight minutes look like on any system. It means nothing.
+
+Files, outside the repository, mode 700 directory, preserved unchanged:
+`~/.personal-os-soak/9.2/baseline.json` (SHA-256 `18c52707…`, mode 444) and
+`~/.personal-os-soak/9.2/observations.jsonl` (2 lines, SHA-256 `7cf14738…`; a read-only copy
+`observations.jsonl.terminated-2026-09-14T01-53Z` sits beside it). No `daily.log`, `alerts.log` or
+`final.json` was ever written.
+
+### Observer shutdown
+
+Both desktop scheduled tasks — `soak-9-2-daily-observer` (daily 06:23) and
+`soak-9-2-day-21-final-snapshot` (one-shot at the void boundary) — were **disabled** at termination,
+with their descriptions marked accordingly, and the daily task's single test run (which had parked on
+an unapproved Bash permission prompt and never executed the observer) was stopped. The observer
+scripts `scripts/soak/soak-9.2-observe.{sql,sh}` remain in the repository as reusable, reviewed
+tooling for any future soak; they were never run by automation.
+
+### What this checkpoint DID produce, and what remains usable
+
+- A **reviewed, privacy-safe, read-only observer** with frozen definitions (active day, local-event
+  discriminator, measurability limits) that a future soak can reuse unchanged — the pre-baseline
+  adversarial review closed five real defects that would otherwise have contaminated any run.
+- A **dated baseline of production on 2026-09-13**, valid as historical measurement, never as
+  adoption evidence.
+- One reliability fact worth keeping: `daily-respiratory-rate` was breaker-disabled on first real
+  data before the soak began (Class A; carried into Phase 9 development as ordinary work).
+
+### Freeze status
+
+**The adoption-critical feature freeze is LIFTED as of 2026-09-14T01:53:37.600Z.** Development
+continues normally across all modules under the standing guardrails (privacy boundaries, production
+rollback, migration discipline, ADR invariants, durable failure semantics, full gates, serialized
+production mutations).
+
+**Freeze exceptions during the soak: 0.** No code was written, deployed or run against production
+except the read-only observer.
+
+### Accepted consequence
+
+Ongoing development contaminates any adoption measurement taken from here. The owner accepts this
+deliberately. Adoption may be reassessed later, once the product has materially matured, as a **new
+checkpoint with a new baseline** — not a resumption of 9.2 and not a resumption of 8.5.

@@ -5,9 +5,10 @@
 IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-12, ADR-062). Checkpoint 9.1 (daily-use: notification-
 shade capture, a dedicated alerts channel, the Rabbit calendar-toggle fix) is IMPLEMENTED, DEPLOYED
 and ACCEPTED (2026-09-13), with physical Rabbit R1 verification of all three deliverables.
-**Checkpoint 9.2 — the 21-day adoption soak — is RUNNING: `SOAK_START 2026-09-14T01:28:10.274Z`,
-`SOAK_END 2026-10-05T01:28:10.274Z`. Adoption-critical surfaces are frozen; no adoption conclusion
-may be drawn before `SOAK_END`.** Record: `docs/SOAK-9.2.md`. Phase 8 closed the same day
+**Checkpoint 9.2 — the 21-day adoption soak — was OWNER-TERMINATED BEFORE MINIMUM DURATION at
+`2026-09-14T01:53:37.600Z`, 25 minutes after `SOAK_START 2026-09-14T01:28:10.274Z` (intended end
+`2026-10-05T01:28:10.274Z`). NO ADOPTION CONCLUSION IS PERMITTED; the adoption-critical freeze is
+lifted; full development continues.** Record: `docs/SOAK-9.2.md`. Phase 8 closed the same day
 Checkpoint 9.0 shipped (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail
 `docs/history/phase-8.md`).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
@@ -288,7 +289,23 @@ table above).
 following the redeploy; three integrations still `active`; no `FATAL`/crash lines in the Rabbit R1's
 logcat for the app process since install.
 
-### Checkpoint 9.2 — 21-day adoption soak: RUNNING (started 2026-09-13 20:28 CDT)
+### Checkpoint 9.2 — 21-day adoption soak: OWNER-TERMINATED BEFORE MINIMUM DURATION (2026-09-14T01:53:37.600Z)
+
+**Terminated by explicit owner decision 25 min 27 s after it began (0.08 % of the 21-day minimum;
+no milestone reached).** The owner chose development velocity over completing the observation
+window — an intentional product/development-priority decision, not a technical failure. **No
+adoption conclusion of any kind may be drawn** (not successful, failed, weak, mixed, meaningful or
+insufficient), the partial window may never be reinterpreted as 21-day evidence, and 9.2 is not
+compared to 8.5 as an equivalent experiment. Preserved verbatim in `docs/SOAK-9.2.md`: start,
+intended end, actual termination timestamp (production DB clock), elapsed duration, baseline, both
+observation lines (zero window activity — descriptive only, meaningless over 25 overnight minutes),
+and the reason. Both scheduled observer tasks are disabled; observation files are preserved
+read-only outside the repository. **Freeze exceptions: 0. The adoption-critical freeze is LIFTED.**
+The reviewed read-only observer tooling stays in `scripts/soak/` for any future soak, which would be
+a new checkpoint with a new baseline. The record below is the start-of-soak entry, retained as
+written.
+
+#### As recorded at soak start (2026-09-13 20:28 CDT)
 
 **Purpose.** With the daily-use friction of 8.1–9.1 removed, observe — never manufacture — whether
 Personal OS becomes part of the owner's real workflow over a sustained 21-day period. This is a
@@ -778,9 +795,14 @@ an intentionally-logged field — are recorded in the ledger below.
 
 ## Current objective
 
-**Checkpoint 9.2 — the 21-day adoption soak — is running until `2026-10-05T01:28:10.274Z`.**
-Observe real usage; keep the adoption-critical surfaces frozen; classify any incident (A/B/C) before
-acting; draw no conclusion before the boundary. Interim statements are descriptive only.
+**Phase 9 product development, accelerated operating model (owner direction, 2026-09-14).** Parallel
+audit → parallel implementation → integration → adversarial review → fixes → full tests →
+deployment → production acceptance. No soak or observation wait between checkpoints; no separate
+planning-only checkpoints when implementation is clear; reversible decisions are not owner gates.
+Production mutations remain serialized and every standing guardrail holds (privacy boundaries,
+rollback, migration discipline, ADR invariants, durable failure semantics, full gates, no unrelated
+broad refactors). The first task is a short evidence-based opportunity ranking, then the selected
+implementation checkpoint (9.3).
 
 ---
 
@@ -802,7 +824,7 @@ the one-line summary is:
 | **8** | Consolidation & adoption: failure visibility, real calendar, search + export, capture front doors, owner-terminated soak, `capture.parse` DLQ, Cloud Ask (OFF by default), monitor CRUD, retention cleanup. **CLOSED 2026-09-12** (ADR-061). |
 | **9.0** | Reliability & privacy housekeeping: occurrences DLQs + durable failure evidence, 404 query scrub, HRV spec re-observed and re-enabled, OAuth-state sweep wired into retention. **Deployed and accepted 2026-09-12** (ADR-062). |
 | **9.1** | Daily-use: notification-shade capture (no new native code), dedicated `alerts`/`updates`/`capture` Android channels, the Rabbit calendar-toggle fix. **Deployed and accepted 2026-09-13**, all three verified on the physical Rabbit R1. |
-| **9.2** | 21-day adoption soak. **RUNNING** — `2026-09-14T01:28:10.274Z` → `2026-10-05T01:28:10.274Z`. Read-only observer + daily scheduled check; no code deployed; record in `docs/SOAK-9.2.md`. |
+| **9.2** | 21-day adoption soak. **OWNER-TERMINATED after 25 min** (`2026-09-14T01:28:10.274Z` → `2026-09-14T01:53:37.600Z`; intended end `2026-10-05T01:28:10.274Z`). **No adoption conclusion.** Reviewed read-only observer tooling retained in `scripts/soak/`; record in `docs/SOAK-9.2.md`. |
 
 **Production is at migration level 17** and serves api/worker images built from `77ea112` and a web
 image built from `ca04e57`. All three Google integrations are active. Monitoring runs against five
@@ -813,10 +835,7 @@ The Rabbit R1 runs `com.himal.personalos` versionCode 13, built from the same `7
 
 ## Current work
 
-**Checkpoint 9.2 adoption soak — observation in progress.** Nothing is being built. Permitted
-during the soak: backend maintenance that does not change user-visible behaviour, documentation,
-tests, internal tooling, isolated infrastructure cleanup, provably behaviour-identical refactors.
-Deferred past `SOAK_END`: anything that could plausibly make the app easier or harder to use daily.
+**Phase 9 opportunity ranking → Checkpoint 9.3 selection and implementation** (see *Next action*).
 
 ---
 
@@ -870,17 +889,14 @@ clean; full evidence in `docs/PHASE-8-CLOSEOUT.md`.
 
 ## Next action
 
-**Let the soak run to `2026-10-05T01:28:10.274Z`.** The owner uses Personal OS when it is genuinely
-useful — no quota, no prompting. The daily observer pushes only on RED. At the boundary, the
-one-shot task takes the final snapshot; the end-of-soak analysis then compares it to the baseline
-under the frozen definitions in `docs/SOAK-9.2.md` (frequency, breadth, follow-through,
-persistence, friction, reliability; weeks 1/2/3; burst vs sustained) and produces exactly one of
-`meaningful adoption demonstrated` / `mixed / inconclusive adoption` / `weak adoption demonstrated`,
-plus the product-learning output and a recommended 9.3 direction. Phase 9.3 does not begin
-automatically.
-
-Optional, non-blocking, safe during the soak (Class A): correct the `daily-respiratory-rate` value
-spec (a worker-only change plus deployment; health is passive and off every frozen surface).
+Rank the Phase 9 product candidates (tasks/reminders/recurrence · search/knowledge · calendar/
+planning · capture/inbox · Daily Brief · projects · health intelligence) on daily value, usage
+lift, cost, dependency risk, privacy risk, incremental shippability, architectural fit and blocking
+debt — using parallel read-only audit agents over the existing closeout, debt and product documents
+— select the dominant candidate, and begin Checkpoint 9.3 implementation in the same session. Pause
+for the owner only if two candidates with materially different product directions tie on value at
+significant scope. Also in scope as ordinary work: the `daily-respiratory-rate` value-spec
+correction.
 
 Open, non-blocking, carried forward: D1e; the generate-lazy repair-path and `bossReady` silent-loss
 gaps (9.0 review); `daily-sleep-temperature-derivations` needs a product decision; the monitor URL
