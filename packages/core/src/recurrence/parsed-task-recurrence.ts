@@ -1,4 +1,4 @@
-import { validateRecurrenceRule } from "./validation.js";
+import { validateEventRecurrenceRule, validateRecurrenceRule } from "./validation.js";
 
 /**
  * The recurrence-bearing subset of the capture parser's `create_task`
@@ -74,8 +74,11 @@ export function validateParsedTaskRecurrence(
  * ask both questions before a commit is attempted (ADR-060: a 202 means a
  * commit WILL be attempted, never that doomed work was accepted).
  *
- * Only `create_task` carries a recurrence the commit materializes; every
- * other tool is committable as far as this check is concerned. The boolean
+ * `create_task` and (since Checkpoint 9.5) `create_event` carry a recurrence
+ * the commit materializes; every other tool is committable as far as this
+ * check is concerned. An event rule is judged by the same grammar POST
+ * /events applies (validateEventRecurrenceRule, in the capture's own zone
+ * because commit-parsed-entity recurs an event there). The boolean
  * deliberately carries no reason: the refusal it feeds is token-only, and the
  * error message would embed the parser-authored rule text.
  */
@@ -83,11 +86,18 @@ export function hasCommittableRecurrence(
   call: { tool: string; args?: unknown },
   captureTimezone: string,
 ): boolean {
-  if (call.tool !== "create_task") return true;
+  if (call.tool !== "create_task" && call.tool !== "create_event") return true;
   if (typeof call.args !== "object" || call.args === null) return false;
   try {
     // `args` is an object here; the fields this reads are all optional, so an
-    // object of any other shape is simply a task with no recurrence.
+    // object of any other shape is simply a task/event with no recurrence.
+    if (call.tool === "create_event") {
+      const rrule = (call.args as { rrule?: unknown }).rrule;
+      if (typeof rrule === "string" && rrule.trim() !== "") {
+        validateEventRecurrenceRule(rrule, captureTimezone);
+      }
+      return true;
+    }
     validateParsedTaskRecurrence(call.args, captureTimezone);
     return true;
   } catch {

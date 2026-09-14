@@ -18,13 +18,22 @@ import {
   type Db,
 } from "@personal-os/db";
 import { and, eq } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import type { PgBoss } from "pg-boss";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestDb, truncateTestTables } from "../test/build-test-db.js";
 import {
   createCalendarSyncCalendarDeadLetterHandler,
   runCalendarSync,
   type CalendarSyncCalendarJobData,
 } from "./calendar-sync-calendar.js";
+import {
+  createCalendarPushEventHandler,
+  desiredCaldavResourceHref,
+  desiredGoogleEventId,
+} from "./calendar-push-event.js";
+import { buildEventRecurrenceRule, expandRecurrenceInRange } from "@personal-os/core";
 import { env } from "../env.js";
 
 const GOOGLE_CALENDAR_ID = "primary";
@@ -957,6 +966,627 @@ describe("calendar.google.sync-calendar", () => {
       const allEvents = await db.select().from(events);
       expect(allEvents).toHaveLength(1);
       expect(allEvents[0]!.title).toBe("Strategy Meeting");
+    });
+  });
+
+  // =========================================================================
+  // Checkpoint 9.5: every inbound insert is origin='external'; a both-changed
+  // tie parks the link as `conflict` instead of overwriting the local edit;
+  // needs_reauth goes through the shared transition.
+  // =========================================================================
+  describe("Checkpoint 9.5 -- ownership and conflict contract", () => {
+    it("every `.insert(events)` in calendar-sync-calendar.ts builds its row through localEventFieldsToInsert, which sets origin: 'external'", () => {
+      // A source-level pin over the four insert sites, so a fifth added
+      // without the shared builder fails here rather than defaulting silently
+      // (the column default is also 'external', which is the safe direction --
+      // but an explicit builder is what the runtime assertions below rely on).
+      const source = readFileSync(
+        path.resolve(import.meta.dirname, "calendar-sync-calendar.ts"),
+        "utf8",
+      );
+      const inserts = [
+        ...source.matchAll(/\.insert\(events\)\s*\.values\(([\s\S]*?)\)\s*\.returning/g),
+      ];
+      expect(inserts.length).toBeGreaterThanOrEqual(4);
+      for (const match of inserts) {
+        expect(match[1]).toContain("localEventFieldsToInsert(");
+      }
+      expect(source).toContain('origin: "external"');
+    });
+
+    it("Google one-off, Google master, and Google detached child are all inserted with origin 'external'", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+      const instanceEvent: GoogleCalendarEvent = {
+        id: "g-instance-1",
+        status: "confirmed",
+        summary: "Standup (moved)",
+        start: { dateTime: "2026-09-14T10:00:00-05:00", timeZone: "America/Chicago" },
+        end: { dateTime: "2026-09-14T10:30:00-05:00", timeZone: "America/Chicago" },
+        recurringEventId: "g-master-1",
+        originalStartTime: { dateTime: "2026-09-14T09:00:00-05:00", timeZone: "America/Chicago" },
+        etag: '"etag-instance"',
+        updated: "2026-08-02T00:00:00.000Z",
+        iCalUID: "ical-instance@google.com",
+      };
+      const client = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            { items: [oneOffEvent(), masterEvent(), instanceEvent], nextSyncToken: "t" },
+          ],
+        },
+      });
+      await runSync(db, client, calendarId, connectionId);
+
+      const rows = await db.select().from(events);
+      expect(rows).toHaveLength(3);
+      expect(rows.map((r) => r.origin)).toEqual(["external", "external", "external"]);
+      expect(rows.some((r) => r.parentEventId !== null)).toBe(true);
+    });
+
+    it("CalDAV master and detached child are inserted with origin 'external'", async () => {
+      const connectionId = await insertCaldavConnection(db);
+      const calendarId = await insertCaldavCalendar(db, connectionId);
+      const fakeClient = createFakeCalDavClient();
+      const auth = { username: "testuser", password: "fake-password" };
+      const masterIcs = localEventToVCalendar({
+        title: "Team Standup",
+        allDay: false,
+        startsAt: new Date("2026-08-21T14:00:00.000Z"),
+        endsAt: new Date("2026-08-21T14:30:00.000Z"),
+        timezone: "America/Chicago",
+        rrule: "FREQ=WEEKLY;BYDAY=FR",
+      });
+      const withException = applyExceptionToVCalendar(masterIcs, {
+        kind: "detach",
+        originalStartInstant: new Date("2026-08-28T14:00:00.000Z"),
+        fields: {
+          title: "Team Standup (Moved)",
+          allDay: false,
+          startsAt: new Date("2026-08-28T15:00:00.000Z"),
+          endsAt: new Date("2026-08-28T15:30:00.000Z"),
+          timezone: "America/Chicago",
+        },
+      });
+      await fakeClient.putEvent(
+        `${CALDAV_CALENDAR_URL}standup.ics`,
+        withException,
+        undefined,
+        auth,
+        {
+          ifNoneMatch: true,
+        },
+      );
+      await runCalendarSync(
+        { db, client: createFakeGoogleCalendarClient(), caldavClient: fakeClient },
+        { connectionId, calendarConnectionCalendarId: calendarId },
+      );
+      const rows = await db.select().from(events);
+      expect(rows).toHaveLength(2);
+      expect(rows.every((r) => r.origin === "external")).toBe(true);
+    });
+
+    it("a both-changed tie (identical millisecond timestamps) marks the Google link `conflict` and does NOT apply the remote edit", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+      const baseDate = new Date("2026-08-01T10:00:00.000Z");
+      const seed = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            { items: [oneOffEvent({ updated: baseDate.toISOString() })], nextSyncToken: "t0" },
+          ],
+        },
+      });
+      await runSync(db, seed, calendarId, connectionId);
+      const [local] = await db.select().from(events);
+      await db.update(events).set({ updatedAt: baseDate }).where(eq(events.id, local!.id));
+      await db
+        .update(eventExternalLinks)
+        .set({ lastSyncedLocalUpdatedAt: baseDate, googleUpdatedAt: baseDate })
+        .where(eq(eventExternalLinks.eventId, local!.id));
+
+      // Both sides edit at the SAME instant -- decideConflict has no winner.
+      const tie = new Date(baseDate.getTime() + 3600_000);
+      await db
+        .update(events)
+        .set({ title: "Local Edit", updatedAt: tie })
+        .where(eq(events.id, local!.id));
+      const remote = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            {
+              items: [oneOffEvent({ summary: "Remote Edit", updated: tie.toISOString() })],
+              nextSyncToken: "t1",
+            },
+          ],
+        },
+      });
+      await runSync(db, remote, calendarId, connectionId);
+
+      const [after] = await db.select().from(events).where(eq(events.id, local!.id));
+      expect(after?.title).toBe("Local Edit");
+      expect(after?.updatedAt.getTime()).toBe(tie.getTime());
+      const [link] = await db
+        .select()
+        .from(eventExternalLinks)
+        .where(eq(eventExternalLinks.eventId, local!.id));
+      expect(link?.syncStatus).toBe("conflict");
+      expect(link?.lastSyncError).toBe("conflict");
+      // Baselines are NOT advanced: nothing was reconciled.
+      expect(link?.googleUpdatedAt?.getTime()).toBe(baseDate.getTime());
+      expect(link?.lastSyncedLocalUpdatedAt?.getTime()).toBe(baseDate.getTime());
+    });
+
+    it("a both-changed tie on a detached instance marks the instance row `conflict` and keeps the local child", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+      const baseDate = new Date("2026-08-01T10:00:00.000Z");
+      const instance = (overrides: Partial<GoogleCalendarEvent>): GoogleCalendarEvent => ({
+        id: "g-instance-1",
+        status: "confirmed",
+        summary: "Standup (moved)",
+        start: { dateTime: "2026-09-14T10:00:00-05:00", timeZone: "America/Chicago" },
+        end: { dateTime: "2026-09-14T10:30:00-05:00", timeZone: "America/Chicago" },
+        recurringEventId: "g-master-1",
+        originalStartTime: { dateTime: "2026-09-14T09:00:00-05:00", timeZone: "America/Chicago" },
+        etag: '"etag-instance"',
+        updated: baseDate.toISOString(),
+        iCalUID: "ical-instance@google.com",
+        ...overrides,
+      });
+      const seed = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [{ items: [masterEvent(), instance({})], nextSyncToken: "t0" }],
+        },
+      });
+      await runSync(db, seed, calendarId, connectionId);
+      const child = (await db.select().from(events)).find((e) => e.parentEventId !== null)!;
+      await db.update(events).set({ updatedAt: baseDate }).where(eq(events.id, child.id));
+      await db
+        .update(calendarEventInstances)
+        .set({ lastSyncedLocalUpdatedAt: baseDate, googleUpdatedAt: baseDate })
+        .where(eq(calendarEventInstances.localDetachedEventId, child.id));
+
+      const tie = new Date(baseDate.getTime() + 3600_000);
+      await db
+        .update(events)
+        .set({ title: "Local child edit", updatedAt: tie })
+        .where(eq(events.id, child.id));
+      const remote = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            {
+              items: [instance({ summary: "Remote child edit", updated: tie.toISOString() })],
+              nextSyncToken: "t1",
+            },
+          ],
+        },
+      });
+      await runSync(db, remote, calendarId, connectionId);
+
+      const [after] = await db.select().from(events).where(eq(events.id, child.id));
+      expect(after?.title).toBe("Local child edit");
+      const [instanceRow] = await db
+        .select()
+        .from(calendarEventInstances)
+        .where(eq(calendarEventInstances.localDetachedEventId, child.id));
+      expect(instanceRow?.syncStatus).toBe("conflict");
+      expect(instanceRow?.lastSyncError).toBe("conflict");
+    });
+
+    describe("needs_reauth through the shared transition", () => {
+      afterEach(() => vi.unstubAllGlobals());
+
+      it("a permanent OAuth failure during sync mints the ADR-058 key once and never re-stamps updated_at on a retry", async () => {
+        const connectionId = await insertConnection(db, {
+          accessTokenExpiresAt: new Date(Date.now() - 60_000),
+        });
+        const calendarId = await insertCalendar(db, connectionId);
+        const { devices } = await import("@personal-os/db");
+        await db.insert(devices).values({
+          name: "Device",
+          platform: "android",
+          tokenHash: `hash-${Math.random()}`,
+          pushToken: "ExponentPushToken[x]",
+          notifyAlerts: true,
+          notificationsEnabled: true,
+        });
+        vi.stubGlobal(
+          "fetch",
+          vi
+            .fn()
+            .mockImplementation(() =>
+              Promise.resolve(
+                new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }),
+              ),
+            ),
+        );
+        const boss = { send: vi.fn() };
+        const client = createFakeGoogleCalendarClient();
+        const data: CalendarSyncCalendarJobData = {
+          connectionId,
+          calendarConnectionCalendarId: calendarId,
+        };
+
+        await runCalendarSync({ db, client, boss: boss as unknown as PgBoss }, data);
+        const [first] = await db
+          .select()
+          .from(calendarConnections)
+          .where(eq(calendarConnections.id, connectionId));
+        expect(first?.status).toBe("needs_reauth");
+        expect(first?.lastSyncError).toBe("auth_expired");
+        const keys = () =>
+          boss.send.mock.calls.map((c) => c[1] as { dedupeKey?: string }).map((p) => p.dedupeKey);
+        expect(keys()).toEqual([
+          `calendar-needs-reauth:${connectionId}:${first!.updatedAt.toISOString()}`,
+        ]);
+
+        // A retry finds the connection already needs_reauth and returns early
+        // (runCalendarSync no-ops on a non-active connection), so nothing
+        // moves: same timestamp, no second key.
+        await runCalendarSync({ db, client, boss: boss as unknown as PgBoss }, data);
+        const [second] = await db
+          .select()
+          .from(calendarConnections)
+          .where(eq(calendarConnections.id, connectionId));
+        expect(second!.updatedAt.getTime()).toBe(first!.updatedAt.getTime());
+        expect(new Set(keys()).size).toBe(1);
+      });
+    });
+  });
+
+  // =========================================================================
+  // Fixer review findings (Checkpoint 9.5): our own pushed event must never be
+  // imported as a duplicate, archived by a stale listing, or re-anchored.
+  // =========================================================================
+  describe("fixer review findings", () => {
+    const fakeJob = (eventId: string) =>
+      ({ id: "job-p", name: "calendar.google.push-event", data: { eventId } }) as never;
+
+    async function insertLocalLinkedEvent(
+      connectionId: string,
+      eventValues: Partial<typeof events.$inferInsert> = {},
+    ) {
+      const [eventRow] = await db
+        .insert(events)
+        .values({
+          title: "Owner authored",
+          origin: "local",
+          timezone: "America/Chicago",
+          startsAt: new Date("2026-09-07T09:00:00-05:00"),
+          endsAt: new Date("2026-09-07T09:30:00-05:00"),
+          ...eventValues,
+        })
+        .returning();
+      const [link] = await db
+        .insert(eventExternalLinks)
+        .values({
+          eventId: eventRow!.id,
+          connectionId,
+          googleCalendarId: GOOGLE_CALENDAR_ID,
+          googleEventId: null,
+          syncStatus: "pending_push",
+        })
+        .returning();
+      return { event: eventRow!, link: link! };
+    }
+
+    async function readLink(eventId: string) {
+      const [link] = await db
+        .select()
+        .from(eventExternalLinks)
+        .where(eq(eventExternalLinks.eventId, eventId));
+      return link;
+    }
+
+    it("BLOCKER-1: a sync running inside the push retry window ADOPTS the pending link instead of importing a duplicate, and the retry then finishes cleanly", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+      const { event, link } = await insertLocalLinkedEvent(connectionId);
+      const client = createFakeGoogleCalendarClient();
+      const push = createCalendarPushEventHandler(db, client);
+
+      // Attempt 1: the insert reached Google; the response was lost.
+      client.queueInsertFailure({
+        error: Object.assign(new Error("timeout"), { name: "TimeoutError" }),
+        afterRemoteWrite: true,
+      });
+      await expect(push([fakeJob(event.id)])).rejects.toThrow();
+      const desired = desiredGoogleEventId(link.id);
+      const remote = client.remoteEvents.get(`${GOOGLE_CALENDAR_ID}/${desired}`)!;
+      expect(remote).toBeDefined();
+      expect((await readLink(event.id))!.googleEventId).toBeNull();
+
+      // The 15-minute sync lists the event no link claims yet.
+      client.enqueueListEventsResponse(GOOGLE_CALENDAR_ID, {
+        items: [remote],
+        nextSyncToken: "t1",
+      });
+      await runSync(db, client, calendarId, connectionId);
+
+      // Before the fix: a SECOND events row (origin external) and a second
+      // link claiming the id -- and the retry below dead-lettered on 23505.
+      expect(await db.select().from(events)).toHaveLength(1);
+      const adopted = (await readLink(event.id))!;
+      expect(adopted.googleEventId).toBe(desired);
+      expect(adopted.syncStatus).toBe("pending_push");
+      expect(adopted.googleEtag).toBe(remote.etag);
+      expect(adopted.lastSyncedLocalUpdatedAt?.getTime()).toBe(event.updatedAt.getTime());
+      const [row] = await db.select().from(events);
+      expect(row?.origin).toBe("local");
+      expect(row?.title).toBe("Owner authored");
+
+      // The retry: update in place, no duplicate, link synced.
+      await push([fakeJob(event.id)]);
+      expect(client.writeCalls.map((c) => c.kind)).toEqual(["insert", "update"]);
+      expect(client.remoteEvents.size).toBe(1);
+      expect(await db.select().from(events)).toHaveLength(1);
+      expect(await db.select().from(eventExternalLinks)).toHaveLength(1);
+      expect((await readLink(event.id))!.syncStatus).toBe("synced");
+    });
+
+    it("BLOCKER-1: a CANCELLED remote event matching a pending link archives and unlinks it (someone deleted our just-created event)", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+      const { event, link } = await insertLocalLinkedEvent(connectionId);
+      const client = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            {
+              items: [oneOffEvent({ id: desiredGoogleEventId(link.id), status: "cancelled" })],
+              nextSyncToken: "t",
+            },
+          ],
+        },
+      });
+      await runSync(db, client, calendarId, connectionId);
+      const [row] = await db.select().from(events);
+      expect(row?.id).toBe(event.id);
+      expect(row?.archivedAt).not.toBeNull();
+      expect(await db.select().from(eventExternalLinks)).toHaveLength(0);
+    });
+
+    it("MAJOR-C: a full-sync reconcile does NOT archive a link whose push completed after the listing began", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+      const { event } = await insertLocalLinkedEvent(connectionId);
+      const client = createFakeGoogleCalendarClient({
+        listEventsQueues: { [GOOGLE_CALENDAR_ID]: [{ items: [], nextSyncToken: "t" }] },
+      });
+      // The push lands DURING the listing: after listStartedAt, before reconcile.
+      const push = createCalendarPushEventHandler(db, client);
+      const originalList = client.listEvents.bind(client);
+      client.listEvents = async (token, params) => {
+        const page = await originalList(token, params);
+        await push([fakeJob(event.id)]);
+        return page;
+      };
+
+      await runSync(db, client, calendarId, connectionId);
+
+      const link = (await readLink(event.id))!;
+      expect(link.googleEventId).not.toBeNull();
+      expect(link.syncStatus).toBe("synced");
+      const [row] = await db.select().from(events);
+      expect(row?.archivedAt).toBeNull();
+      expect(await db.select().from(eventExternalLinks)).toHaveLength(1);
+    });
+
+    it("MAJOR-C: a link synced BEFORE the listing and absent from it is still archived", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+      const { event } = await insertLocalLinkedEvent(connectionId);
+      await db
+        .update(eventExternalLinks)
+        .set({
+          googleEventId: "g-gone",
+          syncStatus: "synced",
+          updatedAt: new Date(Date.now() - 60_000),
+        })
+        .where(eq(eventExternalLinks.eventId, event.id));
+      const client = createFakeGoogleCalendarClient({
+        listEventsQueues: { [GOOGLE_CALENDAR_ID]: [{ items: [], nextSyncToken: "t" }] },
+      });
+      await runSync(db, client, calendarId, connectionId);
+      const [row] = await db.select().from(events);
+      expect(row?.archivedAt).not.toBeNull();
+      expect(await db.select().from(eventExternalLinks)).toHaveLength(0);
+    });
+
+    it("MAJOR-D: a local all-day daily series (Dec 28-31, Chicago) pushed and echoed back through apply_remote still expands to 4 instances with its zones untouched", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+      const { event } = await insertLocalLinkedEvent(connectionId, {
+        allDay: true,
+        startsAt: null,
+        endsAt: null,
+        startDate: "2026-12-28",
+        endDate: "2026-12-28",
+        timezone: "America/Chicago",
+        recurrenceTimezone: "America/Chicago",
+        rrule: "FREQ=DAILY",
+        recurrenceUntil: new Date("2026-12-31T23:59:59.999-06:00"),
+      });
+      const countInstances = async () => {
+        const [row] = await db.select().from(events).where(eq(events.id, event.id));
+        const rule = buildEventRecurrenceRule(row!);
+        expect(rule).not.toBeNull();
+        return expandRecurrenceInRange(
+          rule!,
+          new Date("2026-12-01T00:00:00Z"),
+          new Date("2027-01-31T00:00:00Z"),
+        ).length;
+      };
+      expect(await countInstances()).toBe(4);
+
+      const client = createFakeGoogleCalendarClient();
+      await createCalendarPushEventHandler(db, client)([fakeJob(event.id)]);
+      const [remote] = [...client.remoteEvents.values()];
+      expect(remote?.recurrence).toEqual(["RRULE:FREQ=DAILY;UNTIL=20261231"]);
+      expect(remote?.start).toEqual({ date: "2026-12-28" }); // no timeZone, as Google sends
+
+      // The echo, made strictly newer so decideConflict applies it.
+      client.enqueueListEventsResponse(GOOGLE_CALENDAR_ID, {
+        items: [{ ...remote!, updated: new Date(Date.now() + 60_000).toISOString() }],
+        nextSyncToken: "t",
+      });
+      await runSync(db, client, calendarId, connectionId);
+
+      const [after] = await db.select().from(events).where(eq(events.id, event.id));
+      expect((await readLink(event.id))!.syncStatus).toBe("synced");
+      expect(after?.timezone).toBe("America/Chicago");
+      expect(after?.recurrenceTimezone).toBe("America/Chicago");
+      expect(after?.recurrenceUntil?.toISOString()).toBe("2027-01-01T05:59:59.999Z");
+      expect(await countInstances()).toBe(4);
+    });
+
+    it("MINOR-6: a detached child delivered by Google inherits its parent's origin (local parent -> local child)", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+      const { event: parent } = await insertLocalLinkedEvent(connectionId, {
+        rrule: "FREQ=WEEKLY",
+        recurrenceTimezone: "America/Chicago",
+      });
+      await db
+        .update(eventExternalLinks)
+        .set({ googleEventId: "g-local-master", syncStatus: "synced" })
+        .where(eq(eventExternalLinks.eventId, parent.id));
+      const instanceEvent: GoogleCalendarEvent = {
+        id: "g-local-instance",
+        status: "confirmed",
+        summary: "Moved by a guest",
+        start: { dateTime: "2026-09-14T10:00:00-05:00", timeZone: "America/Chicago" },
+        end: { dateTime: "2026-09-14T10:30:00-05:00", timeZone: "America/Chicago" },
+        recurringEventId: "g-local-master",
+        originalStartTime: { dateTime: "2026-09-14T09:00:00-05:00", timeZone: "America/Chicago" },
+        etag: '"etag-instance"',
+        updated: "2026-08-02T00:00:00.000Z",
+        iCalUID: "ical-instance@google.com",
+      };
+      const client = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [{ items: [instanceEvent], nextSyncToken: "t" }],
+        },
+      });
+      await runSync(db, client, calendarId, connectionId);
+      const child = (await db.select().from(events)).find((e) => e.parentEventId === parent.id);
+      expect(child).toBeDefined();
+      expect(child?.origin).toBe("local");
+    });
+
+    it("MINOR-6: a CalDAV detached child inherits its parent's origin too", async () => {
+      const connectionId = await insertCaldavConnection(db);
+      const calendarId = await insertCaldavCalendar(db, connectionId);
+      const fakeClient = createFakeCalDavClient();
+      const auth = { username: "testuser", password: "fake-password" };
+      const href = `${CALDAV_CALENDAR_URL}local-series.ics`;
+      const masterIcs = localEventToVCalendar({
+        title: "Local series",
+        allDay: false,
+        startsAt: new Date("2026-08-21T14:00:00.000Z"),
+        endsAt: new Date("2026-08-21T14:30:00.000Z"),
+        timezone: "America/Chicago",
+        rrule: "FREQ=WEEKLY;BYDAY=FR",
+      });
+      const put = await fakeClient.putEvent(href, masterIcs, undefined, auth, {
+        ifNoneMatch: true,
+      });
+      const [parent] = await db
+        .insert(events)
+        .values({
+          title: "Local series",
+          origin: "local",
+          timezone: "America/Chicago",
+          startsAt: new Date("2026-08-21T14:00:00.000Z"),
+          endsAt: new Date("2026-08-21T14:30:00.000Z"),
+          rrule: "FREQ=WEEKLY;BYDAY=FR",
+          recurrenceTimezone: "America/Chicago",
+        })
+        .returning();
+      await db.insert(eventExternalLinks).values({
+        eventId: parent!.id,
+        connectionId,
+        caldavCalendarUrl: CALDAV_CALENDAR_URL,
+        caldavResourceUrl: href,
+        caldavEtag: put.etag,
+        lastSyncedLocalUpdatedAt: parent!.updatedAt,
+        syncStatus: "synced",
+      });
+      // A guest detaches one occurrence on the server.
+      const withException = applyExceptionToVCalendar(masterIcs, {
+        kind: "detach",
+        originalStartInstant: new Date("2026-08-28T14:00:00.000Z"),
+        fields: {
+          title: "Local series (moved)",
+          allDay: false,
+          startsAt: new Date("2026-08-28T15:00:00.000Z"),
+          endsAt: new Date("2026-08-28T15:30:00.000Z"),
+          timezone: "America/Chicago",
+        },
+      });
+      await fakeClient.putEvent(href, withException, put.etag, auth);
+      await runCalendarSync(
+        { db, client: createFakeGoogleCalendarClient(), caldavClient: fakeClient },
+        { connectionId, calendarConnectionCalendarId: calendarId },
+      );
+      const child = (await db.select().from(events)).find((e) => e.parentEventId === parent!.id);
+      expect(child).toBeDefined();
+      expect(child?.origin).toBe("local");
+    });
+
+    it("BLOCKER-2 (inbound): a CalDAV resource at a pending link's deterministic href is ADOPTED, never imported as a duplicate", async () => {
+      const connectionId = await insertCaldavConnection(db);
+      const calendarId = await insertCaldavCalendar(db, connectionId);
+      const [eventRow] = await db
+        .insert(events)
+        .values({
+          title: "Owner authored",
+          origin: "local",
+          timezone: "America/Chicago",
+          startsAt: new Date("2026-08-25T14:00:00.000Z"),
+          endsAt: new Date("2026-08-25T15:00:00.000Z"),
+        })
+        .returning();
+      const [link] = await db
+        .insert(eventExternalLinks)
+        .values({
+          eventId: eventRow!.id,
+          connectionId,
+          caldavCalendarUrl: CALDAV_CALENDAR_URL,
+          syncStatus: "pending_push",
+        })
+        .returning();
+      // The push's first attempt created the resource and lost the response.
+      const fakeClient = createFakeCalDavClient();
+      const href = desiredCaldavResourceHref(CALDAV_CALENDAR_URL, link!.id);
+      const put = await fakeClient.putEvent(
+        href,
+        localEventToVCalendar({
+          title: "Owner authored",
+          allDay: false,
+          startsAt: eventRow!.startsAt!,
+          endsAt: eventRow!.endsAt!,
+          timezone: "America/Chicago",
+          uid: `${link!.id}@personal-os.local`,
+        }),
+        undefined,
+        { username: "testuser", password: "fake-password" },
+        { ifNoneMatch: true },
+      );
+
+      await runCalendarSync(
+        { db, client: createFakeGoogleCalendarClient(), caldavClient: fakeClient },
+        { connectionId, calendarConnectionCalendarId: calendarId },
+      );
+
+      expect(await db.select().from(events)).toHaveLength(1);
+      const [after] = await db.select().from(eventExternalLinks);
+      expect(after?.id).toBe(link!.id);
+      expect(after?.caldavResourceUrl).toBe(href);
+      expect(after?.caldavEtag).toBe(put.etag);
+      expect(after?.caldavIcalUid).toBe(`${link!.id}@personal-os.local`);
+      expect(after?.syncStatus).toBe("pending_push");
+      expect(after?.lastSyncedLocalUpdatedAt?.getTime()).toBe(eventRow!.updatedAt.getTime());
     });
   });
 });

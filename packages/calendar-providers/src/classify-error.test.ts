@@ -79,6 +79,10 @@ describe("classifyCalendarProviderError — CalDAV", () => {
     expect(classifyCalendarProviderError(new CalDavError("x", 403))).toBe("auth_failed");
   });
 
+  it("maps 405 (method not allowed on the collection) to missing_scope -- a permanent push refusal (fixer review, MINOR-3)", () => {
+    expect(classifyCalendarProviderError(new CalDavError("x", 405))).toBe("missing_scope");
+  });
+
   it("maps a statusless discovery failure to provider_error, not to a guess", () => {
     expect(classifyCalendarProviderError(new CalDavError("Could not find calendar-home-set"))).toBe(
       "provider_error",
@@ -96,6 +100,31 @@ describe("classifyCalendarProviderError — transport and fallbacks", () => {
   it("detects an aborted request", () => {
     const err = new Error("aborted");
     err.name = "AbortError";
+    expect(classifyCalendarProviderError(err)).toBe("network_error");
+  });
+
+  it("maps a real AbortSignal.timeout() rejection -- a DOMException TimeoutError -- to network_error (Checkpoint 9.5)", async () => {
+    // Exactly what googleFetch's `signal: AbortSignal.timeout(...)` rejects
+    // with once the deadline passes: constructed by the runtime, not by hand.
+    const signal = AbortSignal.timeout(1);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const reason: unknown = signal.reason;
+    expect((reason as { name?: string }).name).toBe("TimeoutError");
+    expect(classifyCalendarProviderError(reason)).toBe("network_error");
+  });
+
+  it("maps a real AbortController abort to network_error", () => {
+    const controller = new AbortController();
+    controller.abort();
+    expect(classifyCalendarProviderError(controller.signal.reason)).toBe("network_error");
+  });
+
+  it("maps an undici dual-stack refusal (AggregateError cause, no top-level code) to network_error", () => {
+    const err = new TypeError("fetch failed");
+    (err as { cause?: unknown }).cause = new AggregateError(
+      [Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" })],
+      "",
+    );
     expect(classifyCalendarProviderError(err)).toBe("network_error");
   });
 

@@ -20,6 +20,7 @@ import {
 import type { CalendarSyncErrorCode } from "@personal-os/schema";
 import { CALENDAR_SYNC_CALENDAR_QUEUE } from "../queue-names.js";
 import { withCalendarJobErrorContainment } from "./calendar-job-error.js";
+import { markNeedsReauth } from "./calendar-refresh-token.js";
 import {
   calendarConnectionCalendars,
   calendarConnections,
@@ -29,9 +30,11 @@ import {
   occurrences,
   type Db,
 } from "@personal-os/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Job, PgBoss } from "pg-boss";
 import { env } from "../env.js";
+import { log } from "../logger.js";
+import { desiredCaldavResourceHref } from "./calendar-push-event.js";
 
 export interface CalendarSyncCalendarJobData {
   connectionId: string;
@@ -51,7 +54,7 @@ function encryptedFromColumns(
   return { ciphertext, iv, authTag };
 }
 
-async function resolveFreshAccessToken(
+export async function resolveFreshAccessToken(
   db: Db,
   connection: typeof calendarConnections.$inferSelect,
 ): Promise<string> {
@@ -142,6 +145,11 @@ function localEventFieldsToInsert(
   projectId: string | null,
 ): EventInsert {
   return {
+    // EVERY inbound insert is provider-originated (Checkpoint 9.5, ADR ownership
+    // contract): read-only through the ordinary edit/cancel surface. Set
+    // explicitly even though the column defaults to 'external', so the intent
+    // is visible at the one place every inbound insert site builds its row.
+    origin: "external",
     title: fields.title,
     description: fields.description,
     location: fields.location,
@@ -160,8 +168,19 @@ function localEventFieldsToInsert(
   };
 }
 
+/**
+ * The zone an EXISTING local row's recurrence is read in: the caller passes it
+ * to the translation layer so a remote payload that carries no zone (every
+ * all-day event from Google) is resolved where the row already lives, never
+ * in the connection-level fallback (fixer review, MAJOR-D).
+ */
+function existingZoneOf(row: typeof events.$inferSelect): string {
+  return row.recurrenceTimezone ?? row.timezone;
+}
+
 function localEventFieldsToUpdate(
   fields: LocalEventFields | CalDavEventFields,
+  existing: typeof events.$inferSelect,
 ): Partial<typeof events.$inferInsert> {
   return {
     title: fields.title,
@@ -170,13 +189,18 @@ function localEventFieldsToUpdate(
     allDay: fields.allDay,
     startsAt: fields.startsAt ?? null,
     endsAt: fields.endsAt ?? null,
-    timezone: fields.timezone ?? "UTC",
+    // NEVER the fallback over a row that already has a zone (fixer review,
+    // MAJOR-D): an all-day payload carries no zone, and "UTC" written here
+    // re-anchored a LOCAL Chicago series on every apply_remote of its own echo.
+    timezone: fields.timezone ?? existing.timezone,
     startDate: fields.startDate ?? null,
     endDate: fields.endDate ?? null,
     rrule: fields.rrule ?? null,
     recurrenceUntil: fields.recurrenceUntil ?? null,
     recurrenceCount: fields.recurrenceCount ?? null,
-    recurrenceTimezone: fields.recurrenceTimezone ?? null,
+    recurrenceTimezone: fields.rrule
+      ? (fields.recurrenceTimezone ?? existing.recurrenceTimezone ?? existing.timezone)
+      : null,
     recurrenceExdates: fields.recurrenceExdates ?? null,
     updatedAt: new Date(),
   };
@@ -213,6 +237,10 @@ async function runCaldavSync(
   let finalSyncToken: string | undefined;
   const updatedItems: Array<{ href: string; etag: string }> = [];
   const deletedHrefs: string[] = [];
+  // Captured BEFORE the first provider read (fixer review, MAJOR-C): a link
+  // that a push completed after this instant can be absent from a listing
+  // taken before it, and must not be archived for that.
+  const listStartedAt = new Date();
 
   if (!isFullSync && calendarRow.nextSyncToken) {
     let currentToken: string | undefined = calendarRow.nextSyncToken;
@@ -255,9 +283,16 @@ async function runCaldavSync(
 
     const inventoryMap = new Map(inventory.map((i) => [i.href, i.etag]));
 
-    // Identify deleted remotely
+    // Identify deleted remotely -- only links that were SYNCED before the
+    // listing began. A link stamped by a push mid-listing is newer than the
+    // inventory it is missing from (MAJOR-C, the CalDAV twin).
     for (const link of existingLinks) {
-      if (link.caldavResourceUrl && !inventoryMap.has(link.caldavResourceUrl)) {
+      if (
+        link.caldavResourceUrl &&
+        !inventoryMap.has(link.caldavResourceUrl) &&
+        link.syncStatus === "synced" &&
+        link.updatedAt.getTime() < listStartedAt.getTime()
+      ) {
         deletedHrefs.push(link.caldavResourceUrl);
       }
     }
@@ -322,6 +357,23 @@ async function runCaldavSync(
               ),
             );
 
+          if (!existingLink) {
+            // OUR OWN JUST-PUSHED RESOURCE (fixer review, BLOCKER-2): the push
+            // job creates resources at a link-derived href and stores it only
+            // after a confirmed response, so a sync running inside the retry
+            // window sees a resource no link claims yet. Adopt the pending
+            // link rather than importing a duplicate; the retry then updates
+            // in place. Local is authoritative -- nothing is applied.
+            const adopted = await adoptPendingCaldavLink(
+              tx as unknown as Db,
+              connection.id,
+              calendarHref,
+              item.href,
+              { icalUid: intent.icalUid ?? null, etag: intent.etag, updatedAt: intent.updatedAt },
+            );
+            if (adopted) continue;
+          }
+
           if (existingLink) {
             const [localEvent] = await tx
               .select()
@@ -353,7 +405,7 @@ async function runCaldavSync(
 
             const [updated] = await tx
               .update(events)
-              .set(localEventFieldsToUpdate(intent.fields))
+              .set(localEventFieldsToUpdate(intent.fields, localEvent))
               .where(eq(events.id, localEvent.id))
               .returning();
 
@@ -411,10 +463,15 @@ async function runCaldavSync(
               );
 
             if (existingInstance && existingInstance.localDetachedEventId) {
+              const [childEvent] = await tx
+                .select()
+                .from(events)
+                .where(eq(events.id, existingInstance.localDetachedEventId));
+              if (!childEvent) continue;
               await tx
                 .update(events)
-                .set(localEventFieldsToUpdate(intent.fields))
-                .where(eq(events.id, existingInstance.localDetachedEventId));
+                .set(localEventFieldsToUpdate(intent.fields, childEvent))
+                .where(eq(events.id, childEvent.id));
 
               await tx
                 .update(calendarEventInstances)
@@ -426,10 +483,18 @@ async function runCaldavSync(
                 })
                 .where(eq(calendarEventInstances.id, existingInstance.id));
             } else {
+              const [parentEvent] = await tx
+                .select({ origin: events.origin })
+                .from(events)
+                .where(eq(events.id, parentLink.eventId));
+              if (!parentEvent) continue;
               const [detachedChild] = await tx
                 .insert(events)
                 .values({
                   ...localEventFieldsToInsert(intent.fields, calendarRow.projectId),
+                  // A detached child of a LOCAL series is local (fixer review,
+                  // MINOR-6): ownership follows the parent, not the transport.
+                  origin: parentEvent.origin,
                   parentEventId: parentLink.eventId,
                   originalStartAt: intent.originalStartInstant,
                 })
@@ -552,6 +617,117 @@ interface ApplyContext {
   defaultProjectId: string | null;
   seenLinkKeys: Set<string>;
   seenInstanceKeys: Set<string>;
+  /** Captured before the first listEvents call -- see reconcileFullSync (MAJOR-C). */
+  listStartedAt: Date;
+}
+
+/**
+ * Finds the link a still-pending push is about to claim for this Google id
+ * (fixer review, BLOCKER-1). The push job pre-derives the remote id from the
+ * link row (`desiredGoogleEventId(link.id)`) and stores `google_event_id`
+ * only after a confirmed response, so between a lost response and the retry
+ * the remote event exists under an id that NO link carries yet. Looking the
+ * event up by `google_event_id` alone therefore inserted a second `events`
+ * row plus a link claiming the same id -- and the retry's own id write then
+ * collided on `event_external_links_connection_calendar_event_idx` and
+ * dead-lettered for ever.
+ */
+async function findPendingLinkForGoogleId(
+  ctx: ApplyContext,
+  googleEventId: string,
+): Promise<typeof eventExternalLinks.$inferSelect | undefined> {
+  const [link] = await ctx.tx
+    .select()
+    .from(eventExternalLinks)
+    .where(
+      and(
+        eq(eventExternalLinks.connectionId, ctx.connectionId),
+        eq(eventExternalLinks.googleCalendarId, ctx.googleCalendarId),
+        isNull(eventExternalLinks.googleEventId),
+        sql`replace(${eventExternalLinks.id}::text, '-', '') = ${googleEventId}`,
+      ),
+    );
+  return link;
+}
+
+/**
+ * Adopts a pending link for the remote event its push created: stores the
+ * provider identifiers and the remote baseline, sets the local baseline to
+ * the row's CURRENT `updated_at` (local is what the remote is a copy of), and
+ * leaves `sync_status` untouched -- `pending_push` stays pending so the retry
+ * finishes cleanly, and its unconditional id write is then a no-op rather
+ * than a 23505. Nothing from the remote is applied.
+ */
+async function adoptPendingGoogleLink(
+  ctx: ApplyContext,
+  link: typeof eventExternalLinks.$inferSelect,
+  event: GoogleCalendarEvent,
+): Promise<void> {
+  const [localEvent] = await ctx.tx
+    .select({ updatedAt: events.updatedAt })
+    .from(events)
+    .where(eq(events.id, link.eventId));
+  await ctx.tx
+    .update(eventExternalLinks)
+    .set({
+      googleEventId: event.id,
+      googleIcalUid: event.iCalUID ?? null,
+      googleEtag: event.etag,
+      googleUpdatedAt: new Date(event.updated),
+      lastSyncedLocalUpdatedAt: localEvent?.updatedAt ?? new Date(),
+    })
+    .where(eq(eventExternalLinks.id, link.id));
+  log.info("calendar.sync_calendar.adopted_pending_link", {
+    provider: "google",
+    linkId: link.id,
+    eventId: link.eventId,
+    syncStatus: link.syncStatus,
+  });
+}
+
+/** The CalDAV twin of adoptPendingGoogleLink, keyed on the deterministic href. */
+async function adoptPendingCaldavLink(
+  db: Db,
+  connectionId: string,
+  calendarHref: string,
+  resourceHref: string,
+  remote: { icalUid: string | null; etag: string; updatedAt: Date | undefined },
+): Promise<boolean> {
+  const pending = await db
+    .select()
+    .from(eventExternalLinks)
+    .where(
+      and(
+        eq(eventExternalLinks.connectionId, connectionId),
+        eq(eventExternalLinks.caldavCalendarUrl, calendarHref),
+        isNull(eventExternalLinks.caldavResourceUrl),
+      ),
+    );
+  const link = pending.find(
+    (candidate) => desiredCaldavResourceHref(calendarHref, candidate.id) === resourceHref,
+  );
+  if (!link) return false;
+  const [localEvent] = await db
+    .select({ updatedAt: events.updatedAt })
+    .from(events)
+    .where(eq(events.id, link.eventId));
+  await db
+    .update(eventExternalLinks)
+    .set({
+      caldavResourceUrl: resourceHref,
+      caldavIcalUid: remote.icalUid,
+      caldavEtag: remote.etag,
+      caldavUpdatedAt: remote.updatedAt ?? null,
+      lastSyncedLocalUpdatedAt: localEvent?.updatedAt ?? new Date(),
+    })
+    .where(eq(eventExternalLinks.id, link.id));
+  log.info("calendar.sync_calendar.adopted_pending_link", {
+    provider: "caldav",
+    linkId: link.id,
+    eventId: link.eventId,
+    syncStatus: link.syncStatus,
+  });
+  return true;
 }
 
 async function applyOneItem(
@@ -561,7 +737,7 @@ async function applyOneItem(
 ): Promise<void> {
   if (event.status === "cancelled" && !event.recurringEventId) {
     ctx.seenLinkKeys.add(event.id);
-    const [link] = await ctx.tx
+    const [byId] = await ctx.tx
       .select()
       .from(eventExternalLinks)
       .where(
@@ -571,6 +747,9 @@ async function applyOneItem(
           eq(eventExternalLinks.googleEventId, event.id),
         ),
       );
+    // A cancelled remote event matching a PENDING link is someone deleting
+    // our just-created event remotely: archive + unlink, as for any link.
+    const link = byId ?? (await findPendingLinkForGoogleId(ctx, event.id));
     if (link) {
       await ctx.tx
         .update(events)
@@ -584,6 +763,7 @@ async function applyOneItem(
   const classification = classifyGoogleEvent(event);
   const intent = mapGoogleEventToLocalUpsert(event, classification, {
     defaultTimezone,
+    existingTimezone: await existingLinkedZone(ctx, event),
   });
   if (intent.kind === "upsert_standalone_or_master") {
     await applyUpsertMaster(ctx, event, intent);
@@ -594,6 +774,36 @@ async function applyOneItem(
   }
 }
 
+/**
+ * The zone of the local row this Google event already maps to, if any, so
+ * the translation resolves a zone-less payload (all-day) where the row lives
+ * rather than in `defaultTimezone` (fixer review, MAJOR-D). A detached
+ * instance reads its parent's zone. Undefined for a never-seen event.
+ */
+async function existingLinkedZone(
+  ctx: ApplyContext,
+  event: GoogleCalendarEvent,
+): Promise<string | undefined> {
+  const remoteId = event.recurringEventId ?? event.id;
+  const [byId] = await ctx.tx
+    .select({ eventId: eventExternalLinks.eventId })
+    .from(eventExternalLinks)
+    .where(
+      and(
+        eq(eventExternalLinks.connectionId, ctx.connectionId),
+        eq(eventExternalLinks.googleCalendarId, ctx.googleCalendarId),
+        eq(eventExternalLinks.googleEventId, remoteId),
+      ),
+    );
+  const link = byId ?? (await findPendingLinkForGoogleId(ctx, remoteId));
+  if (!link) return undefined;
+  const [row] = await ctx.tx
+    .select({ timezone: events.timezone, recurrenceTimezone: events.recurrenceTimezone })
+    .from(events)
+    .where(eq(events.id, link.eventId));
+  return row ? existingZoneOf(row as typeof events.$inferSelect) : undefined;
+}
+
 async function applyUpsertMaster(
   ctx: ApplyContext,
   event: GoogleCalendarEvent,
@@ -601,7 +811,7 @@ async function applyUpsertMaster(
 ): Promise<void> {
   ctx.seenLinkKeys.add(event.id);
 
-  const [link] = await ctx.tx
+  const [byId] = await ctx.tx
     .select()
     .from(eventExternalLinks)
     .where(
@@ -611,11 +821,18 @@ async function applyUpsertMaster(
         eq(eventExternalLinks.googleEventId, event.id),
       ),
     );
+  const pendingLink = byId ? undefined : await findPendingLinkForGoogleId(ctx, event.id);
+  const link = byId ?? pendingLink;
 
   if (event.status === "cancelled") {
     if (!link) return;
     await ctx.tx.update(events).set({ archivedAt: new Date() }).where(eq(events.id, link.eventId));
     await ctx.tx.delete(eventExternalLinks).where(eq(eventExternalLinks.id, link.id));
+    return;
+  }
+
+  if (pendingLink) {
+    await adoptPendingGoogleLink(ctx, pendingLink, event);
     return;
   }
 
@@ -652,9 +869,25 @@ async function applyUpsertMaster(
 
   if (decision === "noop_neither_changed" || decision === "noop_local_wins") return;
 
+  if (decision === "conflict") {
+    // Both sides changed and neither timestamp is later (Checkpoint 9.5):
+    // mirror the CalDAV branch -- record the conflict on the link and apply
+    // NOTHING, so the local edit is never silently overwritten by the remote
+    // one. The link stays parked until a later local edit re-arms it
+    // (pending_push) or the remote moves on (a strictly later `updated`).
+    await ctx.tx
+      .update(eventExternalLinks)
+      .set({
+        syncStatus: "conflict",
+        lastSyncError: "conflict" satisfies CalendarSyncErrorCode,
+      })
+      .where(eq(eventExternalLinks.id, link.id));
+    return;
+  }
+
   const [updated] = await ctx.tx
     .update(events)
-    .set(localEventFieldsToUpdate(intent.fields))
+    .set(localEventFieldsToUpdate(intent.fields, localEvent))
     .where(eq(events.id, localEvent.id))
     .returning();
   await ctx.tx
@@ -703,9 +936,21 @@ async function applyDetachInstance(
     );
     if (decision === "noop_neither_changed" || decision === "noop_local_wins") return;
 
+    if (decision === "conflict") {
+      // Same rule as the master path: park, never overwrite.
+      await ctx.tx
+        .update(calendarEventInstances)
+        .set({
+          syncStatus: "conflict",
+          lastSyncError: "conflict" satisfies CalendarSyncErrorCode,
+        })
+        .where(eq(calendarEventInstances.id, instanceRow.id));
+      return;
+    }
+
     const [updatedChild] = await ctx.tx
       .update(events)
-      .set(localEventFieldsToUpdate(intent.fields))
+      .set(localEventFieldsToUpdate(intent.fields, childEvent))
       .where(eq(events.id, childEvent.id))
       .returning();
     await ctx.tx
@@ -740,6 +985,9 @@ async function applyDetachInstance(
     .insert(events)
     .values({
       ...localEventFieldsToInsert(intent.fields, ctx.defaultProjectId),
+      // A detached child of a LOCAL series is local (fixer review, MINOR-6):
+      // ownership follows the parent, not the transport that delivered it.
+      origin: parentEvent.origin,
       parentEventId: parentEvent.id,
       originalStartAt: intent.originalStartInstant,
     })
@@ -888,7 +1136,17 @@ async function reconcileFullSync(ctx: ApplyContext): Promise<void> {
       ),
     );
   for (const link of existingLinks) {
-    if (link.googleEventId && !ctx.seenLinkKeys.has(link.googleEventId)) {
+    // Only a link that was SYNCED before the listing began can be "absent
+    // from the listing" (fixer review, MAJOR-C). A push that completed after
+    // `listStartedAt` stamped an id the listing could not contain; archiving
+    // that would delete the owner's just-created event on its first sync.
+    // `synced` alone also excludes a still-pending link, whose id is null.
+    if (
+      link.googleEventId &&
+      !ctx.seenLinkKeys.has(link.googleEventId) &&
+      link.syncStatus === "synced" &&
+      link.updatedAt.getTime() < ctx.listStartedAt.getTime()
+    ) {
       await ctx.tx
         .update(events)
         .set({ archivedAt: new Date() })
@@ -909,7 +1167,9 @@ async function reconcileFullSync(ctx: ApplyContext): Promise<void> {
   for (const instance of existingInstances) {
     if (
       instance.googleInstanceEventId &&
-      !ctx.seenInstanceKeys.has(instance.googleInstanceEventId)
+      !ctx.seenInstanceKeys.has(instance.googleInstanceEventId) &&
+      instance.syncStatus === "synced" &&
+      instance.updatedAt.getTime() < ctx.listStartedAt.getTime()
     ) {
       if (instance.localDetachedEventId) {
         await ctx.tx
@@ -923,10 +1183,10 @@ async function reconcileFullSync(ctx: ApplyContext): Promise<void> {
 }
 
 export async function runCalendarSync(
-  deps: { db: Db; client: GoogleCalendarClient; caldavClient?: CalDavClient },
+  deps: { db: Db; client: GoogleCalendarClient; caldavClient?: CalDavClient; boss?: PgBoss },
   data: CalendarSyncCalendarJobData,
 ): Promise<void> {
-  const { db, client, caldavClient } = deps;
+  const { db, client, caldavClient, boss } = deps;
 
   const [connection] = await db
     .select()
@@ -950,17 +1210,13 @@ export async function runCalendarSync(
     accessToken = await resolveFreshAccessToken(db, connection);
   } catch (err) {
     if (err instanceof GoogleOAuthError && err.isPermanent) {
-      await db
-        .update(calendarConnections)
-        .set({
-          status: "needs_reauth",
-          // Never err.message: for Google that is `error_description`, i.e.
-          // vendor prose lifted verbatim out of the token endpoint's JSON
-          // body, and this column is projected by GET /calendar-connections.
-          lastSyncError: classifyCalendarProviderError(err),
-          updatedAt: new Date(),
-        })
-        .where(eq(calendarConnections.id, connection.id));
+      // Through the ONE shared, `status = 'active'`-conditional transition
+      // (Checkpoint 9.5), so this job mints the same ADR-058 episode key the
+      // refresh-token job would and never re-stamps `updated_at` on a retry.
+      // Never err.message: for Google that is `error_description`, i.e.
+      // vendor prose lifted verbatim out of the token endpoint's JSON body,
+      // and this column is projected by GET /calendar-connections.
+      await markNeedsReauth(db, boss, connection.id, classifyCalendarProviderError(err));
       return;
     }
     throw err;
@@ -971,6 +1227,8 @@ export async function runCalendarSync(
   const items: GoogleCalendarEvent[] = [];
   let pageToken: string | undefined;
   let finalSyncToken: string | undefined;
+  // BEFORE the first provider read -- see reconcileFullSync (MAJOR-C).
+  const listStartedAt = new Date();
 
   for (;;) {
     let page;
@@ -996,6 +1254,8 @@ export async function runCalendarSync(
     pageToken = page.nextPageToken;
   }
 
+  // Last resort only (fixer review, MAJOR-D): a payload that carries no zone
+  // is resolved in the EXISTING linked row's zone first -- see applyOneItem.
   const defaultTimezone = "UTC";
 
   await db.transaction(async (tx) => {
@@ -1006,6 +1266,7 @@ export async function runCalendarSync(
       defaultProjectId: calendarRow.projectId,
       seenLinkKeys: new Set(),
       seenInstanceKeys: new Set(),
+      listStartedAt,
     };
 
     const instanceItems: GoogleCalendarEvent[] = [];
@@ -1043,12 +1304,13 @@ export function createCalendarSyncCalendarHandler(
   db: Db,
   client: GoogleCalendarClient,
   caldavClient?: CalDavClient,
+  boss?: PgBoss,
 ): (jobs: Job<CalendarSyncCalendarJobData>[]) => Promise<void> {
   // Nothing provider-authored may reach pgboss.job.output -- see
   // calendar-job-error.ts.
   return withCalendarJobErrorContainment(
     CALENDAR_SYNC_CALENDAR_QUEUE,
-    createCalendarSyncCalendarHandlerUncontained(db, client, caldavClient),
+    createCalendarSyncCalendarHandlerUncontained(db, client, caldavClient, boss),
   );
 }
 
@@ -1056,10 +1318,11 @@ function createCalendarSyncCalendarHandlerUncontained(
   db: Db,
   client: GoogleCalendarClient,
   caldavClient?: CalDavClient,
+  boss?: PgBoss,
 ): (jobs: Job<CalendarSyncCalendarJobData>[]) => Promise<void> {
   return async function handleCalendarSyncCalendar(jobs) {
     for (const job of jobs) {
-      await runCalendarSync({ db, client, caldavClient }, job.data);
+      await runCalendarSync({ db, client, caldavClient, boss }, job.data);
     }
   };
 }

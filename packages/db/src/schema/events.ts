@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   date,
   index,
   integer,
@@ -51,10 +52,28 @@ export const events = pgTable(
     // tasks.ts's archivedAt comment for the full rationale (independent of
     // any lifecycle state; occurrences/item_tags lineage are never touched).
     archivedAt: timestamp("archived_at", { withTimezone: true }),
+    // Ownership (Checkpoint 9.5). 'local' = authored in Personal OS (POST
+    // /events, capture commit) and editable/cancellable here; 'external' =
+    // originated in a connected calendar and synced inward, read-only through
+    // the ordinary edit/cancel surface. The DB default is 'external' ON
+    // PURPOSE: every pre-9.5 production row was sync-ingested, a backfill
+    // UPDATE is not reconcilable, and an insert path that forgets to set the
+    // column fails SAFE (read-only) rather than editable. Every local writer
+    // sets "local" explicitly and a test pins each one.
+    origin: text("origin").notNull().default("external"),
+    // Client-supplied idempotency key for POST /events (Checkpoint 9.5) --
+    // the same role inbox_items.client_uuid plays for /capture. text rather
+    // than uuid because the migration reconcile allowlist binds ADD COLUMN to
+    // text/bytea/date/timestamptz/timestamp.
+    clientUuid: text("client_uuid"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    check("events_origin", sql`${table.origin} in ('local', 'external')`),
+    uniqueIndex("events_client_uuid_idx")
+      .on(table.clientUuid)
+      .where(sql`${table.clientUuid} is not null`),
     index("events_recurrence_due_idx")
       .on(table.rrule)
       .where(sql`${table.rrule} is not null`),

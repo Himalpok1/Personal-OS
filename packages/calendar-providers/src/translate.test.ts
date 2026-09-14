@@ -5,6 +5,8 @@ import {
   googleAllDayToLocal,
   googleExdateInstantToLocalDate,
   googleRecurrenceToLocal,
+  localRecurrenceToGoogle,
+  normalizeRruleParts,
   localAllDayToGoogle,
   mapGoogleEventToLocalUpsert,
   wouldCollideOnSameLocalDate,
@@ -122,6 +124,218 @@ describe("googleRecurrenceToLocal", () => {
 
   it("throws when no RRULE line is present", () => {
     expect(() => googleRecurrenceToLocal(["EXDATE:20260825T090000Z"], "UTC")).toThrow(/RRULE/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Outbound recurrence round-trips (Checkpoint 9.5). Every case goes local ->
+// Google lines -> `googleRecurrenceToLocal` (the EXISTING inbound parser, not
+// a mirror written for the test) and must come back equal: rule parts modulo
+// the RRULE: prefix, the UNTIL instant, the COUNT, and the exdate local dates.
+// ---------------------------------------------------------------------------
+describe("localRecurrenceToGoogle round-trips through googleRecurrenceToLocal", () => {
+  const CHICAGO = "America/Chicago";
+
+  function roundTrip(input: Parameters<typeof localRecurrenceToGoogle>[0]) {
+    const lines = localRecurrenceToGoogle(input);
+    const back = googleRecurrenceToLocal(lines, input.timezone);
+    return {
+      lines,
+      back,
+      backParts: normalizeRruleParts(back.rrule),
+      backExdates: back.exdateInstants.map((i) =>
+        googleExdateInstantToLocalDate(i, input.timezone),
+      ),
+    };
+  }
+
+  it("normalises a bare FREQ=... and a prefixed RRULE:FREQ=... to the same line", () => {
+    const bare = localRecurrenceToGoogle({ rrule: "FREQ=DAILY", allDay: false, timezone: CHICAGO });
+    const prefixed = localRecurrenceToGoogle({
+      rrule: "RRULE:FREQ=DAILY",
+      allDay: false,
+      timezone: CHICAGO,
+    });
+    expect(bare).toEqual(["RRULE:FREQ=DAILY"]);
+    expect(prefixed).toEqual(bare);
+  });
+
+  it("daily", () => {
+    const { backParts, back } = roundTrip({
+      rrule: "FREQ=DAILY",
+      allDay: false,
+      timezone: CHICAGO,
+    });
+    expect(backParts).toEqual(["FREQ=DAILY"]);
+    expect(back.recurrenceUntil).toBeUndefined();
+    expect(back.recurrenceCount).toBeUndefined();
+    expect(back.exdateInstants).toEqual([]);
+  });
+
+  it("weekdays (BYDAY=MO,TU,WE,TH,FR)", () => {
+    const { backParts } = roundTrip({
+      rrule: "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+      allDay: false,
+      timezone: CHICAGO,
+    });
+    expect(backParts).toEqual(["FREQ=WEEKLY", "BYDAY=MO,TU,WE,TH,FR"]);
+  });
+
+  it("weekly BYDAY with INTERVAL", () => {
+    const { backParts } = roundTrip({
+      rrule: "FREQ=WEEKLY;INTERVAL=2;BYDAY=TU",
+      allDay: false,
+      timezone: CHICAGO,
+    });
+    expect(backParts).toEqual(["FREQ=WEEKLY", "INTERVAL=2", "BYDAY=TU"]);
+  });
+
+  it("monthly BYMONTHDAY=-1", () => {
+    const { backParts } = roundTrip({
+      rrule: "FREQ=MONTHLY;BYMONTHDAY=-1",
+      allDay: true,
+      timezone: CHICAGO,
+    });
+    expect(backParts).toEqual(["FREQ=MONTHLY", "BYMONTHDAY=-1"]);
+  });
+
+  it("timed UNTIL in America/Chicago on both sides of the DST fall-back is emitted as a UTC instant and returns as the same instant", () => {
+    // 2026-11-01 is the US fall-back day. An UNTIL just before (CDT, -05:00)
+    // and just after (CST, -06:00) the transition must each survive as the
+    // exact instant, which only the UTC basic form guarantees.
+    for (const iso of ["2026-10-31T09:00:00-05:00", "2026-11-02T09:00:00-06:00"]) {
+      const until = new Date(iso);
+      const { lines, back } = roundTrip({
+        rrule: "FREQ=WEEKLY;BYDAY=MO",
+        recurrenceUntil: until,
+        allDay: false,
+        timezone: CHICAGO,
+      });
+      expect(lines[0]).toMatch(/;UNTIL=\d{8}T\d{6}Z$/);
+      expect(back.recurrenceUntil?.getTime()).toBe(until.getTime());
+      expect(back.rrule).not.toMatch(/UNTIL/);
+    }
+  });
+
+  it("all-day UNTIL is emitted as the local YYYYMMDD and returns as that local date", () => {
+    // The mobile editor stores an all-day until as end-of-local-day; Google's
+    // date-only UNTIL carries the date alone, and the inbound parser resolves
+    // it at END of local day (Checkpoint 9.5 fixer review) -- so the instant
+    // round-trips exactly, not merely the date.
+    const until = new Date("2026-12-31T23:59:59.999-06:00");
+    const { lines, back } = roundTrip({
+      rrule: "FREQ=DAILY",
+      recurrenceUntil: until,
+      allDay: true,
+      timezone: CHICAGO,
+    });
+    expect(lines).toEqual(["RRULE:FREQ=DAILY;UNTIL=20261231"]);
+    expect(googleExdateInstantToLocalDate(back.recurrenceUntil!, CHICAGO)).toBe("2026-12-31");
+    expect(back.recurrenceUntil?.getTime()).toBe(until.getTime());
+  });
+
+  it("a date-only UNTIL resolves to the END of that local day, after ADR-042's local-noon anchor (fixer review, MAJOR-D)", () => {
+    // Before the fix a date-only UNTIL resolved at local MIDNIGHT, which sits
+    // BEFORE the noon anchor every all-day instance is generated at, so the
+    // last day of every inbound all-day series was dropped.
+    const back = googleRecurrenceToLocal(["RRULE:FREQ=DAILY;UNTIL=20261231"], CHICAGO);
+    expect(back.recurrenceUntil?.toISOString()).toBe("2027-01-01T05:59:59.999Z");
+    const noonOfLastDay = new Date("2026-12-31T12:00:00-06:00");
+    expect(back.recurrenceUntil!.getTime()).toBeGreaterThan(noonOfLastDay.getTime());
+    // A date-time UNTIL is an exact instant and is untouched.
+    const exact = googleRecurrenceToLocal(["RRULE:FREQ=DAILY;UNTIL=20261231T120000Z"], CHICAGO);
+    expect(exact.recurrenceUntil?.toISOString()).toBe("2026-12-31T12:00:00.000Z");
+    // An EXDATE date-only value still marks the whole day from local midnight.
+    const ex = googleRecurrenceToLocal(["RRULE:FREQ=DAILY", "EXDATE;VALUE=DATE:20261230"], CHICAGO);
+    expect(ex.exdateInstants[0]?.toISOString()).toBe("2026-12-30T06:00:00.000Z");
+  });
+
+  it("COUNT", () => {
+    const { lines, back, backParts } = roundTrip({
+      rrule: "FREQ=DAILY;INTERVAL=3",
+      recurrenceCount: 10,
+      allDay: false,
+      timezone: CHICAGO,
+    });
+    expect(lines).toEqual(["RRULE:FREQ=DAILY;INTERVAL=3;COUNT=10"]);
+    expect(back.recurrenceCount).toBe(10);
+    expect(backParts).toEqual(["FREQ=DAILY", "INTERVAL=3"]);
+  });
+
+  it("the UNTIL/COUNT columns win over a stale embedded UNTIL/COUNT in the stored string", () => {
+    const lines = localRecurrenceToGoogle({
+      rrule: "RRULE:FREQ=DAILY;COUNT=99;UNTIL=20200101T000000Z",
+      recurrenceCount: 4,
+      allDay: false,
+      timezone: CHICAGO,
+    });
+    expect(lines).toEqual(["RRULE:FREQ=DAILY;COUNT=4"]);
+  });
+
+  it("two timed EXDATEs carry DTSTART's wall-clock time under the series TZID and return as the same local dates", () => {
+    const { lines, backExdates, backParts } = roundTrip({
+      rrule: "FREQ=WEEKLY;BYDAY=MO",
+      recurrenceExdates: ["2026-09-21", "2026-09-14"],
+      allDay: false,
+      timezone: CHICAGO,
+      startsAt: new Date("2026-09-07T09:00:00-05:00"),
+    });
+    expect(lines).toEqual([
+      "RRULE:FREQ=WEEKLY;BYDAY=MO",
+      "EXDATE;TZID=America/Chicago:20260914T090000,20260921T090000",
+    ]);
+    expect(backParts).toEqual(["FREQ=WEEKLY", "BYDAY=MO"]);
+    expect(backExdates).toEqual(["2026-09-14", "2026-09-21"]);
+  });
+
+  it("a timed EXDATE across the DST fall-back keeps the wall-clock time, so the date never shifts", () => {
+    const { backExdates } = roundTrip({
+      rrule: "FREQ=DAILY",
+      recurrenceExdates: ["2026-10-31", "2026-11-02"],
+      allDay: false,
+      timezone: CHICAGO,
+      startsAt: new Date("2026-10-01T23:30:00-05:00"),
+    });
+    expect(backExdates).toEqual(["2026-10-31", "2026-11-02"]);
+  });
+
+  it("two all-day EXDATEs use VALUE=DATE and return as the same local dates", () => {
+    const { lines, backExdates } = roundTrip({
+      rrule: "FREQ=DAILY",
+      recurrenceExdates: ["2026-09-15", "2026-09-15", "2026-09-10"],
+      allDay: true,
+      timezone: CHICAGO,
+    });
+    expect(lines).toEqual(["RRULE:FREQ=DAILY", "EXDATE;VALUE=DATE:20260910,20260915"]);
+    expect(backExdates).toEqual(["2026-09-10", "2026-09-15"]);
+  });
+
+  it("a timed series with no DTSTART falls back to VALUE=DATE exdates, which the inbound parser also accepts", () => {
+    const { lines, backExdates } = roundTrip({
+      rrule: "FREQ=DAILY",
+      recurrenceExdates: ["2026-09-15"],
+      allDay: false,
+      timezone: CHICAGO,
+    });
+    expect(lines[1]).toBe("EXDATE;VALUE=DATE:20260915");
+    expect(backExdates).toEqual(["2026-09-15"]);
+  });
+
+  it("returns no lines at all for a rule with no FREQ, never an empty RRULE line", () => {
+    expect(localRecurrenceToGoogle({ rrule: "", allDay: false, timezone: CHICAGO })).toEqual([]);
+    expect(localRecurrenceToGoogle({ rrule: "RRULE:", allDay: false, timezone: CHICAGO })).toEqual(
+      [],
+    );
+  });
+
+  it("ignores exdates that are not YYYY-MM-DD rather than emitting a malformed line", () => {
+    const lines = localRecurrenceToGoogle({
+      rrule: "FREQ=DAILY",
+      recurrenceExdates: ["not-a-date", "2026-09-15"],
+      allDay: true,
+      timezone: CHICAGO,
+    });
+    expect(lines).toEqual(["RRULE:FREQ=DAILY", "EXDATE;VALUE=DATE:20260915"]);
   });
 });
 
@@ -321,5 +535,43 @@ describe("mapGoogleEventToLocalUpsert", () => {
     const intent = mapGoogleEventToLocalUpsert(event, "one_off", ctx);
     if (intent.kind !== "upsert_standalone_or_master") throw new Error("unreachable");
     expect(intent.fields.timezone).toBe("America/Chicago");
+  });
+
+  it("an all-day master with no start.timeZone reads its recurrence in the EXISTING local row's zone before the connection default (fixer review, MAJOR-D)", () => {
+    const event: GoogleCalendarEvent = {
+      id: "allday-master",
+      status: "confirmed",
+      summary: "Holiday block",
+      start: { date: "2026-12-28" },
+      end: { date: "2026-12-29" },
+      recurrence: ["RRULE:FREQ=DAILY;UNTIL=20261231"],
+      etag: '"1"',
+      updated: "2026-08-01T00:00:00Z",
+      iCalUID: "uid@google.com",
+    };
+    const withExisting = mapGoogleEventToLocalUpsert(event, "master", {
+      defaultTimezone: "UTC",
+      existingTimezone: "America/Chicago",
+    });
+    if (withExisting.kind !== "upsert_standalone_or_master") throw new Error("unreachable");
+    expect(withExisting.fields.recurrenceTimezone).toBe("America/Chicago");
+    expect(withExisting.fields.recurrenceUntil?.toISOString()).toBe("2027-01-01T05:59:59.999Z");
+    // All-day rows carry no timed zone; the caller must not overwrite one.
+    expect(withExisting.fields.timezone).toBeUndefined();
+
+    const withoutExisting = mapGoogleEventToLocalUpsert(event, "master", {
+      defaultTimezone: "UTC",
+    });
+    if (withoutExisting.kind !== "upsert_standalone_or_master") throw new Error("unreachable");
+    expect(withoutExisting.fields.recurrenceTimezone).toBe("UTC");
+
+    // Google's own zone, when sent, wins over both.
+    const withGoogleZone = mapGoogleEventToLocalUpsert(
+      { ...event, start: { date: "2026-12-28", timeZone: "Europe/Berlin" } },
+      "master",
+      { defaultTimezone: "UTC", existingTimezone: "America/Chicago" },
+    );
+    if (withGoogleZone.kind !== "upsert_standalone_or_master") throw new Error("unreachable");
+    expect(withGoogleZone.fields.recurrenceTimezone).toBe("Europe/Berlin");
   });
 });

@@ -262,6 +262,54 @@ notes (
 )
 ```
 
+### Event ownership and outbound sync (Checkpoint 9.5, ADR-064)
+
+`events.origin` (`local` | `external`, CHECKed, **DB default `external`**) makes ownership explicit.
+
+- **`external`** — originated in a connected calendar and synced inward. **Read-only** through
+  Personal OS: `PATCH /events/:id`, `/archive`, `/detach`, `/cancel-occurrence` and `/link-calendar`
+  answer `409 event_not_owned`, and the client renders a read-only card. Inbound sync is the only
+  writer of these rows. Personal OS never writes to a calendar it did not author an event into.
+- **`local`** — authored in Personal OS (`POST /events`, capture `create_event`). Editable and
+  cancellable here. It may be linked at creation to ONE **write-eligible** calendar
+  (`sync_enabled`, connection `active`, and Google `access_role in (owner, writer)` — a NULL role is
+  *unknown*, never writable; CalDAV carries no role and the PUT is the check). The calendar is
+  create-only in 9.5: no move, no unlink.
+
+The default is `external` on purpose: every pre-9.5 row was sync-ingested, a backfill `UPDATE` is
+not reconcilable, and an insert path that forgets the column fails **safe** (read-only) rather than
+editable. Every local writer sets `local` explicitly and a test pins each one.
+
+**Outbound writes are durable intent, never request-scoped.** `POST /events` with a `calendar`
+inserts the event, its occurrence window and an `event_external_links` row (`pending_push`) in one
+transaction; every later mutation of a linked local event flips the link to `pending_push` in the
+same transaction; the push job is enqueued only after commit, and a lost enqueue is re-driven by
+the worker's five-minute calendar cron from the `pending_push` rows themselves. `client_uuid` on
+`POST /events` makes a retried create return the existing row (200) instead of a second event.
+
+**Provider idempotency.** The Google event id is derived from the link id (`link.id` without
+dashes — base32hex-legal) and sent on insert; a retry after a lost response gets `409 duplicate`
+and falls through to an update, so exactly one remote event exists. The CalDAV UID and resource
+href are derived the same way and a `412` on `If-None-Match: *` is "already exists", not a
+conflict. Inbound sync **adopts** a pending link whose derived id matches an incoming remote event
+rather than importing it as a read-only twin. The job's final write is race-safe: ids/etag are
+stored unconditionally, but `sync_status` flips to `synced` only if the link's `updated_at` still
+equals the value read at job start — a mid-push edit leaves the row `pending_push` for its own job.
+
+**Recurrence crosses the boundary through one conversion layer**: `localRecurrenceToGoogle` /
+`googleRecurrenceToLocal` in `packages/calendar-providers/src/translate.ts` (RRULE with
+UNTIL/COUNT appended from their columns, EXDATE lines, all-day as pure dates), round-trip-tested.
+Series editing is whole-series only: "this event only" on a *linked* local series is refused
+(`409 linked_series_detach_unsupported`) because Google does not create an exception from
+`events.insert`; cancelling one occurrence (an EXDATE on the master) is supported.
+
+**Failure semantics.** Transient provider failures retry through pg-boss and dead-letter to an
+occurrence-scoped alert (`calendar.push-event.dead:<eventId>:<link updated_at>`); permanent
+failures (`missing_scope`, `invalid_request`, `not_found`) mark the link `error` without retry and
+surface on the event screen; an inactive connection leaves the link `pending_push` so reconnecting
+resumes it. A remote deletion of a local event archives it locally (as before). A local archive of
+a linked event pushes a remote delete and removes the link only after the provider acknowledges.
+
 ### Snooze is an occurrence property, never a rule edit (Checkpoint 9.4)
 
 `occurrences.snoozed_until` defers ONE instance of a recurring task. `occurs_at` stays the row's identity (the nightly window job re-inserts on it), the parent's `due_at` stays the series anchor, and the rule is untouched. The effective instant every read model buckets on is `greatest(occurs_at, snoozed_until)` — a snooze may only defer; snoozing the reminder to an instant before the due instant moves the reminder, never the due. A one-off task snoozes by moving its own `due_at`/`remind_at`, as before.

@@ -111,10 +111,12 @@ describe("validateParsedTaskRecurrence", () => {
 describe("hasCommittableRecurrence", () => {
   const tz = "America/Chicago";
 
-  it("is true for every non-task tool", () => {
+  it("is true for every tool that carries no recurrence", () => {
     expect(
       hasCommittableRecurrence({ tool: "create_note", args: { title: "x", body: "y" } }, tz),
     ).toBe(true);
+    // Before 9.5 a create_event with an unparseable rule was reported
+    // committable and threw inside the commit; it is now judged like a task.
     expect(
       hasCommittableRecurrence(
         {
@@ -123,7 +125,7 @@ describe("hasCommittableRecurrence", () => {
         },
         tz,
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("is true for a task with no rrule and for a task with a valid rrule", () => {
@@ -151,5 +153,36 @@ describe("hasCommittableRecurrence", () => {
 
   it("is false for a task whose args are not an object", () => {
     expect(hasCommittableRecurrence({ tool: "create_task", args: null }, tz)).toBe(false);
+  });
+});
+
+describe("hasCommittableRecurrence for create_event (Checkpoint 9.5)", () => {
+  it("judges an event rule by the event grammar", () => {
+    const ok = {
+      tool: "create_event",
+      args: { title: "x", start: "2026-09-15T10:00", rrule: "FREQ=WEEKLY;BYDAY=MO" },
+    };
+    expect(hasCommittableRecurrence(ok, "America/Chicago")).toBe(true);
+    const hourly = {
+      tool: "create_event",
+      args: { title: "x", start: "2026-09-15T10:00", rrule: "FREQ=HOURLY" },
+    };
+    expect(hasCommittableRecurrence(hourly, "America/Chicago")).toBe(false);
+    const garbage = {
+      tool: "create_event",
+      args: { title: "x", start: "2026-09-15T10:00", rrule: "every monday" },
+    };
+    expect(hasCommittableRecurrence(garbage, "America/Chicago")).toBe(false);
+    const embedded = {
+      tool: "create_event",
+      args: { title: "x", start: "2026-09-15T10:00", rrule: "FREQ=DAILY;COUNT=3" },
+    };
+    expect(hasCommittableRecurrence(embedded, "America/Chicago")).toBe(false);
+  });
+  it("an event with no rule, or a non-object args, follows the task convention", () => {
+    expect(hasCommittableRecurrence({ tool: "create_event", args: { title: "x" } }, "UTC")).toBe(
+      true,
+    );
+    expect(hasCommittableRecurrence({ tool: "create_event", args: null }, "UTC")).toBe(false);
   });
 });

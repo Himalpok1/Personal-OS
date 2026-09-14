@@ -1,10 +1,12 @@
 import {
+  buildEventRecurrenceRule,
   expandDueDateWindow,
   parseFlexibleDatetime,
   resolveInstantToLocalUntil,
   resolveParsedTaskRecurrence,
   resolveSeriesAnchor,
   toWallClockComponents,
+  validateEventRecurrenceRule,
   validateParsedTaskRecurrence,
   wallClockToNaiveDate,
   type DueDateRecurrenceRule,
@@ -238,6 +240,18 @@ export async function commitParsedEntity(
     case "create_event": {
       const isAllDay = toolCall.args.all_day ?? false;
 
+      // EVERYTHING THAT CAN THROW IS COMPUTED BEFORE ANY ROW IS WRITTEN --
+      // the same discipline the create_task branch adopted in Checkpoint 9.3.
+      // CreateEventToolSchema validates `rrule` as a bare string, so the
+      // parser can emit "every monday" or FREQ=HOURLY. The rule is judged by
+      // the SAME core validator POST/PATCH /events use, in the capture's own
+      // zone (which is the zone it will be stored under), so an invalid rule
+      // throws here with zero rows written and is classified permanent by
+      // the confirm path (hasCommittableRecurrence asks the identical
+      // question before a commit is ever attempted).
+      const rrule = toolCall.args.rrule?.trim() ? toolCall.args.rrule.trim() : undefined;
+      if (rrule) validateEventRecurrenceRule(rrule, ctx.timezone);
+
       // Canonical shape per EventCreateSchema: all-day events carry
       // start_date/end_date (calendar dates), never starts_at/ends_at; timed
       // events carry starts_at/ends_at, never start_date/end_date. The parser
@@ -247,37 +261,98 @@ export async function commitParsedEntity(
       // shape (all_day=true with starts_at set and start_date left null) --
       // that shape breaks Google/CalDAV push and both calendar grids.
       const startInstant = parseFlexibleDatetime(toolCall.args.start, ctx.timezone);
-      const endInstant = toolCall.args.end
+      let endInstant = toolCall.args.end
         ? parseFlexibleDatetime(toolCall.args.end, ctx.timezone)
         : undefined;
+      // A parsed end at or before the start is dropped rather than committed
+      // (Checkpoint 9.5): POST /events refuses `ends_at <= starts_at`, and a
+      // zero-length timed event (no end) is legal today, so the honest
+      // fallback is "no end" -- never a fabricated duration.
+      if (!isAllDay && endInstant && endInstant.getTime() <= startInstant.getTime()) {
+        endInstant = undefined;
+      }
 
       const startDate = isAllDay
         ? resolveInstantToLocalUntil(startInstant, ctx.timezone)
         : undefined;
-      const endDate = isAllDay
+      let endDate = isAllDay
         ? endInstant
           ? resolveInstantToLocalUntil(endInstant, ctx.timezone)
           : startDate
         : undefined;
+      // The all-day twin of the rule above: a parsed end date before the
+      // start date collapses to a single day (EventCreateSchema requires
+      // end_date >= start_date).
+      if (isAllDay && startDate && endDate && endDate < startDate) endDate = startDate;
 
-      const [row] = await db
-        .insert(events)
-        .values({
-          title: toolCall.args.title,
-          location: toolCall.args.location,
-          startsAt: isAllDay ? undefined : startInstant,
-          endsAt: isAllDay ? undefined : endInstant,
-          timezone: ctx.timezone,
-          allDay: isAllDay,
-          startDate,
-          endDate,
-          rrule: toolCall.args.rrule,
-          recurrenceTimezone: toolCall.args.rrule ? ctx.timezone : undefined,
-        })
-        .returning({ id: events.id });
-      if (!row) throw new Error("insert into events returned no row");
+      const recurrenceTimezone = rrule ? ctx.timezone : undefined;
+      const effectiveNow = new Date();
+      // The rolling 90-day window, exactly as POST /events materializes it,
+      // computed BEFORE the transaction so a rule the expander rejects leaves
+      // nothing behind. The event branch has no anchor to persist: a timed
+      // series' DTSTART is starts_at and an all-day series' is start_date at
+      // ADR-042's local-noon anchor, both already on the row.
+      const creationRule = buildEventRecurrenceRule({
+        rrule: rrule ?? null,
+        recurrenceTimezone: recurrenceTimezone ?? null,
+        allDay: isAllDay,
+        startsAt: isAllDay ? null : startInstant,
+        startDate: startDate ?? null,
+      });
+      const seeds = creationRule
+        ? expandDueDateWindow(creationRule, 90, effectiveNow).map((occurrence) => ({
+            occursAt: occurrence.occursAt,
+            occursLocal: wallClockToNaiveDate(occurrence.occursLocal),
+          }))
+        : [];
+
+      // ONE transaction for the event and its occurrences (Checkpoint 9.5,
+      // mirroring the task branch): a crash mid-write leaves nothing behind,
+      // and a pg-boss retry after a failure inside it finds zero event rows
+      // rather than an orphan with no inbox link.
+      const eventId = await db.transaction(async (tx) => {
+        const [row] = await tx
+          .insert(events)
+          .values({
+            // Authored in Personal OS (Checkpoint 9.5 ownership contract):
+            // editable and cancellable through the ordinary surface. Every
+            // local writer sets this explicitly; the column default is the
+            // read-only 'external', so an insert path that forgot would fail
+            // safe rather than editable.
+            origin: "local",
+            title: toolCall.args.title,
+            location: toolCall.args.location,
+            startsAt: isAllDay ? undefined : startInstant,
+            endsAt: isAllDay ? undefined : endInstant,
+            timezone: ctx.timezone,
+            allDay: isAllDay,
+            startDate,
+            endDate,
+            rrule,
+            recurrenceTimezone,
+          })
+          .returning({ id: events.id });
+        if (!row) throw new Error("insert into events returned no row");
+
+        for (const seed of seeds) {
+          await tx
+            .insert(occurrences)
+            .values({
+              parentType: "event",
+              parentId: row.id,
+              occursAt: seed.occursAt,
+              occursLocal: seed.occursLocal,
+              status: "scheduled",
+              lazyGenerated: false,
+            })
+            .onConflictDoNothing({
+              target: [occurrences.parentType, occurrences.parentId, occurrences.occursAt],
+            });
+        }
+        return row.id;
+      });
       return {
-        committed: { entityType: "event", entityId: row.id },
+        committed: { entityType: "event", entityId: eventId },
         unknownProjectReference: false,
       };
     }

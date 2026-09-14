@@ -19,6 +19,9 @@ import type { ErrorBody, Paginated } from "../test/types.js";
 // .strict() (recurrence stays capture(AI)-only), so range-query tests that
 // need a recurring series or a detached override go straight through
 // app.db, same precedent as apps/worker's expand-due-date-window.test.ts.
+// `origin: "local"` because the column defaults to `external` (Checkpoint
+// 9.5) and an external series is read-only through detach/cancel; the 9.5
+// ownership tests set `external` explicitly through `overrides`.
 async function insertRecurringEvent(
   app: FastifyInstance,
   overrides: Partial<typeof events.$inferInsert>,
@@ -32,6 +35,7 @@ async function insertRecurringEvent(
       endsAt: new Date("2026-09-07T09:30:00-05:00"),
       rrule: "FREQ=WEEKLY;INTERVAL=1",
       recurrenceTimezone: "America/Chicago",
+      origin: "local",
       ...overrides,
     })
     .returning({ id: events.id });
@@ -1847,6 +1851,9 @@ describe("events routes", () => {
         googleCalendarId,
         summary: "user@example.com",
         syncEnabled: true,
+        // Checkpoint 9.5: link-calendar applies the write-eligibility rule,
+        // so a Google fixture needs a writable role to be a valid target.
+        accessRole: "owner",
       });
       return { connectionId: connection!.id, googleCalendarId };
     }
@@ -1979,6 +1986,9 @@ describe("events routes", () => {
         googleCalendarId,
         summary: "user@example.com",
         syncEnabled: true,
+        // Checkpoint 9.5: link-calendar applies the write-eligibility rule,
+        // so a Google fixture needs a writable role to be a valid target.
+        accessRole: "owner",
       });
       return { connectionId: connection!.id, googleCalendarId };
     }
@@ -2095,7 +2105,11 @@ describe("events routes", () => {
       expect(await pushJobCount(parentId)).toBeGreaterThan(countAfterLink);
     });
 
-    it("enqueues a push for the parent series when a linked recurring event's occurrence is detached", async () => {
+    // Checkpoint 9.5 review: detaching an occurrence of a LINKED series is
+    // refused (409 linked_series_detach_unsupported) -- the push would carry
+    // the EXDATE while the child is never pushed, so the instance would
+    // vanish from Google. Before 9.5 this test asserted a 201 + push.
+    it("refuses to detach an occurrence of a linked recurring event, enqueuing nothing", async () => {
       const { connectionId, googleCalendarId } =
         await insertActiveConnectionWithSyncEnabledCalendar();
       const parentId = await insertRecurringEvent(app, {});
@@ -2111,8 +2125,9 @@ describe("events routes", () => {
         url: `/events/${parentId}/detach`,
         payload: { original_start_at: "2026-09-07T09:00:00-05:00", title: "Moved instance" },
       });
-      expect(detachResp.statusCode).toBe(201);
-      expect(await pushJobCount(parentId)).toBeGreaterThan(countAfterLink);
+      expect(detachResp.statusCode).toBe(409);
+      expect(detachResp.json<ErrorBody>().error).toBe("linked_series_detach_unsupported");
+      expect(await pushJobCount(parentId)).toBe(countAfterLink);
     });
 
     it("enqueues a push job when archiving an already-linked event", async () => {

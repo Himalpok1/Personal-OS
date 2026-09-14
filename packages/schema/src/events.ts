@@ -6,6 +6,46 @@ import { z } from "zod";
 import { OccurrenceStatusSchema } from "./occurrences.js";
 import { booleanQueryParam, PaginationQuerySchema } from "./pagination.js";
 import { FlexibleDatetimeSchema } from "./parser-tools.js";
+import { CalendarSyncErrorCodeSchema } from "./calendar-sync-errors.js";
+
+// Ownership (Checkpoint 9.5). `local` = authored in Personal OS and
+// editable/cancellable here; `external` = synced inward from a connected
+// calendar and read-only through PATCH/archive/detach/cancel-occurrence
+// (`409 event_not_owned`). Mirrors the `events.origin` CHECK.
+export const EventOriginSchema = z.enum(["local", "external"]);
+export type EventOrigin = z.infer<typeof EventOriginSchema>;
+
+export const EventSyncStatusSchema = z.enum(["synced", "pending_push", "conflict", "error"]);
+export type EventSyncStatus = z.infer<typeof EventSyncStatusSchema>;
+
+// The outbound-link projection of an event (Checkpoint 9.5): null when the
+// event is not linked to any external calendar. Never carries the provider's
+// own ids beyond the calendar identity the client already knows from
+// /calendar-connections -- no etag, no remote event id, no ical uid.
+export const EventSyncStateSchema = z
+  .object({
+    status: EventSyncStatusSchema,
+    connection_id: z.string().uuid(),
+    google_calendar_id: z.string().nullable(),
+    caldav_calendar_url: z.string().nullable(),
+    last_error: CalendarSyncErrorCodeSchema.nullable(),
+  })
+  .strict();
+export type EventSyncState = z.infer<typeof EventSyncStateSchema>;
+
+// Selects the external calendar a NEW local event is written to (POST
+// /events `calendar`). Create-only: PATCH rejects it (`calendar_immutable`).
+export const EventCalendarTargetSchema = z
+  .object({
+    connection_id: z.string().uuid(),
+    google_calendar_id: z.string().min(1).optional(),
+    caldav_calendar_url: z.string().min(1).optional(),
+  })
+  .strict()
+  .refine((v) => (v.google_calendar_id ? 1 : 0) + (v.caldav_calendar_url ? 1 : 0) === 1, {
+    message: "exactly one of google_calendar_id or caldav_calendar_url is required",
+  });
+export type EventCalendarTarget = z.infer<typeof EventCalendarTargetSchema>;
 
 export const EventSchema = z.object({
   id: z.string().uuid(),
@@ -29,6 +69,8 @@ export const EventSchema = z.object({
   original_start_at: z.string().datetime({ offset: true }).nullable(),
   project_id: z.string().uuid().nullable(),
   archived_at: z.string().datetime({ offset: true }).nullable(),
+  origin: EventOriginSchema,
+  sync: EventSyncStateSchema.nullable(),
   created_at: z.string().datetime({ offset: true }),
   updated_at: z.string().datetime({ offset: true }),
 });
@@ -51,6 +93,12 @@ export const EventCreateSchema = z
     recurrence_until: FlexibleDatetimeSchema.nullable().optional(),
     recurrence_count: z.number().int().positive().nullable().optional(),
     recurrence_exdates: z.array(z.string().date()).nullable().optional(),
+    // Idempotency key (Checkpoint 9.5): a retry carrying the same uuid gets
+    // the existing row back (200) instead of a second event.
+    client_uuid: z.string().uuid().optional(),
+    // Optional outbound calendar; the link row is created in the same
+    // transaction as the event so the intent is durable before any push.
+    calendar: EventCalendarTargetSchema.optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

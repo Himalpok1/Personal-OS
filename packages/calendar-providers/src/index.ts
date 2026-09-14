@@ -13,6 +13,9 @@ export {
   createGoogleCalendarClient,
   GoogleSyncTokenExpiredError,
   GoogleCalendarApiError,
+  GOOGLE_FETCH_TIMEOUT_MS,
+  clampGoogleCalendarAccessRole,
+  type GoogleCalendarAccessRole,
   type GoogleCalendarClient,
   type GoogleCalendarEvent,
   type GoogleEventDateTime,
@@ -28,6 +31,7 @@ export {
   FAKE_SYNC_TOKEN_EXPIRED,
   type FakeGoogleCalendarClient,
   type FakeListEventsResponse,
+  type FakeWriteFailure,
   type GoogleCalendarClientFixtures,
 } from "./google-calendar-client.fake.js";
 
@@ -35,12 +39,15 @@ export {
   googleAllDayToLocal,
   localAllDayToGoogle,
   googleRecurrenceToLocal,
+  localRecurrenceToGoogle,
+  normalizeRruleParts,
   googleExdateInstantToLocalDate,
   wouldCollideOnSameLocalDate,
   classifyGoogleEvent,
   mapGoogleEventToLocalUpsert,
   type LocalEventFields,
   type LocalMutationIntent,
+  type LocalRecurrenceInput,
   type GoogleRecurrenceTranslation,
 } from "./translate.js";
 

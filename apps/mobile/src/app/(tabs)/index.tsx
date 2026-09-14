@@ -18,6 +18,7 @@ import { classifyTaskActionError, completionTarget } from "@/components/task-act
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import { useCompleteTask } from "@/queries/tasks";
 import { useToday } from "@/queries/today";
+import { eventDetailHref } from "@/utils/event-navigation";
 import { eventTimeLabel } from "@/utils/event-time-label";
 import { addLocalDays, formatHeaderDate, parseLocalDate } from "@/utils/local-date";
 
@@ -198,9 +199,12 @@ function EventRow({ event }: { event: TodayEventItem }) {
   // chain fell through to occurs_at, which for a recurring all-day instance
   // is ADR-042's local-noon anchor, and rendered "12:00".
   const timeRange = eventTimeLabel(event, "All day");
+  // A recurring instance carries its occurs_at (Checkpoint 9.5, mirroring
+  // components/agenda/agenda-rows.tsx) so the detail screen can offer the
+  // occurrence modal for exactly this instance rather than the series.
   return (
     <Pressable
-      onPress={() => router.push(`/events/${event.id}`)}
+      onPress={() => router.push(eventDetailHref(event.id, event.occurs_at) as Href)}
       className="flex-row items-baseline gap-3 px-4 py-3"
     >
       {/* w-24, matching components/agenda/agenda-rows.tsx: the widest real
@@ -521,11 +525,26 @@ export default function TodayScreen() {
             {formatHeaderDate(data.local_date)}
           </Text>
         </View>
-        <Link href="/tasks" asChild>
-          <Pressable hitSlop={8} className="min-h-[44px] items-center justify-center">
-            <Text className="text-sm text-blue-600 dark:text-blue-400">All tasks</Text>
-          </Pressable>
-        </Link>
+        {/* Header actions, one row: the calendar tab's "+" remains the
+            primary entry point; this makes a new event one tap from the
+            screen the owner lands on (Checkpoint 9.5). */}
+        <View className="flex-row items-center gap-4">
+          <Link href="/events/new" asChild>
+            <Pressable
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="New event"
+              className="min-h-[44px] items-center justify-center"
+            >
+              <Text className="text-sm text-blue-600 dark:text-blue-400">+ Event</Text>
+            </Pressable>
+          </Link>
+          <Link href="/tasks" asChild>
+            <Pressable hitSlop={8} className="min-h-[44px] items-center justify-center">
+              <Text className="text-sm text-blue-600 dark:text-blue-400">All tasks</Text>
+            </Pressable>
+          </Link>
+        </View>
       </View>
 
       <View className="mt-3 flex-row flex-wrap gap-2 px-4">

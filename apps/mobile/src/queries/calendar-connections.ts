@@ -1,15 +1,18 @@
 import type {
   CalendarConnectionCalendarUpdate,
+  CalendarTarget,
   ConnectCaldavCalendarRequest,
   ConnectGoogleCalendarRequest,
   LinkEventToCalendarRequest,
-  LinkEventToGoogleCalendarRequest,
 } from "@personal-os/schema";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { mergeAvailableCalendars } from "@/calendar-connections/merge-available-calendars";
 import { api } from "./client";
+import { EVENT_MUTATION_INVALIDATION_KEYS } from "./events";
 
 const connectionsKey = ["calendar-connections"] as const;
+export const calendarTargetsKey = ["calendar-targets"] as const;
+
+const NO_TARGETS: readonly CalendarTarget[] = [];
 const availableCalendarsKey = (connectionId: string) =>
   ["calendar-connections", connectionId, "available-calendars"] as const;
 
@@ -72,9 +75,22 @@ export function useAvailableCalendars(connectionId: string | undefined) {
   });
 }
 
+/**
+ * Every connection-level mutation also refreshes the calendar-targets list:
+ * a calendar toggled on, a connection connected, disconnected or re-synced
+ * changes which calendars a NEW event may be written to, and the event
+ * screens read that list from `calendarTargetsKey` -- without this a
+ * calendar enabled in Settings became a target only after a relaunch.
+ */
+export const CALENDAR_MUTATION_INVALIDATION_KEYS = [connectionsKey, calendarTargetsKey] as const;
+
 function useInvalidateCalendarConnections() {
   const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: connectionsKey });
+  return () => {
+    for (const queryKey of CALENDAR_MUTATION_INVALIDATION_KEYS) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
+  };
 }
 
 export function useConnectGoogleCalendar() {
@@ -105,7 +121,9 @@ export function useUpdateCalendarConnectionCalendars() {
     }) => api.updateCalendarConnectionCalendars(connectionId, body),
     onSuccess: (data, variables) => {
       queryClient.setQueryData(persistedCalendarsKey(variables.connectionId), data);
-      void queryClient.invalidateQueries({ queryKey: connectionsKey });
+      for (const queryKey of CALENDAR_MUTATION_INVALIDATION_KEYS) {
+        void queryClient.invalidateQueries({ queryKey });
+      }
     },
   });
 }
@@ -126,19 +144,25 @@ export function useDisconnectCalendarConnection() {
   });
 }
 
-export function useLinkableGoogleCalendars() {
-  const { data: connectionsData } = useCalendarConnections();
-  const activeConnection = (connectionsData?.items ?? []).find(
-    (connection) => connection.provider === "google" && connection.status === "active",
-  );
-  const { data: available } = useAvailableGoogleCalendars(activeConnection?.id);
-  const { data: persisted } = usePersistedCalendarConnectionCalendars(activeConnection?.id);
+/**
+ * GET /calendar-targets (Checkpoint 9.5): the calendars a NEW local event
+ * may be written to -- sync-enabled, on an active connection, writable.
+ * Replaces the Phase 4 `useLinkableGoogleCalendars`, which merged the
+ * available/persisted calendar lists client-side and offered every
+ * sync-enabled Google calendar whether or not it was writable. `targets` is
+ * a stable empty array until the query resolves, so the pickers can render
+ * nothing without a loading state of their own.
+ */
+export function calendarTargetsQueryOptions() {
+  return {
+    queryKey: calendarTargetsKey,
+    queryFn: () => api.listCalendarTargets(),
+  };
+}
 
-  const calendars = mergeAvailableCalendars(available ?? [], persisted ?? []).filter(
-    (calendar) => calendar.sync_enabled && calendar.google_calendar_id,
-  );
-
-  return { connectionId: activeConnection?.id, calendars };
+export function useCalendarTargets() {
+  const query = useQuery(calendarTargetsQueryOptions());
+  return { ...query, targets: query.data?.items ?? NO_TARGETS };
 }
 
 export function useLinkableCalendars() {
@@ -151,34 +175,15 @@ export function useLinkableCalendars() {
   return { activeConnections };
 }
 
-export function useLinkEventToGoogleCalendar() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      eventId,
-      body,
-    }: {
-      eventId: string;
-      body: LinkEventToGoogleCalendarRequest;
-    }) => api.linkEventToGoogleCalendar(eventId, body),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["events"] });
-    },
-  });
-}
-
 export function useLinkEventToCalendar() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      eventId,
-      body,
-    }: {
-      eventId: string;
-      body: LinkEventToCalendarRequest;
-    }) => api.linkEventToCalendar(eventId, body),
+    mutationFn: ({ eventId, body }: { eventId: string; body: LinkEventToCalendarRequest }) =>
+      api.linkEventToCalendar(eventId, body),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      for (const queryKey of EVENT_MUTATION_INVALIDATION_KEYS) {
+        void queryClient.invalidateQueries({ queryKey });
+      }
     },
   });
 }

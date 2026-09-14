@@ -8,6 +8,11 @@ export default defineConfig({
       "react-native": "react-native-web",
       "expo-router": path.resolve(import.meta.dirname, "./src/__mocks__/expo-router.ts"),
       nativewind: path.resolve(import.meta.dirname, "./src/__mocks__/nativewind.ts"),
+      "@expo/ui/jetpack-compose": path.resolve(
+        import.meta.dirname,
+        "./src/__mocks__/expo-ui-jetpack-compose.ts",
+      ),
+      "expo-crypto": path.resolve(import.meta.dirname, "./src/__mocks__/expo-crypto.ts"),
     },
   },
   test: {

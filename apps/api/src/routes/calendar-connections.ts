@@ -7,6 +7,7 @@ import {
   GoogleOAuthError,
   refreshAccessToken,
 } from "@personal-os/calendar-providers";
+import { errorToken } from "@personal-os/core/logging/logger";
 import { calendarConnectionCalendars, calendarConnections } from "@personal-os/db";
 import {
   AvailableCalendarsResponseSchema,
@@ -21,8 +22,8 @@ import {
   type CalendarConnection,
   type CalendarConnectionCalendar,
 } from "@personal-os/schema";
-import { and, eq } from "drizzle-orm";
-import type { FastifyInstance } from "fastify";
+import { and, eq, inArray, isNotNull, notInArray } from "drizzle-orm";
+import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import { env } from "../env.js";
 import { CALENDAR_SYNC_CALENDAR_QUEUE } from "../queue-names.js";
 
@@ -55,6 +56,7 @@ function toCalendarResponse(
     caldav_calendar_url: row.caldavCalendarUrl ?? null,
     summary: row.summary,
     sync_enabled: row.syncEnabled,
+    access_role: row.accessRole ?? null,
     project_id: row.projectId,
     last_successful_sync_at: row.lastSuccessfulSyncAt
       ? row.lastSuccessfulSyncAt.toISOString()
@@ -226,11 +228,60 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
       if (connection.provider === "google") {
         const accessToken = await resolveAccessTokenForRequest(app, connection);
         const result = await app.googleCalendarClient.listCalendars(accessToken);
-        const response: AvailableGoogleCalendarsResponse = result.items.map((item) => ({
-          google_calendar_id: item.id,
-          summary: item.summary,
-          primary: item.primary ?? false,
-        }));
+        const response: AvailableGoogleCalendarsResponse = [];
+        for (const item of result.items) {
+          // Checkpoint 9.5: the calendarList `accessRole` is the only signal
+          // of whether a Google calendar can be written to, so every read of
+          // the live listing refreshes it onto the persisted row -- UPDATE
+          // only, never an insert: a row exists solely once the user has
+          // chosen the calendar through PATCH .../calendars (which now
+          // resolves the role itself on insert, see below). A listed
+          // calendar that carries no role is stored as NULL, and unknown is
+          // never treated as writable (see calendar-targets.ts). The display
+          // name is refreshed on the same pass.
+          const accessRole = item.accessRole ?? null;
+          await app.db
+            .update(calendarConnectionCalendars)
+            .set({
+              accessRole,
+              ...(item.summary ? { summary: item.summary } : {}),
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(calendarConnectionCalendars.connectionId, connection.id),
+                eq(calendarConnectionCalendars.googleCalendarId, item.id),
+              ),
+            );
+          response.push({
+            google_calendar_id: item.id,
+            summary: item.summary,
+            primary: item.primary ?? false,
+            access_role: accessRole,
+          });
+        }
+        // A persisted calendar ABSENT from the listing (unshared, deleted
+        // upstream) has no known role any more, so its stale one is cleared
+        // rather than left to keep it write-eligible (9.5 review). Skipped
+        // when the listing is empty: an empty calendarList is far more
+        // likely a provider hiccup than the removal of every calendar, and
+        // clearing every role on it would silently empty the target picker.
+        if (result.items.length > 0) {
+          await app.db
+            .update(calendarConnectionCalendars)
+            .set({ accessRole: null, updatedAt: new Date() })
+            .where(
+              and(
+                eq(calendarConnectionCalendars.connectionId, connection.id),
+                isNotNull(calendarConnectionCalendars.googleCalendarId),
+                isNotNull(calendarConnectionCalendars.accessRole),
+                notInArray(
+                  calendarConnectionCalendars.googleCalendarId,
+                  result.items.map((item) => item.id),
+                ),
+              ),
+            );
+        }
         return AvailableGoogleCalendarsResponseSchema.parse(response);
       }
 
@@ -303,6 +354,18 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
       const body = CalendarConnectionCalendarUpdateSchema.array().parse(request.body);
       const results: CalendarConnectionCalendar[] = [];
 
+      // Checkpoint 9.5 review: a Google calendar toggled on here must be an
+      // event target IMMEDIATELY, with its real name. The insert branch used
+      // to write access_role = NULL and the calendar KEY as the summary,
+      // leaving it ineligible (unknown is never writable) and mis-named
+      // until Settings happened to re-read the live listing. One
+      // listCalendars call per PATCH request -- and only when the body
+      // names at least one Google calendar not yet persisted -- resolves
+      // both. A listing failure degrades to the old behaviour rather than
+      // failing the toggle: the row still lands, role NULL, and the next
+      // GET .../available-calendars repairs it. Ids-only log.
+      const listing = await resolveGoogleListingForInserts(app, request.log, connection, body);
+
       for (const item of body) {
         const isCaldav = Boolean(item.caldav_calendar_url);
         const calendarKey = item.google_calendar_id || item.caldav_calendar_url;
@@ -335,15 +398,17 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
             .where(eq(calendarConnectionCalendars.id, existingRow.id))
             .returning();
         } else {
+          const listed = isCaldav ? undefined : listing?.get(item.google_calendar_id!);
           [row] = await app.db
             .insert(calendarConnectionCalendars)
             .values({
               connectionId: connection.id,
               googleCalendarId: isCaldav ? null : item.google_calendar_id,
               caldavCalendarUrl: isCaldav ? item.caldav_calendar_url : null,
-              summary: calendarKey,
+              summary: listed?.summary || calendarKey,
               syncEnabled: item.sync_enabled,
               projectId: item.project_id ?? null,
+              accessRole: listed?.accessRole ?? null,
             })
             .returning();
         }
@@ -445,6 +510,54 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
       return toConnectionResponse(row);
     },
   );
+}
+
+type GoogleListing = Map<string, { summary: string; accessRole: string | null }>;
+
+// One live calendarList read for a PATCH .../calendars request, keyed by
+// google calendar id -- or null when nothing needs it (a CalDAV connection,
+// an inactive Google connection, or a body whose Google calendars are all
+// already persisted) or when the listing cannot be read (token refresh or
+// provider failure). Never throws: the caller's insert falls back to a NULL
+// role and the key as summary.
+async function resolveGoogleListingForInserts(
+  app: FastifyInstance,
+  log: FastifyBaseLogger,
+  connection: typeof calendarConnections.$inferSelect,
+  body: Array<{ google_calendar_id?: string }>,
+): Promise<GoogleListing | null> {
+  if (connection.provider !== "google" || connection.status !== "active") return null;
+  const requested = body
+    .map((item) => item.google_calendar_id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  if (requested.length === 0) return null;
+  const persisted = await app.db
+    .select({ googleCalendarId: calendarConnectionCalendars.googleCalendarId })
+    .from(calendarConnectionCalendars)
+    .where(
+      and(
+        eq(calendarConnectionCalendars.connectionId, connection.id),
+        inArray(calendarConnectionCalendars.googleCalendarId, requested),
+      ),
+    );
+  const persistedIds = new Set(persisted.map((row) => row.googleCalendarId));
+  if (requested.every((id) => persistedIds.has(id))) return null;
+
+  try {
+    const accessToken = await resolveAccessTokenForRequest(app, connection);
+    const result = await app.googleCalendarClient.listCalendars(accessToken);
+    const listing: GoogleListing = new Map();
+    for (const item of result.items) {
+      listing.set(item.id, { summary: item.summary, accessRole: item.accessRole ?? null });
+    }
+    return listing;
+  } catch (err: unknown) {
+    log.warn(
+      { connectionId: connection.id, error: errorToken(err) },
+      "calendar-connections: calendar listing unavailable during PATCH; inserting without access_role",
+    );
+    return null;
+  }
 }
 
 async function resolveAccessTokenForRequest(

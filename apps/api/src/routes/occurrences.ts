@@ -4,7 +4,7 @@ import {
   wallTimeOfNaiveTimestamp,
 } from "@personal-os/core";
 import { errorToken } from "@personal-os/core/logging/logger";
-import { occurrences, tasks } from "@personal-os/db";
+import { events, occurrences, tasks } from "@personal-os/db";
 import {
   MAX_SNOOZE_DAYS,
   OccurrenceListQuerySchema,
@@ -34,6 +34,10 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 type TerminalStatus = "done" | "skipped";
 
 interface TransitionResult {
+  /** Checkpoint 9.5: an occurrence of an EXTERNAL event series (or of a
+   * detached child of one) is read-only, like every other write surface
+   * for such an event. Nothing is written when this is set. */
+  kind?: "event_not_owned";
   id: string;
   parentType: string;
   parentId: string;
@@ -122,6 +126,20 @@ async function transitionOccurrence(
     if (occurrence.status !== "scheduled") {
       return {
         ...base,
+        status: occurrence.status,
+        transitioned: false,
+        completionAnchoredParent: false,
+      };
+    }
+
+    // Checkpoint 9.5 ownership contract: an external event's occurrences are
+    // local view state (nothing is ever pushed for them), but every write
+    // surface for an external event refuses with the same token, and this
+    // one is no exception. Checked BEFORE the update so nothing is written.
+    if (occurrence.parentType === "event" && (await isExternalEventOccurrence(tx, occurrence))) {
+      return {
+        ...base,
+        kind: "event_not_owned",
         status: occurrence.status,
         transitioned: false,
         completionAnchoredParent: false,
@@ -234,6 +252,29 @@ async function transitionOccurrence(
   });
 }
 
+// True when the parent event row exists and is external, or is a detached
+// child whose own parent is external (the same rule events.ts applies as
+// isExternallyOwned). A missing parent row is not "external": the
+// occurrence is then orphaned view state and the transition proceeds as
+// before.
+async function isExternalEventOccurrence(
+  tx: { select: FastifyInstance["db"]["select"] },
+  occurrence: { parentId: string },
+): Promise<boolean> {
+  const [parent] = await tx
+    .select({ origin: events.origin, parentEventId: events.parentEventId })
+    .from(events)
+    .where(eq(events.id, occurrence.parentId));
+  if (!parent) return false;
+  if (parent.origin === "external") return true;
+  if (parent.parentEventId === null) return false;
+  const [grandparent] = await tx
+    .select({ origin: events.origin })
+    .from(events)
+    .where(eq(events.id, parent.parentEventId));
+  return grandparent?.origin === "external";
+}
+
 async function enqueueSuccessorRecheck(
   app: FastifyInstance,
   result: TransitionResult,
@@ -317,6 +358,7 @@ export default function occurrencesRoutes(app: FastifyInstance): void {
   app.post<{ Params: { id: string } }>("/occurrences/:id/complete", async (request, reply) => {
     const result = await transitionOccurrence(app, request.params.id, "done", "complete");
     if (!result) return reply.code(404).send({ error: "not_found" });
+    if (result.kind === "event_not_owned") return reply.code(409).send({ error: result.kind });
     await enqueueSuccessorRecheck(app, result, "completed", "complete");
     return reply.code(200).send({ id: result.id, status: result.status });
   });
@@ -324,6 +366,7 @@ export default function occurrencesRoutes(app: FastifyInstance): void {
   app.post<{ Params: { id: string } }>("/occurrences/:id/skip", async (request, reply) => {
     const result = await transitionOccurrence(app, request.params.id, "skipped", "skip");
     if (!result) return reply.code(404).send({ error: "not_found" });
+    if (result.kind === "event_not_owned") return reply.code(409).send({ error: result.kind });
     await enqueueSuccessorRecheck(app, result, "skipped", "skip");
     return reply.code(200).send({ id: result.id, status: result.status });
   });

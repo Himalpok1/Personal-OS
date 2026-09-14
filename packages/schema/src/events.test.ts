@@ -116,10 +116,112 @@ describe("Event schemas", () => {
         original_start_at: null,
         project_id: null,
         archived_at: null,
+        origin: "local",
+        sync: null,
         created_at: "2026-08-20T12:00:00Z",
         updated_at: "2026-08-20T12:00:00Z",
       });
       expect(result.success).toBe(true);
+    });
+
+    it("requires origin and a nullable sync projection (9.5)", () => {
+      const base = {
+        id: "123e4567-e89b-12d3-a456-426614174000",
+        title: "T",
+        description: null,
+        location: null,
+        starts_at: "2026-08-20T12:00:00Z",
+        ends_at: null,
+        timezone: "UTC",
+        all_day: false,
+        start_date: null,
+        end_date: null,
+        rrule: null,
+        recurrence_timezone: null,
+        recurrence_until: null,
+        recurrence_count: null,
+        recurrence_exdates: null,
+        parent_event_id: null,
+        original_start_at: null,
+        project_id: null,
+        archived_at: null,
+        created_at: "2026-08-20T12:00:00Z",
+        updated_at: "2026-08-20T12:00:00Z",
+      };
+      expect(EventSchema.safeParse(base).success).toBe(false);
+      expect(EventSchema.safeParse({ ...base, origin: "imported", sync: null }).success).toBe(
+        false,
+      );
+      const linked = EventSchema.safeParse({
+        ...base,
+        origin: "external",
+        sync: {
+          status: "pending_push",
+          connection_id: "123e4567-e89b-12d3-a456-426614174001",
+          google_calendar_id: "primary",
+          caldav_calendar_url: null,
+          last_error: null,
+        },
+      });
+      expect(linked.success).toBe(true);
+      // The projection is strict: no etag / remote id / ical uid may leak.
+      expect(
+        EventSchema.safeParse({
+          ...base,
+          origin: "local",
+          sync: {
+            status: "synced",
+            connection_id: "123e4567-e89b-12d3-a456-426614174001",
+            google_calendar_id: "primary",
+            caldav_calendar_url: null,
+            last_error: null,
+            google_etag: "x",
+          },
+        }).success,
+      ).toBe(false);
+    });
+  });
+
+  describe("EventCreateSchema calendar target (9.5)", () => {
+    const timed = { title: "T", timezone: "UTC", starts_at: "2026-08-20T12:00:00Z" };
+    it("accepts client_uuid and exactly one calendar identity", () => {
+      expect(
+        EventCreateSchema.safeParse({
+          ...timed,
+          client_uuid: "123e4567-e89b-12d3-a456-426614174000",
+          calendar: {
+            connection_id: "123e4567-e89b-12d3-a456-426614174001",
+            google_calendar_id: "primary",
+          },
+        }).success,
+      ).toBe(true);
+      expect(
+        EventCreateSchema.safeParse({
+          ...timed,
+          calendar: { connection_id: "123e4567-e89b-12d3-a456-426614174001" },
+        }).success,
+      ).toBe(false);
+      expect(
+        EventCreateSchema.safeParse({
+          ...timed,
+          calendar: {
+            connection_id: "123e4567-e89b-12d3-a456-426614174001",
+            google_calendar_id: "primary",
+            caldav_calendar_url: "https://x/cal/",
+          },
+        }).success,
+      ).toBe(false);
+    });
+    it("rejects origin on create and calendar on update", () => {
+      expect(EventCreateSchema.safeParse({ ...timed, origin: "local" }).success).toBe(false);
+      expect(
+        EventUpdateSchema.safeParse({
+          calendar: {
+            connection_id: "123e4567-e89b-12d3-a456-426614174001",
+            google_calendar_id: "primary",
+          },
+        }).success,
+      ).toBe(false);
     });
   });
 });

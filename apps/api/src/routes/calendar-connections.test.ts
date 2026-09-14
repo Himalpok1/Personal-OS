@@ -4,6 +4,7 @@ import {
   createFakeGoogleCalendarClient,
   type FakeCalDavClient,
   type FakeGoogleCalendarClient,
+  type ListCalendarsResult,
 } from "@personal-os/calendar-providers";
 import { calendarConnectionCalendars, calendarConnections } from "@personal-os/db";
 import type {
@@ -168,11 +169,29 @@ describe("calendar-connections routes", () => {
         url: `/calendar-connections/${connectionId}/available-calendars`,
       });
       expect(response.statusCode).toBe(200);
-      const body =
-        response.json<Array<{ google_calendar_id: string; summary: string; primary: boolean }>>();
+      const body = response.json<
+        Array<{
+          google_calendar_id: string;
+          summary: string;
+          primary: boolean;
+          access_role: string | null;
+        }>
+      >();
+      // The fixture calendars carry no accessRole, so the projected role is
+      // null (unknown) -- see the 9.5 cases below for a role that is carried.
       expect(body).toEqual([
-        { google_calendar_id: "primary", summary: "user@example.com", primary: true },
-        { google_calendar_id: "work@group.calendar.google.com", summary: "Work", primary: false },
+        {
+          google_calendar_id: "primary",
+          summary: "user@example.com",
+          primary: true,
+          access_role: null,
+        },
+        {
+          google_calendar_id: "work@group.calendar.google.com",
+          summary: "Work",
+          primary: false,
+          access_role: null,
+        },
       ]);
     });
 
@@ -688,5 +707,379 @@ describe("calendar-connections routes", () => {
         expect(listRes.body).not.toContain(needle);
       }
     });
+  });
+});
+
+// Checkpoint 9.5: the Google calendarList `accessRole` is the only signal of
+// whether a calendar can be WRITTEN to, so reading the live listing persists
+// it onto the rows the user has already chosen. Own app instance because the
+// suite above pins a role-less fixture list.
+describe("calendar-connections routes -- access_role (Checkpoint 9.5)", () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    const fakeClient = createFakeGoogleCalendarClient({
+      calendars: [
+        { id: "primary", summary: "user@example.com", primary: true, accessRole: "owner" },
+        { id: "team@group.calendar.google.com", summary: "Team", accessRole: "writer" },
+        { id: "holidays@group.calendar.google.com", summary: "Holidays", accessRole: "reader" },
+        { id: "noroles@group.calendar.google.com", summary: "No role" },
+      ],
+    });
+    app = await buildTestApp({
+      googleCalendarClient: fakeClient,
+      caldavClient: createFakeCalDavClient(),
+    });
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(async () => {
+    await truncateTestTables(app);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns access_role from the live listing (null when Google sends none)", async () => {
+    const connectionId = (await connectViaApi(app)).json<CalendarConnection>().id;
+    const response = await app.inject({
+      method: "GET",
+      url: `/calendar-connections/${connectionId}/available-calendars`,
+    });
+    expect(response.statusCode).toBe(200);
+    const roles = response
+      .json<Array<{ google_calendar_id: string; access_role: string | null }>>()
+      .map((item) => [item.google_calendar_id, item.access_role]);
+    expect(roles).toEqual([
+      ["primary", "owner"],
+      ["team@group.calendar.google.com", "writer"],
+      ["holidays@group.calendar.google.com", "reader"],
+      ["noroles@group.calendar.google.com", null],
+    ]);
+  });
+
+  it("persists access_role onto EXISTING calendar rows only -- never inserts a row for a listed calendar", async () => {
+    const connectionId = (await connectViaApi(app)).json<CalendarConnection>().id;
+    // The user has chosen two calendars (PATCH), so two rows exist.
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/calendar-connections/${connectionId}/calendars`,
+      payload: [
+        { google_calendar_id: "primary", sync_enabled: true },
+        { google_calendar_id: "holidays@group.calendar.google.com", sync_enabled: false },
+      ],
+    });
+    expect(patch.statusCode).toBe(200);
+    // 9.5 review: the insert branch resolves the role from the listing, so
+    // a toggled-on calendar is a target immediately.
+    const patched = new Map(
+      patch.json<CalendarConnectionCalendar[]>().map((row) => [row.google_calendar_id, row]),
+    );
+    expect(patched.get("primary")?.access_role).toBe("owner");
+    expect(patched.get("primary")?.summary).toBe("user@example.com");
+    expect(patched.get("holidays@group.calendar.google.com")?.access_role).toBe("reader");
+    expect(patched.get("holidays@group.calendar.google.com")?.summary).toBe("Holidays");
+
+    const listing = await app.inject({
+      method: "GET",
+      url: `/calendar-connections/${connectionId}/available-calendars`,
+    });
+    expect(listing.statusCode).toBe(200);
+
+    const rows = await app.db
+      .select()
+      .from(calendarConnectionCalendars)
+      .where(eq(calendarConnectionCalendars.connectionId, connectionId));
+    expect(rows).toHaveLength(2);
+    const byId = new Map(rows.map((row) => [row.googleCalendarId, row.accessRole]));
+    expect(byId.get("primary")).toBe("owner");
+    expect(byId.get("holidays@group.calendar.google.com")).toBe("reader");
+
+    // GET .../calendars projects the persisted role; a later PATCH keeps it.
+    const persisted = await app.inject({
+      method: "GET",
+      url: `/calendar-connections/${connectionId}/calendars`,
+    });
+    const projected = new Map(
+      persisted
+        .json<CalendarConnectionCalendar[]>()
+        .map((row) => [row.google_calendar_id, row.access_role]),
+    );
+    expect(projected.get("primary")).toBe("owner");
+    expect(projected.get("holidays@group.calendar.google.com")).toBe("reader");
+
+    const repatch = await app.inject({
+      method: "PATCH",
+      url: `/calendar-connections/${connectionId}/calendars`,
+      payload: [{ google_calendar_id: "primary", sync_enabled: false }],
+    });
+    expect(repatch.json<CalendarConnectionCalendar[]>()[0]?.access_role).toBe("owner");
+  });
+
+  it("refreshes a stale role on every read of the listing", async () => {
+    const connectionId = (await connectViaApi(app)).json<CalendarConnection>().id;
+    await app.db.insert(calendarConnectionCalendars).values({
+      connectionId,
+      googleCalendarId: "team@group.calendar.google.com",
+      summary: "Team",
+      syncEnabled: true,
+      accessRole: "reader",
+    });
+    await app.inject({
+      method: "GET",
+      url: `/calendar-connections/${connectionId}/available-calendars`,
+    });
+    const [row] = await app.db
+      .select()
+      .from(calendarConnectionCalendars)
+      .where(eq(calendarConnectionCalendars.connectionId, connectionId));
+    expect(row!.accessRole).toBe("writer");
+  });
+
+  it("refreshes the persisted display name from the listing (the PATCH insert branch stores the key)", async () => {
+    const connectionId = (await connectViaApi(app)).json<CalendarConnection>().id;
+    await app.db.insert(calendarConnectionCalendars).values({
+      connectionId,
+      googleCalendarId: "team@group.calendar.google.com",
+      summary: "team@group.calendar.google.com",
+      syncEnabled: true,
+      accessRole: null,
+    });
+    await app.inject({
+      method: "GET",
+      url: `/calendar-connections/${connectionId}/available-calendars`,
+    });
+    const [row] = await app.db
+      .select()
+      .from(calendarConnectionCalendars)
+      .where(eq(calendarConnectionCalendars.connectionId, connectionId));
+    expect(row!.summary).toBe("Team");
+    expect(row!.accessRole).toBe("writer");
+  });
+});
+
+// Checkpoint 9.5 review: the PATCH insert branch resolves access_role and the
+// real summary with ONE listCalendars call per request, and tolerates the
+// listing failing; the available-calendars read clears the role of a
+// persisted calendar that is no longer listed. Own app instance with a
+// wrapped fake whose listing can be counted, swapped or made to throw.
+describe("calendar-connections routes -- role resolution on PATCH and stale-role clearing (9.5 review)", () => {
+  let app: FastifyInstance;
+  let listCalendarsCalls = 0;
+  let listCalendarsFailure: Error | null = null;
+  let calendars: ListCalendarsResult["items"];
+
+  const defaultCalendars = (): ListCalendarsResult["items"] => [
+    { id: "primary", summary: "user@example.com", primary: true, accessRole: "owner" },
+    { id: "team@group.calendar.google.com", summary: "Team", accessRole: "writer" },
+    { id: "holidays@group.calendar.google.com", summary: "Holidays", accessRole: "reader" },
+  ];
+
+  beforeAll(async () => {
+    const inner = createFakeGoogleCalendarClient();
+    const wrapped: FakeGoogleCalendarClient = {
+      ...inner,
+      listCalendars() {
+        listCalendarsCalls += 1;
+        if (listCalendarsFailure) return Promise.reject(listCalendarsFailure);
+        return Promise.resolve({ items: calendars });
+      },
+    };
+    app = await buildTestApp({
+      googleCalendarClient: wrapped,
+      caldavClient: createFakeCalDavClient(),
+    });
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(async () => {
+    await truncateTestTables(app);
+    listCalendarsCalls = 0;
+    listCalendarsFailure = null;
+    calendars = defaultCalendars();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function persistedRows(connectionId: string) {
+    const rows = await app.db
+      .select()
+      .from(calendarConnectionCalendars)
+      .where(eq(calendarConnectionCalendars.connectionId, connectionId));
+    return new Map(rows.map((row) => [row.googleCalendarId, row]));
+  }
+
+  it("PATCH insert persists the listed access_role and real summary with ONE listing call for the whole body", async () => {
+    const connectionId = (await connectViaApi(app)).json<CalendarConnection>().id;
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/calendar-connections/${connectionId}/calendars`,
+      payload: [
+        { google_calendar_id: "team@group.calendar.google.com", sync_enabled: true },
+        { google_calendar_id: "holidays@group.calendar.google.com", sync_enabled: true },
+      ],
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(listCalendarsCalls).toBe(1);
+
+    const body = new Map(
+      patch.json<CalendarConnectionCalendar[]>().map((row) => [row.google_calendar_id, row]),
+    );
+    expect(body.get("team@group.calendar.google.com")).toMatchObject({
+      summary: "Team",
+      access_role: "writer",
+      sync_enabled: true,
+    });
+    expect(body.get("holidays@group.calendar.google.com")).toMatchObject({
+      summary: "Holidays",
+      access_role: "reader",
+    });
+    const rows = await persistedRows(connectionId);
+    expect(rows.get("team@group.calendar.google.com")?.accessRole).toBe("writer");
+    expect(rows.get("team@group.calendar.google.com")?.summary).toBe("Team");
+
+    // The calendar is a write target immediately -- no Settings re-read.
+    const targets = await app.inject({ method: "GET", url: "/calendar-targets" });
+    expect(
+      targets
+        .json<{ items: Array<{ google_calendar_id: string | null }> }>()
+        .items.map((item) => item.google_calendar_id),
+    ).toEqual(["team@group.calendar.google.com"]);
+  });
+
+  it("PATCH makes no listing call when every Google calendar in the body is already persisted, and keeps the stored role", async () => {
+    const connectionId = (await connectViaApi(app)).json<CalendarConnection>().id;
+    await app.inject({
+      method: "PATCH",
+      url: `/calendar-connections/${connectionId}/calendars`,
+      payload: [{ google_calendar_id: "primary", sync_enabled: true }],
+    });
+    expect(listCalendarsCalls).toBe(1);
+
+    const again = await app.inject({
+      method: "PATCH",
+      url: `/calendar-connections/${connectionId}/calendars`,
+      payload: [{ google_calendar_id: "primary", sync_enabled: false }],
+    });
+    expect(again.statusCode).toBe(200);
+    expect(listCalendarsCalls).toBe(1);
+    expect(again.json<CalendarConnectionCalendar[]>()[0]?.access_role).toBe("owner");
+  });
+
+  it("PATCH insert still succeeds (200) with a NULL role and the key as summary when the listing fails", async () => {
+    const connectionId = (await connectViaApi(app)).json<CalendarConnection>().id;
+    listCalendarsFailure = new Error("upstream said something with user@example.com in it");
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/calendar-connections/${connectionId}/calendars`,
+      payload: [{ google_calendar_id: "team@group.calendar.google.com", sync_enabled: true }],
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json<CalendarConnectionCalendar[]>()[0]).toMatchObject({
+      google_calendar_id: "team@group.calendar.google.com",
+      summary: "team@group.calendar.google.com",
+      access_role: null,
+      sync_enabled: true,
+    });
+    expect(patch.body).not.toContain("upstream said");
+
+    // Not a target until the listing is readable again -- unknown is never
+    // writable -- and the next available-calendars read repairs it.
+    const before = await app.inject({ method: "GET", url: "/calendar-targets" });
+    expect(before.json<{ items: unknown[] }>().items).toEqual([]);
+    listCalendarsFailure = null;
+    await app.inject({
+      method: "GET",
+      url: `/calendar-connections/${connectionId}/available-calendars`,
+    });
+    const rows = await persistedRows(connectionId);
+    expect(rows.get("team@group.calendar.google.com")?.accessRole).toBe("writer");
+    expect(rows.get("team@group.calendar.google.com")?.summary).toBe("Team");
+  });
+
+  it("PATCH inserts a calendar the listing does not know with a NULL role", async () => {
+    const connectionId = (await connectViaApi(app)).json<CalendarConnection>().id;
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/calendar-connections/${connectionId}/calendars`,
+      payload: [{ google_calendar_id: "unlisted@group.calendar.google.com", sync_enabled: true }],
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json<CalendarConnectionCalendar[]>()[0]).toMatchObject({
+      summary: "unlisted@group.calendar.google.com",
+      access_role: null,
+    });
+  });
+
+  it("available-calendars clears the stale role of a persisted calendar that is ABSENT from the listing", async () => {
+    const connectionId = (await connectViaApi(app)).json<CalendarConnection>().id;
+    await app.inject({
+      method: "PATCH",
+      url: `/calendar-connections/${connectionId}/calendars`,
+      payload: [
+        { google_calendar_id: "primary", sync_enabled: true },
+        { google_calendar_id: "team@group.calendar.google.com", sync_enabled: true },
+      ],
+    });
+    let rows = await persistedRows(connectionId);
+    expect(rows.get("team@group.calendar.google.com")?.accessRole).toBe("writer");
+
+    // The team calendar is unshared upstream: it no longer appears.
+    calendars = defaultCalendars().filter((c) => c.id !== "team@group.calendar.google.com");
+    const listing = await app.inject({
+      method: "GET",
+      url: `/calendar-connections/${connectionId}/available-calendars`,
+    });
+    expect(listing.statusCode).toBe(200);
+    rows = await persistedRows(connectionId);
+    expect(rows.get("team@group.calendar.google.com")?.accessRole).toBeNull();
+    expect(rows.get("primary")?.accessRole).toBe("owner");
+    const targets = await app.inject({ method: "GET", url: "/calendar-targets" });
+    expect(
+      targets
+        .json<{ items: Array<{ google_calendar_id: string | null }> }>()
+        .items.map((item) => item.google_calendar_id),
+    ).toEqual(["primary"]);
+  });
+
+  it("available-calendars leaves every role alone when the listing comes back EMPTY", async () => {
+    const connectionId = (await connectViaApi(app)).json<CalendarConnection>().id;
+    await app.inject({
+      method: "PATCH",
+      url: `/calendar-connections/${connectionId}/calendars`,
+      payload: [{ google_calendar_id: "primary", sync_enabled: true }],
+    });
+    calendars = [];
+    const listing = await app.inject({
+      method: "GET",
+      url: `/calendar-connections/${connectionId}/available-calendars`,
+    });
+    expect(listing.statusCode).toBe(200);
+    const rows = await persistedRows(connectionId);
+    expect(rows.get("primary")?.accessRole).toBe("owner");
+  });
+
+  it("available-calendars never touches another connection's rows when clearing stale roles", async () => {
+    const a = (await connectViaApi(app, "sub-a", "a@example.com")).json<CalendarConnection>().id;
+    const b = (await connectViaApi(app, "sub-b", "b@example.com")).json<CalendarConnection>().id;
+    await app.db.insert(calendarConnectionCalendars).values({
+      connectionId: b,
+      googleCalendarId: "only-on-b@group.calendar.google.com",
+      summary: "B",
+      syncEnabled: true,
+      accessRole: "owner",
+    });
+    await app.inject({ method: "GET", url: `/calendar-connections/${a}/available-calendars` });
+    const rows = await persistedRows(b);
+    expect(rows.get("only-on-b@group.calendar.google.com")?.accessRole).toBe("owner");
   });
 });

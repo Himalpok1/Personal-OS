@@ -68,6 +68,10 @@ export function classifyCalendarProviderError(err: unknown): CalendarSyncErrorCo
     // A CalDAV 403 is a plain authorization refusal, not a scope grant -- CalDAV
     // has no scope concept at all.
     if (err.status === 401 || err.status === 403) return "auth_failed";
+    // 405 on a calendar collection is the server refusing the METHOD -- a
+    // read-only collection that will not take a PUT/DELETE. Authentication
+    // was fine; the permission is what is missing (fixer review, MINOR-3).
+    if (err.status === 405) return "missing_scope";
     return fromHttpStatus(err.status, "provider_error");
   }
 
@@ -107,28 +111,46 @@ function fromHttpStatus(status: number, fallback: CalendarSyncErrorCode): Calend
  * code, so both halves are checked: neither alone is reliable across Node
  * versions and undici releases.
  */
+const NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EPIPE",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "CERT_HAS_EXPIRED",
+]);
+
+function hasNetworkErrorCode(value: unknown, depth = 0): boolean {
+  if (!value || typeof value !== "object" || depth > 3) return false;
+  const code = (value as { code?: unknown }).code;
+  if (typeof code === "string" && NETWORK_ERROR_CODES.has(code)) return true;
+  // undici wraps a dual-stack connect failure in an AggregateError whose
+  // `errors` carry the per-address codes; `cause.code` alone is undefined.
+  const nested = (value as { errors?: unknown }).errors;
+  if (Array.isArray(nested)) return nested.some((inner) => hasNetworkErrorCode(inner, depth + 1));
+  return false;
+}
+
 function isNetworkError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  // An aborted or timed-out fetch rejects with a DOMException named
+  // `AbortError` / `TimeoutError` (Checkpoint 9.5: googleFetch carries
+  // `AbortSignal.timeout`). DOMException extends Error in current Node, but
+  // the name is the documented contract, so it is checked without an
+  // instanceof guard -- a runtime where it did not extend Error would
+  // otherwise classify a timeout as `provider_error` and stop retrying.
+  const name = (err as { name?: unknown }).name;
+  if (name === "AbortError" || name === "TimeoutError") return true;
   if (!(err instanceof Error)) return false;
-  if (err.name === "AbortError" || err.name === "TimeoutError") return true;
   const cause: unknown = (err as { cause?: unknown }).cause;
-  const code =
-    cause && typeof cause === "object" && "code" in cause
-      ? (cause as { code?: unknown }).code
-      : undefined;
-  if (typeof code === "string") {
-    return [
-      "ECONNREFUSED",
-      "ECONNRESET",
-      "ENOTFOUND",
-      "ETIMEDOUT",
-      "EAI_AGAIN",
-      "EHOSTUNREACH",
-      "ENETUNREACH",
-      "EPIPE",
-      "UND_ERR_CONNECT_TIMEOUT",
-      "UND_ERR_SOCKET",
-      "CERT_HAS_EXPIRED",
-    ].includes(code);
-  }
+  if (hasNetworkErrorCode(cause)) return true;
+  if (hasNetworkErrorCode(err)) return true;
   return err instanceof TypeError && err.message.toLowerCase().includes("fetch");
 }

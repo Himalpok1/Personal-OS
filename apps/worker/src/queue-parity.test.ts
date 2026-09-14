@@ -311,3 +311,57 @@ describe("occurrences dead-letter attach survives an existing queue", () => {
     expect(source).toMatch(/await attachOccurrencesDeadLetterQueues\(boss\);/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The same attach, for calendar.google.push-event. Checkpoint 9.5.
+// ---------------------------------------------------------------------------
+//
+// The primary has existed in production since Phase 4 WITHOUT a dead letter,
+// and BOTH processes create it (the api sends to it from the events routes),
+// so both must run the three-step sequence. The worker's lives in
+// jobs/calendar-push-queues.ts (runtime-proven by calendar-push-queues.test.ts);
+// the api's is inline in plugins/boss.ts and is scanned here.
+const WORKER_PUSH_ATTACH = path.resolve(import.meta.dirname, "jobs/calendar-push-queues.ts");
+
+describe("calendar.google.push-event dead-letter attach survives an existing queue", () => {
+  it.each([
+    ["apps/worker/src/jobs/calendar-push-queues.ts", WORKER_PUSH_ATTACH],
+    ["apps/api/src/plugins/boss.ts", API_BOSS],
+  ])("%s calls updateQueue for calendar.google.push-event", (_label, file) => {
+    const source = readFileSync(file, "utf8").replace(/\s+/g, " ");
+    expect(source).toMatch(
+      /updateQueue\(CALENDAR_PUSH_EVENT_QUEUE, \{ deadLetter: CALENDAR_PUSH_EVENT_DEAD_QUEUE,? \}\)/,
+    );
+  });
+
+  it.each([
+    ["apps/worker/src/jobs/calendar-push-queues.ts", WORKER_PUSH_ATTACH],
+    ["apps/api/src/plugins/boss.ts", API_BOSS],
+  ])("%s creates the dead queue BEFORE the primary (FK ordering)", (_label, file) => {
+    const source = readFileSync(file, "utf8");
+    const dead = source.indexOf("createQueue(CALENDAR_PUSH_EVENT_DEAD_QUEUE)");
+    const primary = source.indexOf("createQueue(CALENDAR_PUSH_EVENT_QUEUE");
+    expect(dead).toBeGreaterThan(-1);
+    expect(primary).toBeGreaterThan(-1);
+    expect(dead).toBeLessThan(primary);
+  });
+
+  it("index.ts invokes the attach, binds the dead handler to the dead queue with boss, and gives the primary handler boss too", () => {
+    const source = readFileSync(WORKER_INDEX, "utf8");
+    expect(source).toMatch(/await attachCalendarPushDeadLetterQueue\(boss\);/);
+    expect(source).toMatch(
+      /work\(\s*CALENDAR_PUSH_EVENT_DEAD_QUEUE,\s*createCalendarPushEventDeadLetterHandler\(db,\s*boss\),?\s*\)/,
+    );
+    expect(source).not.toMatch(
+      /work\(\s*CALENDAR_PUSH_EVENT_QUEUE,\s*createCalendarPushEventDeadLetterHandler/,
+    );
+    // The primary handler needs `boss` so a permanent OAuth failure alerts
+    // through the shared needs_reauth transition (ADR-058 key minted once).
+    expect(source).toMatch(
+      /work\(\s*CALENDAR_PUSH_EVENT_QUEUE,\s*createCalendarPushEventHandler\(db,\s*googleCalendarClient,\s*caldavClient,\s*boss\),?\s*\)/,
+    );
+    // And the redrive rides the existing refresh cron -- no new schedule.
+    expect(source).toMatch(/await redrivePendingCalendarPushes\(db, boss\);/);
+    expect(source).not.toMatch(/schedule\([^)]*redrive/i);
+  });
+});

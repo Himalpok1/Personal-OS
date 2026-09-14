@@ -35,6 +35,7 @@ import {
   listAvailableGoogleCalendars,
   listCalendarConnectionCalendars,
   listCalendarConnections,
+  listCalendarTargets,
   syncCalendarConnectionNow,
   updateCalendarConnectionCalendars,
 } from "./calendar-connections.js";
@@ -131,6 +132,8 @@ export type {
   CalendarConnection,
   CalendarConnectionCalendar,
   CalendarConnectionCalendarUpdate,
+  CalendarTarget,
+  CalendarTargetsResponse,
   ConnectGoogleCalendarRequest,
 } from "./calendar-connections.js";
 export type { DeviceListParams } from "./devices.js";
@@ -329,6 +332,7 @@ export function createApiClient(baseUrl: string) {
     listAvailableGoogleCalendars: listAvailableGoogleCalendars.bind(null, baseUrl),
     listAvailableCalendars: listAvailableCalendars.bind(null, baseUrl),
     listCalendarConnectionCalendars: listCalendarConnectionCalendars.bind(null, baseUrl),
+    listCalendarTargets: listCalendarTargets.bind(null, baseUrl),
     updateCalendarConnectionCalendars: updateCalendarConnectionCalendars.bind(null, baseUrl),
     syncCalendarConnectionNow: syncCalendarConnectionNow.bind(null, baseUrl),
     disconnectCalendarConnection: disconnectCalendarConnection.bind(null, baseUrl),

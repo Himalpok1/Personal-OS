@@ -47,6 +47,9 @@ export const CalendarConnectionCalendarSchema = z.object({
   caldav_calendar_url: z.string().nullable().optional(),
   summary: z.string(),
   sync_enabled: z.boolean(),
+  // Provider-reported write capability (9.5): Google calendarList accessRole
+  // ('owner' | 'writer' | 'reader' | 'freeBusyReader'); null = unknown/CalDAV.
+  access_role: z.string().nullable().optional(),
   project_id: z.string().uuid().nullable(),
   last_successful_sync_at: z.string().datetime({ offset: true }).nullable(),
   last_full_sync_at: z.string().datetime({ offset: true }).nullable(),
@@ -102,7 +105,26 @@ export const AvailableGoogleCalendarSchema = z.object({
   google_calendar_id: z.string(),
   summary: z.string(),
   primary: z.boolean(),
+  access_role: z.string().nullable().optional(),
 });
+
+// GET /calendar-targets (Checkpoint 9.5): the calendars a NEW local event may
+// be written to -- sync-enabled, on an active connection, and (Google)
+// reported writable. A Google calendar with no recorded access role is NOT a
+// target; CalDAV calendars carry null and are offered (the PUT is the check).
+export const CalendarTargetSchema = z
+  .object({
+    connection_id: z.string().uuid(),
+    provider: z.enum(["google", "caldav"]),
+    google_calendar_id: z.string().nullable(),
+    caldav_calendar_url: z.string().nullable(),
+    summary: z.string(),
+    access_role: z.string().nullable(),
+  })
+  .strict();
+export type CalendarTarget = z.infer<typeof CalendarTargetSchema>;
+export const CalendarTargetsResponseSchema = z.object({ items: z.array(CalendarTargetSchema) });
+export type CalendarTargetsResponse = z.infer<typeof CalendarTargetsResponseSchema>;
 export type AvailableGoogleCalendar = z.infer<typeof AvailableGoogleCalendarSchema>;
 
 export const AvailableGoogleCalendarsResponseSchema = z.array(AvailableGoogleCalendarSchema);

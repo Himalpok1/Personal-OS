@@ -134,6 +134,14 @@ export async function registerBoss(app: FastifyInstance): Promise<void> {
       ...QUEUE_RETRY_OPTIONS[CALENDAR_PUSH_EVENT_QUEUE],
       deadLetter: CALENDAR_PUSH_EVENT_DEAD_QUEUE,
     });
+    // Checkpoint 9.5: the third step, for the same reason as capture.parse and
+    // occurrences.generate-lazy above. This process sends to push-event from
+    // POST/PATCH /events and the archive route; the queue has existed in
+    // production since Phase 4 WITHOUT a dead letter, so the createQueue
+    // above is a silent no-op there and only this UPDATE attaches it.
+    await boss.updateQueue(CALENDAR_PUSH_EVENT_QUEUE, {
+      deadLetter: CALENDAR_PUSH_EVENT_DEAD_QUEUE,
+    });
     // Phase 6 Checkpoint 6.3. apps/api sends to this queue from
     // POST /health-connections/:id/sync and the backfill routes; the worker
     // owns the handler. Created identically in both processes because

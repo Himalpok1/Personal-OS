@@ -163,6 +163,25 @@ function icalValueToInstant(value: ParsedIcalDateTimeValue, fallbackTimezone: st
   );
 }
 
+/**
+ * UNTIL is an INCLUSIVE bound (RFC 5545 3.3.10), so a date-only `UNTIL=YYYYMMDD`
+ * -- the form Google emits for every all-day series -- means "through the end
+ * of that local day", and resolves to 23:59:59.999 in the master's zone
+ * (Checkpoint 9.5, fixer review). Resolving it at local MIDNIGHT, as the
+ * generic value reader does for an EXDATE, put the bound BEFORE ADR-042's
+ * local-noon anchor of that same day, so the final instance of every inbound
+ * all-day series was silently dropped on every apply. A date-time UNTIL is
+ * an exact instant and is unchanged.
+ */
+function icalUntilToInstant(value: ParsedIcalDateTimeValue, fallbackTimezone: string): Date {
+  if (value.hour !== undefined) return icalValueToInstant(value, fallbackTimezone);
+  const endOfDay = resolveWallClockToInstant(
+    { year: value.year, month: value.month, day: value.day, hour: 23, minute: 59, second: 59 },
+    fallbackTimezone,
+  );
+  return new Date(endOfDay.getTime() + 999);
+}
+
 // A single RFC5545 content line's PARAM=value pairs (e.g. `TZID=America/Chicago;VALUE=DATE`).
 function parseIcalParams(paramsSegment: string): Map<string, string> {
   const params = new Map<string, string>();
@@ -227,7 +246,7 @@ export function googleRecurrenceToLocal(
         const key = eq === -1 ? part : part.slice(0, eq);
         const value = eq === -1 ? "" : part.slice(eq + 1);
         if (key === "UNTIL") {
-          recurrenceUntil = icalValueToInstant(parseIcalDateTimeValue(value), dtstartTimezone);
+          recurrenceUntil = icalUntilToInstant(parseIcalDateTimeValue(value), dtstartTimezone);
           continue;
         }
         if (key === "COUNT") {
@@ -274,6 +293,115 @@ export function googleRecurrenceToLocal(
     recurrenceTimezone: dtstartTimezone,
     exdateInstants,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Outbound recurrence: local columns -> Google `recurrence` lines (Checkpoint 9.5)
+// ---------------------------------------------------------------------------
+
+export interface LocalRecurrenceInput {
+  /** Stored rule -- either bare `FREQ=...` or prefixed `RRULE:FREQ=...`; both are accepted. */
+  rrule: string;
+  /** The series' own columns; these WIN over any UNTIL=/COUNT= a stored string still embeds. */
+  recurrenceUntil?: Date | null;
+  recurrenceCount?: number | null;
+  /** `YYYY-MM-DD` local dates in `timezone`, this app's exdate representation. */
+  recurrenceExdates?: string[] | null;
+  allDay: boolean;
+  /** The series' recurrence timezone (`recurrence_timezone`, falling back to the event's). */
+  timezone: string;
+  /**
+   * Timed series only: the series DTSTART instant. Google requires a timed
+   * master's EXDATE values to carry the instance's wall-clock time, so each
+   * local exdate DATE is combined with DTSTART's time-of-day in `timezone`.
+   * Ignored for all-day series. When absent on a timed series the exdates
+   * fall back to `VALUE=DATE`, which the inbound parser also round-trips.
+   */
+  startsAt?: Date | null;
+}
+
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+function icalDateBasic(year: number, month: number, day: number): string {
+  return `${String(year).padStart(4, "0")}${pad2(month)}${pad2(day)}`;
+}
+
+function icalUtcBasic(instant: Date): string {
+  return (
+    `${icalDateBasic(instant.getUTCFullYear(), instant.getUTCMonth() + 1, instant.getUTCDate())}` +
+    `T${pad2(instant.getUTCHours())}${pad2(instant.getUTCMinutes())}${pad2(instant.getUTCSeconds())}Z`
+  );
+}
+
+/**
+ * Strips an optional `RRULE:` prefix and any embedded UNTIL=/COUNT= parts,
+ * returning the remaining `KEY=VALUE` parts in stored order. Shared by the
+ * outbound builder and by tests that compare a rule modulo its prefix.
+ */
+export function normalizeRruleParts(rrule: string): string[] {
+  const body = rrule.trim().replace(/^RRULE:/i, "");
+  return body
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .filter((part) => !/^(UNTIL|COUNT)=/i.test(part));
+}
+
+/**
+ * The inverse of {@link googleRecurrenceToLocal}: this app's recurrence
+ * columns -> the RFC5545 lines Google's `recurrence` field takes on a master.
+ *
+ * Forms are chosen to be the ones Google itself emits, so that what this
+ * function writes is what {@link googleRecurrenceToLocal} already reads back
+ * (proven by round-trip tests in translate.test.ts):
+ *   - `UNTIL` on a timed series is the UTC basic form `YYYYMMDDTHHMMSSZ`
+ *     (an instant round-trips exactly); on an all-day series it is the local
+ *     `YYYYMMDD` of the until instant in `timezone`.
+ *   - `EXDATE` on an all-day series is `EXDATE;VALUE=DATE:YYYYMMDD`; on a
+ *     timed series it is `EXDATE;TZID=<zone>:YYYYMMDDTHHMMSS` at DTSTART's
+ *     wall-clock time, one line carrying every date comma-joined.
+ * Exdates are emitted sorted and de-duplicated. Returns `[]` for a rule that
+ * has no FREQ, so a caller never sends Google an empty RRULE line.
+ */
+export function localRecurrenceToGoogle(input: LocalRecurrenceInput): string[] {
+  const parts = normalizeRruleParts(input.rrule);
+  if (!parts.some((part) => /^FREQ=/i.test(part))) return [];
+
+  if (input.recurrenceUntil) {
+    if (input.allDay) {
+      const { year, month, day } = toWallClockComponents(input.recurrenceUntil, input.timezone);
+      parts.push(`UNTIL=${icalDateBasic(year, month, day)}`);
+    } else {
+      parts.push(`UNTIL=${icalUtcBasic(input.recurrenceUntil)}`);
+    }
+  } else if (input.recurrenceCount !== null && input.recurrenceCount !== undefined) {
+    parts.push(`COUNT=${Math.trunc(input.recurrenceCount)}`);
+  }
+
+  const lines = [`RRULE:${parts.join(";")}`];
+
+  const exdates = [
+    ...new Set((input.recurrenceExdates ?? []).filter((d) => DATE_ONLY.test(d))),
+  ].sort();
+  if (exdates.length > 0) {
+    if (input.allDay || !input.startsAt) {
+      const values = exdates.map((d) => {
+        const { year, month, day } = parseDateOnly(d);
+        return icalDateBasic(year, month, day);
+      });
+      lines.push(`EXDATE;VALUE=DATE:${values.join(",")}`);
+    } else {
+      const start = toWallClockComponents(input.startsAt, input.timezone);
+      const time = `${pad2(start.hour)}${pad2(start.minute)}${pad2(start.second)}`;
+      const values = exdates.map((d) => {
+        const { year, month, day } = parseDateOnly(d);
+        return `${icalDateBasic(year, month, day)}T${time}`;
+      });
+      lines.push(`EXDATE;TZID=${input.timezone}:${values.join(",")}`);
+    }
+  }
+
+  return lines;
 }
 
 /**
@@ -376,8 +504,17 @@ export type LocalMutationIntent =
 
 /** Context a caller supplies for translation decisions this package can't infer from the Google event alone. */
 export interface CalendarSyncConnectionContext {
-  /** Fallback IANA timezone for a timed event whose `start.timeZone` Google omitted. */
+  /** Last-resort IANA timezone when neither Google nor an existing local row supplies one. */
   defaultTimezone: string;
+  /**
+   * The zone of the EXISTING linked local row (`recurrence_timezone ?? timezone`),
+   * when the caller has one (Checkpoint 9.5). Google omits `start.timeZone` on
+   * every all-day event, so without this an all-day master that this app
+   * itself pushed would come back resolved in `defaultTimezone` ("UTC" at the
+   * only call site) and its date-only UNTIL would land in the wrong zone.
+   * Precedence: `event.start.timeZone`, then this, then `defaultTimezone`.
+   */
+  existingTimezone?: string;
 }
 
 function googleEventDateTimeToInstant(dt: GoogleEventDateTime): Date {
@@ -393,6 +530,13 @@ function googleEventDateTimeToInstant(dt: GoogleEventDateTime): Date {
     return new Date(Date.UTC(year, month - 1, day));
   }
   throw new Error("GoogleEventDateTime has neither dateTime nor date");
+}
+
+function resolveEventTimezone(
+  event: GoogleCalendarEvent,
+  ctx: CalendarSyncConnectionContext,
+): string {
+  return event.start?.timeZone ?? ctx.existingTimezone ?? ctx.defaultTimezone;
 }
 
 function translateFields(
@@ -422,7 +566,7 @@ function translateFields(
   if (!event.start?.dateTime || !event.end?.dateTime) {
     throw new Error(`timed event "${event.id}" is missing start.dateTime/end.dateTime`);
   }
-  const timezone = event.start.timeZone ?? ctx.defaultTimezone;
+  const timezone = resolveEventTimezone(event, ctx);
   return {
     ...base,
     allDay: false,
@@ -475,7 +619,10 @@ export function mapGoogleEventToLocalUpsert(
     if (!event.recurrence) {
       throw new Error(`master event "${event.id}" is missing recurrence`);
     }
-    const timezone = fields.timezone ?? connectionContext.defaultTimezone;
+    // A timed master already resolved its zone; an all-day master carries no
+    // `fields.timezone`, so the same precedence chain decides the zone its
+    // date-only UNTIL and EXDATEs are read in (see CalendarSyncConnectionContext).
+    const timezone = fields.timezone ?? resolveEventTimezone(event, connectionContext);
     const translation = googleRecurrenceToLocal(event.recurrence, timezone);
     const recurrenceExdates = translation.exdateInstants.map((instant) =>
       googleExdateInstantToLocalDate(instant, timezone),

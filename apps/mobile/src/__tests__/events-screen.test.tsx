@@ -1,7 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import type { EventRangeItem } from "@personal-os/schema";
+import type { CalendarTarget, EventRangeItem, EventSyncState } from "@personal-os/schema";
 import type { RecurrenceEditorState } from "@personal-os/core/recurrence/editor";
-import { EditEventView, computeOccurrenceTiming } from "@/app/events/[id]";
+import {
+  EditEventView,
+  ExternalEventView,
+  computeOccurrenceTiming,
+  type EditEventViewProps,
+} from "@/app/events/[id]";
+import { NewEventView, type NewEventViewProps } from "@/app/events/new";
+import { CalendarTargetPicker } from "@/components/calendar/calendar-target-picker";
+import { DateField } from "@/components/date-field";
+import { DateTimeField } from "@/components/datetime-field";
+import { EVENT_NOT_OWNED_MESSAGE } from "@/components/events/event-form-state";
+import { eventDetailHref } from "@/utils/event-navigation";
 
 function findByTestId(node: any, testID: string): any {
   if (!node || typeof node !== "object") return null;
@@ -47,6 +58,91 @@ const mockRecurrenceState: RecurrenceEditorState = {
   rawRrule: null,
 };
 
+const GOOGLE_TARGET: CalendarTarget = {
+  connection_id: "11111111-1111-4111-8111-111111111111",
+  provider: "google",
+  google_calendar_id: "primary",
+  caldav_calendar_url: null,
+  summary: "Work",
+  access_role: "owner",
+};
+
+const SYNCED: EventSyncState = {
+  status: "synced",
+  connection_id: GOOGLE_TARGET.connection_id,
+  google_calendar_id: "primary",
+  caldav_calendar_url: null,
+  last_error: null,
+};
+
+// The calendar/link props every EditEventView render needs (Checkpoint 9.5):
+// unlinked, no targets, so nothing calendar-related appears unless a test
+// overrides it.
+const LINK_PROPS = {
+  sync: null,
+  calendarTargets: [] as CalendarTarget[],
+  linkTarget: null,
+  onLinkTargetChange: vi.fn(),
+  onLink: vi.fn(),
+};
+
+function editProps(overrides: Partial<EditEventViewProps> = {}): EditEventViewProps {
+  return {
+    modalVisible: false,
+    onDismissModal: vi.fn(),
+    onSelectEditOccurrence: vi.fn(),
+    onSelectEditSeries: vi.fn(),
+    onCancelOccurrence: vi.fn(),
+    isDetached: false,
+    editMode: "standard",
+    recurrence: mockRecurrenceState,
+    onRecurrenceChange: vi.fn(),
+    title: "Weekly Sync",
+    onTitleChange: vi.fn(),
+    description: "",
+    onDescriptionChange: vi.fn(),
+    location: "",
+    onLocationChange: vi.fn(),
+    allDay: false,
+    onAllDayChange: vi.fn(),
+    timed: { startsAt: "2026-09-06T09:00:00-05:00", endsAt: "2026-09-06T10:00:00-05:00" },
+    onStartsAtChange: vi.fn(),
+    onEndsAtChange: vi.fn(),
+    allDayRange: { startDate: null, endDate: null },
+    onStartDateChange: vi.fn(),
+    onEndDateChange: vi.fn(),
+    timezone: "America/Chicago",
+    onSubmit: vi.fn(),
+    onProjectIdChange: vi.fn(),
+    onDelete: vi.fn(),
+    ...LINK_PROPS,
+    ...overrides,
+  };
+}
+
+function findByType(node: any, type: unknown): any[] {
+  const out: any[] = [];
+  const walk = (n: any) => {
+    if (!n || typeof n !== "object") return;
+    if (Array.isArray(n)) {
+      n.forEach(walk);
+      return;
+    }
+    if (n.type === type) out.push(n);
+    if (n.props?.children) walk(n.props.children);
+  };
+  walk(node);
+  return out;
+}
+
+// <CalendarTargetPicker> is a hook-free component element in the views' trees,
+// opaque to the walk until called (the task-repeat-field tests do the same
+// for RecurrenceEditor). Returns its rendered tree, or null if it is absent.
+function expandPicker(tree: any): any {
+  const element = findByType(tree, CalendarTargetPicker)[0];
+  return element ? CalendarTargetPicker(element.props) : null;
+}
+
 describe("EditEventScreen & Recurring Exceptions UX", () => {
   it("displays action modal with 3 options when modalVisible is true", () => {
     const onSelectEditOccurrence = vi.fn();
@@ -72,19 +168,16 @@ describe("EditEventScreen & Recurring Exceptions UX", () => {
       onLocationChange: vi.fn(),
       allDay: false,
       onAllDayChange: vi.fn(),
-      startDate: "",
-      onStartDateChange: vi.fn(),
-      endDate: "",
-      onEndDateChange: vi.fn(),
-      startsAt: "2026-09-06T14:00:00.000Z",
+      timed: { startsAt: "2026-09-06T09:00:00-05:00", endsAt: "2026-09-06T10:00:00-05:00" },
       onStartsAtChange: vi.fn(),
-      endsAt: "2026-09-06T15:00:00.000Z",
       onEndsAtChange: vi.fn(),
+      allDayRange: { startDate: null, endDate: null },
+      onStartDateChange: vi.fn(),
+      onEndDateChange: vi.fn(),
       timezone: "America/Chicago",
       onSubmit: vi.fn(),
       onProjectIdChange: vi.fn(),
-      onGoogleCalendarChange: vi.fn(),
-      onLinkToGoogleCalendar: vi.fn(),
+      ...LINK_PROPS,
     });
 
     const modal = findByTestId(tree, "recurring-action-modal");
@@ -257,19 +350,16 @@ describe("EditEventScreen & Recurring Exceptions UX", () => {
       onLocationChange: vi.fn(),
       allDay: false,
       onAllDayChange: vi.fn(),
-      startDate: "",
-      onStartDateChange: vi.fn(),
-      endDate: "",
-      onEndDateChange: vi.fn(),
-      startsAt: "2026-09-20T14:00:00.000Z",
+      timed: { startsAt: "2026-09-20T09:00:00-05:00", endsAt: "2026-09-20T10:00:00-05:00" },
       onStartsAtChange: vi.fn(),
-      endsAt: "2026-09-20T15:00:00.000Z",
       onEndsAtChange: vi.fn(),
+      allDayRange: { startDate: null, endDate: null },
+      onStartDateChange: vi.fn(),
+      onEndDateChange: vi.fn(),
       timezone: "America/Chicago",
       onSubmit: vi.fn(),
       onProjectIdChange: vi.fn(),
-      onGoogleCalendarChange: vi.fn(),
-      onLinkToGoogleCalendar: vi.fn(),
+      ...LINK_PROPS,
     });
 
     expect(findByTestId(tree, "recurrence-section")).toBeNull();
@@ -295,26 +385,21 @@ describe("EditEventScreen & Recurring Exceptions UX", () => {
       onLocationChange: vi.fn(),
       allDay: false,
       onAllDayChange: vi.fn(),
-      startDate: "",
-      onStartDateChange: vi.fn(),
-      endDate: "",
-      onEndDateChange: vi.fn(),
-      startsAt: "2026-09-20T16:00:00.000Z",
+      timed: { startsAt: "2026-09-20T11:00:00-05:00", endsAt: "2026-09-20T12:00:00-05:00" },
       onStartsAtChange: vi.fn(),
-      endsAt: "2026-09-20T17:00:00.000Z",
       onEndsAtChange: vi.fn(),
+      allDayRange: { startDate: null, endDate: null },
+      onStartDateChange: vi.fn(),
+      onEndDateChange: vi.fn(),
       timezone: "America/Chicago",
       onSubmit,
       onProjectIdChange: vi.fn(),
-      onGoogleCalendarChange: vi.fn(),
-      onLinkToGoogleCalendar: vi.fn(),
+      ...LINK_PROPS,
     });
 
     const banner = findByTestId(tree, "detached-event-banner");
     expect(banner).toBeTruthy();
-    expect(getTextContent(banner)).toContain(
-      "This is a modified occurrence of a recurring event.",
-    );
+    expect(getTextContent(banner)).toContain("This is a modified occurrence of a recurring event.");
 
     expect(findByTestId(tree, "recurrence-section")).toBeNull();
 
@@ -357,17 +442,11 @@ describe("EditEventScreen & Recurring Exceptions UX", () => {
       status: null,
     };
 
-    const getCalendarRoute = (entry: EventRangeItem) => {
-      if (entry.is_recurring_instance && entry.occurs_at) {
-        return `/events/${entry.id}?occursAt=${encodeURIComponent(entry.occurs_at)}`;
-      }
-      return `/events/${entry.id}`;
-    };
-
-    expect(getCalendarRoute(recurringInstance)).toBe(
+    // The one href rule Today and the Agenda both use (utils/event-navigation.ts).
+    expect(eventDetailHref(recurringInstance.id, recurringInstance.occurs_at)).toBe(
       "/events/series-uuid-1?occursAt=2026-09-15T14%3A00%3A00.000Z",
     );
-    expect(getCalendarRoute(oneOffEvent)).toBe("/events/oneoff-uuid-1");
+    expect(eventDetailHref(oneOffEvent.id, oneOffEvent.occurs_at)).toBe("/events/oneoff-uuid-1");
   });
 
   it("calls detachEvent API and cancelEventOccurrence API properly", async () => {
@@ -396,5 +475,267 @@ describe("EditEventScreen & Recurring Exceptions UX", () => {
     expect(cancelSpy).toHaveBeenCalledWith("series-1", {
       original_start_at: "2026-09-15T14:00:00.000Z",
     });
+  });
+});
+
+describe("Checkpoint 9.5 -- ownership, calendar and sync on the edit screen", () => {
+  it("an external event renders read-only: no Save, no Delete, no link, no occurrence modal", () => {
+    const tree = ExternalEventView({
+      title: "Team offsite",
+      whenLabel: "Sep 15, 2026 · all day",
+      location: "HQ",
+      description: "Bring a laptop https://example.invalid/join",
+      calendarLine: "From connected calendar · read-only",
+      timezone: "America/Chicago",
+    });
+    expect(findByTestId(tree, "external-event-view")).toBeTruthy();
+    expect(getTextContent(findByTestId(tree, "external-event-banner"))).toBe(
+      "From connected calendar · read-only",
+    );
+    expect(getTextContent(findByTestId(tree, "external-event-when"))).toBe(
+      "Sep 15, 2026 · all day",
+    );
+    expect(getTextContent(tree)).toContain("Team offsite");
+    expect(getTextContent(tree)).toContain("Bring a laptop https://example.invalid/join");
+    for (const id of [
+      "save-event-button",
+      "archive-event-button",
+      "link-calendar-button",
+      "calendar-target-picker",
+      "recurring-action-modal",
+      "recurrence-section",
+    ]) {
+      expect(findByTestId(tree, id), id).toBeNull();
+    }
+    // Every string lands in a <Text>; nothing is a link or a pressable.
+    expect(findByType(tree, "a")).toEqual([]);
+  });
+
+  it("a local linked event shows its calendar and the sync status line, and no link control", () => {
+    const tree = EditEventView(
+      editProps({
+        sync: { ...SYNCED, status: "pending_push" },
+        calendarTargets: [GOOGLE_TARGET],
+      }),
+    );
+    expect(getTextContent(findByTestId(tree, "event-calendar-label"))).toBe("Synced to Work");
+    expect(getTextContent(findByTestId(tree, "event-sync-status"))).toBe("Syncing to calendar…");
+    expect(expandPicker(tree)).toBeNull();
+    expect(findByTestId(tree, "link-calendar-button")).toBeNull();
+    expect(findByTestId(tree, "save-event-button")).toBeTruthy();
+    expect(findByTestId(tree, "archive-event-button")).toBeTruthy();
+  });
+
+  it("a synced local event shows no status line; conflict and error each get theirs", () => {
+    expect(
+      findByTestId(EditEventView(editProps({ sync: SYNCED })), "event-sync-status"),
+    ).toBeNull();
+    expect(
+      getTextContent(
+        findByTestId(
+          EditEventView(editProps({ sync: { ...SYNCED, status: "conflict" } })),
+          "event-sync-status",
+        ),
+      ),
+    ).toBe("Calendar conflict — your latest edit hasn't been synced. Save it again to retry.");
+    expect(
+      getTextContent(
+        findByTestId(
+          EditEventView(editProps({ sync: { ...SYNCED, status: "error" } })),
+          "event-sync-status",
+        ),
+      ),
+    ).toBe("Calendar sync failed");
+  });
+
+  it("a LINKED local series' occurrence modal offers only 'Cancel this occurrence' and 'Edit entire series'", () => {
+    const onSelectEditOccurrence = vi.fn();
+    const linked = EditEventView(
+      editProps({ modalVisible: true, sync: SYNCED, onSelectEditOccurrence }),
+    );
+    expect(findByTestId(linked, "recurring-action-modal").props.visible).toBe(true);
+    expect(findByTestId(linked, "edit-occurrence-button")).toBeNull();
+    expect(findByTestId(linked, "edit-series-button")).toBeTruthy();
+    expect(findByTestId(linked, "cancel-occurrence-button")).toBeTruthy();
+    expect(getTextContent(findByTestId(linked, "recurring-action-modal"))).not.toContain(
+      "Edit this occurrence",
+    );
+    expect(getTextContent(findByTestId(linked, "recurring-action-modal"))).toContain(
+      "synced to a calendar",
+    );
+    expect(onSelectEditOccurrence).not.toHaveBeenCalled();
+    // An UNLINKED local series keeps all three options.
+    const unlinked = EditEventView(editProps({ modalVisible: true, sync: null }));
+    expect(findByTestId(unlinked, "edit-occurrence-button")).toBeTruthy();
+  });
+
+  it("a failed calendar-targets query shows a muted note on an unlinked event, and nothing on a linked one", () => {
+    const unlinked = EditEventView(editProps({ calendarTargetsError: true }));
+    expect(getTextContent(findByTestId(unlinked, "calendar-targets-error"))).toBe(
+      "Couldn't load calendars — this event will stay in Personal OS only",
+    );
+    expect(findByTestId(unlinked, "save-event-button")).toBeTruthy();
+    expect(findByTestId(EditEventView(editProps()), "calendar-targets-error")).toBeNull();
+    expect(
+      findByTestId(
+        EditEventView(editProps({ calendarTargetsError: true, sync: SYNCED })),
+        "calendar-targets-error",
+      ),
+    ).toBeNull();
+  });
+
+  it("a local UNLINKED event offers the link picker from the targets list, and the button once a target is picked", () => {
+    const onLinkTargetChange = vi.fn();
+    const onLink = vi.fn();
+    const noPick = EditEventView(
+      editProps({ calendarTargets: [GOOGLE_TARGET], onLinkTargetChange }),
+    );
+    expect(getTextContent(findByTestId(noPick, "event-calendar-label"))).toBe(
+      "Not synced to a calendar",
+    );
+    const picker = expandPicker(noPick);
+    expect(findByTestId(picker, "calendar-target-picker")).toBeTruthy();
+    expect(findByTestId(noPick, "link-calendar-button")).toBeNull();
+    findByTestId(picker, `calendar-target-${GOOGLE_TARGET.connection_id}:primary`).props.onPress();
+    expect(onLinkTargetChange).toHaveBeenCalledWith(GOOGLE_TARGET);
+
+    const picked = EditEventView(
+      editProps({ calendarTargets: [GOOGLE_TARGET], linkTarget: GOOGLE_TARGET, onLink }),
+    );
+    const button = findByTestId(picked, "link-calendar-button");
+    expect(button).toBeTruthy();
+    button.props.onPress();
+    expect(onLink).toHaveBeenCalled();
+    // With no writable calendar at all the picker renders nothing.
+    expect(expandPicker(EditEventView(editProps()))).toBeNull();
+  });
+
+  it("a 409 event_not_owned renders the ownership line inline", () => {
+    const tree = EditEventView(editProps({ errorMessage: EVENT_NOT_OWNED_MESSAGE }));
+    expect(getTextContent(findByTestId(tree, "event-error"))).toBe(
+      "This event belongs to a connected calendar and can't be changed here.",
+    );
+  });
+
+  it("timed fields are the picker fields seeded with offset-bearing instants; all-day uses the date-only field", () => {
+    const timed = EditEventView(editProps());
+    const [starts, ends] = findByType(timed, DateTimeField);
+    expect(starts.props.value).toBe("2026-09-06T09:00:00-05:00");
+    expect(ends.props.value).toBe("2026-09-06T10:00:00-05:00");
+    expect(findByType(timed, DateField)).toEqual([]);
+
+    const allDay = EditEventView(
+      editProps({ allDay: true, allDayRange: { startDate: "2026-09-06", endDate: "2026-09-07" } }),
+    );
+    const [startDate, endDate] = findByType(allDay, DateField);
+    expect(startDate.props.value).toBe("2026-09-06");
+    expect(endDate.props.value).toBe("2026-09-07");
+    expect(endDate.props.clearable).toBe(false);
+    expect(findByType(allDay, DateTimeField)).toEqual([]);
+  });
+
+  it("Delete goes through the screen's confirm callback, labelled as a delete", () => {
+    const onDelete = vi.fn();
+    const tree = EditEventView(editProps({ onDelete }));
+    const button = findByTestId(tree, "archive-event-button");
+    expect(getTextContent(button)).toBe("Delete event");
+    button.props.onPress();
+    expect(onDelete).toHaveBeenCalled();
+  });
+});
+
+describe("NewEventView (Checkpoint 9.5)", () => {
+  function newProps(overrides: Partial<NewEventViewProps> = {}): NewEventViewProps {
+    return {
+      timezone: "America/Chicago",
+      title: "Dentist",
+      onTitleChange: vi.fn(),
+      description: "",
+      onDescriptionChange: vi.fn(),
+      location: "",
+      onLocationChange: vi.fn(),
+      allDay: false,
+      onAllDayChange: vi.fn(),
+      timed: { startsAt: "2026-09-15T14:00:00-05:00", endsAt: "2026-09-15T15:00:00-05:00" },
+      onStartsAtChange: vi.fn(),
+      onEndsAtChange: vi.fn(),
+      allDayRange: { startDate: null, endDate: null },
+      onStartDateChange: vi.fn(),
+      onEndDateChange: vi.fn(),
+      recurrence: { ...mockRecurrenceState, enabled: false },
+      onRecurrenceChange: vi.fn(),
+      calendarTargets: [],
+      calendar: null,
+      onCalendarChange: vi.fn(),
+      onProjectIdChange: vi.fn(),
+      formError: null,
+      onSubmit: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  it("hides the calendar picker entirely with zero targets, and offers 'Personal OS only' first otherwise", () => {
+    expect(expandPicker(NewEventView(newProps()))).toBeNull();
+    const picker = expandPicker(NewEventView(newProps({ calendarTargets: [GOOGLE_TARGET] })));
+    expect(findByTestId(picker, "calendar-target-picker")).toBeTruthy();
+    const none = findByTestId(picker, "calendar-target-none");
+    expect(getTextContent(none)).toBe("Personal OS only");
+    expect(none.props.accessibilityState.selected).toBe(true);
+    expect(
+      getTextContent(
+        findByTestId(picker, `calendar-target-${GOOGLE_TARGET.connection_id}:primary`),
+      ),
+    ).toBe("Work");
+  });
+
+  it("uses the picker fields for timed and the date-only fields for all-day, and shows the form error", () => {
+    const timed = NewEventView(newProps());
+    expect(findByType(timed, DateTimeField)).toHaveLength(2);
+    expect(findByType(timed, DateField)).toEqual([]);
+    const allDay = NewEventView(
+      newProps({ allDay: true, allDayRange: { startDate: "2026-09-15", endDate: "2026-09-15" } }),
+    );
+    expect(findByType(allDay, DateField)).toHaveLength(2);
+    expect(findByType(allDay, DateTimeField)).toEqual([]);
+    expect(
+      getTextContent(
+        findByTestId(
+          NewEventView(newProps({ formError: "The end must be after the start." })),
+          "event-form-error",
+        ),
+      ),
+    ).toBe("The end must be after the start.");
+  });
+
+  it("shows a muted note when the targets query errored, and still lets the event be created", () => {
+    const onSubmit = vi.fn();
+    const tree = NewEventView(newProps({ calendarTargetsError: true, onSubmit }));
+    expect(expandPicker(tree)).toBeNull();
+    expect(getTextContent(findByTestId(tree, "calendar-targets-error"))).toBe(
+      "Couldn't load calendars — this event will stay in Personal OS only",
+    );
+    const button = findByTestId(tree, "create-event-button");
+    expect(button.props.disabled).toBe(false);
+    button.props.onPress();
+    expect(onSubmit).toHaveBeenCalled();
+    // No note while the query is fine (or merely empty), and none once a
+    // stale-but-present list is still being offered.
+    expect(findByTestId(NewEventView(newProps()), "calendar-targets-error")).toBeNull();
+    expect(
+      findByTestId(
+        NewEventView(newProps({ calendarTargetsError: true, calendarTargets: [GOOGLE_TARGET] })),
+        "calendar-targets-error",
+      ),
+    ).toBeNull();
+  });
+
+  it("the Create button submits and is disabled without a title", () => {
+    const onSubmit = vi.fn();
+    const button = findByTestId(NewEventView(newProps({ onSubmit })), "create-event-button");
+    button.props.onPress();
+    expect(onSubmit).toHaveBeenCalled();
+    expect(
+      findByTestId(NewEventView(newProps({ title: "  " })), "create-event-button").props.disabled,
+    ).toBe(true);
   });
 });

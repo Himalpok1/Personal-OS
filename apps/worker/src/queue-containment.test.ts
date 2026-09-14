@@ -243,7 +243,10 @@ const EXPECTED_CONTAINMENT: Readonly<Record<string, boolean>> = {
   CALENDAR_PUSH_EVENT_DEAD_QUEUE: false,
   CALENDAR_PUSH_EVENT_QUEUE: true,
   CALENDAR_SYNC_CRON_QUEUE: false,
-  CALENDAR_REFRESH_CRON_QUEUE: false,
+  // Contained since the 9.5 fixer review (MINOR-5): its tick now calls Google
+  // (the access-role refresh), so a provider error could otherwise reach
+  // pgboss.job.output through a bare handler.
+  CALENDAR_REFRESH_CRON_QUEUE: true,
   HEALTH_SYNC_CONNECTION_QUEUE: false,
   HEALTH_SYNC_CRON_QUEUE: false,
   MAIL_SYNC_CONNECTION_QUEUE: true,

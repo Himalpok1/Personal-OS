@@ -4,6 +4,7 @@ import {
   CalendarConnectionCalendarSchema,
   CalendarConnectionCalendarUpdateSchema,
   CalendarConnectionSchema,
+  CalendarTargetsResponseSchema,
   ConnectCaldavCalendarRequestSchema,
   ConnectGoogleCalendarRequestSchema,
   type AvailableCalendar,
@@ -12,6 +13,8 @@ import {
   type CalendarConnection,
   type CalendarConnectionCalendar,
   type CalendarConnectionCalendarUpdate,
+  type CalendarTarget,
+  type CalendarTargetsResponse,
   type ConnectCaldavCalendarRequest,
   type ConnectGoogleCalendarRequest,
 } from "@personal-os/schema";
@@ -25,9 +28,17 @@ export type {
   CalendarConnection,
   CalendarConnectionCalendar,
   CalendarConnectionCalendarUpdate,
+  CalendarTarget,
+  CalendarTargetsResponse,
   ConnectCaldavCalendarRequest,
   ConnectGoogleCalendarRequest,
 };
+
+// GET /calendar-targets (Checkpoint 9.5): the calendars a new local event may
+// be written to. Only write-eligible calendars are returned.
+export async function listCalendarTargets(baseUrl: string): Promise<CalendarTargetsResponse> {
+  return fetchJson(baseUrl, "/calendar-targets", CalendarTargetsResponseSchema);
+}
 
 const CalendarConnectionListResponseSchema = z.object({ items: z.array(CalendarConnectionSchema) });
 const CalendarConnectionCalendarListResponseSchema = z.array(CalendarConnectionCalendarSchema);

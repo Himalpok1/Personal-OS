@@ -55,6 +55,13 @@ export interface TaskRepeatFieldProps {
   /** The device's IANA zone; a loaded rule keeps its own (see effectiveTimezone). */
   timezone: string;
   disabled?: boolean;
+  /**
+   * Event mode (Checkpoint 9.5): the same chips minus the "After I complete
+   * it" toggle -- an event is never completed -- and minus the no-due-date
+   * hint, because an event always has a start. `dueAt` is then the event's
+   * start. Defaults to task mode so the 9.4 screens are unchanged.
+   */
+  kind?: "task" | "event";
 }
 
 export interface TaskRepeatFieldViewProps extends TaskRepeatFieldProps {
@@ -132,6 +139,7 @@ export function TaskRepeatFieldView({
   dueAt,
   timezone,
   disabled = false,
+  kind = "task",
   intervalText,
   onIntervalTextChange,
   onIntervalBlur,
@@ -143,6 +151,7 @@ export function TaskRepeatFieldView({
   const isCustom = selection.preset === "custom";
   const afterCompletion = "afterCompletion" in selection && selection.afterCompletion;
   const summary = summaryFor(value);
+  const isTask = kind === "task";
 
   return (
     <View className="mb-4" testID="task-repeat-field">
@@ -202,7 +211,7 @@ export function TaskRepeatFieldView({
             </View>
           ) : null}
 
-          {canAnchorOnCompletion(value) ? (
+          {isTask && canAnchorOnCompletion(value) ? (
             <View className="mt-2 flex-row flex-wrap gap-2">
               {chip({
                 testID: "repeat-after-completion",
@@ -226,7 +235,7 @@ export function TaskRepeatFieldView({
         </>
       )}
 
-      {needsDueDateHint(value, dueAt) ? (
+      {isTask && needsDueDateHint(value, dueAt) ? (
         <View testID="repeat-due-hint" className={`mt-2 ${AMBER_CARD}`}>
           <Text className={AMBER_BODY}>{REPEAT_NO_DUE_DATE_HINT}</Text>
         </View>
@@ -237,7 +246,7 @@ export function TaskRepeatFieldView({
           {/* The existing editor, unchanged: it already preserves rawRrule
               until the owner explicitly replaces the rule, so mounting it
               here never clobbers anything. */}
-          <RecurrenceEditor value={value} onChange={onChange} isTask disabled={disabled} />
+          <RecurrenceEditor value={value} onChange={onChange} isTask={isTask} disabled={disabled} />
         </View>
       ) : null}
     </View>

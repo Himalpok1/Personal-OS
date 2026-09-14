@@ -9,6 +9,10 @@ import {
   createCalendarPushEventDeadLetterHandler,
   createCalendarPushEventHandler,
 } from "./jobs/calendar-push-event.js";
+import { attachCalendarPushDeadLetterQueue } from "./jobs/calendar-push-queues.js";
+import { redrivePendingCalendarPushes } from "./jobs/calendar-push-redrive.js";
+import { withCalendarJobErrorContainment } from "./jobs/calendar-job-error.js";
+import { refreshCalendarAccessRoles } from "./jobs/calendar-role-refresh.js";
 import {
   createCalendarRefreshTokenDeadLetterHandler,
   createCalendarRefreshTokenHandler,
@@ -304,18 +308,28 @@ async function main(): Promise<void> {
   });
   await boss.work(
     CALENDAR_SYNC_CALENDAR_QUEUE,
-    createCalendarSyncCalendarHandler(db, googleCalendarClient, caldavClient),
+    // `boss` so a permanent OAuth failure found mid-sync alerts through the
+    // shared needs_reauth transition (Checkpoint 9.5).
+    createCalendarSyncCalendarHandler(db, googleCalendarClient, caldavClient, boss),
   );
 
-  await boss.createQueue(CALENDAR_PUSH_EVENT_DEAD_QUEUE);
-  await boss.work(CALENDAR_PUSH_EVENT_DEAD_QUEUE, createCalendarPushEventDeadLetterHandler(db));
-  await boss.createQueue(CALENDAR_PUSH_EVENT_QUEUE, {
-    ...QUEUE_RETRY_OPTIONS[CALENDAR_PUSH_EVENT_QUEUE],
-    deadLetter: CALENDAR_PUSH_EVENT_DEAD_QUEUE,
-  });
+  // Checkpoint 9.5: calendar.google.push-event gets the same three-step attach
+  // as capture.parse and the occurrences queues -- dead queue first (FK), then
+  // createQueue with `deadLetter` for a fresh database, then updateQueue for
+  // every EXISTING deployment, where create_queue's ON CONFLICT DO NOTHING
+  // silently discards the option. The primary has existed since Phase 4, so
+  // without step 3 the dead letter would attach in every test and in no
+  // production. The sequence lives in jobs/calendar-push-queues.ts so
+  // calendar-push-queues.test.ts can run it against a real pg-boss schema in
+  // production's shape; see the capture.parse block above for the reasoning.
+  await attachCalendarPushDeadLetterQueue(boss);
+  await boss.work(
+    CALENDAR_PUSH_EVENT_DEAD_QUEUE,
+    createCalendarPushEventDeadLetterHandler(db, boss),
+  );
   await boss.work(
     CALENDAR_PUSH_EVENT_QUEUE,
-    createCalendarPushEventHandler(db, googleCalendarClient, caldavClient),
+    createCalendarPushEventHandler(db, googleCalendarClient, caldavClient, boss),
   );
 
   // Local trigger queues: fan out into the real per-connection/per-calendar
@@ -330,9 +344,23 @@ async function main(): Promise<void> {
   await boss.schedule(CALENDAR_SYNC_CRON_QUEUE, "*/15 * * * *");
 
   await boss.createQueue(CALENDAR_REFRESH_CRON_QUEUE);
-  await boss.work(CALENDAR_REFRESH_CRON_QUEUE, async () => {
-    await enqueueCalendarRefreshForAllActiveConnections(db, boss, CALENDAR_REFRESH_TOKEN_QUEUE);
-  });
+  await boss.work(
+    CALENDAR_REFRESH_CRON_QUEUE,
+    // Contained like every other calendar handler (fixer review, MINOR-5):
+    // the role refresh talks to Google, and a provider error escaping a bare
+    // handler would land its prose in pgboss.job.output.
+    withCalendarJobErrorContainment(CALENDAR_REFRESH_CRON_QUEUE, async () => {
+      await enqueueCalendarRefreshForAllActiveConnections(db, boss, CALENDAR_REFRESH_TOKEN_QUEUE);
+      // Checkpoint 9.5: piggy-backed on this five-minute tick rather than a
+      // schedule of its own -- re-enqueues any push whose enqueue was lost after
+      // its transaction committed. See jobs/calendar-push-redrive.ts.
+      await redrivePendingCalendarPushes(db, boss);
+      // Keeps `access_role` honest between Settings visits, so a calendar
+      // demoted on Google's side stops being write-eligible here. See
+      // jobs/calendar-role-refresh.ts.
+      await refreshCalendarAccessRoles(db, googleCalendarClient, boss);
+    }),
+  );
   await boss.schedule(CALENDAR_REFRESH_CRON_QUEUE, "*/5 * * * *");
 
   // Phase 6 Checkpoint 6.3 (Google Health sync). ONE connection-level queue.

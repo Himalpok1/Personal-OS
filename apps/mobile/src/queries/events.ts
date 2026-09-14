@@ -33,6 +33,8 @@ const UI_TEST_EVENT: Event = {
   archived_at: null,
   created_at: "2026-08-20T00:00:00.000Z",
   updated_at: "2026-08-20T00:00:00.000Z",
+  origin: "local",
+  sync: null,
 };
 
 const eventsKey = (params: EventListParams = {}) => ["events", params] as const;
@@ -68,9 +70,20 @@ export function useEventsInRange(query: EventRangeQuery | undefined) {
   });
 }
 
+// Every event mutation refreshes the three read models an event appears in
+// (Checkpoint 9.5): the events list/detail/range caches under ["events"],
+// Today (queries/today.ts) and the Agenda (queries/agenda.ts). Before 9.5
+// only ["events"] was invalidated, so a newly created or deleted event did
+// not appear on -- or vanish from -- Today until its next refetch.
+export const EVENT_MUTATION_INVALIDATION_KEYS = [["events"], ["today"], ["agenda"]] as const;
+
 function useInvalidateEvents() {
   const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: ["events"] });
+  return () => {
+    for (const queryKey of EVENT_MUTATION_INVALIDATION_KEYS) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
+  };
 }
 
 export function useCreateEvent() {

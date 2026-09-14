@@ -17,6 +17,13 @@ export const calendarConnectionCalendars = pgTable(
     caldavCalendarUrl: text("caldav_calendar_url"),
     summary: text("summary").notNull(),
     syncEnabled: boolean("sync_enabled").notNull().default(false),
+    // Provider-reported write capability (Checkpoint 9.5). Google: the
+    // calendarList `accessRole` ('owner' | 'writer' | 'reader' |
+    // 'freeBusyReader'), refreshed whenever the calendar list is read.
+    // CalDAV: NULL (no equivalent is fetched). NULL means UNKNOWN, never
+    // writable -- a Google calendar with no recorded role is not offered as
+    // an authoring target. No CHECK (ADR-050: provider-defined vocabulary).
+    accessRole: text("access_role"),
     // Inbound landing hint only -- which local project a newly-imported
     // event attaches to. Never used to decide outbound push behavior.
     projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),

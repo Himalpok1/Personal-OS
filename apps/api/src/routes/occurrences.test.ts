@@ -1,5 +1,5 @@
 import { computeNextLazyOccurrence, wallTimeOfNaiveTimestamp } from "@personal-os/core";
-import { occurrences, tasks } from "@personal-os/db";
+import { events, occurrences, tasks } from "@personal-os/db";
 import type { Occurrence } from "@personal-os/schema";
 import { asc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -254,6 +254,99 @@ describe("POST /occurrences/:id/complete|skip", () => {
     const rows = await app.db.select().from(occurrences);
     expect(rows).toHaveLength(1);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  // Checkpoint 9.5 ownership contract: an external event's occurrences are
+  // read-only like every other write surface for that event.
+  describe("event occurrences of an EXTERNAL series (Checkpoint 9.5)", () => {
+    async function insertEventOccurrence(eventOverrides: Partial<typeof events.$inferInsert>) {
+      const [event] = await app.db
+        .insert(events)
+        .values({
+          title: "Series",
+          timezone: "America/Chicago",
+          startsAt: new Date("2026-09-07T14:00:00Z"),
+          endsAt: new Date("2026-09-07T14:30:00Z"),
+          rrule: "FREQ=WEEKLY",
+          recurrenceTimezone: "America/Chicago",
+          ...eventOverrides,
+        })
+        .returning();
+      const [open] = await app.db
+        .insert(occurrences)
+        .values({
+          parentType: "event",
+          parentId: event!.id,
+          occursAt: new Date("2026-09-14T14:00:00Z"),
+          occursLocal: new Date("2026-09-14T09:00:00"),
+          status: "scheduled",
+        })
+        .returning();
+      return { event: event!, open: open! };
+    }
+
+    it.each(["complete", "skip"] as const)(
+      "%s on an occurrence whose parent event is external returns 409 event_not_owned and writes nothing",
+      async (action) => {
+        const { open } = await insertEventOccurrence({ origin: "external" });
+        const send = vi.spyOn(app.boss, "send").mockResolvedValue(null);
+        const response = await app.inject({
+          method: "POST",
+          url: `/occurrences/${open.id}/${action}`,
+        });
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toEqual({ error: "event_not_owned" });
+        const [row] = await app.db.select().from(occurrences).where(eq(occurrences.id, open.id));
+        expect(row!.status).toBe("scheduled");
+        expect(row!.completedAt).toBeNull();
+        expect(send).not.toHaveBeenCalled();
+      },
+    );
+
+    it("a detached child whose PARENT is external is refused too", async () => {
+      const { event: parent } = await insertEventOccurrence({ origin: "external" });
+      const [child] = await app.db
+        .insert(events)
+        .values({
+          title: "Moved",
+          timezone: "America/Chicago",
+          startsAt: new Date("2026-09-21T15:00:00Z"),
+          endsAt: new Date("2026-09-21T15:30:00Z"),
+          parentEventId: parent.id,
+          originalStartAt: new Date("2026-09-21T14:00:00Z"),
+          origin: "local",
+        })
+        .returning();
+      const [open] = await app.db
+        .insert(occurrences)
+        .values({
+          parentType: "event",
+          parentId: child!.id,
+          occursAt: new Date("2026-09-21T15:00:00Z"),
+          occursLocal: new Date("2026-09-21T10:00:00"),
+          status: "scheduled",
+        })
+        .returning();
+      const response = await app.inject({
+        method: "POST",
+        url: `/occurrences/${open!.id}/complete`,
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({ error: "event_not_owned" });
+    });
+
+    it("a LOCAL event occurrence still completes (200) with no successor and no enqueue", async () => {
+      const { open } = await insertEventOccurrence({ origin: "local" });
+      const send = vi.spyOn(app.boss, "send").mockResolvedValue(null);
+      const response = await app.inject({
+        method: "POST",
+        url: `/occurrences/${open.id}/complete`,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ id: open.id, status: "done" });
+      expect(await app.db.select().from(occurrences)).toHaveLength(1);
+      expect(send).not.toHaveBeenCalled();
+    });
   });
 
   it.each([

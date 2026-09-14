@@ -2,10 +2,29 @@ import { confirmDestructive } from "@/components/confirm-destructive";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { PLACEHOLDER_LIGHT, usePlaceholderColor } from "@/components/placeholder-color";
+import { DateField } from "@/components/date-field";
+import { DateTimeField } from "@/components/datetime-field";
+import { CalendarTargetPicker } from "@/components/calendar/calendar-target-picker";
+import { EventRepeatField } from "@/components/recurrence/event-repeat-field";
+import { applyEventStartChange } from "@/components/recurrence/event-repeat-state";
+import {
+  allDayRangeError,
+  applyStartDateChange,
+  applyStartsAtChange,
+  calendarLabel,
+  classifyEventMutationError,
+  eventMutationErrorCopy,
+  eventWhenLabel,
+  externalCalendarLabel,
+  RANGE_ERROR_COPY,
+  syncStatusLine,
+  timedRangeError,
+  toCalendarBody,
+  type AllDayRange,
+  type TimedRange,
+} from "@/components/events/event-form-state";
 import { ApiClientError } from "@personal-os/api-client";
-import { GoogleCalendarLinkPicker } from "@/components/calendar/google-calendar-link-picker";
-import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
-import { useLinkableGoogleCalendars, useLinkEventToGoogleCalendar } from "@/queries/calendar-connections";
+import { useCalendarTargets, useLinkEventToCalendar } from "@/queries/calendar-connections";
 import { useProjects } from "@/queries/projects";
 import {
   useArchiveEvent,
@@ -14,11 +33,14 @@ import {
   useEvent,
   useUpdateEvent,
 } from "@/queries/events";
+import type { CalendarTarget, EventSyncState } from "@personal-os/schema";
+import { formatInstantWithOffset } from "@personal-os/core/timezone";
 import {
   parseRRuleStringToEditorState,
   resolveInstantToLocalUntil,
   serializeEditorStateToRRule,
   type RecurrenceEditorState,
+  type SerializedRecurrenceRule,
 } from "@personal-os/core/recurrence/editor";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
@@ -107,15 +129,83 @@ export function computeOccurrenceTiming(
   }
 }
 
+/** A stored instant re-serialized in the event's own zone for the picker, or null. */
+function seedInstant(value: string | null | undefined, timezone: string): string | null {
+  if (!value) return null;
+  const instant = new Date(value);
+  return Number.isNaN(instant.getTime()) ? null : formatInstantWithOffset(instant, timezone);
+}
+
+const CONTENT_STYLE = (keyboardHeight: number) => ({
+  padding: 16,
+  paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight,
+});
+
+export interface ExternalEventViewProps {
+  keyboardHeight?: number;
+  title: string;
+  /** From eventWhenLabel -- dates for all-day, local start/end for timed. */
+  whenLabel: string;
+  location: string | null;
+  description: string | null;
+  /** From externalCalendarLabel: "From <summary> · read-only". */
+  calendarLine: string;
+  timezone: string;
+}
+
+/**
+ * The read-only card for an EXTERNAL event (Checkpoint 9.5): one that
+ * originated in a connected calendar and synced inward. The server refuses
+ * every mutation on it with `409 event_not_owned`, so this view offers none
+ * -- no Save, no Delete, no link, no occurrence modal. Everything shown is
+ * text in a `<Text>`; a description holding a conference link stays inert.
+ */
+export function ExternalEventView(props: ExternalEventViewProps) {
+  return (
+    <ScrollView
+      className="flex-1 bg-white dark:bg-black"
+      contentContainerStyle={CONTENT_STYLE(props.keyboardHeight ?? 0)}
+      testID="external-event-view"
+    >
+      <View
+        testID="external-event-banner"
+        className="mb-4 rounded-lg border border-neutral-300 bg-neutral-50 p-3 dark:border-neutral-700 dark:bg-neutral-900"
+      >
+        <Text className="text-sm text-neutral-600 dark:text-neutral-300">{props.calendarLine}</Text>
+      </View>
+
+      <Text className="mb-1 text-xl font-semibold text-black dark:text-white">{props.title}</Text>
+      <Text testID="external-event-when" className="mb-4 text-base text-black dark:text-white">
+        {props.whenLabel}
+      </Text>
+
+      {props.location ? (
+        <>
+          <Text className="mb-1 text-sm text-neutral-500">Location</Text>
+          <Text className="mb-4 text-black dark:text-white">{props.location}</Text>
+        </>
+      ) : null}
+
+      {props.description ? (
+        <>
+          <Text className="mb-1 text-sm text-neutral-500">Description</Text>
+          <Text className="mb-4 text-black dark:text-white">{props.description}</Text>
+        </>
+      ) : null}
+
+      <Text className="mb-1 text-sm text-neutral-500">Timezone</Text>
+      <Text className="mb-4 text-black dark:text-white">{props.timezone}</Text>
+    </ScrollView>
+  );
+}
+
 export interface EditEventViewProps {
   /** Measured IME height; optional so hook-free callers (tests) can omit it. */
   keyboardHeight?: number;
   /**
    * WCAG-compliant placeholder colour, computed by the screen via
    * usePlaceholderColor() (a hook, so it can't be read in this hook-free
-   * component). Optional so hook-free callers (tests) can omit it; falls
-   * back to the light-mode value rather than the old "#888" (~3.6:1, below
-   * AA) so an un-styled test render is still accessible.
+   * component). Optional so hook-free callers (tests) can omit it.
    */
   placeholderColor?: string;
   modalVisible: boolean;
@@ -136,38 +226,51 @@ export interface EditEventViewProps {
   onLocationChange: (val: string) => void;
   allDay: boolean;
   onAllDayChange: (val: boolean) => void;
-  startDate: string;
-  onStartDateChange: (val: string) => void;
-  endDate: string;
-  onEndDateChange: (val: string) => void;
-  startsAt: string;
-  onStartsAtChange: (val: string) => void;
-  endsAt: string;
-  onEndsAtChange: (val: string) => void;
+  timed: TimedRange;
+  onStartsAtChange: (val: string | null) => void;
+  onEndsAtChange: (val: string | null) => void;
+  allDayRange: AllDayRange;
+  onStartDateChange: (val: string | null) => void;
+  onEndDateChange: (val: string | null) => void;
   timezone: string;
   projects?: { id: string; name: string }[];
   projectId?: string;
   onProjectIdChange: (id?: string) => void;
   onSubmit: () => void;
   isSubmitting?: boolean;
-  onArchive?: () => void;
-  isArchiving?: boolean;
-  isError?: boolean;
-  selectedGoogleCalendarId?: string;
-  onGoogleCalendarChange: (googleCalendarId: string | undefined) => void;
-  onLinkToGoogleCalendar: () => void;
-  isLinkingToGoogleCalendar?: boolean;
-  googleCalendarLinkNote?: string | null;
+  onDelete?: () => void;
+  isDeleting?: boolean;
+  /** One classified line for any failed mutation (event-form-state.ts). */
+  errorMessage?: string | null;
+  /** The event's outbound link, immutable here; null = not linked. */
+  sync: EventSyncState | null;
+  /** GET /calendar-targets -- for the calendar label and the link picker. */
+  calendarTargets: readonly CalendarTarget[];
+  /** Link picker state, offered only while `sync` is null. */
+  linkTarget: CalendarTarget | null;
+  onLinkTargetChange: (target: CalendarTarget | null) => void;
+  onLink: () => void;
+  isLinking?: boolean;
+  linkNote?: string | null;
+  /** GET /calendar-targets failed: no link picker can be offered; editing goes on. */
+  calendarTargetsError?: boolean;
 }
 
 export function EditEventView(props: EditEventViewProps) {
   // Deliberately NO hooks in this component: events-screen.test.tsx invokes it
   // directly as a plain function (no renderer, no dispatcher), so a hook call
   // here throws "Cannot read properties of null (reading 'useState')".
-  // keyboardHeight is therefore passed in by the screen below.
+  // keyboardHeight is therefore passed in by the screen below; the picker
+  // fields and the repeat field are ELEMENTS in the tree, never called.
   const keyboardHeight = props.keyboardHeight ?? 0;
   const placeholderColor = props.placeholderColor ?? PLACEHOLDER_LIGHT;
   const showRecurrenceEditor = !props.isDetached && props.editMode !== "occurrence";
+  const statusLine = syncStatusLine(props.sync);
+  // A LOCAL series linked to a calendar cannot detach an occurrence yet
+  // (POST /events/:id/detach → 409 linked_series_detach_unsupported: the
+  // child could not be pushed), so the modal offers only the series edit
+  // and the cancel.
+  const canEditOccurrence = props.sync === null;
 
   return (
     <ScrollView
@@ -175,11 +278,9 @@ export function EditEventView(props: EditEventViewProps) {
       // Padding lives entirely in contentContainerStyle (no
       // contentContainerClassName) because NativeWind remaps that class onto
       // this same prop -- see FLOATING_CLEARANCE_PX. The clearance keeps the
-      // globally-mounted QuickAdd/PTT buttons off this form's Save/Archive
+      // globally-mounted QuickAdd/PTT buttons off this form's Save/Delete
       // control; the keyboard height gives room to scroll it clear of the IME.
-      // Extra room so lower controls can be scrolled clear of the IME --
-      // see components/use-keyboard-height.ts for why insets alone don't do it.
-      contentContainerStyle={{ padding: 16, paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
+      contentContainerStyle={CONTENT_STYLE(keyboardHeight)}
       // Without this the first tap on a submit button below a focused field
       // only dismisses the keyboard instead of submitting.
       keyboardShouldPersistTaps="handled"
@@ -197,16 +298,20 @@ export function EditEventView(props: EditEventViewProps) {
               Recurring Event
             </Text>
             <Text className="mb-5 text-sm text-neutral-600 dark:text-neutral-400">
-              Would you like to edit only this occurrence or the entire recurring series?
+              {canEditOccurrence
+                ? "Would you like to edit only this occurrence or the entire recurring series?"
+                : "This series is synced to a calendar, so single occurrences can't be edited yet. Edit the whole series or cancel this occurrence."}
             </Text>
 
-            <Pressable
-              testID="edit-occurrence-button"
-              onPress={props.onSelectEditOccurrence}
-              className="mb-2.5 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700"
-            >
-              <Text className="font-semibold text-white">Edit this occurrence</Text>
-            </Pressable>
+            {canEditOccurrence ? (
+              <Pressable
+                testID="edit-occurrence-button"
+                onPress={props.onSelectEditOccurrence}
+                className="mb-2.5 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700"
+              >
+                <Text className="font-semibold text-white">Edit this occurrence</Text>
+              </Pressable>
+            ) : null}
 
             <Pressable
               testID="edit-series-button"
@@ -249,38 +354,65 @@ export function EditEventView(props: EditEventViewProps) {
         </View>
       ) : null}
 
-      {showRecurrenceEditor ? (
-        <View className="mb-4" testID="recurrence-section">
-          <Text className="mb-1 text-sm text-neutral-500">Recurrence</Text>
-          <RecurrenceEditor
-            value={props.recurrence}
-            onChange={props.onRecurrenceChange}
-            isTask={false}
-          />
-        </View>
-      ) : null}
-
       <Text className="mb-1 text-sm text-neutral-500">Title</Text>
       <TextInput
         value={props.title}
         onChangeText={props.onTitleChange}
+        placeholderTextColor={placeholderColor}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
 
-      <Text className="mb-1 text-sm text-neutral-500">Description</Text>
-      <TextInput
-        value={props.description}
-        onChangeText={props.onDescriptionChange}
-        multiline
-        className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
+      {/* The calendar is create-only (PATCH rejects `calendar`), so a linked
+          event shows where it goes and a status line; an unlinked one may
+          still be linked once, through the same targets list the create
+          screen offers. */}
+      <View className="mb-4" testID="event-calendar-section">
+        <Text className="mb-1 text-sm text-neutral-500">Calendar</Text>
+        <Text testID="event-calendar-label" className="text-black dark:text-white">
+          {calendarLabel(props.sync, props.calendarTargets)}
+        </Text>
+        {statusLine ? (
+          <Text
+            testID="event-sync-status"
+            className="mt-1 text-xs text-amber-700 dark:text-amber-500"
+          >
+            {statusLine}
+          </Text>
+        ) : null}
+      </View>
 
-      <Text className="mb-1 text-sm text-neutral-500">Location</Text>
-      <TextInput
-        value={props.location}
-        onChangeText={props.onLocationChange}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
+      {props.sync === null ? (
+        <>
+          <CalendarTargetPicker
+            label="Link to a calendar (optional)"
+            targets={props.calendarTargets}
+            selected={props.linkTarget}
+            onChange={props.onLinkTargetChange}
+          />
+          {props.linkTarget ? (
+            <Pressable
+              testID="link-calendar-button"
+              onPress={props.onLink}
+              disabled={props.isLinking}
+              className="mb-4 rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"
+            >
+              <Text className="text-center font-semibold text-black dark:text-white">
+                {props.isLinking ? "Linking…" : "Link to calendar"}
+              </Text>
+            </Pressable>
+          ) : null}
+          {props.linkNote ? (
+            <Text testID="link-calendar-note" className="-mt-2 mb-4 text-xs text-neutral-500">
+              {props.linkNote}
+            </Text>
+          ) : null}
+          {props.calendarTargetsError && props.calendarTargets.length === 0 ? (
+            <Text testID="calendar-targets-error" className="mb-4 text-xs text-neutral-500">
+              {"Couldn't load calendars — this event will stay in Personal OS only"}
+            </Text>
+          ) : null}
+        </>
+      ) : null}
 
       <View className="mb-4 flex-row items-center justify-between">
         <Text className="text-black dark:text-white">All-day</Text>
@@ -289,45 +421,66 @@ export function EditEventView(props: EditEventViewProps) {
 
       {props.allDay ? (
         <>
-          <Text className="mb-1 text-sm text-neutral-500">Start date (YYYY-MM-DD)</Text>
-          <TextInput
-            value={props.startDate}
-            onChangeText={props.onStartDateChange}
-            placeholder="2026-09-15"
-            placeholderTextColor={placeholderColor}
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+          <DateField
+            testID="event-start-date"
+            label="Start date"
+            value={props.allDayRange.startDate}
+            onChange={props.onStartDateChange}
           />
-
-          <Text className="mb-1 text-sm text-neutral-500">End date (YYYY-MM-DD)</Text>
-          <TextInput
-            value={props.endDate}
-            onChangeText={props.onEndDateChange}
-            placeholder="2026-09-15"
-            placeholderTextColor={placeholderColor}
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+          <DateField
+            testID="event-end-date"
+            label="End date"
+            value={props.allDayRange.endDate}
+            onChange={props.onEndDateChange}
+            clearable={false}
           />
         </>
       ) : (
         <>
-          <Text className="mb-1 text-sm text-neutral-500">Starts at (ISO 8601)</Text>
-          <TextInput
-            value={props.startsAt}
-            onChangeText={props.onStartsAtChange}
-            placeholder="2026-09-15T14:00:00"
-            placeholderTextColor={placeholderColor}
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+          <DateTimeField
+            testID="event-starts-at"
+            label="Starts"
+            value={props.timed.startsAt}
+            onChange={props.onStartsAtChange}
           />
-
-          <Text className="mb-1 text-sm text-neutral-500">Ends at (ISO 8601)</Text>
-          <TextInput
-            value={props.endsAt}
-            onChangeText={props.onEndsAtChange}
-            placeholder="2026-09-15T14:30:00"
-            placeholderTextColor={placeholderColor}
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+          <DateTimeField
+            testID="event-ends-at"
+            label="Ends"
+            value={props.timed.endsAt}
+            onChange={props.onEndsAtChange}
           />
         </>
       )}
+
+      {showRecurrenceEditor ? (
+        <View testID="recurrence-section">
+          <EventRepeatField
+            value={props.recurrence}
+            onChange={props.onRecurrenceChange}
+            start={{
+              allDay: props.allDay,
+              startDate: props.allDayRange.startDate,
+              startsAt: props.timed.startsAt,
+            }}
+            timezone={props.timezone}
+          />
+        </View>
+      ) : null}
+
+      <Text className="mb-1 text-sm text-neutral-500">Location</Text>
+      <TextInput
+        value={props.location}
+        onChangeText={props.onLocationChange}
+        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+      />
+
+      <Text className="mb-1 text-sm text-neutral-500">Notes</Text>
+      <TextInput
+        value={props.description}
+        onChangeText={props.onDescriptionChange}
+        multiline
+        className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+      />
 
       <Text className="mb-1 text-sm text-neutral-500">Timezone</Text>
       <Text className="mb-4 text-black dark:text-white">{props.timezone}</Text>
@@ -360,26 +513,10 @@ export function EditEventView(props: EditEventViewProps) {
         ))}
       </View>
 
-      <GoogleCalendarLinkPicker
-        selectedGoogleCalendarId={props.selectedGoogleCalendarId}
-        onChange={props.onGoogleCalendarChange}
-        alreadyLinkedNote={props.googleCalendarLinkNote ?? undefined}
-      />
-      {props.selectedGoogleCalendarId ? (
-        <Pressable
-          testID="link-google-calendar-button"
-          onPress={props.onLinkToGoogleCalendar}
-          disabled={props.isLinkingToGoogleCalendar}
-          className="mb-4 rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"
-        >
-          <Text className="text-center font-semibold text-black dark:text-white">
-            {props.isLinkingToGoogleCalendar ? "Linking…" : "Link to Google Calendar"}
-          </Text>
-        </Pressable>
-      ) : null}
-
-      {props.isError ? (
-        <Text className="mb-2 text-red-600">Couldn&apos;t save those changes.</Text>
+      {props.errorMessage ? (
+        <Text testID="event-error" className="mb-2 text-red-600" accessibilityRole="alert">
+          {props.errorMessage}
+        </Text>
       ) : null}
 
       <Pressable
@@ -393,15 +530,15 @@ export function EditEventView(props: EditEventViewProps) {
         </Text>
       </Pressable>
 
-      {props.onArchive ? (
+      {props.onDelete ? (
         <Pressable
           testID="archive-event-button"
-          onPress={props.onArchive}
-          disabled={props.isArchiving}
+          onPress={props.onDelete}
+          disabled={props.isDeleting}
           className="items-center rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"
         >
           <Text className="font-semibold text-neutral-600 dark:text-neutral-300">
-            {props.isArchiving ? "Archiving..." : "Archive event"}
+            {props.isDeleting ? "Deleting..." : "Delete event"}
           </Text>
         </Pressable>
       ) : null}
@@ -416,32 +553,46 @@ export default function EditEventScreen() {
   const router = useRouter();
   const { data: event, isLoading, isError, error, refetch } = useEvent(id);
   const { data: projects } = useProjects();
+  const { targets: calendarTargets, isError: calendarTargetsError } = useCalendarTargets();
   const updateEvent = useUpdateEvent();
   const archiveEvent = useArchiveEvent();
   const detachEvent = useDetachEvent();
   const cancelEventOccurrence = useCancelEventOccurrence();
-  const linkToGoogleCalendar = useLinkEventToGoogleCalendar();
-  const { connectionId: googleConnectionId } = useLinkableGoogleCalendars();
-  const [selectedGoogleCalendarId, setSelectedGoogleCalendarId] = useState<string | undefined>(
-    undefined,
-  );
-  const [googleCalendarLinkNote, setGoogleCalendarLinkNote] = useState<string | null>(null);
+  const linkEvent = useLinkEventToCalendar();
+  const [linkTarget, setLinkTarget] = useState<CalendarTarget | null>(null);
+  const [linkNote, setLinkNote] = useState<string | null>(null);
+  // One classified line for any failed mutation (Checkpoint 9.5) -- before,
+  // a 409 event_not_owned, a 404 and a 503 were all "Couldn't save".
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const isDetached = event?.parent_event_id != null;
   const isRecurring = Boolean(event?.rrule);
+  // An external event is read-only, full stop: no occurrence modal either.
+  const isExternal = event?.origin === "external";
 
   const [editMode, setEditMode] = useState<EditMode>("standard");
-  const [modalVisible, setModalVisible] = useState(() => Boolean(occursAt && isRecurring));
+  const [modalVisible, setModalVisible] = useState(() =>
+    Boolean(occursAt && isRecurring && event?.origin === "local"),
+  );
 
   const [title, setTitle] = useState(() => event?.title ?? "");
   const [description, setDescription] = useState(() => event?.description ?? "");
   const [location, setLocation] = useState(() => event?.location ?? "");
   const [allDay, setAllDay] = useState(() => event?.all_day ?? false);
-  const [startDate, setStartDate] = useState(() => event?.start_date ?? "");
-  const [endDate, setEndDate] = useState(() => event?.end_date ?? "");
-  const [startsAt, setStartsAt] = useState(() => event?.starts_at ?? "");
-  const [endsAt, setEndsAt] = useState(() => event?.ends_at ?? "");
-  const [projectId, setProjectId] = useState<string | undefined>(() => event?.project_id ?? undefined);
+  const [allDayRange, setAllDayRange] = useState<AllDayRange>(() => ({
+    startDate: event?.start_date ?? null,
+    endDate: event?.end_date ?? null,
+  }));
+  // Timed fields are seeded in the EVENT's zone (formatInstantWithOffset),
+  // never as the raw UTC string the API stores, so the picker opens on the
+  // wall clock the owner set.
+  const [timed, setTimed] = useState<TimedRange>(() => ({
+    startsAt: seedInstant(event?.starts_at, event?.timezone ?? "UTC"),
+    endsAt: seedInstant(event?.ends_at, event?.timezone ?? "UTC"),
+  }));
+  const [projectId, setProjectId] = useState<string | undefined>(
+    () => event?.project_id ?? undefined,
+  );
   const [recurrence, setRecurrence] = useState<RecurrenceEditorState>(() =>
     parseRRuleStringToEditorState(event?.rrule, {
       recurrenceTimezone: event?.recurrence_timezone,
@@ -452,7 +603,7 @@ export default function EditEventScreen() {
   );
 
   useEffect(() => {
-    if (event && occursAt && isRecurring) {
+    if (event && occursAt && isRecurring && event.origin === "local") {
       setModalVisible(true);
     }
   }, [event, occursAt, isRecurring]);
@@ -463,10 +614,11 @@ export default function EditEventScreen() {
     setDescription(event.description ?? "");
     setLocation(event.location ?? "");
     setAllDay(event.all_day);
-    setStartDate(event.start_date ?? "");
-    setEndDate(event.end_date ?? "");
-    setStartsAt(event.starts_at ?? "");
-    setEndsAt(event.ends_at ?? "");
+    setAllDayRange({ startDate: event.start_date ?? null, endDate: event.end_date ?? null });
+    setTimed({
+      startsAt: seedInstant(event.starts_at, event.timezone),
+      endsAt: seedInstant(event.ends_at, event.timezone),
+    });
     setProjectId(event.project_id ?? undefined);
     setRecurrence(
       parseRRuleStringToEditorState(event.rrule, {
@@ -519,18 +671,38 @@ export default function EditEventScreen() {
     );
   }
 
+  if (isExternal) {
+    return (
+      <ExternalEventView
+        keyboardHeight={keyboardHeight}
+        title={event.title}
+        whenLabel={eventWhenLabel(event, occursAt)}
+        location={event.location}
+        description={event.description}
+        calendarLine={externalCalendarLabel(event.sync, calendarTargets)}
+        timezone={event.timezone}
+      />
+    );
+  }
+
+  const failWith = (verb: string) => (err: unknown) =>
+    setErrorMessage(eventMutationErrorCopy(classifyEventMutationError(err), verb));
+
   const handleSelectEditOccurrence = () => {
     setModalVisible(false);
+    // The modal hides this option for a linked series; guard the screen too.
+    if (event.sync !== null) return;
     setEditMode("occurrence");
 
     if (!occursAt) return;
     const timing = computeOccurrenceTiming(event, occursAt);
     if (timing.allDay) {
-      setStartDate(timing.startDate);
-      setEndDate(timing.endDate);
+      setAllDayRange({ startDate: timing.startDate, endDate: timing.endDate });
     } else {
-      setStartsAt(timing.startsAt);
-      setEndsAt(timing.endsAt);
+      setTimed({
+        startsAt: seedInstant(timing.startsAt, event.timezone),
+        endsAt: seedInstant(timing.endsAt, event.timezone),
+      });
     }
   };
 
@@ -539,35 +711,56 @@ export default function EditEventScreen() {
     setEditMode("standard");
   };
 
-  const handleLinkToGoogleCalendar = () => {
-    if (!selectedGoogleCalendarId || !googleConnectionId) return;
-    setGoogleCalendarLinkNote(null);
-    linkToGoogleCalendar.mutate(
+  // A Weekly/Monthly repeat follows the START's weekday / day of month, so
+  // the repeat state is re-derived from the start field's own onChange --
+  // never from an effect, which would rewrite the loaded rule on mount.
+  const onStartsAtChange = (value: string | null) => {
+    const next = applyStartsAtChange(timed, value, event.timezone);
+    setTimed(next);
+    setRecurrence((state) =>
+      applyEventStartChange(
+        state,
+        { allDay: false, startDate: null, startsAt: next.startsAt },
+        event.timezone,
+      ),
+    );
+  };
+  const onStartDateChange = (value: string | null) => {
+    const next = applyStartDateChange(allDayRange, value);
+    setAllDayRange(next);
+    setRecurrence((state) =>
+      applyEventStartChange(
+        state,
+        { allDay: true, startDate: next.startDate, startsAt: null },
+        event.timezone,
+      ),
+    );
+  };
+
+  const handleLink = () => {
+    if (!linkTarget) return;
+    setLinkNote(null);
+    setErrorMessage(null);
+    linkEvent.mutate(
+      { eventId: event.id, body: toCalendarBody(linkTarget) },
       {
-        eventId: event.id,
-        body: {
-          connection_id: googleConnectionId,
-          google_calendar_id: selectedGoogleCalendarId,
-        },
-      },
-      {
-        onSuccess: () => setGoogleCalendarLinkNote("Now syncing to Google Calendar."),
+        onSuccess: () => setLinkNote("Now syncing to the calendar."),
         onError: (err) => {
-          // 409 already_linked -- the route's documented idempotent case
-          // (see LinkEventToGoogleCalendarRequestSchema's comment /
-          // apps/api's link-google-calendar route). Not an error, just an
-          // inline note.
-          if (err instanceof ApiClientError && err.status === 409) {
-            setGoogleCalendarLinkNote("Already syncing to Google.");
+          // 409 already_linked is the route's documented idempotent case;
+          // 409 event_not_owned is the ownership refusal. Never the raw
+          // message (developer-shaped, could carry provider text).
+          if (classifyEventMutationError(err) === "not_owned") {
+            failWith("link this event")(err);
             return;
           }
-          // Never the raw message: `ApiClientError.message` is the
-          // developer-shaped `API error 400: validation_failed`, and a future
-          // route change could put provider text behind it.
-          setGoogleCalendarLinkNote(
+          if (err instanceof ApiClientError && err.status === 409) {
+            setLinkNote("Already syncing to a calendar.");
+            return;
+          }
+          setLinkNote(
             err instanceof ApiClientError && err.code === "validation_failed"
-              ? "Couldn't link to Google Calendar: that calendar isn't valid for this event."
-              : "Couldn't link to Google Calendar. Please try again.",
+              ? "Couldn't link: that calendar isn't valid for this event."
+              : "Couldn't link to the calendar. Please try again.",
           );
         },
       },
@@ -576,34 +769,56 @@ export default function EditEventScreen() {
 
   const handleCancelOccurrence = () => {
     if (!occursAt) return;
-    // Confirmed like Archive on this same screen: cancelling an occurrence
+    // Confirmed like Delete on this same screen: cancelling an occurrence
     // exdates it from the series with no in-app way back, and the button sits
     // one tap from two non-destructive options in the same modal (6.7A, AY8).
     confirmDestructive({
-        title: "Cancel this occurrence?",
-        message: "This removes just this occurrence from the series. There's currently no way to restore it from the app.",
-        cancelLabel: "Keep it",
-        confirmLabel: "Cancel occurrence",
-        onConfirm: () =>
-            cancelEventOccurrence.mutate(
-              {
-                id: event.id,
-                body: { original_start_at: occursAt },
-              },
-              {
-                onSuccess: () => {
-                  setModalVisible(false);
-                  router.back();
-                },
-              },
-            ),
-      });
+      title: "Cancel this occurrence?",
+      message:
+        "This removes just this occurrence from the series. There's currently no way to restore it from the app.",
+      cancelLabel: "Keep it",
+      confirmLabel: "Cancel occurrence",
+      onConfirm: () =>
+        cancelEventOccurrence.mutate(
+          { id: event.id, body: { original_start_at: occursAt } },
+          {
+            onSuccess: () => {
+              setModalVisible(false);
+              router.back();
+            },
+            onError: (err) => {
+              setModalVisible(false);
+              failWith("cancel this occurrence")(err);
+            },
+          },
+        ),
+    });
   };
 
   const isSubmitting =
     updateEvent.isPending || detachEvent.isPending || cancelEventOccurrence.isPending;
 
   const submit = () => {
+    setErrorMessage(null);
+    const rangeError = allDay ? allDayRangeError(allDayRange) : timedRangeError(timed);
+    if (rangeError) {
+      setErrorMessage(RANGE_ERROR_COPY[rangeError]);
+      return;
+    }
+    const timing = allDay
+      ? {
+          start_date: allDayRange.startDate,
+          end_date: allDayRange.endDate ?? allDayRange.startDate,
+          starts_at: null,
+          ends_at: null,
+        }
+      : {
+          starts_at: timed.startsAt,
+          ends_at: timed.endsAt,
+          start_date: null,
+          end_date: null,
+        };
+
     if (editMode === "occurrence" && occursAt) {
       detachEvent.mutate(
         {
@@ -614,30 +829,27 @@ export default function EditEventScreen() {
             description: description.trim() || null,
             location: location.trim() || null,
             all_day: allDay,
-            ...(allDay
-              ? {
-                  start_date: startDate.trim() || null,
-                  end_date: endDate.trim() || null,
-                  starts_at: null,
-                  ends_at: null,
-                }
-              : {
-                  starts_at: startsAt.trim() || null,
-                  ends_at: endsAt.trim() || null,
-                  start_date: null,
-                  end_date: null,
-                }),
+            ...timing,
             project_id: projectId ?? null,
           },
         },
-        {
-          onSuccess: () => router.back(),
-        },
+        { onSuccess: () => router.back(), onError: failWith("save this occurrence") },
       );
       return;
     }
 
-    const serialized = isDetached ? null : serializeEditorStateToRRule(recurrence);
+    // The serializer throws on what the inline advanced editor can hold (a
+    // half-typed until date); that is a validation outcome for the line,
+    // not an unhandled throw from a Save tap.
+    let serialized: SerializedRecurrenceRule | null = null;
+    if (!isDetached) {
+      try {
+        serialized = serializeEditorStateToRRule(recurrence);
+      } catch {
+        setErrorMessage("That repeat rule isn't supported.");
+        return;
+      }
+    }
     updateEvent.mutate(
       {
         id: event.id,
@@ -646,21 +858,9 @@ export default function EditEventScreen() {
           description: description.trim() || null,
           location: location.trim() || null,
           all_day: allDay,
-          ...(allDay
-            ? {
-                start_date: startDate.trim() || null,
-                end_date: endDate.trim() || null,
-                starts_at: null,
-                ends_at: null,
-              }
-            : {
-                starts_at: startsAt.trim() || null,
-                ends_at: endsAt.trim() || null,
-                start_date: null,
-                end_date: null,
-              }),
+          ...timing,
           project_id: projectId ?? null,
-          ...(!isDetached && serialized
+          ...(serialized
             ? {
                 rrule: serialized.rrule,
                 recurrence_timezone: serialized.recurrence_timezone,
@@ -672,19 +872,23 @@ export default function EditEventScreen() {
             : {}),
         },
       },
-      {
-        onSuccess: () => router.back(),
-      },
+      { onSuccess: () => router.back(), onError: failWith("save those changes") },
     );
   };
 
-  const confirmArchive = () =>
+  const confirmDelete = () =>
     confirmDestructive({
-        title: "Archive this event?",
-        message: "This hides it from your lists. There's currently no way to view or restore it from the app.",
-        confirmLabel: "Archive",
-        onConfirm: () => archiveEvent.mutate(event.id, { onSuccess: () => router.back() }),
-      });
+      title: "Delete this event?",
+      message: event.sync
+        ? "This removes it from Personal OS and from the linked calendar. There's currently no way to restore it from the app."
+        : "This hides it from your lists. There's currently no way to view or restore it from the app.",
+      confirmLabel: "Delete",
+      onConfirm: () =>
+        archiveEvent.mutate(event.id, {
+          onSuccess: () => router.back(),
+          onError: failWith("delete this event"),
+        }),
+    });
 
   return (
     <EditEventView
@@ -708,28 +912,29 @@ export default function EditEventScreen() {
       onLocationChange={setLocation}
       allDay={allDay}
       onAllDayChange={setAllDay}
-      startDate={startDate}
-      onStartDateChange={setStartDate}
-      endDate={endDate}
-      onEndDateChange={setEndDate}
-      startsAt={startsAt}
-      onStartsAtChange={setStartsAt}
-      endsAt={endsAt}
-      onEndsAtChange={setEndsAt}
+      timed={timed}
+      onStartsAtChange={onStartsAtChange}
+      onEndsAtChange={(value) => setTimed((range) => ({ ...range, endsAt: value }))}
+      allDayRange={allDayRange}
+      onStartDateChange={onStartDateChange}
+      onEndDateChange={(value) => setAllDayRange((range) => ({ ...range, endDate: value }))}
       timezone={event.timezone}
       projects={projects}
       projectId={projectId}
       onProjectIdChange={setProjectId}
       onSubmit={submit}
       isSubmitting={isSubmitting}
-      onArchive={confirmArchive}
-      isArchiving={archiveEvent.isPending}
-      isError={updateEvent.isError || detachEvent.isError || cancelEventOccurrence.isError}
-      selectedGoogleCalendarId={selectedGoogleCalendarId}
-      onGoogleCalendarChange={setSelectedGoogleCalendarId}
-      onLinkToGoogleCalendar={handleLinkToGoogleCalendar}
-      isLinkingToGoogleCalendar={linkToGoogleCalendar.isPending}
-      googleCalendarLinkNote={googleCalendarLinkNote}
+      onDelete={confirmDelete}
+      isDeleting={archiveEvent.isPending}
+      errorMessage={errorMessage}
+      sync={event.sync}
+      calendarTargets={calendarTargets}
+      linkTarget={linkTarget}
+      onLinkTargetChange={setLinkTarget}
+      onLink={handleLink}
+      isLinking={linkEvent.isPending}
+      linkNote={linkNote}
+      calendarTargetsError={calendarTargetsError}
     />
   );
 }

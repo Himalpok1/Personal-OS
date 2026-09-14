@@ -216,3 +216,52 @@ export function validateTaskDueDateRule(
     );
   }
 }
+
+/**
+ * Write-time validation of an EVENT's recurrence rule (Checkpoint 9.5) --
+ * the event twin of validateTaskDueDateRule, shared by POST/PATCH /events
+ * and the capture `create_event` commit so both writers refuse the same
+ * rules with the same tokens. Events have no completion anchor, so every
+ * event rule is due-date-style: pre-expanded, DAILY or coarser, UNTIL/COUNT
+ * carried in their own columns rather than embedded in the string.
+ *
+ * Throws TaskDueDateRuleError (token-only message: `unsupported_frequency` /
+ * `embedded_until_count`) or validateRecurrenceRule's own errors; callers
+ * map the latter to the `invalid_rrule` token and never echo the rule.
+ */
+export function validateEventRecurrenceRule(
+  rrule: string,
+  recurrenceTimezone: string = "UTC",
+  extras: Pick<
+    ValidateRecurrenceRuleParams,
+    "recurrenceUntil" | "recurrenceCount" | "recurrenceExdates"
+  > = {},
+): void {
+  if (/(?:^|[;:])(?:UNTIL|COUNT)=/i.test(rrule)) {
+    throw new TaskDueDateRuleError(
+      "embedded_until_count",
+      "event recurrence rule must not embed UNTIL or COUNT (embedded_until_count)",
+    );
+  }
+
+  validateRecurrenceRule({
+    rrule,
+    recurrenceTimezone,
+    isTask: false,
+    ...extras,
+  });
+
+  const freqPart = rrule
+    .trim()
+    .replace(/^RRULE:/i, "")
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => /^FREQ=/i.test(part));
+  const freq = freqPart?.slice("FREQ=".length).trim().toUpperCase() ?? "";
+  if (SUB_DAILY_FREQUENCIES.has(freq)) {
+    throw new TaskDueDateRuleError(
+      "unsupported_frequency",
+      "event recurrence rule frequency must be DAILY or coarser (unsupported_frequency)",
+    );
+  }
+}

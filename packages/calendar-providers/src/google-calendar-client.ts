@@ -37,6 +37,14 @@ export interface GoogleCalendarEvent {
 }
 
 export interface GoogleEventWriteBody {
+  /**
+   * Client-chosen event id (Checkpoint 9.5). Google accepts a caller-supplied
+   * id on insert (`[a-v0-9]{5,1024}`, base32hex), which is what makes an
+   * insert idempotent across a lost response: the push job derives it from
+   * the link row, and a retry that finds the id already taken gets a 409 it
+   * can resolve into an update instead of a duplicate event.
+   */
+  id?: string;
   status?: GoogleEventStatus;
   summary?: string;
   description?: string;
@@ -48,8 +56,42 @@ export interface GoogleEventWriteBody {
   originalStartTime?: GoogleEventDateTime;
 }
 
+/**
+ * Google's calendarList `accessRole` vocabulary. Carried through verbatim
+ * (Checkpoint 9.5) so the API can decide write-eligibility -- `owner` and
+ * `writer` may receive pushes; `reader`/`freeBusyReader` may not. A calendar
+ * whose role is absent is treated as NOT writable by every consumer.
+ */
+export type GoogleCalendarAccessRole = "owner" | "writer" | "reader" | "freeBusyReader";
+
 export interface ListCalendarsResult {
-  items: Array<{ id: string; summary: string; primary?: boolean }>;
+  items: Array<{
+    id: string;
+    summary: string;
+    primary?: boolean;
+    /** Clamped to the four documented values; anything else is `undefined` (= not writable). */
+    accessRole?: GoogleCalendarAccessRole;
+  }>;
+}
+
+const GOOGLE_CALENDAR_ACCESS_ROLES: ReadonlySet<string> = new Set([
+  "owner",
+  "writer",
+  "reader",
+  "freeBusyReader",
+]);
+
+/**
+ * Clamps a calendarList `accessRole` to the documented vocabulary (fixer
+ * review, MINOR-4). An unknown string -- a future role, a typo in a fixture,
+ * a provider change -- becomes `undefined`, which every consumer already
+ * treats as "not writable". A role this code does not understand must never
+ * be persisted as if it were one it does.
+ */
+export function clampGoogleCalendarAccessRole(raw: unknown): GoogleCalendarAccessRole | undefined {
+  return typeof raw === "string" && GOOGLE_CALENDAR_ACCESS_ROLES.has(raw)
+    ? (raw as GoogleCalendarAccessRole)
+    : undefined;
 }
 
 export interface ListEventsParams {
@@ -116,6 +158,16 @@ interface GoogleApiErrorBody {
   };
 }
 
+/**
+ * Per-request deadline (Checkpoint 9.5). Without one a stalled TCP connection
+ * holds a push job open until pg-boss's own expiry redelivers it, and the
+ * hung attempt keeps running in the same process alongside the retry. A
+ * timed-out request surfaces as a DOMException named `TimeoutError`, which
+ * `classifyCalendarProviderError` maps to `network_error` -- the same
+ * transient class as a refused connection, so pg-boss retries it.
+ */
+export const GOOGLE_FETCH_TIMEOUT_MS = 20_000;
+
 async function googleFetch(
   accessToken: string,
   path: string,
@@ -123,6 +175,7 @@ async function googleFetch(
 ): Promise<Response> {
   return fetch(`${CALENDAR_API_BASE}${path}`, {
     ...init,
+    signal: AbortSignal.timeout(GOOGLE_FETCH_TIMEOUT_MS),
     headers: {
       Authorization: `Bearer ${accessToken}`,
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
@@ -155,9 +208,16 @@ export function createGoogleCalendarClient(): GoogleCalendarClient {
       const response = await googleFetch(accessToken, "/users/me/calendarList");
       if (!response.ok) return throwForNonOk(response, false);
       const body = (await response.json()) as {
-        items?: Array<{ id: string; summary: string; primary?: boolean }>;
+        items?: Array<{ id: string; summary: string; primary?: boolean; accessRole?: string }>;
       };
-      return { items: body.items ?? [] };
+      return {
+        items: (body.items ?? []).map((item) => ({
+          id: item.id,
+          summary: item.summary,
+          primary: item.primary,
+          accessRole: clampGoogleCalendarAccessRole(item.accessRole),
+        })),
+      };
     },
 
     async listEvents(accessToken, params) {

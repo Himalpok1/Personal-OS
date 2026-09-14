@@ -210,7 +210,15 @@ async function runAutoParse(db: Db, row: typeof inboxItems.$inferSelect): Promis
   const signals: ConfidenceSignals = {
     typeAmbiguous: sampleA.tool !== sampleB.tool,
     unresolvedDatePhrase: textHasRelativeDatePhrase(rawText) && !hasResolvedDate(sampleA),
-    recurrenceInferred: sampleA.tool === "create_task" && Boolean(sampleA.args.rrule),
+    // Any tool that carries a rule (Checkpoint 9.5: create_event as well as
+    // create_task) -- docs/ARCHITECTURE.md: "always confirm the first time a
+    // rule is created. A wrong RRULE generates wrong occurrences indefinitely."
+    // It also routes a parser-emitted rule the event validator would refuse
+    // into needs_confirm, where the confirm route answers 409 up front,
+    // instead of into an auto-commit that throws on every retry.
+    recurrenceInferred:
+      (sampleA.tool === "create_task" || sampleA.tool === "create_event") &&
+      Boolean(sampleA.args.rrule),
     degenerateTitle: isDegenerateTitle(sampleA),
     unknownProjectReference,
     lowTranscriptionConfidence: isLowTranscriptionConfidence(row.source, row.confidence),

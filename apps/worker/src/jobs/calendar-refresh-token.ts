@@ -122,9 +122,24 @@ function createCalendarRefreshTokenHandlerUncontained(
   };
 }
 
-async function markNeedsReauth(
+/**
+ * THE ONE needs_reauth transition (Checkpoint 9.5: exported and shared).
+ *
+ * calendar-push-event.ts and calendar-sync-calendar.ts used to perform their
+ * own unconditional `status = 'needs_reauth'` UPDATE on a permanent OAuth
+ * failure -- which re-stamped `updated_at` on every retry and never alerted.
+ * Because `updated_at` IS the episode discriminator in the ADR-058 alert key,
+ * an unconditional write from a second producer could mint a second key for
+ * one failure, or move the timestamp under a key this job had already sent.
+ * Every producer now goes through this function, so one episode has one
+ * timestamp and one key however many jobs observe it.
+ *
+ * `boss` may be absent only where no queue exists at all (a direct caller in
+ * a test); the conditional transition still happens, the alert is skipped.
+ */
+export async function markNeedsReauth(
   db: Db,
-  boss: PgBoss,
+  boss: PgBoss | undefined,
   connectionId: string,
   reason: CalendarSyncErrorCode,
 ): Promise<void> {
@@ -145,7 +160,7 @@ async function markNeedsReauth(
     .set({ status: "needs_reauth", lastSyncError: reason, updatedAt: new Date() })
     .where(and(eq(calendarConnections.id, connectionId), eq(calendarConnections.status, "active")));
 
-  await enqueueNeedsReauthAlert(db, boss, connectionId);
+  if (boss) await enqueueNeedsReauthAlert(db, boss, connectionId);
 }
 
 /**

@@ -600,3 +600,226 @@ describe("commitParsedEntity -- create_task recurrence materialization (9.3)", (
     expect(task.recurrenceTimezone).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Checkpoint 9.5: create_event is a LOCAL writer, validates its rule with the
+// shared event validator, drops an inverted end, and materializes its window
+// in the same transaction as the insert.
+// ---------------------------------------------------------------------------
+describe("commitParsedEntity -- create_event ownership, validation and window (9.5)", () => {
+  let db: Db;
+  const TZ = "America/Chicago";
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  beforeEach(async () => {
+    db = buildTestDb();
+    await truncateTestTables(db);
+  });
+
+  it("writes origin 'local' (the column default is the read-only 'external')", async () => {
+    const result = await commitParsedEntity(
+      db,
+      {
+        tool: "create_event",
+        args: { title: "Coffee", start: "2026-09-20T09:00:00", end: "2026-09-20T09:30:00" },
+      },
+      { timezone: TZ },
+    );
+    const [row] = await db.select().from(events).where(eq(events.id, result.committed.entityId));
+    expect(row!.origin).toBe("local");
+  });
+
+  it("drops an end at or before the start (no fabricated duration) for a timed event", async () => {
+    for (const end of ["2026-09-20T09:00:00", "2026-09-20T08:00:00"]) {
+      await truncateTestTables(db);
+      const result = await commitParsedEntity(
+        db,
+        { tool: "create_event", args: { title: "Zero", start: "2026-09-20T09:00:00", end } },
+        { timezone: TZ },
+      );
+      const [row] = await db.select().from(events).where(eq(events.id, result.committed.entityId));
+      expect(row!.startsAt?.toISOString()).toBe("2026-09-20T14:00:00.000Z");
+      expect(row!.endsAt).toBeNull();
+    }
+  });
+
+  it("collapses an all-day end date before the start date to a single day", async () => {
+    const result = await commitParsedEntity(
+      db,
+      {
+        tool: "create_event",
+        args: {
+          title: "Backwards",
+          start: "2026-09-20T09:00:00",
+          end: "2026-09-18T09:00:00",
+          all_day: true,
+        },
+      },
+      { timezone: TZ },
+    );
+    const [row] = await db.select().from(events).where(eq(events.id, result.committed.entityId));
+    expect(row!.startDate).toBe("2026-09-20");
+    expect(row!.endDate).toBe("2026-09-20");
+  });
+
+  it("materializes the 90-day window for a timed weekly series in the same commit, with a valid bare rule stored", async () => {
+    // Whole seconds: the expander works in wall-clock components (no ms), as
+    // POST /events does.
+    const start = new Date(Math.floor((Date.now() + DAY_MS) / 1000) * 1000);
+    const result = await commitParsedEntity(
+      db,
+      {
+        tool: "create_event",
+        args: {
+          title: "Weekly sync",
+          start: start.toISOString(),
+          end: new Date(start.getTime() + 3600_000).toISOString(),
+          rrule: "FREQ=WEEKLY",
+        },
+      },
+      { timezone: TZ },
+    );
+    const [row] = await db.select().from(events).where(eq(events.id, result.committed.entityId));
+    expect(row!.rrule).toBe("FREQ=WEEKLY");
+    expect(row!.recurrenceTimezone).toBe(TZ);
+    expect(row!.origin).toBe("local");
+    const rows = await db
+      .select()
+      .from(occurrences)
+      .where(and(eq(occurrences.parentType, "event"), eq(occurrences.parentId, row!.id)));
+    // 90 days of weekly instances starting tomorrow: 12 or 13 depending on the
+    // day-of-week alignment, never 0 and never more than 13.
+    expect(rows.length).toBeGreaterThanOrEqual(12);
+    expect(rows.length).toBeLessThanOrEqual(13);
+    expect(rows[0]!.occursAt.getTime()).toBe(row!.startsAt!.getTime());
+    expect(rows.every((o) => o.status === "scheduled" && !o.lazyGenerated)).toBe(true);
+  });
+
+  it("materializes an all-day daily series from start_date at ADR-042's local-noon anchor", async () => {
+    const start = new Date(Date.now() + DAY_MS);
+    const result = await commitParsedEntity(
+      db,
+      {
+        tool: "create_event",
+        args: { title: "Daily", start: start.toISOString(), all_day: true, rrule: "FREQ=DAILY" },
+      },
+      { timezone: TZ },
+    );
+    const [row] = await db.select().from(events).where(eq(events.id, result.committed.entityId));
+    expect(row!.allDay).toBe(true);
+    expect(row!.startsAt).toBeNull();
+    const rows = await db
+      .select()
+      .from(occurrences)
+      .where(and(eq(occurrences.parentType, "event"), eq(occurrences.parentId, row!.id)));
+    expect(rows.length).toBeGreaterThanOrEqual(89);
+    // occurs_local is the naive wall clock: local noon, by construction.
+    expect(rows[0]!.occursLocal.getUTCHours()).toBe(12);
+  });
+
+  it("is idempotent across a redelivery of the same commit: a second commit of the same call re-inserts nothing into the first event's window", async () => {
+    const start = new Date(Date.now() + DAY_MS);
+    const call: ParserToolCall = {
+      tool: "create_event",
+      args: { title: "Twice", start: start.toISOString(), rrule: "FREQ=DAILY" },
+    };
+    const first = await commitParsedEntity(db, call, { timezone: TZ });
+    const before = await db
+      .select({ id: occurrences.id })
+      .from(occurrences)
+      .where(eq(occurrences.parentId, first.committed.entityId));
+    const second = await commitParsedEntity(db, call, { timezone: TZ });
+    expect(second.committed.entityId).not.toBe(first.committed.entityId);
+    const after = await db
+      .select({ id: occurrences.id })
+      .from(occurrences)
+      .where(eq(occurrences.parentId, first.committed.entityId));
+    expect(after).toHaveLength(before.length);
+  });
+
+  describe("refuses a rule the shared event validator rejects with ZERO rows written", () => {
+    it.each([
+      ["free-text rrule", "every monday"],
+      ["sub-daily frequency", "FREQ=HOURLY"],
+      ["embedded UNTIL", "FREQ=DAILY;UNTIL=20261231T000000Z"],
+      ["embedded COUNT", "FREQ=DAILY;COUNT=3"],
+      ["INTERVAL=0", "FREQ=DAILY;INTERVAL=0"],
+    ])("%s", async (_label, rrule) => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await expect(
+          commitParsedEntity(
+            db,
+            {
+              tool: "create_event",
+              args: { title: "Bad rule", start: "2026-09-20T09:00:00", rrule },
+            },
+            { timezone: TZ },
+          ),
+        ).rejects.toThrow();
+      }
+      expect(await db.select({ id: events.id }).from(events)).toHaveLength(0);
+      expect(await db.select({ id: occurrences.id }).from(occurrences)).toHaveLength(0);
+    });
+
+    it("the refusal message is a token, never the rule text", async () => {
+      await expect(
+        commitParsedEntity(
+          db,
+          {
+            tool: "create_event",
+            args: { title: "Bad rule", start: "2026-09-20T09:00:00", rrule: "FREQ=HOURLY" },
+          },
+          { timezone: TZ },
+        ),
+      ).rejects.toThrow(/unsupported_frequency/);
+    });
+  });
+
+  it("writes the event and its window in ONE transaction: an occurrence-insert failure leaves no event row, and a retry starts from zero", async () => {
+    const realTransaction = db.transaction.bind(db);
+    const transactionSpy = vi.spyOn(db, "transaction").mockImplementation(((
+      callback: (tx: unknown) => Promise<unknown>,
+    ) =>
+      realTransaction(async (tx) => {
+        const refusing = new Proxy(tx, {
+          get(target, key, receiver) {
+            if (key === "insert") {
+              return (table: unknown) => {
+                if (table === occurrences) throw new Error("occurrence insert refused by test");
+                return target.insert(table as typeof events);
+              };
+            }
+            return Reflect.get(target, key, receiver) as unknown;
+          },
+        });
+        return callback(refusing);
+      })) as typeof db.transaction);
+    const call: ParserToolCall = {
+      tool: "create_event",
+      args: {
+        title: "Atomic event",
+        start: new Date(Date.now() + DAY_MS).toISOString(),
+        rrule: "FREQ=DAILY",
+      },
+    };
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await expect(commitParsedEntity(db, call, { timezone: TZ })).rejects.toThrow(
+          /refused by test/,
+        );
+        expect(await db.select({ id: events.id }).from(events)).toHaveLength(0);
+      }
+    } finally {
+      transactionSpy.mockRestore();
+    }
+    expect(await db.select({ id: events.id }).from(events)).toHaveLength(0);
+    expect(await db.select({ id: occurrences.id }).from(occurrences)).toHaveLength(0);
+    // With the fault removed the same call commits cleanly -- the retry path.
+    const ok = await commitParsedEntity(db, call, { timezone: TZ });
+    expect(await db.select({ id: events.id }).from(events)).toHaveLength(1);
+    expect(
+      (await db.select().from(occurrences).where(eq(occurrences.parentId, ok.committed.entityId)))
+        .length,
+    ).toBeGreaterThan(0);
+  });
+});

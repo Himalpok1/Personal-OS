@@ -6,8 +6,9 @@
 // missed reuse.
 import { ApiClientError } from "@personal-os/api-client";
 import type { AgendaItem, AgendaTaskItem, AgendaOccurrenceItem, AgendaEventItem } from "@personal-os/schema";
-import { useRouter } from "expo-router";
+import { useRouter, type Href } from "expo-router";
 import { Pressable, Text, View } from "react-native";
+import { eventDetailHref } from "@/utils/event-navigation";
 import { eventTimeLabel } from "@/utils/event-time-label";
 import { useCompleteOccurrence, useSkipOccurrence } from "@/queries/occurrences";
 import { useCompleteTask, useUpdateTask } from "@/queries/tasks";
@@ -174,13 +175,8 @@ export function AgendaTaskRow({ item }: { item: AgendaTaskItem | AgendaOccurrenc
 
 export function AgendaEventRow({ item }: { item: AgendaEventItem }) {
   const router = useRouter();
-  const onPress = () => {
-    if (item.occurs_at) {
-      router.push(`/events/${item.id}?occursAt=${encodeURIComponent(item.occurs_at)}`);
-    } else {
-      router.push(`/events/${item.id}`);
-    }
-  };
+  // One href rule shared with Today (utils/event-navigation.ts).
+  const onPress = () => router.push(eventDetailHref(item.id, item.occurs_at) as Href);
   // Routed through the shared helper (Checkpoint 5.7.1) so the
   // all_day-checked-first rule has ONE source of truth with Today rather than
   // two hand-maintained chains that can drift. This surface was already
