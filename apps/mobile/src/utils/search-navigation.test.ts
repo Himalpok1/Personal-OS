@@ -1,11 +1,19 @@
 import type { SearchResult } from "@personal-os/schema";
 import { describe, expect, it } from "vitest";
-import { SEARCH_TYPE_LABELS, searchResultHref } from "./search-navigation";
+import { SEARCH_RESULT_TYPE_ORDER } from "@personal-os/schema";
+import { SEARCH_TYPE_CHIP_LABELS, SEARCH_TYPE_LABELS, searchResultHref } from "./search-navigation";
 
 const ID = "11111111-1111-4111-8111-111111111111";
 const ENTITY_ID = "22222222-2222-4222-8222-222222222222";
 
-const base = { id: ID, title: "t", preview: null, timestamp: "2026-08-01T00:00:00.000Z" };
+const base = {
+  id: ID,
+  title: "t",
+  preview: null,
+  timestamp: "2026-08-01T00:00:00.000Z",
+  score: 0,
+  match: { reasons: [], fields: [] },
+};
 
 describe("searchResultHref", () => {
   it("routes a task to its detail screen", () => {
@@ -16,6 +24,36 @@ describe("searchResultHref", () => {
   it("routes a note to its detail screen", () => {
     const result: SearchResult = { ...base, type: "note", archived: false };
     expect(searchResultHref(result)).toBe(`/notes/${ID}`);
+  });
+
+  it("routes an event to its detail screen -- the plain route, never an ?occursAt= instance", () => {
+    for (const shape of [
+      { origin: "local", is_recurring: false, is_detached: false },
+      { origin: "local", is_recurring: true, is_detached: false },
+      { origin: "external", is_recurring: false, is_detached: true },
+    ] as const) {
+      const result: SearchResult = {
+        ...base,
+        type: "event",
+        ...shape,
+        all_day: false,
+        starts_at: "2026-09-18T12:46:00.000Z",
+        start_date: null,
+        archived: false,
+      };
+      expect(searchResultHref(result)).toBe(`/events/${ID}`);
+    }
+  });
+
+  it("routes a project to its detail screen", () => {
+    const result: SearchResult = {
+      ...base,
+      type: "project",
+      status: "active",
+      target_date: null,
+      archived: false,
+    };
+    expect(searchResultHref(result)).toBe(`/projects/${ID}`);
   });
 
   it("routes a committed inbox capture to the entity it became", () => {
@@ -71,7 +109,7 @@ describe("searchResultHref", () => {
     // The whole point of deriving from `type` + uuid: a subject or a display
     // name that looks like a route must not be able to become one.
     const hostile: SearchResult = {
-      id: ID,
+      ...base,
       type: "mail_message",
       title: "/settings",
       preview: "https://evil.example/steal",
@@ -95,13 +133,14 @@ describe("searchResultHref", () => {
   });
 });
 
-describe("SEARCH_TYPE_LABELS", () => {
-  it("names every searchable type", () => {
-    expect(Object.keys(SEARCH_TYPE_LABELS).sort()).toEqual([
-      "inbox_item",
-      "mail_message",
-      "note",
-      "task",
-    ]);
+describe("SEARCH_TYPE_LABELS / SEARCH_TYPE_CHIP_LABELS", () => {
+  it("name every searchable type -- exactly the six in SEARCH_RESULT_TYPE_ORDER", () => {
+    const expected = [...SEARCH_RESULT_TYPE_ORDER].sort();
+    expect(Object.keys(SEARCH_TYPE_LABELS).sort()).toEqual(expected);
+    expect(Object.keys(SEARCH_TYPE_CHIP_LABELS).sort()).toEqual(expected);
+    expect(SEARCH_TYPE_LABELS.event).toBe("Events");
+    expect(SEARCH_TYPE_LABELS.project).toBe("Projects");
+    expect(SEARCH_TYPE_CHIP_LABELS.event).toBe("Event");
+    expect(SEARCH_TYPE_CHIP_LABELS.project).toBe("Project");
   });
 });

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { CaptureSourceSchema } from "./capture.js";
 import { booleanQueryParam } from "./pagination.js";
-import { ParserToolCallSchema } from "./parser-tools.js";
+import { ParserToolCallSchema, StoredParserToolCallSchema } from "./parser-tools.js";
 
 export const InboxItemStatusSchema = z.enum([
   "pending",
@@ -80,7 +80,14 @@ export const StoredParseFailureSchema = z.object({
 export type StoredParseFailure = z.infer<typeof StoredParseFailureSchema>;
 
 export const StoredParseResultSchema = z.object({
-  toolCall: ParserToolCallSchema,
+  // The UNBOUNDED union, deliberately: this schema READS rows, some of which
+  // were written before Checkpoint 9.6 bounded the tool arguments. Reading
+  // such a row through the bounded ParserToolCallSchema made it
+  // `parse_result_unreadable` -- a legacy capture the owner could no longer
+  // file. Bounds are enforced where text ENTERS (the worker truncates model
+  // output before validating; a correction is refused with a 400), never
+  // where stored text is read back. See parser-tools.ts.
+  toolCall: StoredParserToolCallSchema,
   confidenceFlags: z.array(z.string()),
   // Present only on a row the dead-letter handler finalized. Optional so every
   // pre-8.6A row still parses unchanged, and so finalizing a `needs_confirm`

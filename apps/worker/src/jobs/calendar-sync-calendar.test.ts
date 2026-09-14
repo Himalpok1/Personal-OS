@@ -34,7 +34,9 @@ import {
   desiredGoogleEventId,
 } from "./calendar-push-event.js";
 import { buildEventRecurrenceRule, expandRecurrenceInRange } from "@personal-os/core";
+import { EVENT_DESCRIPTION_MAX_CHARS } from "@personal-os/schema";
 import { env } from "../env.js";
+import { setLogSink } from "../logger.js";
 
 const GOOGLE_CALENDAR_ID = "primary";
 const CALDAV_CALENDAR_URL = "/calendars/users/testuser/personal/";
@@ -974,6 +976,96 @@ describe("calendar.google.sync-calendar", () => {
   // tie parks the link as `conflict` instead of overwriting the local edit;
   // needs_reauth goes through the shared transition.
   // =========================================================================
+  // Checkpoint 9.6 (ADR-065): provider text is bounded at translation, and
+  // the job reports how many fields that cut -- ONE counts-only line per
+  // pass, only when the count is non-zero, never the text.
+  describe("Checkpoint 9.6 -- text bounds are logged as a count", () => {
+    let sink: Array<Record<string, unknown>>;
+    let restore: () => void;
+
+    beforeEach(() => {
+      sink = [];
+      restore = setLogSink({ write: (_level, record) => sink.push(record) });
+    });
+    afterEach(() => restore());
+
+    const bounded = () => sink.filter((record) => record["event"] === "calendar.sync.text_bounded");
+
+    it("Google: an over-long description is stored at the bound and counted once, ids and counts only", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+      const description = "agenda ".repeat(700); // 4,900 chars > EVENT_DESCRIPTION_MAX_CHARS
+      const client = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [
+            {
+              items: [oneOffEvent({ description }), oneOffEvent({ id: "g-event-2" })],
+              nextSyncToken: "sync-token-1",
+            },
+          ],
+        },
+      });
+
+      await runSync(db, client, calendarId, connectionId);
+
+      const rows = await db.select().from(events);
+      const stored = rows.find((row) => row.description !== null);
+      expect(stored?.description).toHaveLength(EVENT_DESCRIPTION_MAX_CHARS);
+
+      const lines = bounded();
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ connectionId, truncatedFields: 1 });
+      // Nothing but the connection id and the count rides on the line.
+      const json = JSON.stringify(sink);
+      expect(json).not.toContain("agenda agenda");
+      expect(json).not.toContain("Dentist");
+    });
+
+    it("Google: a pass that bounds nothing emits no line", async () => {
+      const connectionId = await insertConnection(db);
+      const calendarId = await insertCalendar(db, connectionId);
+      const client = createFakeGoogleCalendarClient({
+        listEventsQueues: {
+          [GOOGLE_CALENDAR_ID]: [{ items: [oneOffEvent()], nextSyncToken: "sync-token-1" }],
+        },
+      });
+
+      await runSync(db, client, calendarId, connectionId);
+
+      expect(bounded()).toEqual([]);
+    });
+
+    it("CalDAV: an over-long DESCRIPTION is stored at the bound and counted once", async () => {
+      const connectionId = await insertCaldavConnection(db);
+      const calendarId = await insertCaldavCalendar(db, connectionId);
+      const fakeClient = createFakeCalDavClient();
+      const auth = { username: "testuser", password: "fake-password" };
+      const ics = localEventToVCalendar({
+        title: "Board meeting",
+        description: "minutes ".repeat(700),
+        allDay: false,
+        startsAt: new Date("2026-08-21T14:00:00.000Z"),
+        endsAt: new Date("2026-08-21T15:00:00.000Z"),
+        timezone: "America/Chicago",
+      });
+      await fakeClient.putEvent(`${CALDAV_CALENDAR_URL}long.ics`, ics, undefined, auth, {
+        ifNoneMatch: true,
+      });
+
+      await runCalendarSync(
+        { db, client: createFakeGoogleCalendarClient(), caldavClient: fakeClient },
+        { connectionId, calendarConnectionCalendarId: calendarId },
+      );
+
+      const [row] = await db.select().from(events);
+      expect(row?.description).toHaveLength(EVENT_DESCRIPTION_MAX_CHARS);
+      const lines = bounded();
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ connectionId, truncatedFields: 1 });
+      expect(JSON.stringify(sink)).not.toContain("minutes minutes");
+    });
+  });
+
   describe("Checkpoint 9.5 -- ownership and conflict contract", () => {
     it("every `.insert(events)` in calendar-sync-calendar.ts builds its row through localEventFieldsToInsert, which sets origin: 'external'", () => {
       // A source-level pin over the four insert sites, so a fifth added

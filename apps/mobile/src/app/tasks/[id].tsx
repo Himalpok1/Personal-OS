@@ -1,6 +1,7 @@
 import { confirmDestructive } from "@/components/confirm-destructive";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import { FieldLengthCounter } from "@/components/field-length-counter";
 import { DateTimeField } from "@/components/datetime-field";
 import { deviceTimezone } from "@/components/datetime-field-state";
 import { TaskRepeatField } from "@/components/recurrence/task-repeat-field";
@@ -9,8 +10,9 @@ import { TaskActions } from "@/components/task-actions";
 import { buildTaskUpdatePatch } from "@/components/task-update-patch";
 import { useProjects } from "@/queries/projects";
 import { useArchiveTask, useTask, useUpdateTask } from "@/queries/tasks";
+import { describeValidationError } from "@/utils/validation-error";
 import { ApiClientError } from "@personal-os/api-client";
-import type { TaskUpdate } from "@personal-os/schema";
+import { ENTITY_TITLE_MAX_CHARS, TASK_BODY_MAX_CHARS, type TaskUpdate } from "@personal-os/schema";
 import {
   parseRRuleStringToEditorState,
   type RecurrenceEditorState,
@@ -156,18 +158,24 @@ export default function EditTaskScreen() {
         onSuccess: () => router.back(),
         // Never the raw message -- `ApiClientError.message` is the
         // developer-shaped `API error 400: validation_failed`.
-        onError: (err) =>
+        //
+        // A refused field -- a server 400 or the api-client's own pre-request
+        // parse (a raw ZodError) -- names the field and its bound. The
+        // recurrence fields are in the body only when the repeat changed, so
+        // a 400 with an rrule present and no field-level line is about the
+        // rule.
+        onError: (err) => {
+          const fieldLine = describeValidationError(err);
           setSaveError(
-            err instanceof ApiClientError && err.code === "validation_failed"
-              ? // The recurrence fields are in the body only when the repeat
-                // changed, so a 400 with an rrule present is about the rule.
-                patch.rrule
+            fieldLine !== null
+              ? patch.rrule && !fieldLine.includes("must be at most")
                 ? "That repeat rule isn't supported."
-                : "Couldn't save those changes: something in the form isn't valid."
+                : fieldLine
               : err instanceof ApiClientError && err.status === 404
                 ? "This task couldn't be found."
                 : "Couldn't save those changes. Please try again.",
-          ),
+          );
+        },
       },
     );
   };
@@ -196,16 +204,22 @@ export default function EditTaskScreen() {
       <TextInput
         value={title}
         onChangeText={setTitle}
+        // The server's own bound (packages/schema/src/text-bounds.ts), so an
+        // over-long paste is stopped here rather than refused as a 400.
+        maxLength={ENTITY_TITLE_MAX_CHARS}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
 
       <Text className="mb-1 text-sm text-neutral-500">Notes</Text>
       <TextInput
         value={body}
         onChangeText={setBody}
         multiline
+        maxLength={TASK_BODY_MAX_CHARS}
         className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={body.length} maxLength={TASK_BODY_MAX_CHARS} />
 
       <DateTimeField label="Due date" value={dueAt} onChange={onDueAtChange} />
 

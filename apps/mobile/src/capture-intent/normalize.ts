@@ -1,3 +1,4 @@
+import { truncateProviderString } from "@personal-os/core/mail/provider-strings";
 import { CAPTURE_TEXT_MAX_LENGTH } from "@personal-os/schema";
 
 // C0 controls except tab and newline, DEL, and the C1 block. Written as
@@ -14,12 +15,17 @@ const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F
  *  1. Strip control characters FIRST, so an adversarial share cannot spend
  *     its length budget on invisible codepoints and push the visible payload
  *     past the cap.
- *  2. Then bound to the same limit the server enforces.
+ *  2. Then bound to the same limit the server enforces -- through the same
+ *     surrogate-safe cut mail headers get (`truncateProviderString`, a
+ *     client-safe deep subpath of core), because a plain `slice` can split an
+ *     emoji straddling the bound into a lone surrogate, which is not valid
+ *     UTF-8 and which Postgres refuses outright.
  *
  * Nothing here interprets the text. It is never parsed as HTML or Markdown,
  * never auto-linked, and never used to derive a route -- it is rendered into
  * a TextInput and posted as a capture body, nothing else.
  */
 export function normalizeSharedText(raw: string): string {
-  return raw.replace(CONTROL_CHARACTERS, "").slice(0, CAPTURE_TEXT_MAX_LENGTH).trim();
+  const stripped = raw.replace(CONTROL_CHARACTERS, "");
+  return (truncateProviderString(stripped, CAPTURE_TEXT_MAX_LENGTH) ?? "").trim();
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ENTITY_TITLE_MAX_CHARS, NOTE_BODY_MAX_CHARS, tooLongMessage } from "./text-bounds.js";
 import { booleanQueryParam } from "./pagination.js";
 
 export const NoteSchema = z.object({
@@ -14,8 +15,11 @@ export type Note = z.infer<typeof NoteSchema>;
 
 export const NoteCreateSchema = z
   .object({
-    title: z.string().min(1),
-    body: z.string().min(1),
+    title: z
+      .string()
+      .min(1)
+      .max(ENTITY_TITLE_MAX_CHARS, tooLongMessage("title", ENTITY_TITLE_MAX_CHARS)),
+    body: z.string().min(1).max(NOTE_BODY_MAX_CHARS, tooLongMessage("body", NOTE_BODY_MAX_CHARS)),
     project_id: z.string().uuid().optional(),
   })
   .strict();
@@ -23,8 +27,16 @@ export type NoteCreate = z.infer<typeof NoteCreateSchema>;
 
 export const NoteUpdateSchema = z
   .object({
-    title: z.string().min(1).optional(),
-    body: z.string().min(1).optional(),
+    title: z
+      .string()
+      .min(1)
+      .max(ENTITY_TITLE_MAX_CHARS, tooLongMessage("title", ENTITY_TITLE_MAX_CHARS))
+      .optional(),
+    body: z
+      .string()
+      .min(1)
+      .max(NOTE_BODY_MAX_CHARS, tooLongMessage("body", NOTE_BODY_MAX_CHARS))
+      .optional(),
     project_id: z.string().uuid().nullable().optional(),
   })
   .strict()

@@ -1,4 +1,8 @@
-import { CAPTURE_TEXT_MAX_LENGTH, type ParserToolCall } from "@personal-os/schema";
+import {
+  CAPTURE_TEXT_MAX_LENGTH,
+  ENTITY_TITLE_MAX_CHARS,
+  type ParserToolCall,
+} from "@personal-os/schema";
 import { formatInstantWithOffset } from "@personal-os/core/timezone";
 
 // Builds the `corrected_tool_call` the owner supplies when the parser could
@@ -19,17 +23,21 @@ import { formatInstantWithOffset } from "@personal-os/core/timezone";
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
 
 /**
- * Bound on a title built from capture text.
+ * Bound on a title built from capture text -- and on an owner-EDITED one.
  *
- * The server enforces no separate title bound (`TaskCreateSchema.title` is
- * `z.string().min(1)`); the only server-side ceiling a title inherits is
- * CAPTURE_TEXT_MAX_LENGTH on the capture itself. A 4,000-character task title
- * is legal and useless, so this caps at a length a list row can show. Anything
- * past it stays in the note BODY when filing as a note, and is simply not part
- * of the title when filing as a task or event -- the raw capture is retained
- * on the inbox row either way.
+ * Since Checkpoint 9.6 the server DOES enforce a title bound: every parser
+ * tool call's `title` is `.max(ENTITY_TITLE_MAX_CHARS)` (512,
+ * packages/schema/src/text-bounds.ts), and `POST /inbox/:id/confirm`
+ * validates a `corrected_tool_call` against that schema. So this is the same
+ * constant, not a smaller cosmetic one: a seeded title is capped here with an
+ * ellipsis (the raw capture is retained on the inbox row either way, and a
+ * note keeps the whole text in its BODY), and an owner-typed title passes
+ * through `resolveTitle` -> `titleFromText` at the same bound, so nothing
+ * this file builds can be refused by the server for length. The title
+ * input's own `maxLength` is this constant too, so the cap on an edited title
+ * is a backstop rather than something the owner can reach.
  */
-export const FILE_AS_TITLE_MAX_CHARS = 200;
+export const FILE_AS_TITLE_MAX_CHARS = ENTITY_TITLE_MAX_CHARS;
 
 const ELLIPSIS = "…";
 
@@ -172,7 +180,12 @@ export interface FileAsDraft {
   startAt: string | null;
 }
 
-export const EMPTY_FILE_AS_DRAFT: FileAsDraft = { kind: null, title: "", dueAt: null, startAt: null };
+export const EMPTY_FILE_AS_DRAFT: FileAsDraft = {
+  kind: null,
+  title: "",
+  dueAt: null,
+  startAt: null,
+};
 
 /** The title the draft is seeded with when a kind is chosen. */
 export function defaultTitleFor(kind: FileAsKind, rawText: string): string {

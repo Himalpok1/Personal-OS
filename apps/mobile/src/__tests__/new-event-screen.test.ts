@@ -119,8 +119,11 @@ describe("app/events/[id].tsx (Checkpoint 9.5)", () => {
     expect(editEvent).toMatch(
       /title: "Delete this event\?"[\s\S]*?archiveEvent\.mutate\(event\.id, \{\s*onSuccess: \(\) => router\.back\(\)/,
     );
+    // Checkpoint 9.6: the one-call line carries the field-level validation
+    // message (event-form-state.ts's eventMutationErrorLine) so an
+    // over-bound title is named rather than blamed on the dates.
     expect(editEvent).toMatch(
-      /const failWith = \(verb: string\) => \(err: unknown\) =>\s*setErrorMessage\(eventMutationErrorCopy\(classifyEventMutationError\(err\), verb\)\)/,
+      /const failWith = \(verb: string\) => \(err: unknown\) =>\s*setErrorMessage\(eventMutationErrorLine\(err, verb\)\)/,
     );
     for (const verb of [
       "save those changes",

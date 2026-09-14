@@ -4,6 +4,7 @@
 import { isValidTimezone } from "@personal-os/core/timezone";
 import { validateCompletionAnchoredRule } from "@personal-os/core/recurrence/editor";
 import { z } from "zod";
+import { ENTITY_TITLE_MAX_CHARS, TASK_BODY_MAX_CHARS, tooLongMessage } from "./text-bounds.js";
 import { FlexibleDatetimeSchema } from "./parser-tools.js";
 import { booleanQueryParam } from "./pagination.js";
 
@@ -40,8 +41,14 @@ export type Task = z.infer<typeof TaskSchema>;
 
 export const TaskCreateSchema = z
   .object({
-    title: z.string().min(1),
-    body: z.string().optional(),
+    title: z
+      .string()
+      .min(1)
+      .max(ENTITY_TITLE_MAX_CHARS, tooLongMessage("title", ENTITY_TITLE_MAX_CHARS)),
+    body: z
+      .string()
+      .max(TASK_BODY_MAX_CHARS, tooLongMessage("body", TASK_BODY_MAX_CHARS))
+      .optional(),
     due_at: FlexibleDatetimeSchema.optional(),
     // Creation-time reminders. TaskUpdateSchema has carried remind_at since
     // Checkpoint 5.4, and the tasks.remind_at column has existed since Phase
@@ -128,8 +135,16 @@ export type TaskCreate = z.infer<typeof TaskCreateSchema>;
 // /activate, /complete, /drop, /archive action endpoints.
 export const TaskUpdateSchema = z
   .object({
-    title: z.string().min(1).optional(),
-    body: z.string().nullable().optional(),
+    title: z
+      .string()
+      .min(1)
+      .max(ENTITY_TITLE_MAX_CHARS, tooLongMessage("title", ENTITY_TITLE_MAX_CHARS))
+      .optional(),
+    body: z
+      .string()
+      .max(TASK_BODY_MAX_CHARS, tooLongMessage("body", TASK_BODY_MAX_CHARS))
+      .nullable()
+      .optional(),
     due_at: FlexibleDatetimeSchema.nullable().optional(),
     // Closes the recorded debt that a reminder time could previously only
     // originate from AI capture -- this makes the field writable via a

@@ -25,5 +25,6 @@ export * from "./mail-digests.js";
 export * from "./monitor.js";
 
 export * from "./search.js";
+export * from "./text-bounds.js";
 export * from "./export.js";
 export * from "./ask.js";

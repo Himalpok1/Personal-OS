@@ -440,6 +440,52 @@ These are product semantics, not implementation details. Every aggregate read mo
 
 ---
 
+## Content bounds and search (Checkpoint 9.6, ADR-065)
+
+**Every user-authored or externally-authored text field is bounded at write.** The constants are in
+`packages/schema/src/text-bounds.ts` and every client bounds against the same numbers: titles and
+project names 512, task bodies 4000, note bodies 20 000, event descriptions 4000, event locations
+512, project goals 2000, captures 4000 (unchanged). Two behaviours, never mixed:
+
+- **User-typed text over a bound is rejected** (`400 validation_failed`, field path, "<field> must be
+  at most N characters"). The server never cuts text a person typed.
+- **Provider-, model- and STT-authored text is truncated at write**, surrogate-safely, with a
+  counts-only log line: calendar sync ingest (Google and CalDAV), the PTT transcript, the parser's
+  tool-call arguments (bounded before validation so an over-long model title becomes a truncated
+  entity, not a failed capture), and calendar display names.
+
+The bounds live on create/update/tool schemas only. Read schemas, the export and the stored
+parse-result union stay unbounded so a legacy row always reads back. The DB columns remain `text`
+with no CHECK — the contract is named, not severed by a varchar (the ADR-054 mail discipline).
+
+**Search is lexical, query-time, index-free (ADR-056/059) and now tokenised, six-entity and
+explainable.** `GET /search?q=&tz=&types=&order=&limit=&include_archived=`:
+
+- Entities: tasks, notes, **events**, **projects**, captures, mail metadata. An event result carries
+  `origin` (ADR-064); an external event's description is matched but never emitted — its preview
+  is the location only. Nothing else joins without its own privacy argument.
+- Tokens: NFKC + lowercase, punctuation split, ≥ 2 chars unless numeric/CJK, ≤ 8 (overflow echoed
+  as `dropped`). Candidacy is AND across tokens (each an OR of `ILIKE … ESCAPE` over the entity's
+  columns) with a fallback ladder echoed as `match_mode`: `all` → `all_without_date` → `any`.
+- Dates: with the client's `tz`, one closed grammar (today/tomorrow/yesterday, ISO date or month,
+  month name ± year, bare year) becomes an inclusive local-date window that matches `due_at`,
+  `starts_at`/`start_date`, occurrences (all-day series by `occurs_local::date`, never an instant —
+  ADR-045), `target_date`, `captured_at`, `internal_date` — or the same word as text. A month with
+  no year is the current year in `tz`, and the applied window is echoed as `date_filter`.
+- Ranking: integer points over a closed reason vocabulary, exposed on every result (`score`,
+  `match.reasons`, `match.fields`). Exact title beats everything; match strength beats recency;
+  recency reorders only equal-strength rows; captures then mail rank last at equal strength;
+  done/archived/completed/external carry penalties. Total order ends in `id`, so identical
+  requests are byte-identical. SQL selects up to 100 candidates per type with an honest
+  `count(*) over()` total; TypeScript scores them. The client partitions ("Top matches", then per
+  type) and never re-sorts.
+- Privacy: one guarded `search.completed` log line per request carrying duration, mode, term
+  count and per-type totals — never the query, tokens or any text. `q` is name-scrubbed from the
+  access log. Nothing leaves the machine.
+- Future lanes: `searchPersonalItems` and `getItemContext` in `apps/api/src/search/service.ts` are
+  the bounded, id-cited interfaces a later READ-ONLY lane may call. No agent runtime exists and
+  Cloud Ask is unchanged.
+
 ## The parse pipeline
 
 1. `POST /capture` → insert `inbox_items` row, status `pending`, return 202.

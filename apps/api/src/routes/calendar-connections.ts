@@ -8,8 +8,10 @@ import {
   refreshAccessToken,
 } from "@personal-os/calendar-providers";
 import { errorToken } from "@personal-os/core/logging/logger";
+import { truncateProviderString } from "@personal-os/core/mail/provider-strings";
 import { calendarConnectionCalendars, calendarConnections } from "@personal-os/db";
 import {
+  ENTITY_TITLE_MAX_CHARS,
   AvailableCalendarsResponseSchema,
   AvailableGoogleCalendarsResponseSchema,
   CalendarConnectionCalendarSchema,
@@ -238,13 +240,16 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
           // resolves the role itself on insert, see below). A listed
           // calendar that carries no role is stored as NULL, and unknown is
           // never treated as writable (see calendar-targets.ts). The display
-          // name is refreshed on the same pass.
+          // name is refreshed on the same pass -- bounded at write (Checkpoint
+          // 9.6): it is provider-authored text, so it is truncated to the
+          // shared title bound rather than refused.
           const accessRole = item.accessRole ?? null;
+          const summary = truncateProviderString(item.summary, ENTITY_TITLE_MAX_CHARS);
           await app.db
             .update(calendarConnectionCalendars)
             .set({
               accessRole,
-              ...(item.summary ? { summary: item.summary } : {}),
+              ...(summary ? { summary } : {}),
               updatedAt: new Date(),
             })
             .where(
@@ -405,7 +410,10 @@ export default function calendarConnectionsRoutes(app: FastifyInstance): void {
               connectionId: connection.id,
               googleCalendarId: isCaldav ? null : item.google_calendar_id,
               caldavCalendarUrl: isCaldav ? item.caldav_calendar_url : null,
-              summary: listed?.summary || calendarKey,
+              // Provider-authored display name, bounded at write (9.6); the
+              // fallback is the calendar's own id, which the client chose.
+              summary:
+                truncateProviderString(listed?.summary, ENTITY_TITLE_MAX_CHARS) || calendarKey,
               syncEnabled: item.sync_enabled,
               projectId: item.project_id ?? null,
               accessRole: listed?.accessRole ?? null,

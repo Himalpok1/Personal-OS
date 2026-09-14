@@ -5,10 +5,13 @@ import {
   resolveTranscriptionConnectionForTask,
   transcribeAudio,
 } from "@personal-os/ai-providers";
+import { truncateProviderString } from "@personal-os/core/mail/provider-strings";
 import { inboxItems, type Db } from "@personal-os/db";
+import { CAPTURE_TEXT_MAX_LENGTH } from "@personal-os/schema";
 import { eq } from "drizzle-orm";
 import type { Job, PgBoss } from "pg-boss";
 import { env } from "../env.js";
+import { log } from "../logger.js";
 import { CAPTURE_PARSE_QUEUE, PTT_TRANSCRIBE_QUEUE } from "../queue-names.js";
 import { withAiJobErrorContainment } from "./ai-job-error.js";
 
@@ -108,13 +111,28 @@ export function createPttTranscribeHandler(db: Db, boss: PgBoss) {
           mimeType: mimeTypeForPath(audioPath),
         });
 
+        // The transcript is STT-authored, not typed, so it is bounded the
+        // way every other provider string is (ADR-065): truncated at write
+        // to the same CAPTURE_TEXT_MAX_LENGTH that POST /capture refuses a
+        // typed capture over, surrogate-safely, with one counts-only log
+        // line. Refusing would lose the whole capture over a recording the
+        // owner cannot re-type; keeping the first 4000 characters keeps it.
+        const rawText = truncateProviderString(result.text, CAPTURE_TEXT_MAX_LENGTH) ?? "";
+        if (rawText.length < result.text.length) {
+          log.info("ptt.transcript_truncated", {
+            inboxId,
+            original_length: result.text.length,
+            stored_length: rawText.length,
+          });
+        }
+
         // Commit the transcript *before* deleting the file -- a crash
         // between these two steps leaves at worst an orphaned file (cleaned
         // up by the required sweep-orphan-audio cron), never a lost
         // transcript with no recoverable audio.
         await db
           .update(inboxItems)
-          .set({ rawText: result.text, confidence: result.avgLogprob, audioPath: null })
+          .set({ rawText, confidence: result.avgLogprob, audioPath: null })
           .where(eq(inboxItems.id, inboxId));
 
         await unlink(audioPath).catch((err: unknown) => {

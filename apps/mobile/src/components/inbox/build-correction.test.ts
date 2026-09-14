@@ -1,4 +1,8 @@
-import { CAPTURE_TEXT_MAX_LENGTH, ParserToolCallSchema } from "@personal-os/schema";
+import {
+  CAPTURE_TEXT_MAX_LENGTH,
+  ENTITY_TITLE_MAX_CHARS,
+  ParserToolCallSchema,
+} from "@personal-os/schema";
 import { describe, expect, it } from "vitest";
 import {
   EMPTY_FILE_AS_DRAFT,
@@ -29,10 +33,21 @@ describe("titleFromText", () => {
   });
 
   it("caps at FILE_AS_TITLE_MAX_CHARS with a single ellipsis, never longer", () => {
-    const long = "word ".repeat(100);
+    const long = "word ".repeat(FILE_AS_TITLE_MAX_CHARS);
     const title = titleFromText(long);
     expect(title.length).toBeLessThanOrEqual(FILE_AS_TITLE_MAX_CHARS);
     expect(title.endsWith("…")).toBe(true);
+  });
+
+  it("the cap IS the server's title bound (Checkpoint 9.6), so a seeded title is never refused", () => {
+    // ParserToolCallSchema's create_task.title is .max(ENTITY_TITLE_MAX_CHARS);
+    // a smaller cosmetic cap would be harmless, a larger one would 400.
+    expect(FILE_AS_TITLE_MAX_CHARS).toBe(ENTITY_TITLE_MAX_CHARS);
+    const title = titleFromText("x".repeat(ENTITY_TITLE_MAX_CHARS * 3));
+    expect(title).toHaveLength(ENTITY_TITLE_MAX_CHARS);
+    expect(ParserToolCallSchema.safeParse({ tool: "create_task", args: { title } }).success).toBe(
+      true,
+    );
   });
 
   it("does not split a surrogate pair at the cap", () => {
@@ -98,6 +113,21 @@ describe("buildTaskCorrection", () => {
     expect(buildTaskCorrection("raw", { title: "   " })?.args).toEqual({ title: "raw" });
   });
 
+  it("caps an owner-EDITED title at the server bound too, so a draft can never be refused for length", () => {
+    const edited = "e".repeat(ENTITY_TITLE_MAX_CHARS + 50);
+    for (const call of [
+      buildTaskCorrection("raw", { title: edited }),
+      buildNoteCorrection("raw", { title: edited }),
+      buildEventCorrection("raw", { title: edited, start: "2026-09-14T09:00:00-05:00" }),
+      buildCorrectionFromDraft("raw", { ...EMPTY_FILE_AS_DRAFT, kind: "task", title: edited }),
+    ]) {
+      expect(call).not.toBeNull();
+      const title = (call as { args: { title: string } }).args.title;
+      expect(title).toHaveLength(ENTITY_TITLE_MAX_CHARS);
+      expect(ParserToolCallSchema.safeParse(call).success).toBe(true);
+    }
+  });
+
   it("is null when there is no title to give -- a create_task with an empty title is a 400", () => {
     expect(buildTaskCorrection("")).toBeNull();
     expect(buildTaskCorrection("\u0000")).toBeNull();
@@ -129,7 +159,11 @@ describe("buildEventCorrection", () => {
     });
     expect(call).toEqual({
       tool: "create_event",
-      args: { title: "Dentist", start: "2026-09-14T15:00:00-05:00", end: "2026-09-14T16:00:00-05:00" },
+      args: {
+        title: "Dentist",
+        start: "2026-09-14T15:00:00-05:00",
+        end: "2026-09-14T16:00:00-05:00",
+      },
     });
     expect(ParserToolCallSchema.safeParse(call).success).toBe(true);
   });
@@ -151,7 +185,9 @@ describe("buildEventCorrection", () => {
   it("is null without a start, with an unparseable start, or without a title", () => {
     expect(buildEventCorrection("x", { start: null, timezone: TZ })).toBeNull();
     expect(buildEventCorrection("x", { start: "not a date", timezone: TZ })).toBeNull();
-    expect(buildEventCorrection("", { start: "2026-09-14T15:00:00-05:00", timezone: TZ })).toBeNull();
+    expect(
+      buildEventCorrection("", { start: "2026-09-14T15:00:00-05:00", timezone: TZ }),
+    ).toBeNull();
   });
 });
 
@@ -171,7 +207,12 @@ describe("the File-as draft", () => {
   it("submits each kind with the draft's fields", () => {
     const start = "2026-09-14T15:00:00-05:00";
     expect(
-      buildCorrectionFromDraft(raw, { kind: "task", title: "Dentist", dueAt: start, startAt: null }),
+      buildCorrectionFromDraft(raw, {
+        kind: "task",
+        title: "Dentist",
+        dueAt: start,
+        startAt: null,
+      }),
     ).toEqual({ tool: "create_task", args: { title: "Dentist", due_at: start } });
     expect(
       buildCorrectionFromDraft(raw, { kind: "note", title: "", dueAt: null, startAt: null }),

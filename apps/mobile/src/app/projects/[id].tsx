@@ -1,6 +1,11 @@
 import { confirmDestructive } from "@/components/confirm-destructive";
 import { ApiClientError } from "@personal-os/api-client";
-import type { ProjectDetailEvent, ProjectUpdate } from "@personal-os/schema";
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  PROJECT_GOAL_MAX_CHARS,
+  type ProjectDetailEvent,
+  type ProjectUpdate,
+} from "@personal-os/schema";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
@@ -15,6 +20,7 @@ import {
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { usePlaceholderColor } from "@/components/placeholder-color";
+import { FieldLengthCounter } from "@/components/field-length-counter";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import {
   useArchiveProject,
@@ -28,6 +34,7 @@ import {
 } from "@/queries/projects";
 import { useCompleteTask } from "@/queries/tasks";
 import { formatShortDate } from "@/utils/local-date";
+import { describeValidationError } from "@/utils/validation-error";
 
 const STATUS_PILL = {
   active: "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300",
@@ -114,6 +121,10 @@ export default function ProjectDetailScreen() {
   const [name, setName] = useState("");
   const [goal, setGoal] = useState("");
   const [targetDate, setTargetDate] = useState("");
+  // A refused metadata save (name/goal/target date commit on blur). Before
+  // 9.6 `updateProject.mutate` had no onError, so a rejected field simply
+  // reverted on the next refetch with nothing to say why.
+  const [metadataError, setMetadataError] = useState<string | null>(null);
 
   useEffect(() => {
     if (data) {
@@ -179,7 +190,20 @@ export default function ProjectDetailScreen() {
     });
   };
 
-  const commitMetadata = (body: ProjectUpdate) => updateProject.mutate({ id: project.id, body });
+  const commitMetadata = (body: ProjectUpdate) => {
+    setMetadataError(null);
+    updateProject.mutate(
+      { id: project.id, body },
+      {
+        // A refused field (a server 400 or the api-client's pre-request parse)
+        // names the field and its bound; anything else keeps a generic line.
+        onError: (err) =>
+          setMetadataError(
+            describeValidationError(err) ?? "Couldn't save that change. Please try again.",
+          ),
+      },
+    );
+  };
 
   const lifecyclePending =
     pauseProject.isPending ||
@@ -215,12 +239,17 @@ export default function ProjectDetailScreen() {
             const trimmed = name.trim();
             if (trimmed && trimmed !== project.name) commitMetadata({ name: trimmed });
           }}
+          // The server's own bound (packages/schema/src/text-bounds.ts), so an
+          // over-long paste is stopped here rather than refused as a 400.
+          maxLength={ENTITY_TITLE_MAX_CHARS}
           className="flex-1 rounded-lg border border-neutral-300 p-2 text-lg font-semibold text-black dark:border-neutral-700 dark:text-white"
         />
         <View className={`rounded px-2 py-0.5 ${STATUS_PILL[project.status]}`}>
           <Text className="text-[10px] uppercase">{project.status}</Text>
         </View>
       </View>
+
+      <FieldLengthCounter length={name.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
 
       <Text className="mb-1 text-sm text-neutral-500">Goal</Text>
       <TextInput
@@ -233,8 +262,25 @@ export default function ProjectDetailScreen() {
           const trimmed = goal.trim();
           if (trimmed !== (project.goal ?? "")) commitMetadata({ goal: trimmed || null });
         }}
-        className="mb-2 max-h-[120px] min-h-[48px] rounded-lg border border-neutral-300 p-2 text-black dark:border-neutral-700 dark:text-white"
+        maxLength={PROJECT_GOAL_MAX_CHARS}
+        // mb-4 (was mb-2) so the counter below can tuck into the gap.
+        className="mb-4 max-h-[120px] min-h-[48px] rounded-lg border border-neutral-300 p-2 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={goal.length} maxLength={PROJECT_GOAL_MAX_CHARS} />
+      {/* A refused name/goal/target-date save is shown HERE, directly under
+          the fields it refers to, rather than below the lifecycle buttons and
+          the task list: on a 480x640 screen that was below the fold, so the
+          refusal was invisible exactly when the owner was looking at the
+          field that caused it. */}
+      {metadataError ? (
+        <Text
+          testID="project-metadata-error"
+          className="-mt-2 mb-4 text-red-600"
+          accessibilityRole="alert"
+        >
+          {metadataError}
+        </Text>
+      ) : null}
 
       <Text className="mb-1 text-sm text-neutral-500">Target date (YYYY-MM-DD)</Text>
       <TextInput

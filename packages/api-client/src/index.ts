@@ -120,7 +120,7 @@ import {
   updateTask,
 } from "./tasks.js";
 import { getAgenda } from "./agenda.js";
-import { search } from "./search.js";
+import { getSearchItemContext, search } from "./search.js";
 import { getExport } from "./export.js";
 import { getToday } from "./today.js";
 import { transcribe } from "./transcribe.js";
@@ -207,7 +207,7 @@ export type {
   MonitorTargetCreate,
   MonitorTargetUpdate,
 } from "./monitor.js";
-export type { SearchParams, SearchResponse } from "./search.js";
+export type { ItemContext, ItemRef, SearchParams, SearchResponse } from "./search.js";
 export type { ExportResponse } from "./export.js";
 export type { AskResponse } from "./ask.js";
 export type { AiModel, AiProviderConnection, AiTaskRoute, AiTaskRouteInfo } from "./ai-config.js";
@@ -273,6 +273,7 @@ export function createApiClient(baseUrl: string) {
     getAgenda: getAgenda.bind(null, baseUrl),
 
     search: search.bind(null, baseUrl),
+    getSearchItemContext: getSearchItemContext.bind(null, baseUrl),
     getExport: getExport.bind(null, baseUrl),
 
     listOccurrences: listOccurrences.bind(null, baseUrl),

@@ -1,9 +1,12 @@
 import { confirmDestructive } from "@/components/confirm-destructive";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import { FieldLengthCounter } from "@/components/field-length-counter";
 import { useProjects } from "@/queries/projects";
 import { useArchiveNote, useNote, useUpdateNote } from "@/queries/notes";
+import { describeValidationError } from "@/utils/validation-error";
 import { ApiClientError } from "@personal-os/api-client";
+import { ENTITY_TITLE_MAX_CHARS, NOTE_BODY_MAX_CHARS } from "@personal-os/schema";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -27,6 +30,10 @@ export default function EditNoteScreen() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  // Save failures (Checkpoint 9.6). Until now `updateNote.mutate` had no
+  // onError at all, so a refused save -- an over-bound body, say -- left the
+  // form exactly as it was with nothing to say why.
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!note) return;
@@ -77,10 +84,25 @@ export default function EditNoteScreen() {
   }
 
   const submit = () => {
-    updateNote.mutate({
-      id: note.id,
-      body: { title: title.trim() || undefined, body: body.trim() || undefined, project_id: projectId ?? null },
-    });
+    setSaveError(null);
+    updateNote.mutate(
+      {
+        id: note.id,
+        body: { title: title.trim() || undefined, body: body.trim() || undefined, project_id: projectId ?? null },
+      },
+      {
+        // A refused field -- a server 400 or the api-client's own pre-request
+        // parse (a raw ZodError) -- names the field and its bound. Never the
+        // raw message: `ApiClientError.message` is developer-shaped.
+        onError: (err) =>
+          setSaveError(
+            describeValidationError(err) ??
+              (err instanceof ApiClientError && err.status === 404
+                ? "This note couldn't be found."
+                : "Couldn't save those changes. Please try again."),
+          ),
+      },
+    );
   };
 
   return (
@@ -102,16 +124,22 @@ export default function EditNoteScreen() {
       <TextInput
         value={title}
         onChangeText={setTitle}
+        // The server's own bound (packages/schema/src/text-bounds.ts), so an
+        // over-long paste is stopped here rather than refused as a 400.
+        maxLength={ENTITY_TITLE_MAX_CHARS}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
 
       <Text className="mb-1 text-sm text-neutral-500">Body</Text>
       <TextInput
         value={body}
         onChangeText={setBody}
         multiline
+        maxLength={NOTE_BODY_MAX_CHARS}
         className="mb-4 min-h-[120px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={body.length} maxLength={NOTE_BODY_MAX_CHARS} />
 
       <Text className="mb-1 text-sm text-neutral-500">Project</Text>
       <View className="mb-4 flex-row flex-wrap gap-2">
@@ -134,6 +162,12 @@ export default function EditNoteScreen() {
           </Pressable>
         ))}
       </View>
+
+      {saveError ? (
+        <Text className="mb-2 text-red-600" accessibilityRole="alert">
+          {saveError}
+        </Text>
+      ) : null}
 
       <Pressable
         onPress={submit}

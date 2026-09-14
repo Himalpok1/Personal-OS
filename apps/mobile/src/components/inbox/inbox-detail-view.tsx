@@ -1,8 +1,9 @@
-import type { InboxItem, ParserToolCall } from "@personal-os/schema";
+import { ENTITY_TITLE_MAX_CHARS, type InboxItem, type ParserToolCall } from "@personal-os/schema";
 import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
 import { DateTimeField } from "@/components/datetime-field";
 import { formatFieldLabel } from "@/components/datetime-field-state";
 import { usePlaceholderColor } from "@/components/placeholder-color";
+import { FieldLengthCounter } from "@/components/field-length-counter";
 import {
   buildCorrectionFromDraft,
   type FileAsDraft,
@@ -208,13 +209,18 @@ export function InboxDetailView(props: InboxDetailViewProps) {
               }
             >
               <Text className="font-semibold text-white">
-                {props.confirm.isPending ? "Filing…" : `File as ${KIND_LABEL[draft.kind].toLowerCase()}`}
+                {props.confirm.isPending
+                  ? "Filing…"
+                  : `File as ${KIND_LABEL[draft.kind].toLowerCase()}`}
               </Text>
             </Pressable>
           ) : null}
 
           {props.confirm.isError ? (
-            <Text testID="inbox-detail-confirm-error" className="mt-2 text-sm text-red-600 dark:text-red-400">
+            <Text
+              testID="inbox-detail-confirm-error"
+              className="mt-2 text-sm text-red-600 dark:text-red-400"
+            >
               {confirmErrorMessage(props.confirm.error)}
             </Text>
           ) : null}
@@ -226,8 +232,12 @@ export function InboxDetailView(props: InboxDetailViewProps) {
             </View>
           ) : null}
           {props.commitPollExhausted ? (
-            <Text testID="inbox-detail-poll-exhausted" className="mt-2 text-sm text-amber-700 dark:text-amber-500">
-              This is taking longer than usual. It will finish in the background; check back shortly.
+            <Text
+              testID="inbox-detail-poll-exhausted"
+              className="mt-2 text-sm text-amber-700 dark:text-amber-500"
+            >
+              This is taking longer than usual. It will finish in the background; check back
+              shortly.
             </Text>
           ) : null}
         </View>
@@ -248,7 +258,10 @@ export function InboxDetailView(props: InboxDetailViewProps) {
         </Text>
       </Pressable>
       {props.dismiss.isError ? (
-        <Text testID="inbox-detail-dismiss-error" className="mt-2 text-sm text-red-600 dark:text-red-400">
+        <Text
+          testID="inbox-detail-dismiss-error"
+          className="mt-2 text-sm text-red-600 dark:text-red-400"
+        >
           Couldn&apos;t dismiss this capture. Try again.
         </Text>
       ) : null}
@@ -281,7 +294,16 @@ function FileAsForm({
         editable={!disabled}
         placeholder="Title"
         placeholderTextColor={placeholderColor}
+        // The server's bound on a corrected tool call's title
+        // (packages/schema/src/text-bounds.ts); build-correction.ts caps at
+        // the same constant.
+        maxLength={ENTITY_TITLE_MAX_CHARS}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+      />
+      <FieldLengthCounter
+        testID="inbox-detail-title-counter"
+        length={draft.title.length}
+        maxLength={ENTITY_TITLE_MAX_CHARS}
       />
       {kind === "task" ? (
         <DateTimeField

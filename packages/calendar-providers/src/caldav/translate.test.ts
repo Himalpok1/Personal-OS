@@ -1,3 +1,8 @@
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  EVENT_DESCRIPTION_MAX_CHARS,
+  EVENT_LOCATION_MAX_CHARS,
+} from "@personal-os/schema";
 import { describe, expect, it } from "vitest";
 import {
   applyExceptionToVCalendar,
@@ -157,5 +162,66 @@ describe("CalDAV RFC 5545 Translation", () => {
     if (master && master.kind === "upsert_standalone_or_master") {
       expect(master.fields.recurrenceExdates).toContain("2026-08-22");
     }
+  });
+});
+
+// Checkpoint 9.6 (ADR-065): the CalDAV ingest path applies the same
+// truncate-at-write bounds as the Google path -- see translate.test.ts for
+// the reasoning. Serialising through localEventToVCalendar first is
+// deliberate: the over-long text has to survive RFC 5545 line folding and
+// come back out of ical.js before it is bounded, which is exactly the path a
+// real server's resource takes.
+describe("CalDAV ingest bounds provider text at write", () => {
+  const start = new Date("2026-08-21T14:00:00.000Z");
+  const end = new Date("2026-08-21T15:00:00.000Z");
+
+  it("truncates an over-long SUMMARY, DESCRIPTION and LOCATION to the shared bounds", () => {
+    const ics = localEventToVCalendar({
+      title: "t".repeat(ENTITY_TITLE_MAX_CHARS + 100),
+      description: "d".repeat(EVENT_DESCRIPTION_MAX_CHARS + 100),
+      location: "l".repeat(EVENT_LOCATION_MAX_CHARS + 100),
+      allDay: false,
+      startsAt: start,
+      endsAt: end,
+      timezone: "UTC",
+    });
+    const intents = parseVCalendarToMutationIntents(ics, "/dav/cal/long.ics", "etag-long");
+    expect(intents).toHaveLength(1);
+    const intent = intents[0]!;
+    if (intent.kind !== "upsert_standalone_or_master") throw new Error("unreachable");
+    expect(intent.fields.title).toHaveLength(ENTITY_TITLE_MAX_CHARS);
+    expect(intent.fields.description).toHaveLength(EVENT_DESCRIPTION_MAX_CHARS);
+    expect(intent.fields.location).toHaveLength(EVENT_LOCATION_MAX_CHARS);
+  });
+
+  it("never cuts a surrogate pair in half", () => {
+    const ics = localEventToVCalendar({
+      title: "x".repeat(ENTITY_TITLE_MAX_CHARS - 1) + "\u{1F600}" + "tail",
+      allDay: false,
+      startsAt: start,
+      endsAt: end,
+      timezone: "UTC",
+    });
+    const intent = parseVCalendarToMutationIntents(ics, "/dav/cal/emoji.ics", "etag-e")[0]!;
+    if (intent.kind !== "upsert_standalone_or_master") throw new Error("unreachable");
+    expect(intent.fields.title).toHaveLength(ENTITY_TITLE_MAX_CHARS - 1);
+    expect(intent.fields.title.endsWith("x")).toBe(true);
+  });
+
+  it("leaves text within the bounds byte-identical", () => {
+    const ics = localEventToVCalendar({
+      title: "Dentist \u{1F600}",
+      description: "Annual cleaning",
+      location: "Dental Clinic",
+      allDay: false,
+      startsAt: start,
+      endsAt: end,
+      timezone: "UTC",
+    });
+    const intent = parseVCalendarToMutationIntents(ics, "/dav/cal/ok.ics", "etag-ok")[0]!;
+    if (intent.kind !== "upsert_standalone_or_master") throw new Error("unreachable");
+    expect(intent.fields.title).toBe("Dentist \u{1F600}");
+    expect(intent.fields.description).toBe("Annual cleaning");
+    expect(intent.fields.location).toBe("Dental Clinic");
   });
 });

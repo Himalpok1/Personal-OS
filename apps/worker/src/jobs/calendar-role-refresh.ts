@@ -3,7 +3,9 @@ import {
   classifyCalendarProviderError,
   type GoogleCalendarClient,
 } from "@personal-os/calendar-providers";
+import { truncateProviderString } from "@personal-os/core/mail/provider-strings";
 import { calendarConnectionCalendars, calendarConnections, type Db } from "@personal-os/db";
+import { ENTITY_TITLE_MAX_CHARS } from "@personal-os/schema";
 import { and, eq, notInArray } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 import { errorToken, log } from "../logger.js";
@@ -70,9 +72,21 @@ export async function refreshCalendarAccessRoles(
       const listedIds: string[] = [];
       for (const item of listing.items) {
         listedIds.push(item.id);
+        // Provider-authored display name: truncated at write to the shared
+        // title bound (Checkpoint 9.6), never refused -- a refusal would
+        // leave the role stale as well. The wire type says `summary` is a
+        // string, but Google may omit it and the client passes that through
+        // as `undefined`; an absent or empty name SKIPS the column (the same
+        // pattern as the API's listing refresh) rather than blanking a name
+        // the row already has.
+        const displayName = truncateProviderString(item.summary, ENTITY_TITLE_MAX_CHARS);
         const written = await db
           .update(calendarConnectionCalendars)
-          .set({ accessRole: item.accessRole ?? null, summary: item.summary, updatedAt: now })
+          .set({
+            accessRole: item.accessRole ?? null,
+            ...(displayName ? { summary: displayName } : {}),
+            updatedAt: now,
+          })
           .where(
             and(
               eq(calendarConnectionCalendars.connectionId, connection.id),

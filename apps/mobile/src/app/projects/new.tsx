@@ -1,7 +1,10 @@
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { usePlaceholderColor } from "@/components/placeholder-color";
+import { FieldLengthCounter } from "@/components/field-length-counter";
 import { useCreateProject } from "@/queries/projects";
+import { describeValidationError } from "@/utils/validation-error";
+import { ENTITY_TITLE_MAX_CHARS } from "@personal-os/schema";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import { Pressable, ScrollView, Text, TextInput } from "react-native";
@@ -41,8 +44,12 @@ export default function NewProjectScreen() {
       <TextInput
         value={name}
         onChangeText={setName}
+        // The server's own bound (packages/schema/src/text-bounds.ts), so an
+        // over-long paste is stopped here rather than refused as a 400.
+        maxLength={ENTITY_TITLE_MAX_CHARS}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={name.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
 
       <Text className="mb-1 text-sm text-neutral-500">Color</Text>
       <TextInput
@@ -54,7 +61,11 @@ export default function NewProjectScreen() {
       />
 
       {createProject.isError ? (
-        <Text className="mb-2 text-red-600">Couldn&apos;t create that project.</Text>
+        <Text className="mb-2 text-red-600" accessibilityRole="alert">
+          {/* A refused field (client-side parse or a server 400) names the
+              field and its bound; anything else keeps the generic line. */}
+          {describeValidationError(createProject.error) ?? "Couldn't create that project."}
+        </Text>
       ) : null}
 
       <Pressable

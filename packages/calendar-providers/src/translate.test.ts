@@ -1,3 +1,8 @@
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  EVENT_DESCRIPTION_MAX_CHARS,
+  EVENT_LOCATION_MAX_CHARS,
+} from "@personal-os/schema";
 import { describe, expect, it } from "vitest";
 import type { GoogleCalendarEvent } from "./google-calendar-client.js";
 import {
@@ -573,5 +578,73 @@ describe("mapGoogleEventToLocalUpsert", () => {
     );
     if (withGoogleZone.kind !== "upsert_standalone_or_master") throw new Error("unreachable");
     expect(withGoogleZone.fields.recurrenceTimezone).toBe("Europe/Berlin");
+  });
+});
+
+// Checkpoint 9.6 (ADR-065): third-party event text is bounded at write. A
+// typed value over the bound is refused by POST/PATCH /events; a synced one
+// is truncated to the SAME constants, surrogate-safely, so a calendar
+// description a stranger wrote cannot put more into `events` than the owner
+// may -- and a normal one arrives byte-identical.
+describe("mapGoogleEventToLocalUpsert bounds provider text at write", () => {
+  const ctx = { defaultTimezone: "America/Chicago" };
+  function timedEvent(overrides: Partial<GoogleCalendarEvent>): GoogleCalendarEvent {
+    return {
+      id: "bounded-1",
+      status: "confirmed",
+      summary: "Dentist",
+      start: { dateTime: "2026-08-20T09:00:00-05:00", timeZone: "America/Chicago" },
+      end: { dateTime: "2026-08-20T10:00:00-05:00", timeZone: "America/Chicago" },
+      etag: '"1"',
+      updated: "2026-08-01T00:00:00Z",
+      iCalUID: "uid@google.com",
+      ...overrides,
+    };
+  }
+
+  it("truncates an over-long summary, description and location to the shared bounds", () => {
+    const intent = mapGoogleEventToLocalUpsert(
+      timedEvent({
+        summary: "t".repeat(ENTITY_TITLE_MAX_CHARS + 100),
+        description: "d".repeat(EVENT_DESCRIPTION_MAX_CHARS + 100),
+        location: "l".repeat(EVENT_LOCATION_MAX_CHARS + 100),
+      }),
+      "one_off",
+      ctx,
+    );
+    if (intent.kind !== "upsert_standalone_or_master") throw new Error("unreachable");
+    expect(intent.fields.title).toHaveLength(ENTITY_TITLE_MAX_CHARS);
+    expect(intent.fields.description).toHaveLength(EVENT_DESCRIPTION_MAX_CHARS);
+    expect(intent.fields.location).toHaveLength(EVENT_LOCATION_MAX_CHARS);
+  });
+
+  it("never cuts a surrogate pair in half", () => {
+    // An emoji is two UTF-16 code units; placing its high surrogate exactly at
+    // the cut would otherwise leave a lone surrogate Postgres rejects as
+    // invalid UTF-8.
+    const summary = "x".repeat(ENTITY_TITLE_MAX_CHARS - 1) + "\u{1F600}" + "tail";
+    const intent = mapGoogleEventToLocalUpsert(timedEvent({ summary }), "one_off", ctx);
+    if (intent.kind !== "upsert_standalone_or_master") throw new Error("unreachable");
+    expect(intent.fields.title).toHaveLength(ENTITY_TITLE_MAX_CHARS - 1);
+    expect(intent.fields.title.endsWith("x")).toBe(true);
+  });
+
+  it("leaves text within the bounds byte-identical, and absent text null", () => {
+    const description = "Cleaning \u{1F600} at 9";
+    const intent = mapGoogleEventToLocalUpsert(
+      timedEvent({ summary: "Dentist", description, location: "123 Main St" }),
+      "one_off",
+      ctx,
+    );
+    if (intent.kind !== "upsert_standalone_or_master") throw new Error("unreachable");
+    expect(intent.fields.title).toBe("Dentist");
+    expect(intent.fields.description).toBe(description);
+    expect(intent.fields.location).toBe("123 Main St");
+
+    const bare = mapGoogleEventToLocalUpsert(timedEvent({ summary: undefined }), "one_off", ctx);
+    if (bare.kind !== "upsert_standalone_or_master") throw new Error("unreachable");
+    expect(bare.fields.title).toBe("");
+    expect(bare.fields.description).toBeNull();
+    expect(bare.fields.location).toBeNull();
   });
 });

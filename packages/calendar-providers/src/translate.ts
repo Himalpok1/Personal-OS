@@ -4,7 +4,13 @@
 // job code can call it directly and stay in full control of how (and
 // whether) each mutation is actually applied to the database.
 
+import { truncateProviderString } from "@personal-os/core/mail/provider-strings";
 import { resolveWallClockToInstant, toWallClockComponents } from "@personal-os/core/timezone";
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  EVENT_DESCRIPTION_MAX_CHARS,
+  EVENT_LOCATION_MAX_CHARS,
+} from "@personal-os/schema";
 import type { GoogleCalendarEvent, GoogleEventDateTime } from "./google-calendar-client.js";
 
 // ---------------------------------------------------------------------------
@@ -543,10 +549,16 @@ function translateFields(
   event: GoogleCalendarEvent,
   ctx: CalendarSyncConnectionContext,
 ): LocalEventFields {
+  // Third-party text, bounded at write (Checkpoint 9.6, ADR-065): the same
+  // constants POST/PATCH /events refuse a typed value over, applied here as
+  // a surrogate-safe truncation instead. Refusing would drop the whole
+  // event from the owner's calendar view over a description they did not
+  // write and can re-read at the source. Closes the ADR-057 #3 residual
+  // ("event text unbounded at write") for the Google path.
   const base: Omit<LocalEventFields, "allDay"> = {
-    title: event.summary ?? "",
-    description: event.description ?? null,
-    location: event.location ?? null,
+    title: truncateProviderString(event.summary, ENTITY_TITLE_MAX_CHARS) ?? "",
+    description: truncateProviderString(event.description, EVENT_DESCRIPTION_MAX_CHARS),
+    location: truncateProviderString(event.location, EVENT_LOCATION_MAX_CHARS),
     googleEventId: event.id,
     googleEtag: event.etag,
     googleUpdated: new Date(event.updated),

@@ -43,6 +43,24 @@ describe("normalizeSharedText", () => {
     expect(out).toHaveLength(CAPTURE_TEXT_MAX_LENGTH);
   });
 
+  it("never leaves a lone surrogate when an astral character straddles the bound", () => {
+    // U+1F600 is two UTF-16 code units. Placed so its high surrogate sits at
+    // index CAPTURE_TEXT_MAX_LENGTH - 1, a naive slice keeps the high half and
+    // drops the low one -- invalid UTF-8, which Postgres rejects.
+    const emoji = "\u{1F600}";
+    const out = normalizeSharedText("a".repeat(CAPTURE_TEXT_MAX_LENGTH - 1) + emoji + "tail");
+    expect(out).toHaveLength(CAPTURE_TEXT_MAX_LENGTH - 1);
+    expect(out.endsWith("a")).toBe(true);
+    for (const unit of out) {
+      const code = unit.charCodeAt(0);
+      expect(code >= 0xd800 && code <= 0xdfff, "lone surrogate").toBe(false);
+    }
+    // The same emoji fully inside the bound survives intact.
+    const inside = normalizeSharedText("a".repeat(CAPTURE_TEXT_MAX_LENGTH - 2) + emoji + "tail");
+    expect(inside.endsWith(emoji)).toBe(true);
+    expect(inside).toHaveLength(CAPTURE_TEXT_MAX_LENGTH);
+  });
+
   it("accepts text of exactly the limit without truncating", () => {
     expect(normalizeSharedText("y".repeat(CAPTURE_TEXT_MAX_LENGTH))).toHaveLength(
       CAPTURE_TEXT_MAX_LENGTH,

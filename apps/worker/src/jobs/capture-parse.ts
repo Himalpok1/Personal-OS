@@ -9,12 +9,18 @@ import {
   isLowTranscriptionConfidence,
   type ConfidenceSignals,
 } from "@personal-os/core";
+import { truncateProviderString } from "@personal-os/core/mail/provider-strings";
 import { inboxItems, type Db } from "@personal-os/db";
 import {
   CreateEventToolSchema,
   CreateNoteToolSchema,
   CreateTaskToolSchema,
+  ENTITY_TITLE_MAX_CHARS,
+  EVENT_LOCATION_MAX_CHARS,
   isCommittableToolCall,
+  NOTE_BODY_MAX_CHARS,
+  PARSER_PROJECT_REF_MAX_CHARS,
+  PARSER_REASON_MAX_CHARS,
   ParserToolCallSchema,
   readStoredParseResult,
   UnclearToolSchema,
@@ -89,6 +95,57 @@ function buildSystemPrompt(capturedAt: Date, timezone: string): string {
   );
 }
 
+// Per-tool bounds for the model's string arguments (Checkpoint 9.6,
+// ADR-065). The keys are the argument names each tool schema declares; a
+// name absent here is left exactly as the model returned it.
+const PARSER_ARG_BOUNDS: Record<string, Record<string, number>> = {
+  create_task: { title: ENTITY_TITLE_MAX_CHARS, project: PARSER_PROJECT_REF_MAX_CHARS },
+  create_note: {
+    title: ENTITY_TITLE_MAX_CHARS,
+    body: NOTE_BODY_MAX_CHARS,
+    project: PARSER_PROJECT_REF_MAX_CHARS,
+  },
+  create_event: { title: ENTITY_TITLE_MAX_CHARS, location: EVENT_LOCATION_MAX_CHARS },
+  unclear: { reason: PARSER_REASON_MAX_CHARS },
+};
+
+/**
+ * Bounds the model's tool-call arguments BEFORE `ParserToolCallSchema.parse`.
+ *
+ * The four parser tool schemas carry `.max()` since 9.6, and the AI SDK
+ * validates a tool call's input against its `inputSchema`: an over-long
+ * title makes the SDK mark the call `invalid: true` -- but it still hands
+ * back the parsed JSON as `input` (verified in ai@7.0.66's
+ * `parseToolCall`), so nothing is lost at that layer. What WOULD lose the
+ * capture is our own parse: the model's title is model-authored, not
+ * user-typed, and under ADR-065 provider/model text is truncated at write
+ * rather than refused. A refusal here would burn pg-boss's five retries
+ * re-asking the model for the same long title and dead-letter a capture the
+ * owner can no longer act on. So each declared string argument is cut to
+ * its bound (surrogate-safe) and the schema then accepts it.
+ *
+ * Returns the bounded input plus how many arguments were cut, so the caller
+ * can emit ONE counts-only log line -- never the text itself.
+ */
+export function boundParserToolInput(
+  toolName: string,
+  input: unknown,
+): { input: unknown; truncatedArgs: number } {
+  const bounds = PARSER_ARG_BOUNDS[toolName];
+  if (!bounds || typeof input !== "object" || input === null || Array.isArray(input)) {
+    return { input, truncatedArgs: 0 };
+  }
+  const args: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+  let truncatedArgs = 0;
+  for (const [name, max] of Object.entries(bounds)) {
+    const value = args[name];
+    if (typeof value !== "string" || value.length <= max) continue;
+    args[name] = truncateProviderString(value, max);
+    truncatedArgs += 1;
+  }
+  return { input: args, truncatedArgs };
+}
+
 async function callParser(
   model: LanguageModel,
   text: string,
@@ -118,7 +175,14 @@ async function callParser(
   });
   const call = result.toolCalls[0];
   if (!call) throw new Error("model returned no tool call");
-  return ParserToolCallSchema.parse({ tool: call.toolName, args: call.input });
+  const bounded = boundParserToolInput(call.toolName, call.input);
+  if (bounded.truncatedArgs > 0) {
+    log.info("capture.parse.tool_args_truncated", {
+      tool: call.toolName,
+      truncated_args: bounded.truncatedArgs,
+    });
+  }
+  return ParserToolCallSchema.parse({ tool: call.toolName, args: bounded.input });
 }
 
 function textHasRelativeDatePhrase(text: string): boolean {

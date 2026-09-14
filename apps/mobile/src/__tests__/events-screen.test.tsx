@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CalendarTarget, EventRangeItem, EventSyncState } from "@personal-os/schema";
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  EVENT_DESCRIPTION_MAX_CHARS,
+  EVENT_LOCATION_MAX_CHARS,
+  type CalendarTarget,
+  type EventRangeItem,
+  type EventSyncState,
+} from "@personal-os/schema";
+import { TextInput } from "react-native";
 import type { RecurrenceEditorState } from "@personal-os/core/recurrence/editor";
 import {
   EditEventView,
@@ -11,6 +19,7 @@ import { NewEventView, type NewEventViewProps } from "@/app/events/new";
 import { CalendarTargetPicker } from "@/components/calendar/calendar-target-picker";
 import { DateField } from "@/components/date-field";
 import { DateTimeField } from "@/components/datetime-field";
+import { FieldLengthCounter } from "@/components/field-length-counter";
 import { EVENT_NOT_OWNED_MESSAGE } from "@/components/events/event-form-state";
 import { eventDetailHref } from "@/utils/event-navigation";
 
@@ -737,5 +746,60 @@ describe("NewEventView (Checkpoint 9.5)", () => {
     expect(
       findByTestId(NewEventView(newProps({ title: "  " })), "create-event-button").props.disabled,
     ).toBe(true);
+  });
+});
+
+describe("event text fields carry the server's content bounds (Checkpoint 9.6)", () => {
+  // Title, location, description -- in the order the views render them.
+  const EXPECTED = [ENTITY_TITLE_MAX_CHARS, EVENT_LOCATION_MAX_CHARS, EVENT_DESCRIPTION_MAX_CHARS];
+
+  function newProps(overrides: Partial<NewEventViewProps> = {}): NewEventViewProps {
+    return {
+      timezone: "America/Chicago",
+      title: "Dentist",
+      onTitleChange: vi.fn(),
+      description: "",
+      onDescriptionChange: vi.fn(),
+      location: "",
+      onLocationChange: vi.fn(),
+      allDay: false,
+      onAllDayChange: vi.fn(),
+      timed: { startsAt: "2026-09-15T14:00:00-05:00", endsAt: "2026-09-15T15:00:00-05:00" },
+      onStartsAtChange: vi.fn(),
+      onEndsAtChange: vi.fn(),
+      allDayRange: { startDate: null, endDate: null },
+      onStartDateChange: vi.fn(),
+      onEndDateChange: vi.fn(),
+      recurrence: { ...mockRecurrenceState, enabled: false },
+      onRecurrenceChange: vi.fn(),
+      calendarTargets: [],
+      calendar: null,
+      onCalendarChange: vi.fn(),
+      onProjectIdChange: vi.fn(),
+      formError: null,
+      onSubmit: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  it("NewEventView: every TextInput has maxLength = its schema constant", () => {
+    const inputs = findByType(NewEventView(newProps()), TextInput);
+    expect(inputs.map((i) => i.props.maxLength)).toEqual(EXPECTED);
+  });
+
+  it("EditEventView: every TextInput has maxLength = its schema constant", () => {
+    const inputs = findByType(EditEventView(editProps()), TextInput);
+    expect(inputs.map((i) => i.props.maxLength)).toEqual(EXPECTED);
+  });
+
+  it("shows a live counter only within the last tenth of a bound", () => {
+    const quiet = NewEventView(newProps());
+    for (const counter of findByType(quiet, FieldLengthCounter)) {
+      expect(FieldLengthCounter(counter.props)).toBeNull();
+    }
+    const nearly = NewEventView(newProps({ title: "t".repeat(ENTITY_TITLE_MAX_CHARS - 1) }));
+    const rendered = findByType(nearly, FieldLengthCounter).map((c) => FieldLengthCounter(c.props));
+    expect(rendered.filter((r) => r !== null)).toHaveLength(1);
+    expect(getTextContent(rendered.find((r) => r !== null))).toBe("511 / 512");
   });
 });

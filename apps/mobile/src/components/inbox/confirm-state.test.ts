@@ -47,7 +47,9 @@ describe("canConfirmInboxItem", () => {
     expect(canConfirmInboxItem(item({ parse_result: { error: "no provider" } }))).toBe(false);
     // The bare tool call the API used to store for a correction.
     expect(
-      canConfirmInboxItem(item({ parse_result: { tool: "create_note", args: { title: "T", body: "B" } } })),
+      canConfirmInboxItem(
+        item({ parse_result: { tool: "create_note", args: { title: "T", body: "B" } } }),
+      ),
     ).toBe(false);
   });
 
@@ -64,14 +66,20 @@ describe("canConfirmInboxItem", () => {
       ...NOTE,
       failure: { reason: "retries_exhausted", mode: "confirm", failed_at: "2026-09-10T00:00:00Z" },
     };
-    expect(canConfirmInboxItem(item({ status: "failed", parse_result: failedWithCall }))).toBe(true);
+    expect(canConfirmInboxItem(item({ status: "failed", parse_result: failedWithCall }))).toBe(
+      true,
+    );
     expect(canConfirmInboxItem(item({ status: "failed", parse_result: UNCLEAR }))).toBe(false);
     // A failure marker stored ALONE (the auto-parse path) carries no call.
     expect(
       canConfirmInboxItem(
         item({
           status: "failed",
-          parse_result: { reason: "retries_exhausted", mode: "auto", failed_at: "2026-09-10T00:00:00Z" },
+          parse_result: {
+            reason: "retries_exhausted",
+            mode: "auto",
+            failed_at: "2026-09-10T00:00:00Z",
+          },
         }),
       ),
     ).toBe(false);
@@ -100,6 +108,26 @@ describe("confirmErrorMessage", () => {
     const messages = codes.map((c) => confirmErrorMessage(new ApiClientError(409, c)));
     expect(new Set(messages).size).toBe(codes.length);
     for (const m of messages) expect(m.length).toBeGreaterThan(0);
+  });
+
+  it("names the refused field and its bound for a 400 validation_failed (Checkpoint 9.6)", () => {
+    const refused = new ApiClientError(400, "validation_failed", {
+      error: "validation_failed",
+      issues: [
+        {
+          code: "too_big",
+          origin: "string",
+          maximum: 512,
+          path: ["corrected_tool_call", "args", "title"],
+          message: "title must be at most 512 characters",
+        },
+      ],
+    });
+    expect(confirmErrorMessage(refused)).toBe("title must be at most 512 characters");
+    // No issues at all still says something true rather than the generic line.
+    expect(confirmErrorMessage(new ApiClientError(400, "validation_failed"))).toBe(
+      "Something in the form isn't valid.",
+    );
   });
 
   it("falls back to a real sentence for an unknown code and a non-API error", () => {

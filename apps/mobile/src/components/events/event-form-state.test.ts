@@ -9,6 +9,8 @@ import {
   calendarLabel,
   classifyEventMutationError,
   defaultEndFor,
+  describeEventMutationError,
+  eventMutationErrorLine,
   EVENT_NOT_OWNED_MESSAGE,
   eventMutationErrorCopy,
   eventWhenLabel,
@@ -342,6 +344,69 @@ describe("classifyEventMutationError", () => {
     ] as const) {
       expect(eventMutationErrorCopy(failure, "save")).not.toContain("boom");
     }
+  });
+});
+
+describe("validation_message (Checkpoint 9.6)", () => {
+  const tooLong = new ApiClientError(400, "validation_failed", {
+    error: "validation_failed",
+    issues: [
+      {
+        code: "too_big",
+        origin: "string",
+        maximum: 512,
+        path: ["title"],
+        message: "title must be at most 512 characters",
+      },
+    ],
+  });
+
+  it("carries the field line for a server 400 and folds it into the copy", () => {
+    expect(describeEventMutationError(tooLong)).toEqual({
+      failure: "validation",
+      validation_message: "title must be at most 512 characters",
+    });
+    expect(eventMutationErrorLine(tooLong, "create that event")).toBe(
+      "Couldn't create that event: title must be at most 512 characters.",
+    );
+  });
+
+  it("classifies the api-client's pre-request ZodError as validation, not unknown", () => {
+    // Not an ApiClientError: EventCreateSchema.parse threw before any request.
+    const zod = Object.assign(new Error("Too big"), {
+      name: "ZodError",
+      issues: [{ code: "too_big", origin: "string", maximum: 4000, path: ["description"] }],
+    });
+    expect(classifyEventMutationError(zod)).toBe("validation");
+    expect(describeEventMutationError(zod).validation_message).toBe(
+      "description must be at most 4000 characters",
+    );
+    expect(eventMutationErrorLine(zod, "save those changes")).toBe(
+      "Couldn't save those changes: description must be at most 4000 characters.",
+    );
+  });
+
+  it("keeps the dates-or-repeat-rule line when the refusal names no bound", () => {
+    const dates = new ApiClientError(400, "validation_failed", {
+      issues: [{ code: "custom", path: ["ends_at"], message: "ends_at must be after starts_at" }],
+    });
+    expect(describeEventMutationError(dates)).toEqual({
+      failure: "validation",
+      validation_message: "ends_at isn't valid",
+    });
+    expect(eventMutationErrorLine(dates, "create that event")).toBe(
+      "Couldn't create that event: something about the dates or repeat rule isn't valid.",
+    );
+    // Other classes carry no message and are unchanged.
+    expect(describeEventMutationError(new ApiClientError(409, "event_not_owned"))).toEqual({
+      failure: "not_owned",
+      validation_message: null,
+    });
+    expect(describeEventMutationError(new Error("boom"))).toEqual({
+      failure: "unknown",
+      validation_message: null,
+    });
+    expect(eventMutationErrorLine(new Error("boom"), "save")).not.toContain("boom");
   });
 });
 

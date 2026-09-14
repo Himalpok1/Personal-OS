@@ -35,3 +35,17 @@ describe("QuickAddFab capture follow-through (Checkpoint 9.3 D3-lite)", () => {
     expect(source).toMatch(/followThrough\.dismiss\(\);\s*router\.push\(route as Href\)/);
   });
 });
+
+describe("QuickAddFab content bounds (Checkpoint 9.6)", () => {
+  it("bounds the composer at CAPTURE_TEXT_MAX_LENGTH -- the same constant the share normaliser truncates at", () => {
+    expect(source).toMatch(/import \{ CAPTURE_TEXT_MAX_LENGTH \} from "@personal-os\/schema"/);
+    expect(source).toMatch(/<TextInput[\s\S]*?maxLength=\{CAPTURE_TEXT_MAX_LENGTH\}[\s\S]*?\/>/);
+    expect(source).toMatch(/<FieldLengthCounter[\s\S]*?maxLength=\{CAPTURE_TEXT_MAX_LENGTH\}/);
+  });
+
+  it("names a refused field before falling back to the connection line", () => {
+    expect(source).toMatch(
+      /describeValidationError\(capture\.error\) \?\?\s*"Couldn't save that -- check your connection and try again\."/,
+    );
+  });
+});

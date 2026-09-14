@@ -1,7 +1,14 @@
-import type { Project, Task } from "@personal-os/schema";
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  PROJECT_GOAL_MAX_CHARS,
+  tooLongMessage,
+  type Project,
+  type Task,
+} from "@personal-os/schema";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
+import type { ErrorBody } from "../test/types.js";
 
 const ACTIONS = ["pause", "resume", "complete", "reopen", "archive", "unarchive"] as const;
 
@@ -414,6 +421,49 @@ describe("projects routes", () => {
       expect(completedBody.status).toBe("completed");
       expect(completedBody.archived_at).not.toBeNull(); // still archived
       expect(completedBody.completed_at).not.toBeNull();
+    });
+  });
+
+  // Checkpoint 9.6 (ADR-065): user-typed text over a bound is REFUSED with
+  // the field path -- never truncated -- and exactly-at-bound is accepted.
+  describe("content bounds", () => {
+    // The issue shape Zod emits; only the pieces these tests key on.
+    type Issue = { path: (string | number)[]; message: string };
+
+    it("refuses a name over ENTITY_TITLE_MAX_CHARS with 400 naming the field", async () => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/projects",
+        payload: { name: "n".repeat(ENTITY_TITLE_MAX_CHARS + 1) },
+      });
+      expect(response.statusCode).toBe(400);
+      const body = response.json<ErrorBody>();
+      expect(body.error).toBe("validation_failed");
+      expect((body.issues as Issue[])[0]?.path).toEqual(["name"]);
+      expect((body.issues as Issue[])[0]?.message).toBe(
+        tooLongMessage("name", ENTITY_TITLE_MAX_CHARS),
+      );
+    });
+
+    it("refuses a goal over PROJECT_GOAL_MAX_CHARS on PATCH, leaving the row untouched", async () => {
+      const project = await createProject(app, { goal: "ship" });
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/projects/${project.id}`,
+        payload: { goal: "g".repeat(PROJECT_GOAL_MAX_CHARS + 1) },
+      });
+      expect(response.statusCode).toBe(400);
+      expect((response.json<ErrorBody>().issues as Issue[])[0]?.path).toEqual(["goal"]);
+      const after = await app.inject({ method: "GET", url: `/projects/${project.id}` });
+      expect(after.json<Project>().goal).toBe("ship");
+    });
+
+    it("accepts a name and goal exactly at their bounds, byte-identical", async () => {
+      const name = "e".repeat(ENTITY_TITLE_MAX_CHARS);
+      const goal = "g".repeat(PROJECT_GOAL_MAX_CHARS);
+      const project = await createProject(app, { name, goal });
+      expect(project.name).toBe(name);
+      expect(project.goal).toBe(goal);
     });
   });
 });

@@ -2,6 +2,7 @@ import { confirmDestructive } from "@/components/confirm-destructive";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { PLACEHOLDER_LIGHT, usePlaceholderColor } from "@/components/placeholder-color";
+import { FieldLengthCounter } from "@/components/field-length-counter";
 import { DateField } from "@/components/date-field";
 import { DateTimeField } from "@/components/datetime-field";
 import { CalendarTargetPicker } from "@/components/calendar/calendar-target-picker";
@@ -13,7 +14,7 @@ import {
   applyStartsAtChange,
   calendarLabel,
   classifyEventMutationError,
-  eventMutationErrorCopy,
+  eventMutationErrorLine,
   eventWhenLabel,
   externalCalendarLabel,
   RANGE_ERROR_COPY,
@@ -33,7 +34,13 @@ import {
   useEvent,
   useUpdateEvent,
 } from "@/queries/events";
-import type { CalendarTarget, EventSyncState } from "@personal-os/schema";
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  EVENT_DESCRIPTION_MAX_CHARS,
+  EVENT_LOCATION_MAX_CHARS,
+  type CalendarTarget,
+  type EventSyncState,
+} from "@personal-os/schema";
 import { formatInstantWithOffset } from "@personal-os/core/timezone";
 import {
   parseRRuleStringToEditorState,
@@ -359,8 +366,12 @@ export function EditEventView(props: EditEventViewProps) {
         value={props.title}
         onChangeText={props.onTitleChange}
         placeholderTextColor={placeholderColor}
+        // The server's own bound (packages/schema/src/text-bounds.ts), so an
+        // over-long paste is stopped here rather than refused as a 400.
+        maxLength={ENTITY_TITLE_MAX_CHARS}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={props.title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
 
       {/* The calendar is create-only (PATCH rejects `calendar`), so a linked
           event shows where it goes and a status line; an unlinked one may
@@ -471,15 +482,22 @@ export function EditEventView(props: EditEventViewProps) {
       <TextInput
         value={props.location}
         onChangeText={props.onLocationChange}
+        maxLength={EVENT_LOCATION_MAX_CHARS}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={props.location.length} maxLength={EVENT_LOCATION_MAX_CHARS} />
 
       <Text className="mb-1 text-sm text-neutral-500">Notes</Text>
       <TextInput
         value={props.description}
         onChangeText={props.onDescriptionChange}
         multiline
+        maxLength={EVENT_DESCRIPTION_MAX_CHARS}
         className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+      />
+      <FieldLengthCounter
+        length={props.description.length}
+        maxLength={EVENT_DESCRIPTION_MAX_CHARS}
       />
 
       <Text className="mb-1 text-sm text-neutral-500">Timezone</Text>
@@ -685,8 +703,10 @@ export default function EditEventScreen() {
     );
   }
 
+  // A refused field (a server 400 or the api-client's pre-request parse)
+  // names the field and its bound; see event-form-state.ts.
   const failWith = (verb: string) => (err: unknown) =>
-    setErrorMessage(eventMutationErrorCopy(classifyEventMutationError(err), verb));
+    setErrorMessage(eventMutationErrorLine(err, verb));
 
   const handleSelectEditOccurrence = () => {
     setModalVisible(false);

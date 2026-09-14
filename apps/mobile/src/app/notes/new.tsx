@@ -1,7 +1,10 @@
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import { FieldLengthCounter } from "@/components/field-length-counter";
 import { coerceProjectIdParam, useProjects } from "@/queries/projects";
 import { useCreateNote } from "@/queries/notes";
+import { describeValidationError } from "@/utils/validation-error";
+import { ENTITY_TITLE_MAX_CHARS, NOTE_BODY_MAX_CHARS } from "@personal-os/schema";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
@@ -47,16 +50,22 @@ export default function NewNoteScreen() {
       <TextInput
         value={title}
         onChangeText={setTitle}
+        // The server's own bound (packages/schema/src/text-bounds.ts), so an
+        // over-long paste is stopped here rather than refused as a 400.
+        maxLength={ENTITY_TITLE_MAX_CHARS}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
 
       <Text className="mb-1 text-sm text-neutral-500">Body</Text>
       <TextInput
         value={body}
         onChangeText={setBody}
         multiline
+        maxLength={NOTE_BODY_MAX_CHARS}
         className="mb-4 min-h-[120px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={body.length} maxLength={NOTE_BODY_MAX_CHARS} />
 
       <Text className="mb-1 text-sm text-neutral-500">Project (optional)</Text>
       <View className="mb-4 flex-row flex-wrap gap-2">
@@ -81,7 +90,11 @@ export default function NewNoteScreen() {
       </View>
 
       {createNote.isError ? (
-        <Text className="mb-2 text-red-600">Couldn&apos;t create that note.</Text>
+        <Text className="mb-2 text-red-600" accessibilityRole="alert">
+          {/* A refused field (client-side parse or a server 400) names the
+              field and its bound; anything else keeps the generic line. */}
+          {describeValidationError(createNote.error) ?? "Couldn't create that note."}
+        </Text>
       ) : null}
 
       <Pressable

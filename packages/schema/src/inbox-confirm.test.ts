@@ -6,6 +6,7 @@ import {
   StoredParseResultSchema,
 } from "./inbox.js";
 import { isCommittableToolCall, type ParserToolCall } from "./parser-tools.js";
+import { ENTITY_TITLE_MAX_CHARS } from "./text-bounds.js";
 
 // Checkpoint 8.4. The confirm contract was unsound in three separate ways and
 // every one of them failed silently in production.
@@ -101,5 +102,28 @@ describe("StoredParseResultSchema / InboxConfirmRefusalSchema", () => {
       "parse_result_not_committable",
       "parse_result_unreadable",
     ]);
+  });
+});
+
+// Checkpoint 9.6: a parse result persisted before the tool arguments were
+// bounded must stay readable, or the owner can never file that capture.
+describe("StoredParseResultSchema reads legacy over-bound rows", () => {
+  const legacy = {
+    toolCall: { tool: "create_task", args: { title: "t".repeat(600) } },
+    confidenceFlags: ["degenerate_title"],
+  };
+
+  it("parses a stored 600-character title through StoredParseResultSchema and readStoredParseResult", () => {
+    expect(legacy.toolCall.args.title.length).toBeGreaterThan(ENTITY_TITLE_MAX_CHARS);
+    expect(StoredParseResultSchema.safeParse(legacy).success).toBe(true);
+    const read = readStoredParseResult(legacy);
+    expect(read).not.toBeNull();
+    expect(read?.toolCall.tool).toBe("create_task");
+    expect(read !== null && isCommittableToolCall(read.toolCall)).toBe(true);
+  });
+
+  it("the confirm request's correction is still bounded -- the same title is refused as user input", () => {
+    const result = InboxConfirmRequestSchema.safeParse({ corrected_tool_call: legacy.toolCall });
+    expect(result.success).toBe(false);
   });
 });

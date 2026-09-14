@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ENTITY_TITLE_MAX_CHARS, PROJECT_GOAL_MAX_CHARS, tooLongMessage } from "./text-bounds.js";
 import { booleanQueryParam } from "./pagination.js";
 
 // Literals defined here, not imported from core -- the wire vocabulary is a
@@ -25,9 +26,15 @@ export type Project = z.infer<typeof ProjectSchema>;
 // (Checkpoint 5.2), never through generic create/update.
 export const ProjectCreateSchema = z
   .object({
-    name: z.string().min(1),
-    color: z.string().optional(),
-    goal: z.string().optional(),
+    name: z
+      .string()
+      .min(1)
+      .max(ENTITY_TITLE_MAX_CHARS, tooLongMessage("name", ENTITY_TITLE_MAX_CHARS)),
+    color: z.string().max(64).optional(),
+    goal: z
+      .string()
+      .max(PROJECT_GOAL_MAX_CHARS, tooLongMessage("goal", PROJECT_GOAL_MAX_CHARS))
+      .optional(),
     target_date: z.string().date().optional(),
   })
   .strict();
@@ -35,9 +42,17 @@ export type ProjectCreate = z.infer<typeof ProjectCreateSchema>;
 
 export const ProjectUpdateSchema = z
   .object({
-    name: z.string().min(1).optional(),
-    color: z.string().nullable().optional(),
-    goal: z.string().nullable().optional(),
+    name: z
+      .string()
+      .min(1)
+      .max(ENTITY_TITLE_MAX_CHARS, tooLongMessage("name", ENTITY_TITLE_MAX_CHARS))
+      .optional(),
+    color: z.string().max(64).nullable().optional(),
+    goal: z
+      .string()
+      .max(PROJECT_GOAL_MAX_CHARS, tooLongMessage("goal", PROJECT_GOAL_MAX_CHARS))
+      .nullable()
+      .optional(),
     target_date: z.string().date().nullable().optional(),
   })
   .strict()

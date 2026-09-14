@@ -1,6 +1,7 @@
 import { encryptSecret } from "@personal-os/ai-providers";
 import { createFakeGoogleCalendarClient } from "@personal-os/calendar-providers";
 import { calendarConnectionCalendars, calendarConnections, type Db } from "@personal-os/db";
+import { ENTITY_TITLE_MAX_CHARS } from "@personal-os/schema";
 import { eq } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -69,6 +70,56 @@ describe("refreshCalendarAccessRoles", () => {
   afterEach(() => {
     restore();
     vi.unstubAllGlobals();
+  });
+
+  // Checkpoint 9.6 (ADR-065): the display name is provider-authored, so an
+  // over-long one is truncated at write to the shared title bound.
+  it("bounds a provider display name at write, surrogate-safely", async () => {
+    const connectionId = await insertConnection(db);
+    const id = await insertCalendar(db, connectionId, "cal-long", "writer");
+    const client = createFakeGoogleCalendarClient({
+      calendars: [
+        {
+          id: "cal-long",
+          summary: "n".repeat(ENTITY_TITLE_MAX_CHARS - 1) + "\u{1F600}" + "tail",
+          accessRole: "writer",
+        },
+      ],
+    });
+
+    await refreshCalendarAccessRoles(db, client);
+
+    const [row] = await db
+      .select()
+      .from(calendarConnectionCalendars)
+      .where(eq(calendarConnectionCalendars.id, id));
+    expect(row?.summary).toHaveLength(ENTITY_TITLE_MAX_CHARS - 1);
+    expect(row?.summary.endsWith("n")).toBe(true);
+  });
+
+  it("keeps the stored display name when the provider omits `summary` (never writes an empty one)", async () => {
+    const connectionId = await insertConnection(db);
+    const id = await insertCalendar(db, connectionId, "cal-nameless", "writer");
+    await db
+      .update(calendarConnectionCalendars)
+      .set({ summary: "Kept name" })
+      .where(eq(calendarConnectionCalendars.id, id));
+    // Google's calendarList may omit `summary`; the client's item type says
+    // `string` but passes the absence through. Modelled the way it arrives.
+    const client = createFakeGoogleCalendarClient({
+      calendars: [
+        { id: "cal-nameless", summary: undefined as unknown as string, accessRole: "reader" },
+      ],
+    });
+
+    await refreshCalendarAccessRoles(db, client);
+
+    const [row] = await db
+      .select()
+      .from(calendarConnectionCalendars)
+      .where(eq(calendarConnectionCalendars.id, id));
+    expect(row?.summary).toBe("Kept name");
+    expect(row?.accessRole).toBe("reader");
   });
 
   it("updates role + summary on existing rows, NULLs the role of rows absent from the listing, and never inserts", async () => {

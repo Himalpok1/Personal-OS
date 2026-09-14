@@ -1,6 +1,7 @@
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { PLACEHOLDER_LIGHT, usePlaceholderColor } from "@/components/placeholder-color";
+import { FieldLengthCounter } from "@/components/field-length-counter";
 import { DateField } from "@/components/date-field";
 import { DateTimeField } from "@/components/datetime-field";
 import { deviceTimezone } from "@/components/datetime-field-state";
@@ -12,9 +13,8 @@ import {
   applyStartDateChange,
   applyStartsAtChange,
   buildEventCreateBody,
-  classifyEventMutationError,
   defaultEndFor,
-  eventMutationErrorCopy,
+  eventMutationErrorLine,
   initialClientUuidState,
   markAttemptFailed,
   nextClientUuidAfterEdit,
@@ -33,7 +33,12 @@ import {
   type RecurrenceEditorState,
   type SerializedRecurrenceRule,
 } from "@personal-os/core/recurrence/editor";
-import type { CalendarTarget } from "@personal-os/schema";
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  EVENT_DESCRIPTION_MAX_CHARS,
+  EVENT_LOCATION_MAX_CHARS,
+  type CalendarTarget,
+} from "@personal-os/schema";
 import { randomUUID } from "expo-crypto";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
@@ -133,8 +138,12 @@ export function NewEventView(props: NewEventViewProps) {
         onChangeText={props.onTitleChange}
         placeholder="What's the event?"
         placeholderTextColor={placeholderColor}
+        // The server's own bound (packages/schema/src/text-bounds.ts), so an
+        // over-long paste is stopped here rather than refused as a 400.
+        maxLength={ENTITY_TITLE_MAX_CHARS}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={props.title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
 
       <CalendarTargetPicker
         targets={props.calendarTargets}
@@ -206,15 +215,22 @@ export function NewEventView(props: NewEventViewProps) {
       <TextInput
         value={props.location}
         onChangeText={props.onLocationChange}
+        maxLength={EVENT_LOCATION_MAX_CHARS}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={props.location.length} maxLength={EVENT_LOCATION_MAX_CHARS} />
 
       <Text className="mb-1 text-sm text-neutral-500">Notes (optional)</Text>
       <TextInput
         value={props.description}
         onChangeText={props.onDescriptionChange}
         multiline
+        maxLength={EVENT_DESCRIPTION_MAX_CHARS}
         className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+      />
+      <FieldLengthCounter
+        length={props.description.length}
+        maxLength={EVENT_DESCRIPTION_MAX_CHARS}
       />
 
       <Text className="mb-1 text-sm text-neutral-500">Project (optional)</Text>
@@ -386,9 +402,9 @@ export default function NewEventScreen() {
       onSuccess: () => router.back(),
       onError: (error) => {
         setIdempotency(markAttemptFailed);
-        setFormError(
-          eventMutationErrorCopy(classifyEventMutationError(error), "create that event"),
-        );
+        // A refused field (a server 400 or the api-client's pre-request
+        // parse) names the field and its bound; see event-form-state.ts.
+        setFormError(eventMutationErrorLine(error, "create that event"));
       },
     });
   };

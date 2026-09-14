@@ -5,13 +5,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { getOutboxStats } from "@/outbox/queue";
 import { usePlaceholderColor } from "@/components/placeholder-color";
+import { FieldLengthCounter } from "@/components/field-length-counter";
+import { describeValidationError } from "@/utils/validation-error";
+import { CAPTURE_TEXT_MAX_LENGTH } from "@personal-os/schema";
 import { useCapture } from "@/queries/capture";
 import { normalizeSharedText } from "@/capture-intent/normalize";
 import { useCaptureIntent } from "@/capture-intent/use-capture-intent";
-import {
-  followThroughLabel,
-  followThroughRoute,
-} from "@/components/inbox/capture-follow-through";
+import { followThroughLabel, followThroughRoute } from "@/components/inbox/capture-follow-through";
 import { useCaptureFollowThrough } from "@/components/inbox/use-capture-follow-through";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { useRouter, type Href } from "expo-router";
@@ -240,11 +240,24 @@ export function QuickAddFab() {
                 placeholderTextColor={placeholderColor}
                 multiline
                 autoFocus
+                // The server's own bound on `capture.text` -- the same
+                // constant the share-intent normaliser truncates at -- so a
+                // paste is stopped here rather than refused as a 400.
+                maxLength={CAPTURE_TEXT_MAX_LENGTH}
                 className="min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
               />
+              <FieldLengthCounter
+                length={text.length}
+                maxLength={CAPTURE_TEXT_MAX_LENGTH}
+                className="mt-1 text-right text-xs text-neutral-500 dark:text-neutral-400"
+              />
               {capture.isError ? (
-                <Text className="mt-2 text-red-600">
-                  Couldn&apos;t save that -- check your connection and try again.
+                <Text className="mt-2 text-red-600" accessibilityRole="alert">
+                  {/* A refused field (the api-client's pre-request parse or a
+                      server 400) names the field and its bound; anything else
+                      is a delivery failure the outbox could not classify. */}
+                  {describeValidationError(capture.error) ??
+                    "Couldn't save that -- check your connection and try again."}
                 </Text>
               ) : null}
               <View className="mt-3 flex-row justify-end gap-2">
@@ -290,8 +303,7 @@ function FollowThroughBanner({
   onOpen: (route: string) => void;
   onDismiss: () => void;
 }) {
-  const label =
-    state.phase === "filing" ? "Captured — filing…" : followThroughLabel(state.outcome);
+  const label = state.phase === "filing" ? "Captured — filing…" : followThroughLabel(state.outcome);
   const route = state.phase === "settled" ? followThroughRoute(state.outcome) : null;
   if (label === null) return null;
   return (

@@ -17,7 +17,12 @@ import {
   classifyCalendarProviderError,
   type LocalMutationIntent,
 } from "@personal-os/calendar-providers";
-import type { CalendarSyncErrorCode } from "@personal-os/schema";
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  EVENT_DESCRIPTION_MAX_CHARS,
+  EVENT_LOCATION_MAX_CHARS,
+  type CalendarSyncErrorCode,
+} from "@personal-os/schema";
 import { CALENDAR_SYNC_CALENDAR_QUEUE } from "../queue-names.js";
 import { withCalendarJobErrorContainment } from "./calendar-job-error.js";
 import { markNeedsReauth } from "./calendar-refresh-token.js";
@@ -210,6 +215,56 @@ function localEventFieldsToUpdate(
 // CALDAV SYNC ENGINE
 // -----------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Text-bound accounting (Checkpoint 9.6, ADR-065)
+// ---------------------------------------------------------------------------
+//
+// The provider packages truncate third-party title/location/description at
+// translation to the same constants a typed value is refused over. The
+// contract asks for ONE counts-only log line per sync pass saying how many
+// fields that cut, so a calendar full of over-long descriptions is visible
+// without any of that text reaching a log. Never a title, never a length of
+// a specific field, never an event id -- a count and the connection id.
+
+/** Number of fields on one translated event that are shorter than the provider's. */
+function countGoogleTruncatedFields(
+  event: GoogleCalendarEvent,
+  fields: Pick<LocalEventFields, "title" | "description" | "location">,
+): number {
+  let truncated = 0;
+  if ((event.summary?.length ?? 0) > fields.title.length) truncated += 1;
+  if ((event.description?.length ?? 0) > (fields.description?.length ?? 0)) truncated += 1;
+  if ((event.location?.length ?? 0) > (fields.location?.length ?? 0)) truncated += 1;
+  return truncated;
+}
+
+/**
+ * The CalDAV path parses the VCALENDAR inside the provider package, so this
+ * job never holds the untruncated text to compare against. What it can see is
+ * the OUTPUT of a surrogate-safe cut, which is always exactly the bound or one
+ * short of it; a field at that length is counted as bounded. A field that was
+ * genuinely exactly 4000 characters long is the one false positive, and it is
+ * a count in a diagnostic line, not a decision.
+ */
+function atBound(value: string | null, max: number): boolean {
+  return value !== null && value.length >= max - 1;
+}
+
+function countCaldavBoundedFields(
+  fields: Pick<CalDavEventFields, "title" | "description" | "location">,
+): number {
+  let truncated = 0;
+  if (atBound(fields.title, ENTITY_TITLE_MAX_CHARS)) truncated += 1;
+  if (atBound(fields.description, EVENT_DESCRIPTION_MAX_CHARS)) truncated += 1;
+  if (atBound(fields.location, EVENT_LOCATION_MAX_CHARS)) truncated += 1;
+  return truncated;
+}
+
+function logTextBounded(connectionId: string, truncatedFields: number): void {
+  if (truncatedFields === 0) return;
+  log.info("calendar.sync.text_bounded", { connectionId, truncatedFields });
+}
+
 async function runCaldavSync(
   db: Db,
   caldavClient: CalDavClient,
@@ -237,6 +292,7 @@ async function runCaldavSync(
   let finalSyncToken: string | undefined;
   const updatedItems: Array<{ href: string; etag: string }> = [];
   const deletedHrefs: string[] = [];
+  let truncatedFields = 0;
   // Captured BEFORE the first provider read (fixer review, MAJOR-C): a link
   // that a push completed after this instant can be absent from a listing
   // taken before it, and must not be archived for that.
@@ -345,6 +401,7 @@ async function runCaldavSync(
       }
 
       for (const intent of intents) {
+        if ("fields" in intent) truncatedFields += countCaldavBoundedFields(intent.fields);
         if (intent.kind === "upsert_standalone_or_master") {
           const [existingLink] = await tx
             .select()
@@ -604,6 +661,7 @@ async function runCaldavSync(
       })
       .where(eq(calendarConnectionCalendars.id, calendarRow.id));
   });
+  logTextBounded(connection.id, truncatedFields);
 }
 
 // -----------------------------------------------------------------------------
@@ -619,6 +677,8 @@ interface ApplyContext {
   seenInstanceKeys: Set<string>;
   /** Captured before the first listEvents call -- see reconcileFullSync (MAJOR-C). */
   listStartedAt: Date;
+  /** Fields cut at the text bound this pass (Checkpoint 9.6); logged once as a count. */
+  truncatedFields: number;
 }
 
 /**
@@ -765,6 +825,7 @@ async function applyOneItem(
     defaultTimezone,
     existingTimezone: await existingLinkedZone(ctx, event),
   });
+  if ("fields" in intent) ctx.truncatedFields += countGoogleTruncatedFields(event, intent.fields);
   if (intent.kind === "upsert_standalone_or_master") {
     await applyUpsertMaster(ctx, event, intent);
   } else if (intent.kind === "detach_instance") {
@@ -1258,6 +1319,7 @@ export async function runCalendarSync(
   // is resolved in the EXISTING linked row's zone first -- see applyOneItem.
   const defaultTimezone = "UTC";
 
+  let truncatedFields = 0;
   await db.transaction(async (tx) => {
     const ctx: ApplyContext = {
       tx: tx as unknown as Db,
@@ -1267,6 +1329,7 @@ export async function runCalendarSync(
       seenLinkKeys: new Set(),
       seenInstanceKeys: new Set(),
       listStartedAt,
+      truncatedFields: 0,
     };
 
     const instanceItems: GoogleCalendarEvent[] = [];
@@ -1297,7 +1360,10 @@ export async function runCalendarSync(
         updatedAt: now,
       })
       .where(eq(calendarConnectionCalendars.id, calendarRow.id));
+    truncatedFields = ctx.truncatedFields;
   });
+  // After the commit: a pass that rolled back bounded nothing.
+  logTextBounded(connection.id, truncatedFields);
 }
 
 export function createCalendarSyncCalendarHandler(

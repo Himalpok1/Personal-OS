@@ -11,8 +11,12 @@ import {
   wallClockToNaiveDate,
 } from "@personal-os/core";
 import { errorToken } from "@personal-os/core/logging/logger";
+import { truncateProviderString } from "@personal-os/core/mail/provider-strings";
 import { eventExternalLinks, events, occurrences } from "@personal-os/db";
 import {
+  ENTITY_TITLE_MAX_CHARS,
+  EVENT_DESCRIPTION_MAX_CHARS,
+  EVENT_LOCATION_MAX_CHARS,
   EventCalendarTargetSchema,
   EventCancelOccurrenceSchema,
   EventCreateSchema,
@@ -544,8 +548,18 @@ export default function eventsRoutes(app: FastifyInstance): void {
     const startDate = body.start_date !== undefined ? body.start_date : existing.startDate;
     const endDate = body.end_date !== undefined ? body.end_date : existing.endDate;
 
+    // This re-parse exists for EventCreateSchema's date superRefine (all-day
+    // vs timed consistency, end after start) over the MERGED row. Its text
+    // bounds have already done their job on the body (EventUpdateSchema,
+    // Checkpoint 9.6): a title the caller SET over the bound was refused
+    // above. A title the caller did NOT touch may legitimately exceed the
+    // bound -- rows written before 9.6 and calendar-synced rows were never
+    // bounded -- and re-validating it here would make every PATCH to such a
+    // row a 400 for a field the request never mentioned. So the untouched
+    // stored title is fed in cut to the bound: this value is validation
+    // input only and is never written.
     EventCreateSchema.parse({
-      title: body.title ?? existing.title,
+      title: body.title ?? truncateProviderString(existing.title, ENTITY_TITLE_MAX_CHARS),
       timezone: existing.timezone,
       all_day: allDay,
       ...(startsAt && { starts_at: startsAt.toISOString() }),
@@ -804,9 +818,20 @@ export default function eventsRoutes(app: FastifyInstance): void {
     // computeOccurrenceTiming.
     const occurrenceTz = parent.recurrenceTimezone ?? parent.timezone;
     const allDay = body.all_day ?? parent.allDay;
-    const title = body.title ?? parent.title;
-    const description = body.description !== undefined ? body.description : parent.description;
-    const location = body.location !== undefined ? body.location : parent.location;
+    // Text the caller supplied was bounded by EventDetachSchema (400 over the
+    // bound). Text COPIED from the parent is not user-typed in this request,
+    // and a parent written before Checkpoint 9.6 may exceed the bound, so the
+    // copy is truncated at write (surrogate-safe) rather than making a
+    // legacy series impossible to detach. The parent row itself is untouched.
+    const title = body.title ?? truncateProviderString(parent.title, ENTITY_TITLE_MAX_CHARS) ?? "";
+    const description =
+      body.description !== undefined
+        ? body.description
+        : truncateProviderString(parent.description, EVENT_DESCRIPTION_MAX_CHARS);
+    const location =
+      body.location !== undefined
+        ? body.location
+        : truncateProviderString(parent.location, EVENT_LOCATION_MAX_CHARS);
     const projectId = body.project_id !== undefined ? body.project_id : parent.projectId;
 
     let startDate: string | null = null;

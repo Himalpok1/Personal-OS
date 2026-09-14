@@ -1,5 +1,5 @@
 import { inboxItems, tasks } from "@personal-os/db";
-import type { InboxItem } from "@personal-os/schema";
+import { ENTITY_TITLE_MAX_CHARS, type InboxItem } from "@personal-os/schema";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
@@ -397,6 +397,54 @@ describe("POST /inbox/:id/confirm", () => {
     expect(res.json()).toEqual({ error: "parse_result_not_committable", tool: "unclear" });
     const after = await app.inject({ method: "GET", url: `/inbox/${id}` });
     expect(after.json<InboxItem>().parse_result).toEqual(unclearStored);
+  });
+
+  // Checkpoint 9.6 (ADR-065): a correction is user-typed, so a title over
+  // the bound is REFUSED at the boundary with the field path -- the same
+  // contract as POST /tasks -- never truncated and never enqueued.
+  describe("content bounds on a correction", () => {
+    type Issue = { path: (string | number)[]; message: string };
+
+    it("refuses a corrected title over ENTITY_TITLE_MAX_CHARS with 400 naming the field, writing nothing", async () => {
+      const id = await seedNeedsConfirm(unclearStored);
+      const res = await app.inject({
+        method: "POST",
+        url: `/inbox/${id}/confirm`,
+        payload: {
+          corrected_tool_call: {
+            tool: "create_task",
+            args: { title: "t".repeat(ENTITY_TITLE_MAX_CHARS + 1) },
+          },
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      const body = res.json<{ error: string; issues: Issue[] }>();
+      expect(body.error).toBe("validation_failed");
+      const issue = body.issues.find((i) => i.path[i.path.length - 1] === "title");
+      expect(issue?.path).toEqual(["corrected_tool_call", "args", "title"]);
+      // The parser tool schemas carry the bound but not `tooLongMessage`
+      // (they are shared with the model's tool definitions), so only the
+      // path is pinned here; the client keys on the path for a correction.
+      expect(issue?.message).toMatch(/512/);
+      const after = await app.inject({ method: "GET", url: `/inbox/${id}` });
+      expect(after.json<InboxItem>().parse_result).toEqual(unclearStored);
+    });
+
+    it("accepts a corrected title exactly at the bound and stores it byte-identical", async () => {
+      const id = await seedNeedsConfirm(unclearStored);
+      const title = "e".repeat(ENTITY_TITLE_MAX_CHARS);
+      const res = await app.inject({
+        method: "POST",
+        url: `/inbox/${id}/confirm`,
+        payload: { corrected_tool_call: { tool: "create_task", args: { title } } },
+      });
+      expect(res.statusCode).toBe(202);
+      const after = await app.inject({ method: "GET", url: `/inbox/${id}` });
+      expect(after.json<InboxItem>().parse_result).toEqual({
+        toolCall: { tool: "create_task", args: { title } },
+        confidenceFlags: ["modelUnclear"],
+      });
+    });
   });
 
   // Checkpoint 9.3 review: CreateTaskToolSchema leaves rrule and

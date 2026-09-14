@@ -1,4 +1,12 @@
-// GET /search -- the Personal OS lexical search contract (Checkpoint 8.3).
+// GET /search -- the Personal OS lexical search contract.
+//
+// Checkpoint 8.3 (ADR-059) froze a four-entity, grouped, recency-ordered
+// contract. Checkpoint 9.6 (ADR-065) widens it to six entities, adds
+// tokenised matching with an explainable integer score on every result, a
+// closed date-token grammar, and an interleaved score order by default. The
+// same path serves both; there is no v1/v2 split because every member is
+// `.strict()` and the API and the APK ship together under the frozen
+// deployment order, so a second allowlist would be kept honest for nobody.
 //
 // Deep import, not the barrel -- see capture.ts's comment on this same import
 // for why (keeps rrule and a Node-only workaround out of the web bundle
@@ -9,69 +17,83 @@ import {
   SEARCH_QUERY_RAW_MAX_CHARS,
   normalizeSearchQuery,
 } from "@personal-os/core/search/query";
+import { isValidTimezone } from "@personal-os/core/timezone";
 import { z } from "zod";
 
-// Re-exported so a client (apps/mobile) can enforce the same minimum before it
-// issues a request, without taking a second dependency on packages/core for one
-// number. The schema above is still the authority -- this only lets a caller
-// avoid a request it knows will 400.
 export { SEARCH_QUERY_MAX_CHARS, SEARCH_QUERY_MIN_CHARS };
+import { EventOriginSchema } from "./events.js";
 import { InboxEntityTypeSchema, InboxItemStatusSchema } from "./inbox.js";
 import { booleanQueryParam } from "./pagination.js";
+import { ProjectStatusSchema } from "./projects.js";
 import { TaskStatusSchema } from "./tasks.js";
 
-// ===========================================================================
-// THE SEARCHABLE DOMAIN IS A CLOSED SET, AND EVERYTHING OUTSIDE IT IS EXCLUDED
-// BY CONSTRUCTION RATHER THAN BY THE READ MODEL REMEMBERING TO OMIT IT.
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// Result types
+// ---------------------------------------------------------------------------
 //
-// Four entities: the three that hold user-authored text, plus mail metadata.
-//
-// NOT searchable, and the omissions are decisions rather than an unfinished
-// list: health measurements, monitor targets/checks/incidents, OAuth state,
-// every encrypted credential column, provider tokens and cursors,
-// notification_dispatch_log, the AI configuration tables, and the generated
-// brief/digest artifacts. `events` is also absent -- Checkpoint 8.2 put real
-// third-party calendar text into that table for the first time, and
-// docs/STATUS.md records that event text is still unbounded at write, so adding
-// it to a read surface is a scope expansion with its own privacy argument to
-// make rather than a fifth line in an array.
-export const SearchResultTypeSchema = z.enum(["task", "note", "inbox_item", "mail_message"]);
+// The search domain is closed at SIX entities. Every exclusion is a decision:
+// health measurements, monitor targets/checks/incidents, OAuth state, every
+// encrypted credential column, provider tokens and cursors,
+// `notification_dispatch_log`, the AI configuration tables and the generated
+// brief/digest artifacts. `event` and `project` join in 9.6 because event
+// text is now bounded at write (text-bounds.ts) and projects are authorable
+// on the device. Adding a seventh is a contract change with its own privacy
+// argument.
+export const SearchResultTypeSchema = z.enum([
+  "task",
+  "note",
+  "event",
+  "project",
+  "inbox_item",
+  "mail_message",
+]);
 export type SearchResultType = z.infer<typeof SearchResultTypeSchema>;
+
+/**
+ * Grouping order for `order=type`, and the tie-break order between types at
+ * equal score and timestamp. User-authored kinds first, then captures, then
+ * third-party metadata -- "your own content first" (ADR-059 §2), made numeric
+ * by `type_prior` in the scorer.
+ */
+export const SEARCH_RESULT_TYPE_ORDER = [
+  "task",
+  "note",
+  "event",
+  "project",
+  "inbox_item",
+  "mail_message",
+] as const satisfies readonly SearchResultType[];
 
 /** Default per-type cap. */
 export const SEARCH_LIMIT_DEFAULT = 20;
 /** Largest per-type cap a caller may ask for. */
 export const SEARCH_LIMIT_MAX = 50;
 
-// ===========================================================================
-// `limit` IS PER TYPE, NOT PER RESPONSE, AND THAT IS THE SECURITY-RELEVANT BIT
-// ===========================================================================
-//
-// A single shared budget across all four types would mean the type with the
-// most rows decides what the other three get. In this system that type is
-// `mail_messages` -- hundreds of rows against a handful of tasks and notes, and
-// growing on a 15-minute cron -- and its two searchable fields are chosen by
-// whoever sent the mail.
-//
-// ADR-054 already settled this shape for the digest, in almost these words:
-// the mail section "is capped hardest, capped before measurement, and is the
-// first rung on the drop ladder, or a third party could evict the user's own
-// agenda from their own digest." Search has the identical failure mode, so it
-// gets the identical answer: each type is capped independently, before any
-// merging, so no volume of mail can push a matching note out of a result set.
-// The cost is that a response holds at most 4 x limit rows, which is stated
-// here rather than discovered.
+// ---------------------------------------------------------------------------
+// Query
+// ---------------------------------------------------------------------------
+
+const CommaSeparatedTypes = z
+  .string()
+  .transform((value) =>
+    value
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  )
+  .pipe(z.array(SearchResultTypeSchema).min(1));
+
+/**
+ * `limit` IS PER TYPE, NOT PER RESPONSE (ADR-059 §2): with one shared budget
+ * the type with the most rows -- mail, growing on a 15-minute cron with two
+ * attacker-chosen searchable fields -- would decide what the other five get.
+ */
 export const SearchQuerySchema = z
   .object({
     q: z
       .string()
       .min(1)
       .max(SEARCH_QUERY_RAW_MAX_CHARS)
-      // Normalize BEFORE the length checks, so the bounds apply to the string
-      // that will actually be matched. Checking the raw value first would let
-      // "  a  " pass a >= 2 test and then reach SQL as the single character
-      // "a".
       .transform(normalizeSearchQuery)
       .refine((value) => value.length >= SEARCH_QUERY_MIN_CHARS, {
         message: `query must be at least ${SEARCH_QUERY_MIN_CHARS} characters after trimming`,
@@ -80,36 +102,110 @@ export const SearchQuerySchema = z
         message: `query must be at most ${SEARCH_QUERY_MAX_CHARS} characters`,
       }),
     limit: z.coerce.number().int().min(1).max(SEARCH_LIMIT_MAX).default(SEARCH_LIMIT_DEFAULT),
-    // booleanQueryParam, never z.coerce.boolean() -- see pagination.ts's
-    // comment on why the latter is silently broken for "?flag=false".
-    //
-    // Applies to the two entities whose result member carries an `archived`
-    // flag (tasks, notes). It deliberately does NOT reach mail:
-    // `mail_messages.deleted_at` is a provider-reconciliation tombstone, not a
-    // user action, and a message the provider no longer returns is not
-    // something the user archived. Nor does it reach inbox items (Checkpoint
-    // 9.3): a dismissed capture is excluded unconditionally because the
-    // inbox_item member has no `archived` flag to label it with.
     include_archived: booleanQueryParam(false),
+    /** Comma-separated subset of result types. Absent = all six. */
+    types: CommaSeparatedTypes.optional(),
+    /**
+     * The client's IANA zone, exactly as `/today` takes it. OPTIONAL and with
+     * NO server-side default: without it no date token is recognised (a
+     * date-shaped word is plain text) and `date_filter` is null. Guessing a
+     * zone is how an all-day event lands on the wrong day.
+     */
+    tz: z.string().refine(isValidTimezone, { message: "unknown IANA timezone" }).optional(),
+    /**
+     * `score` (default): one list in `compareScored` order across types.
+     * `type`: grouped in SEARCH_RESULT_TYPE_ORDER, score order within a type
+     * -- the 8.3 shape, kept for curl readability.
+     */
+    order: z.enum(["score", "type"]).default("score"),
   })
   .strict();
 export type SearchQuery = z.infer<typeof SearchQuerySchema>;
 
-// ===========================================================================
-// THE RESULT UNION
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// Match explanation
+// ---------------------------------------------------------------------------
+
+/**
+ * Which rung of the fallback ladder produced the results.
+ *
+ *   all               every token matched (text tokens by ILIKE over the
+ *                     entity's columns; the date token by window OR text)
+ *   all_without_date  rung 1 returned nothing anywhere and the query had a
+ *                     date token, which was dropped entirely
+ *   any               rungs 1-2 returned nothing anywhere and there were >= 2
+ *                     text tokens; OR across tokens ("partial matches")
+ *   none              no token survived tokenisation (e.g. "!!"); nothing was
+ *                     queried and every count is zero
+ */
+export const SearchMatchModeSchema = z.enum(["all", "all_without_date", "any", "none"]);
+export type SearchMatchMode = z.infer<typeof SearchMatchModeSchema>;
+
+/**
+ * The closed vocabulary of scoring reasons. Points per code are fixed in
+ * packages/core/src/search/score.ts and recorded in ADR-065; a result's
+ * `score` is exactly the sum of its `reasons[].points`, so the ranking is
+ * auditable from the response alone.
+ */
+export const SearchScoreCodeSchema = z.enum([
+  "title_exact",
+  "title_prefix",
+  "title_phrase",
+  "title_all_tokens",
+  "title_token",
+  "secondary_token",
+  "body_token",
+  "date_window",
+  "date_text",
+  "recency",
+  "type_prior",
+  "penalty_done",
+  "penalty_archived",
+  "penalty_completed_project",
+  "penalty_external_event",
+]);
+export type SearchScoreCode = z.infer<typeof SearchScoreCodeSchema>;
+
+export const SearchScoreReasonSchema = z
+  .object({
+    code: SearchScoreCodeSchema,
+    points: z.number().int(),
+    /** The matched token, for the per-token codes. Never a stored string. */
+    token: z.string().optional(),
+  })
+  .strict();
+export type SearchScoreReason = z.infer<typeof SearchScoreReasonSchema>;
+
+/** Server-authored field names in which at least one token matched. */
+export const SearchMatchFieldSchema = z.enum([
+  "title",
+  "body",
+  "location",
+  "description",
+  "raw_text",
+  "subject",
+  "sender",
+  "goal",
+  "date",
+]);
+export type SearchMatchField = z.infer<typeof SearchMatchFieldSchema>;
+
+export const SearchMatchSchema = z
+  .object({
+    reasons: z.array(SearchScoreReasonSchema),
+    fields: z.array(SearchMatchFieldSchema),
+  })
+  .strict();
+export type SearchMatch = z.infer<typeof SearchMatchSchema>;
+
+// ---------------------------------------------------------------------------
+// Result members
+// ---------------------------------------------------------------------------
 //
-// Every member is `.strict()`, which is the actual allowlist mechanism rather
-// than a stylistic choice: the read model builds a plain object and parses it
-// through these schemas, so a column that is not named here is STRUCTURALLY
-// INCAPABLE of reaching the wire -- a stray field is a parse failure, not a
-// leak. Same guarantee `apps/api/src/routes/mail-connections.ts` documents for
-// its ciphertext columns.
-//
-// NO NAVIGATION URL IS RETURNED. The client derives a route from `type` and
-// `id`, both of which are server-authored. A server-supplied href would be one
-// more string a result carries, and the one thing a search result must never do
-// is let attacker-authored text decide where a tap goes.
+// STRICT, BY DESIGN. Every member is `.strict()` so a column not named here is
+// a parse failure rather than a leak. No result carries an href: the client
+// derives navigation from `type` + `id` only, so no stored string can become
+// a route.
 
 const SearchResultBase = {
   id: z.string().uuid(),
@@ -119,13 +215,16 @@ const SearchResultBase = {
   preview: z.string().nullable(),
   /** The row's recency instant. Per-type meaning is documented on each member. */
   timestamp: z.string().datetime({ offset: true }),
+  /** Integer sum of `match.reasons[].points`. */
+  score: z.number().int(),
+  match: SearchMatchSchema,
 };
 
 export const TaskSearchResultSchema = z
   .object({
     type: z.literal("task"),
     ...SearchResultBase,
-    /** `updated_at`. */
+    /** timestamp = `updated_at`. */
     status: TaskStatusSchema,
     archived: z.boolean(),
   })
@@ -136,44 +235,68 @@ export const NoteSearchResultSchema = z
   .object({
     type: z.literal("note"),
     ...SearchResultBase,
-    /** `updated_at`. */
+    /** timestamp = `updated_at`. */
     archived: z.boolean(),
   })
   .strict();
 export type NoteSearchResult = z.infer<typeof NoteSearchResultSchema>;
 
+/**
+ * Event ownership is part of the result (ADR-064). `preview` for an
+ * `external` event is the LOCATION ONLY -- the description is matched but
+ * never emitted, because it is where third parties put conference links and
+ * passcodes. A `local` event previews its location, else its description.
+ * No calendar name, no external ids, no `client_uuid`.
+ */
+export const EventSearchResultSchema = z
+  .object({
+    type: z.literal("event"),
+    ...SearchResultBase,
+    /** timestamp = `updated_at`. */
+    origin: EventOriginSchema,
+    all_day: z.boolean(),
+    /** Timed events. */
+    starts_at: z.string().datetime({ offset: true }).nullable(),
+    /** All-day events -- a pure date, never a midnight instant (ADR-042/045). */
+    start_date: z.string().date().nullable(),
+    /** `rrule` is set: this row is a series parent. One result per series. */
+    is_recurring: z.boolean(),
+    /** `parent_event_id` is set: a detached, individually edited instance. */
+    is_detached: z.boolean(),
+    archived: z.boolean(),
+  })
+  .strict();
+export type EventSearchResult = z.infer<typeof EventSearchResultSchema>;
+
+export const ProjectSearchResultSchema = z
+  .object({
+    type: z.literal("project"),
+    ...SearchResultBase,
+    /** title = `name`, preview = `goal`, timestamp = `updated_at`. */
+    status: ProjectStatusSchema,
+    target_date: z.string().date().nullable(),
+    archived: z.boolean(),
+  })
+  .strict();
+export type ProjectSearchResult = z.infer<typeof ProjectSearchResultSchema>;
+
 export const InboxSearchResultSchema = z
   .object({
     type: z.literal("inbox_item"),
     ...SearchResultBase,
-    /** `captured_at` -- inbox_items has no updated_at column. */
+    /** timestamp = `captured_at` -- inbox_items has no updated_at column. */
     status: InboxItemStatusSchema,
-    // Present when the capture was committed to an entity. The client uses the
-    // PAIR to navigate to that entity; there is no inbox-item detail screen, so
-    // without it an inbox result can only return the user to the Inbox tab.
-    // Both fields are server-authored, which is what makes them safe to route
-    // on.
     entity_type: InboxEntityTypeSchema.nullable(),
     entity_id: z.string().uuid().nullable(),
   })
   .strict();
 export type InboxSearchResult = z.infer<typeof InboxSearchResultSchema>;
 
-// METADATA ONLY, and the schema is where that is enforced rather than merely
-// intended. There is no body field because `mail_messages` has no body column
-// and, under the `gmail.metadata` scope, a body is unfetchable (ADR-053).
-//
-// `from_address` and `from_domain` are deliberately ABSENT. They are stored, but
-// an address is an identifier the user did not ask for when they typed a search
-// term, and ADR-054's rule that no address may reach a log or a push body is a
-// statement about how little value it carries against how much it discloses.
-// `sender` carries the display name alone -- attacker-authored, bounded, and
-// rendered as inert text.
 export const MailSearchResultSchema = z
   .object({
     type: z.literal("mail_message"),
     ...SearchResultBase,
-    /** `internal_date` -- when the provider says the message arrived. */
+    /** timestamp = `internal_date` -- when the provider says the message arrived. */
     sender: z.string().nullable(),
     has_attachment: z.boolean(),
   })
@@ -183,15 +306,22 @@ export type MailSearchResult = z.infer<typeof MailSearchResultSchema>;
 export const SearchResultSchema = z.discriminatedUnion("type", [
   TaskSearchResultSchema,
   NoteSearchResultSchema,
+  EventSearchResultSchema,
+  ProjectSearchResultSchema,
   InboxSearchResultSchema,
   MailSearchResultSchema,
 ]);
 export type SearchResult = z.infer<typeof SearchResultSchema>;
 
+// ---------------------------------------------------------------------------
+// Counts and date filter
+// ---------------------------------------------------------------------------
+
 /**
  * Per-type counts, with the same honesty invariant `boundedItemsSectionSchema`
  * enforces on Today: a cap may hide rows, but it may never misreport how many
- * there were.
+ * there were. `total` counts rows satisfying the candidate predicate on the
+ * rung that was taken.
  */
 export const SearchTypeCountSchema = z
   .object({
@@ -208,6 +338,8 @@ export const SearchCountsSchema = z
   .object({
     task: SearchTypeCountSchema,
     note: SearchTypeCountSchema,
+    event: SearchTypeCountSchema,
+    project: SearchTypeCountSchema,
     inbox_item: SearchTypeCountSchema,
     mail_message: SearchTypeCountSchema,
   })
@@ -215,29 +347,54 @@ export const SearchCountsSchema = z
 export type SearchCounts = z.infer<typeof SearchCountsSchema>;
 
 /**
+ * The one date token the query carried, and the local-date window it became.
+ * `dropped` is true on the `all_without_date` rung. Echoed so the user can
+ * read exactly what was applied -- "September" with no year means the
+ * CURRENT year in `tz`, and that rule is visible here rather than guessed.
+ */
+export const SearchDateFilterSchema = z
+  .object({
+    token: z.string(),
+    kind: z.enum(["day", "month", "year", "iso_date", "iso_month"]),
+    from: z.string().date(),
+    to: z.string().date(),
+    tz: z.string(),
+    dropped: z.boolean(),
+  })
+  .strict();
+export type SearchDateFilter = z.infer<typeof SearchDateFilterSchema>;
+
+// ---------------------------------------------------------------------------
+// Response
+// ---------------------------------------------------------------------------
+
+/**
  * ORDERING IS PART OF THE CONTRACT, because a search whose result order is
  * incidental is a search the user cannot learn.
  *
- * Results arrive grouped by type in the fixed order of
- * `SEARCH_RESULT_TYPE_ORDER`, and within a type by recency descending with `id`
- * ascending as the final tie-break. The type order is not alphabetical: it puts
- * the three user-authored kinds ahead of mail, which is the same "your own
- * content first" principle the per-type cap enforces, made visible.
- *
- * `id` breaks ties because two rows CAN share a timestamp -- Checkpoint 8.2
- * ingested 98 calendar events that all shared one `created_at` to the
- * microsecond, so this is an observed property of this database rather than a
- * theoretical one. Without it, two rows with equal timestamps could swap places
- * between identical requests.
+ * `order=score`: `score desc`, then `timestamp desc`, then position in
+ * SEARCH_RESULT_TYPE_ORDER, then `id asc` -- a total order (two rows with
+ * equal timestamps are an observed property of this database, see ADR-059).
+ * `order=type`: grouped by SEARCH_RESULT_TYPE_ORDER, the same order within a
+ * group. The client never re-sorts; it only partitions.
  */
-export const SEARCH_RESULT_TYPE_ORDER = ["task", "note", "inbox_item", "mail_message"] as const;
-
 export const SearchResponseSchema = z
   .object({
     /** The NORMALIZED query that was actually run, echoed for display. */
     query: z.string(),
+    /** The text tokens that were matched (lowercased, NFKC), for audit. */
+    tokens: z.array(z.string()),
+    /**
+     * Query words that survived tokenisation but not the token cap, in query
+     * order, so the client can say what was ignored. QUERY tokens only --
+     * never a stored string.
+     */
+    dropped: z.array(z.string()),
     /** The per-type cap that was applied. */
     limit: z.number().int().min(1),
+    order: z.enum(["score", "type"]),
+    match_mode: SearchMatchModeSchema,
+    date_filter: SearchDateFilterSchema.nullable(),
     /** True when any type had more matches than its cap allowed through. */
     truncated: z.boolean(),
     counts: SearchCountsSchema,
@@ -245,3 +402,41 @@ export const SearchResponseSchema = z
   })
   .strict();
 export type SearchResponse = z.infer<typeof SearchResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Item context (Lane F -- the bounded read a future read-only lane may call)
+// ---------------------------------------------------------------------------
+//
+// `getItemContext({type, id})` returns ONE item with a bounded, control-
+// stripped body and citations by id. It is a function over `Db` in
+// apps/api/src/search/service.ts; no agent runtime calls it (ADR-056). What
+// it never carries: mail bodies (none exist), external event descriptions,
+// any external id, client_uuid, audio_path, parse_result, confidence, or any
+// connection/credential column.
+
+/** Longest body `getItemContext` returns. Equals ASK_BODY_MAX_CHARS deliberately. */
+export const ITEM_CONTEXT_BODY_MAX_CHARS = 1500;
+
+export const ItemRefSchema = z
+  .object({ type: SearchResultTypeSchema, id: z.string().uuid() })
+  .strict();
+export type ItemRef = z.infer<typeof ItemRefSchema>;
+
+export const ItemContextSchema = z
+  .object({
+    type: SearchResultTypeSchema,
+    id: z.string().uuid(),
+    title: z.string().min(1),
+    /** Bounded to ITEM_CONTEXT_BODY_MAX_CHARS; null when the type has no body or it is withheld. */
+    body: z.string().nullable(),
+    body_truncated: z.boolean(),
+    timestamp: z.string().datetime({ offset: true }),
+    status: z.string().nullable(),
+    archived: z.boolean(),
+    origin: EventOriginSchema.nullable(),
+    project_id: z.string().uuid().nullable(),
+    /** Ids a caller may cite; always includes the item itself. */
+    citations: z.array(ItemRefSchema).min(1),
+  })
+  .strict();
+export type ItemContext = z.infer<typeof ItemContextSchema>;

@@ -1,12 +1,15 @@
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { usePlaceholderColor } from "@/components/placeholder-color";
+import { FieldLengthCounter } from "@/components/field-length-counter";
 import { DateTimeField } from "@/components/datetime-field";
 import { deviceTimezone } from "@/components/datetime-field-state";
 import { TaskRepeatField } from "@/components/recurrence/task-repeat-field";
 import { applyDueDateChange } from "@/components/recurrence/task-repeat-state";
 import { coerceProjectIdParam, useProjects } from "@/queries/projects";
 import { useCreateTask } from "@/queries/tasks";
+import { describeValidationError } from "@/utils/validation-error";
+import { ENTITY_TITLE_MAX_CHARS, TASK_BODY_MAX_CHARS } from "@personal-os/schema";
 import {
   serializeEditorStateToRRule,
   type RecurrenceEditorState,
@@ -122,8 +125,12 @@ export default function NewTaskScreen() {
         onChangeText={setTitle}
         placeholder="What needs doing?"
         placeholderTextColor={placeholderColor}
+        // The server's own bound (packages/schema/src/text-bounds.ts), so an
+        // over-long paste is stopped here rather than refused as a 400.
+        maxLength={ENTITY_TITLE_MAX_CHARS}
         className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
 
       <Text className="mb-1 text-sm text-neutral-500">Notes (optional)</Text>
       <TextInput
@@ -131,8 +138,10 @@ export default function NewTaskScreen() {
         onChangeText={setBody}
         multiline
         placeholder=""
+        maxLength={TASK_BODY_MAX_CHARS}
         className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
       />
+      <FieldLengthCounter length={body.length} maxLength={TASK_BODY_MAX_CHARS} />
 
       <DateTimeField label="Due date (optional)" value={dueAt} onChange={onDueAtChange} />
 
@@ -177,7 +186,11 @@ export default function NewTaskScreen() {
           {formError}
         </Text>
       ) : createTask.isError ? (
-        <Text className="mb-2 text-red-600">Couldn&apos;t create that task.</Text>
+        <Text className="mb-2 text-red-600" accessibilityRole="alert">
+          {/* A refused field (client-side parse or a server 400) names the
+              field and its bound; anything else keeps the generic line. */}
+          {describeValidationError(createTask.error) ?? "Couldn't create that task."}
+        </Text>
       ) : null}
 
       <Pressable

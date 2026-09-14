@@ -3,6 +3,12 @@
 // the web bundle apps/mobile ships via this package).
 import { isValidTimezone } from "@personal-os/core/timezone";
 import { z } from "zod";
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  EVENT_DESCRIPTION_MAX_CHARS,
+  EVENT_LOCATION_MAX_CHARS,
+  tooLongMessage,
+} from "./text-bounds.js";
 import { OccurrenceStatusSchema } from "./occurrences.js";
 import { booleanQueryParam, PaginationQuerySchema } from "./pagination.js";
 import { FlexibleDatetimeSchema } from "./parser-tools.js";
@@ -78,9 +84,18 @@ export type Event = z.infer<typeof EventSchema>;
 
 export const EventCreateSchema = z
   .object({
-    title: z.string().min(1),
-    description: z.string().optional(),
-    location: z.string().optional(),
+    title: z
+      .string()
+      .min(1)
+      .max(ENTITY_TITLE_MAX_CHARS, tooLongMessage("title", ENTITY_TITLE_MAX_CHARS)),
+    description: z
+      .string()
+      .max(EVENT_DESCRIPTION_MAX_CHARS, tooLongMessage("description", EVENT_DESCRIPTION_MAX_CHARS))
+      .optional(),
+    location: z
+      .string()
+      .max(EVENT_LOCATION_MAX_CHARS, tooLongMessage("location", EVENT_LOCATION_MAX_CHARS))
+      .optional(),
     starts_at: FlexibleDatetimeSchema.optional(),
     ends_at: FlexibleDatetimeSchema.optional(),
     timezone: z.string().refine(isValidTimezone, { message: "unknown IANA timezone" }),
@@ -171,9 +186,21 @@ export type EventCreate = z.infer<typeof EventCreateSchema>;
 // action endpoint, same as tasks/notes.
 export const EventUpdateSchema = z
   .object({
-    title: z.string().min(1).optional(),
-    description: z.string().nullable().optional(),
-    location: z.string().nullable().optional(),
+    title: z
+      .string()
+      .min(1)
+      .max(ENTITY_TITLE_MAX_CHARS, tooLongMessage("title", ENTITY_TITLE_MAX_CHARS))
+      .optional(),
+    description: z
+      .string()
+      .max(EVENT_DESCRIPTION_MAX_CHARS, tooLongMessage("description", EVENT_DESCRIPTION_MAX_CHARS))
+      .nullable()
+      .optional(),
+    location: z
+      .string()
+      .max(EVENT_LOCATION_MAX_CHARS, tooLongMessage("location", EVENT_LOCATION_MAX_CHARS))
+      .nullable()
+      .optional(),
     starts_at: FlexibleDatetimeSchema.nullable().optional(),
     ends_at: FlexibleDatetimeSchema.nullable().optional(),
     all_day: z.boolean().optional(),
@@ -279,9 +306,21 @@ export type EventRangeQuery = z.infer<typeof EventRangeQuerySchema>;
 export const EventDetachSchema = z
   .object({
     original_start_at: z.string().datetime({ offset: true }),
-    title: z.string().min(1).optional(),
-    description: z.string().nullable().optional(),
-    location: z.string().nullable().optional(),
+    title: z
+      .string()
+      .min(1)
+      .max(ENTITY_TITLE_MAX_CHARS, tooLongMessage("title", ENTITY_TITLE_MAX_CHARS))
+      .optional(),
+    description: z
+      .string()
+      .max(EVENT_DESCRIPTION_MAX_CHARS, tooLongMessage("description", EVENT_DESCRIPTION_MAX_CHARS))
+      .nullable()
+      .optional(),
+    location: z
+      .string()
+      .max(EVENT_LOCATION_MAX_CHARS, tooLongMessage("location", EVENT_LOCATION_MAX_CHARS))
+      .nullable()
+      .optional(),
     starts_at: FlexibleDatetimeSchema.nullable().optional(),
     ends_at: FlexibleDatetimeSchema.nullable().optional(),
     all_day: z.boolean().optional(),

@@ -1,4 +1,5 @@
 import { wallClockToNaiveDate } from "@personal-os/core";
+import { resolveWallClockToInstant } from "@personal-os/core/timezone";
 import {
   calendarConnectionCalendars,
   calendarConnections,
@@ -6,7 +7,15 @@ import {
   events,
   occurrences,
 } from "@personal-os/db";
-import type { Event, EventRangeItem, Project } from "@personal-os/schema";
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  EVENT_DESCRIPTION_MAX_CHARS,
+  EVENT_LOCATION_MAX_CHARS,
+  tooLongMessage,
+  type Event,
+  type EventRangeItem,
+  type Project,
+} from "@personal-os/schema";
 import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -1162,19 +1171,52 @@ describe("events routes", () => {
     });
 
     it("cancels a timed occurrence so it disappears from range and cannot be resurrected", async () => {
+      // Anchored RELATIVE to the clock: the window job materializes only
+      // occurrences after `now`, so a fixed 2026 date rots the day it passes
+      // (it did, on 2026-09-14). Series starts tomorrow 09:00 Chicago; the
+      // cancelled instance is the wall-clock week after, resolved DST-safely.
+      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const chicagoDate = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Chicago",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(tomorrow);
+      const nextWeekDate = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Chicago",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(tomorrow.getTime() + 7 * 24 * 60 * 60 * 1000));
+      const wall = (localDate: string, hour: number, minute: number) => {
+        const [year, month, day] = localDate.split("-").map(Number) as [number, number, number];
+        return resolveWallClockToInstant(
+          { year, month, day, hour, minute, second: 0 },
+          "America/Chicago",
+        );
+      };
+      const seriesStart = wall(chicagoDate, 9, 0);
+      const seriesEnd = wall(chicagoDate, 9, 30);
+      const cancelledInstant = wall(nextWeekDate, 9, 0);
+      const cancelledLocalDate = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Chicago",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(cancelledInstant);
       const parentResp = await app.inject({
         method: "POST",
         url: "/events",
         payload: {
           title: "Recurring to Cancel",
           timezone: "America/Chicago",
-          starts_at: "2026-09-07T09:00:00-05:00",
-          ends_at: "2026-09-07T09:30:00-05:00",
+          starts_at: seriesStart.toISOString(),
+          ends_at: seriesEnd.toISOString(),
           rrule: "FREQ=WEEKLY;INTERVAL=1",
         },
       });
       const parent = parentResp.json<Event>();
-      const occurrenceInstant = "2026-09-14T14:00:00.000Z";
+      const occurrenceInstant = cancelledInstant.toISOString();
 
       // Verify occurrence row exists before cancel
       const occsBefore = await app.db
@@ -1195,7 +1237,7 @@ describe("events routes", () => {
       });
       expect(cancelResp.statusCode).toBe(200);
       const updatedParent = cancelResp.json<Event>();
-      expect(updatedParent.recurrence_exdates).toEqual(["2026-09-14"]);
+      expect(updatedParent.recurrence_exdates).toEqual([cancelledLocalDate]);
 
       // Materialized occurrence row deleted
       const occsAfter = await app.db
@@ -1212,7 +1254,7 @@ describe("events routes", () => {
       // Disappears from range query
       const rangeResp = await app.inject({
         method: "GET",
-        url: "/events/range?from=2026-09-14T00:00:00Z&to=2026-09-15T00:00:00Z",
+        url: `/events/range?from=${cancelledLocalDate}T00:00:00Z&to=${new Date(cancelledInstant.getTime() + 24 * 60 * 60 * 1000).toISOString()}`,
       });
       expect(rangeResp.json<EventRangeItem[]>()).toHaveLength(0);
     });
@@ -2156,6 +2198,145 @@ describe("events routes", () => {
       });
       expect(archiveResp.statusCode).toBe(200);
       expect(await pushJobCount(event.id)).toBeGreaterThan(countAfterLink);
+    });
+  });
+
+  // Checkpoint 9.6 (ADR-065). Typed text over a bound is refused with the
+  // field path; a LEGACY row (pre-9.6, or calendar-synced before ingest was
+  // bounded) may already hold text over the bound and must stay editable
+  // through a PATCH that does not touch that field, and detachable with the
+  // copied text bounded at write.
+  describe("content bounds", () => {
+    type Issue = { path: (string | number)[]; message: string };
+    const overTitle = "t".repeat(ENTITY_TITLE_MAX_CHARS + 200);
+    const overDescription = "d".repeat(EVENT_DESCRIPTION_MAX_CHARS + 200);
+    const overLocation = "l".repeat(EVENT_LOCATION_MAX_CHARS + 200);
+
+    it("refuses a typed title over ENTITY_TITLE_MAX_CHARS on POST with 400 naming the field", async () => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title: overTitle,
+          timezone: "America/Chicago",
+          starts_at: "2026-09-20T09:00:00-05:00",
+          ends_at: "2026-09-20T10:00:00-05:00",
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      const body = response.json<ErrorBody>();
+      expect(body.error).toBe("validation_failed");
+      expect((body.issues as Issue[])[0]?.path).toEqual(["title"]);
+      expect((body.issues as Issue[])[0]?.message).toBe(
+        tooLongMessage("title", ENTITY_TITLE_MAX_CHARS),
+      );
+    });
+
+    it("accepts title, description and location exactly at their bounds, byte-identical", async () => {
+      const title = "e".repeat(ENTITY_TITLE_MAX_CHARS);
+      const description = "d".repeat(EVENT_DESCRIPTION_MAX_CHARS);
+      const location = "l".repeat(EVENT_LOCATION_MAX_CHARS);
+      const response = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: {
+          title,
+          description,
+          location,
+          timezone: "America/Chicago",
+          starts_at: "2026-09-20T09:00:00-05:00",
+          ends_at: "2026-09-20T10:00:00-05:00",
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      expect(response.json<Event>()).toMatchObject({ title, description, location });
+    });
+
+    it("PATCHing a field the request does not name still succeeds on a legacy row whose title, description and location exceed the bounds", async () => {
+      // Seeded directly: POST refuses this row now, which is the point.
+      const [row] = await app.db
+        .insert(events)
+        .values({
+          title: overTitle,
+          description: overDescription,
+          location: overLocation,
+          timezone: "America/Chicago",
+          startsAt: new Date("2026-09-20T14:00:00.000Z"),
+          endsAt: new Date("2026-09-20T15:00:00.000Z"),
+          origin: "local",
+        })
+        .returning({ id: events.id });
+      const id = row!.id;
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/events/${id}`,
+        payload: { starts_at: "2026-09-20T10:00:00-05:00", ends_at: "2026-09-20T11:00:00-05:00" },
+      });
+      expect(response.statusCode).toBe(200);
+      const after = response.json<Event>();
+      expect(after.starts_at).toBe("2026-09-20T15:00:00.000Z");
+      // The oversized text is untouched -- neither refused nor truncated.
+      expect(after.title).toBe(overTitle);
+      expect(after.description).toBe(overDescription);
+      expect(after.location).toBe(overLocation);
+    });
+
+    it("PATCH that SETS a field over its bound is still refused, even on a legacy row", async () => {
+      const [row] = await app.db
+        .insert(events)
+        .values({
+          title: overTitle,
+          timezone: "America/Chicago",
+          startsAt: new Date("2026-09-20T14:00:00.000Z"),
+          endsAt: new Date("2026-09-20T15:00:00.000Z"),
+          origin: "local",
+        })
+        .returning({ id: events.id });
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/events/${row!.id}`,
+        payload: { location: overLocation },
+      });
+      expect(response.statusCode).toBe(400);
+      expect((response.json<ErrorBody>().issues as Issue[])[0]?.path).toEqual(["location"]);
+    });
+
+    it("detaching an occurrence of a legacy oversized series succeeds, with the COPIED parent text bounded at write and the parent untouched", async () => {
+      const parentId = await insertRecurringEvent(app, {
+        title: overTitle,
+        description: overDescription,
+        location: overLocation,
+      });
+      const occurrenceInstant = "2026-09-14T14:00:00.000Z";
+      const response = await app.inject({
+        method: "POST",
+        url: `/events/${parentId}/detach`,
+        payload: { original_start_at: occurrenceInstant },
+      });
+      expect(response.statusCode).toBe(201);
+      const detached = response.json<Event>();
+      expect(detached.parent_event_id).toBe(parentId);
+      expect(detached.title).toHaveLength(ENTITY_TITLE_MAX_CHARS);
+      expect(detached.description).toHaveLength(EVENT_DESCRIPTION_MAX_CHARS);
+      expect(detached.location).toHaveLength(EVENT_LOCATION_MAX_CHARS);
+
+      const parent = await app.inject({ method: "GET", url: `/events/${parentId}` });
+      expect(parent.json<Event>().title).toBe(overTitle);
+      expect(parent.json<Event>().recurrence_exdates).toEqual(["2026-09-14"]);
+    });
+
+    it("detach with a typed title over the bound is refused before any write", async () => {
+      const parentId = await insertRecurringEvent(app, {});
+      const response = await app.inject({
+        method: "POST",
+        url: `/events/${parentId}/detach`,
+        payload: { original_start_at: "2026-09-14T14:00:00.000Z", title: overTitle },
+      });
+      expect(response.statusCode).toBe(400);
+      expect((response.json<ErrorBody>().issues as Issue[])[0]?.path).toEqual(["title"]);
+      const parent = await app.inject({ method: "GET", url: `/events/${parentId}` });
+      expect(parent.json<Event>().recurrence_exdates ?? []).toEqual([]);
     });
   });
 });

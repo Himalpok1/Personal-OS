@@ -18,13 +18,28 @@ import type { Href } from "expo-router";
 // routes-only -- a colocated test file there would register a bogus route and
 // break `expo export --platform web` (src/__tests__/routes-hygiene.test.ts).
 
-/** How the four searchable types map onto screens that actually exist. */
+/**
+ * How the six searchable types map onto screens that actually exist.
+ *
+ * The switch is exhaustive over the discriminated union with no default: a
+ * seventh member added to SearchResultTypeSchema is a TypeScript error here,
+ * not a result that silently renders as a dead row.
+ */
 export function searchResultHref(result: SearchResult): Href | null {
   switch (result.type) {
     case "task":
       return `/tasks/${result.id}` as Href;
     case "note":
       return `/notes/${result.id}` as Href;
+    case "event":
+      // A search result is one row -- a series parent, a one-off or a detached
+      // instance -- so the plain detail route, never the `?occursAt=` form
+      // Today and the Agenda use for a materialized instance
+      // (utils/event-navigation.ts). An external event lands on the read-only
+      // card (ADR-064).
+      return `/events/${result.id}` as Href;
+    case "project":
+      return `/projects/${result.id}` as Href;
     case "inbox_item":
       // When the capture was committed to an entity, that entity is the useful
       // destination; otherwise the capture's own detail screen (Checkpoint 9.3),
@@ -50,10 +65,25 @@ export function searchResultHref(result: SearchResult): Href | null {
   }
 }
 
-/** Section headings, in the fixed order the API already returns results in. */
+/** Section headings, keyed by type; SEARCH_RESULT_TYPE_ORDER fixes their order. */
 export const SEARCH_TYPE_LABELS: Record<SearchResult["type"], string> = {
   task: "Tasks",
   note: "Notes",
+  event: "Events",
+  project: "Projects",
+  inbox_item: "Inbox",
+  mail_message: "Mail",
+};
+
+/**
+ * The short chip a single row wears so a mixed "Top matches" list stays
+ * legible. Singular, because it labels one item.
+ */
+export const SEARCH_TYPE_CHIP_LABELS: Record<SearchResult["type"], string> = {
+  task: "Task",
+  note: "Note",
+  event: "Event",
+  project: "Project",
   inbox_item: "Inbox",
   mail_message: "Mail",
 };

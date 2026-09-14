@@ -13,6 +13,7 @@ import { formatInstantWithOffset } from "@personal-os/core/timezone";
 import { isLocalDate } from "@/components/date-field-state";
 import { formatFieldLabel } from "@/components/datetime-field-state";
 import { addLocalDays, formatShortDate, parseLocalDate } from "@/utils/local-date";
+import { describeValidationError } from "@/utils/validation-error";
 
 /**
  * Pure logic behind the event screens (Checkpoint 9.5) -- the start/end
@@ -296,7 +297,8 @@ export const LINKED_SERIES_DETACH_MESSAGE =
 
 /** Which inline line a failed save/delete/link/detach/cancel gets. */
 export function classifyEventMutationError(error: unknown): EventMutationFailure {
-  if (!(error instanceof ApiClientError)) return "unknown";
+  if (!(error instanceof ApiClientError))
+    return describeValidationError(error) ? "validation" : "unknown";
   if (error.status === 409 && error.code === "event_not_owned") return "not_owned";
   if (error.status === 409 && error.code === "linked_series_detach_unsupported") {
     return "linked_detach";
@@ -306,7 +308,32 @@ export function classifyEventMutationError(error: unknown): EventMutationFailure
   return "unknown";
 }
 
-export function eventMutationErrorCopy(failure: EventMutationFailure, verb: string): string {
+/**
+ * The class plus, for a `validation` failure, the field-level line
+ * (Checkpoint 9.6): "title must be at most 512 characters" from a server 400
+ * or from the api-client's own pre-request parse -- which throws a raw
+ * ZodError, so it is classified `validation` here even though it is not an
+ * ApiClientError. Null when the failure carries no field to name, in which
+ * case the copy falls back to the dates-or-repeat-rule line below.
+ */
+export interface EventMutationErrorInfo {
+  failure: EventMutationFailure;
+  validation_message: string | null;
+}
+
+export function describeEventMutationError(error: unknown): EventMutationErrorInfo {
+  const failure = classifyEventMutationError(error);
+  return {
+    failure,
+    validation_message: failure === "validation" ? describeValidationError(error) : null,
+  };
+}
+
+export function eventMutationErrorCopy(
+  failure: EventMutationFailure,
+  verb: string,
+  validationMessage: string | null = null,
+): string {
   switch (failure) {
     case "not_owned":
       return EVENT_NOT_OWNED_MESSAGE;
@@ -315,10 +342,21 @@ export function eventMutationErrorCopy(failure: EventMutationFailure, verb: stri
     case "not_found":
       return "This event no longer exists.";
     case "validation":
-      return `Couldn't ${verb}: something about the dates or repeat rule isn't valid.`;
+      // A bound refusal names the field; a bare "<field> isn't valid" for a
+      // date or recurrence field is less useful than the line that says which
+      // KIND of thing to fix, so only a too-long line replaces it.
+      return validationMessage !== null && validationMessage.includes("must be at most")
+        ? `Couldn't ${verb}: ${validationMessage}.`
+        : `Couldn't ${verb}: something about the dates or repeat rule isn't valid.`;
     case "unknown":
       return `Couldn't ${verb}. Please try again.`;
   }
+}
+
+/** The whole line for a failed mutation -- classification, field line and verb in one call. */
+export function eventMutationErrorLine(error: unknown, verb: string): string {
+  const info = describeEventMutationError(error);
+  return eventMutationErrorCopy(info.failure, verb, info.validation_message);
 }
 
 // ---------------------------------------------------------------------------

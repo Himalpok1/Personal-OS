@@ -2,10 +2,12 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type * as AiProviders from "@personal-os/ai-providers";
 import { inboxItems, type Db } from "@personal-os/db";
+import { CAPTURE_TEXT_MAX_LENGTH } from "@personal-os/schema";
 import { eq } from "drizzle-orm";
 import type { Job, PgBoss } from "pg-boss";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "../env.js";
+import { setLogSink } from "../logger.js";
 import { buildTestDb, truncateTestTables } from "../test/build-test-db.js";
 
 vi.mock("@personal-os/ai-providers", async () => {
@@ -127,6 +129,80 @@ describe("ptt.transcribe", () => {
     expect(row?.audioPath).toBeNull();
     await expect(readFile(audioPath)).rejects.toThrow();
     expect(bossSend).toHaveBeenCalledWith("capture.parse", { inboxId }, { singletonKey: inboxId });
+  });
+
+  // Checkpoint 9.6 (ADR-065): the transcript is STT-authored, so an over-long
+  // one is truncated at write to CAPTURE_TEXT_MAX_LENGTH (the bound a TYPED
+  // capture is refused over) rather than losing the whole capture, with one
+  // counts-only log line and never the text.
+  it("truncates an over-long transcript to CAPTURE_TEXT_MAX_LENGTH, surrogate-safely, and logs counts only", async () => {
+    const audioPath = path.join(testAudioDir, "long.m4a");
+    await writeFile(audioPath, "fake-audio");
+    const inboxId = await insertPttInboxItem(db, audioPath);
+    const { boss, bossSend } = fakeBoss();
+    // An emoji straddles the cut so a naive slice would leave a lone
+    // surrogate -- which Postgres rejects as invalid UTF-8.
+    const transcript = "w".repeat(CAPTURE_TEXT_MAX_LENGTH - 1) + "\u{1F600}" + "x".repeat(500);
+
+    vi.mocked(resolveTranscriptionConnectionForTask).mockResolvedValue({
+      baseUrl: "https://api.groq.com/openai/v1",
+      apiKey: "sk-fake",
+      modelId: "whisper-large-v3-turbo",
+    });
+    vi.mocked(transcribeAudio).mockResolvedValue({ text: transcript, avgLogprob: -0.2, raw: {} });
+
+    const records: Record<string, unknown>[] = [];
+    const restore = setLogSink({ write: (_level, record) => records.push(record) });
+    try {
+      await createPttTranscribeHandler(db, boss)([fakeJob(inboxId)]);
+    } finally {
+      restore();
+    }
+
+    const [row] = await db.select().from(inboxItems).where(eq(inboxItems.id, inboxId));
+    expect(row?.rawText).toHaveLength(CAPTURE_TEXT_MAX_LENGTH - 1);
+    expect(row?.rawText?.endsWith("w")).toBe(true);
+    expect(row?.audioPath).toBeNull();
+    expect(bossSend).toHaveBeenCalledWith("capture.parse", { inboxId }, { singletonKey: inboxId });
+
+    const truncated = records.filter((r) => r["event"] === "ptt.transcript_truncated");
+    expect(truncated).toHaveLength(1);
+    expect(truncated[0]).toMatchObject({
+      inboxId,
+      original_length: transcript.length,
+      stored_length: CAPTURE_TEXT_MAX_LENGTH - 1,
+    });
+    // Counts only: no record anywhere in the pass carries the transcript.
+    for (const record of records) {
+      expect(JSON.stringify(record)).not.toContain("wwww");
+    }
+  });
+
+  it("stores a transcript within the bound byte-identical and logs no truncation", async () => {
+    const audioPath = path.join(testAudioDir, "exact.m4a");
+    await writeFile(audioPath, "fake-audio");
+    const inboxId = await insertPttInboxItem(db, audioPath);
+    const { boss } = fakeBoss();
+    const transcript = "e".repeat(CAPTURE_TEXT_MAX_LENGTH);
+
+    vi.mocked(resolveTranscriptionConnectionForTask).mockResolvedValue({
+      baseUrl: "https://api.groq.com/openai/v1",
+      apiKey: "sk-fake",
+      modelId: "whisper-large-v3-turbo",
+    });
+    vi.mocked(transcribeAudio).mockResolvedValue({ text: transcript, avgLogprob: null, raw: {} });
+
+    const records: Record<string, unknown>[] = [];
+    const restore = setLogSink({ write: (_level, record) => records.push(record) });
+    try {
+      await createPttTranscribeHandler(db, boss)([fakeJob(inboxId)]);
+    } finally {
+      restore();
+    }
+
+    const [row] = await db.select().from(inboxItems).where(eq(inboxItems.id, inboxId));
+    expect(row?.rawText).toBe(transcript);
+    expect(records.some((r) => r["event"] === "ptt.transcript_truncated")).toBe(false);
   });
 
   it("rethrows on a transient transcription failure, leaving the row untouched for retry", async () => {

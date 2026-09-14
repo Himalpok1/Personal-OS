@@ -1,4 +1,4 @@
-import type { InboxItem } from "@personal-os/schema";
+import { ENTITY_TITLE_MAX_CHARS, type InboxItem } from "@personal-os/schema";
 import { ApiClientError } from "@personal-os/api-client";
 import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
 import { describe, expect, it, vi } from "vitest";
@@ -143,7 +143,12 @@ describe("InboxDetailView -- a committed item taps through to its entity", () =>
     ["event", `/events/${ENTITY}`],
   ] as const)("offers Open %s and routes by entity_type + entity_id only", (entityType, route) => {
     const { props, tree } = render({
-      item: item({ status: "parsed", entity_type: entityType, entity_id: ENTITY, parse_result: TASK }),
+      item: item({
+        status: "parsed",
+        entity_type: entityType,
+        entity_id: ENTITY,
+        parse_result: TASK,
+      }),
     });
     const open = byTestId(tree, "inbox-detail-open-entity");
     expect(text(open)).toBe(`Open ${entityType}`);
@@ -156,10 +161,15 @@ describe("InboxDetailView -- a committed item taps through to its entity", () =>
 
 describe("InboxDetailView -- filing a needs_confirm or failed item", () => {
   it("offers Confirm as parsed only when the stored call is committable", () => {
-    expect(byTestId(render({ item: item({ parse_result: TASK }) }).tree, "inbox-detail-confirm-stored"))
-      .toBeDefined();
-    expect(byTestId(render({ item: item({ parse_result: UNCLEAR }) }).tree, "inbox-detail-confirm-stored"))
-      .toBeUndefined();
+    expect(
+      byTestId(render({ item: item({ parse_result: TASK }) }).tree, "inbox-detail-confirm-stored"),
+    ).toBeDefined();
+    expect(
+      byTestId(
+        render({ item: item({ parse_result: UNCLEAR }) }).tree,
+        "inbox-detail-confirm-stored",
+      ),
+    ).toBeUndefined();
   });
 
   it("offers File as task/note/event for needs_confirm AND failed (contract 7)", () => {
@@ -183,7 +193,12 @@ describe("InboxDetailView -- filing a needs_confirm or failed item", () => {
   });
 
   it("submits the corrected tool call built from the draft, and disables submit while unsubmittable", () => {
-    const draft: FileAsDraft = { kind: "task", title: "Insurance", dueAt: "2026-09-14T15:00:00-05:00", startAt: null };
+    const draft: FileAsDraft = {
+      kind: "task",
+      title: "Insurance",
+      dueAt: "2026-09-14T15:00:00-05:00",
+      startAt: null,
+    };
     const { props, tree } = render({ item: item({ parse_result: UNCLEAR }), draft });
     const submit = byTestId(tree, "inbox-detail-file-submit");
     expect(submit.props.disabled).toBe(false);
@@ -204,16 +219,35 @@ describe("InboxDetailView -- filing a needs_confirm or failed item", () => {
 
   it("shows the right picker per kind: due for a task, start for an event, neither for a note", () => {
     const base = { title: "x", dueAt: null, startAt: null };
-    const task = render({ item: item({ parse_result: UNCLEAR }), draft: { ...base, kind: "task" } }).tree;
+    const task = render({
+      item: item({ parse_result: UNCLEAR }),
+      draft: { ...base, kind: "task" },
+    }).tree;
     expect(byTestId(task, "inbox-detail-due")).toBeDefined();
     expect(byTestId(task, "inbox-detail-start")).toBeUndefined();
-    const event = render({ item: item({ parse_result: UNCLEAR }), draft: { ...base, kind: "event" } }).tree;
+    const event = render({
+      item: item({ parse_result: UNCLEAR }),
+      draft: { ...base, kind: "event" },
+    }).tree;
     expect(byTestId(event, "inbox-detail-start")).toBeDefined();
     expect(byTestId(event, "inbox-detail-due")).toBeUndefined();
-    const note = render({ item: item({ parse_result: UNCLEAR }), draft: { ...base, kind: "note" } }).tree;
+    const note = render({
+      item: item({ parse_result: UNCLEAR }),
+      draft: { ...base, kind: "note" },
+    }).tree;
     expect(byTestId(note, "inbox-detail-due")).toBeUndefined();
     expect(byTestId(note, "inbox-detail-start")).toBeUndefined();
     expect(byTestId(note, "inbox-detail-title")).toBeDefined();
+  });
+
+  it("bounds the title input at the server's constant and shows the counter only near it (9.6)", () => {
+    const short: FileAsDraft = { kind: "task", title: "x", dueAt: null, startAt: null };
+    const quiet = render({ item: item({ parse_result: UNCLEAR }), draft: short }).tree;
+    expect(byTestId(quiet, "inbox-detail-title").props.maxLength).toBe(ENTITY_TITLE_MAX_CHARS);
+    expect(byTestId(quiet, "inbox-detail-title-counter")).toBeUndefined();
+    const nearly: FileAsDraft = { ...short, title: "t".repeat(ENTITY_TITLE_MAX_CHARS - 3) };
+    const loud = render({ item: item({ parse_result: UNCLEAR }), draft: nearly }).tree;
+    expect(text(byTestId(loud, "inbox-detail-title-counter"))).toBe("509 / 512");
   });
 
   it("edits flow back through onDraftChange, never into local state", () => {
@@ -252,7 +286,10 @@ describe("InboxDetailView -- filing a needs_confirm or failed item", () => {
     expect(byTestId(tree, "inbox-detail-kind-task").props.disabled).toBe(true);
     expect(byTestId(tree, "inbox-detail-awaiting")).toBeDefined();
 
-    const exhausted = render({ item: item({ parse_result: TASK }), commitPollExhausted: true }).tree;
+    const exhausted = render({
+      item: item({ parse_result: TASK }),
+      commitPollExhausted: true,
+    }).tree;
     expect(byTestId(exhausted, "inbox-detail-poll-exhausted")).toBeDefined();
   });
 });

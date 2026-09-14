@@ -1,3 +1,9 @@
+import { truncateProviderString } from "@personal-os/core/mail/provider-strings";
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  EVENT_DESCRIPTION_MAX_CHARS,
+  EVENT_LOCATION_MAX_CHARS,
+} from "@personal-os/schema";
 import ICAL from "ical.js";
 import { googleAllDayToLocal, localAllDayToGoogle } from "../translate.js";
 
@@ -148,9 +154,17 @@ function veventToCalDavFields(
   uidFallback?: string,
 ): CalDavEventFields {
   const comp = event.component;
-  const summary = event.summary || "Untitled event";
-  const description = event.description || null;
-  const location = event.location || null;
+  // Third-party text, bounded at write (Checkpoint 9.6, ADR-065) -- the same
+  // surrogate-safe truncation the Google path applies, so a CalDAV server's
+  // oversized DESCRIPTION cannot put more into `events` than a typed one may.
+  const summary =
+    truncateProviderString(event.summary || "Untitled event", ENTITY_TITLE_MAX_CHARS) ??
+    "Untitled event";
+  const description = truncateProviderString(
+    event.description || null,
+    EVENT_DESCRIPTION_MAX_CHARS,
+  );
+  const location = truncateProviderString(event.location || null, EVENT_LOCATION_MAX_CHARS);
 
   const dtstart = event.startDate;
   const dtend = event.endDate;

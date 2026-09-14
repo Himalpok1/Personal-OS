@@ -1,6 +1,12 @@
 import { computeNextLazyOccurrence, wallTimeOfNaiveTimestamp } from "@personal-os/core";
 import { occurrences, tasks } from "@personal-os/db";
-import type { Project, Task } from "@personal-os/schema";
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  TASK_BODY_MAX_CHARS,
+  tooLongMessage,
+  type Project,
+  type Task,
+} from "@personal-os/schema";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -1387,5 +1393,58 @@ describe("POST /tasks remind_at", () => {
     });
     expect(cleared.statusCode).toBe(200);
     expect(cleared.json<Task>().remind_at).toBeNull();
+  });
+
+  // Checkpoint 9.6 (ADR-065): user-typed text over a bound is REFUSED with
+  // the field path -- never truncated -- and exactly-at-bound is accepted.
+  describe("content bounds", () => {
+    // The issue shape Zod emits; only the pieces these tests key on.
+    type Issue = { path: (string | number)[]; message: string };
+
+    it("refuses a title over ENTITY_TITLE_MAX_CHARS with 400 naming the field", async () => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "t".repeat(ENTITY_TITLE_MAX_CHARS + 1), timezone: "America/Chicago" },
+      });
+      expect(response.statusCode).toBe(400);
+      const body = response.json<ErrorBody>();
+      expect(body.error).toBe("validation_failed");
+      expect((body.issues as Issue[])[0]?.path).toEqual(["title"]);
+      expect((body.issues as Issue[])[0]?.message).toBe(
+        tooLongMessage("title", ENTITY_TITLE_MAX_CHARS),
+      );
+    });
+
+    it("refuses a body over TASK_BODY_MAX_CHARS on PATCH, leaving the row untouched", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "Bounded", body: "short", timezone: "America/Chicago" },
+      });
+      const id = created.json<Task>().id;
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { body: "b".repeat(TASK_BODY_MAX_CHARS + 1) },
+      });
+      expect(response.statusCode).toBe(400);
+      expect((response.json<ErrorBody>().issues as Issue[])[0]?.path).toEqual(["body"]);
+      const after = await app.inject({ method: "GET", url: `/tasks/${id}` });
+      expect(after.json<Task>().body).toBe("short");
+    });
+
+    it("accepts a title and body exactly at their bounds, byte-identical", async () => {
+      const title = "e".repeat(ENTITY_TITLE_MAX_CHARS);
+      const body = "b".repeat(TASK_BODY_MAX_CHARS);
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title, body, timezone: "America/Chicago" },
+      });
+      expect(response.statusCode).toBe(201);
+      expect(response.json<Task>().title).toBe(title);
+      expect(response.json<Task>().body).toBe(body);
+    });
   });
 });
