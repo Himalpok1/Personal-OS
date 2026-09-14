@@ -59,4 +59,68 @@ describe("validateCompletionAnchoredRule", () => {
       /FREQ\/INTERVAL/,
     );
   });
+
+  // Checkpoint 9.3: the check used to look at part NAMES only, so every rule
+  // below passed write-time validation and then threw -- or, for a negative
+  // interval, never returned -- inside computeNextLazyOccurrence at the moment
+  // the owner completed the task. Each of these must now fail at write time.
+  describe("rejects rules the old name-only check accepted (9.3)", () => {
+    it.each([
+      ["unknown FREQ", "FREQ=WEEKLYY", /unknown FREQ/],
+      ["lowercase unknown FREQ", "FREQ=fortnightly", /unknown FREQ/],
+      ["missing FREQ", "INTERVAL=2", /require FREQ/],
+      ["INTERVAL=0", "FREQ=DAILY;INTERVAL=0", /INTERVAL must be a positive integer/],
+      ["negative INTERVAL", "FREQ=DAILY;INTERVAL=-1", /INTERVAL must be a positive integer/],
+      ["non-numeric INTERVAL", "FREQ=DAILY;INTERVAL=abc", /INTERVAL must be a positive integer/],
+      ["fractional INTERVAL", "FREQ=DAILY;INTERVAL=1.5", /INTERVAL must be a positive integer/],
+      ["empty INTERVAL", "FREQ=DAILY;INTERVAL=", /INTERVAL must be a positive integer/],
+      ["duplicate FREQ", "FREQ=DAILY;FREQ=WEEKLY", /repeats "FREQ"/],
+      ["empty part (trailing semicolon)", "FREQ=DAILY;", /FREQ\/INTERVAL/],
+      ["part with no value", "FREQ=DAILY;INTERVAL", /has no value/],
+      ["unknown WKST", "FREQ=WEEKLY;WKST=XX", /unknown WKST/],
+    ])("%s: %s", (_label, rrule, pattern) => {
+      expect(() => validateCompletionAnchoredRule(rrule)).toThrow(pattern);
+    });
+
+    it("still accepts every RFC 5545 frequency, case-insensitively, with WKST and an RRULE: prefix", () => {
+      for (const freq of [
+        "SECONDLY",
+        "MINUTELY",
+        "HOURLY",
+        "DAILY",
+        "WEEKLY",
+        "MONTHLY",
+        "YEARLY",
+      ]) {
+        expect(() => validateCompletionAnchoredRule(`FREQ=${freq};INTERVAL=2`)).not.toThrow();
+      }
+      expect(() => validateCompletionAnchoredRule("freq=weekly;interval=1;wkst=su")).not.toThrow();
+      expect(() => validateCompletionAnchoredRule("RRULE:FREQ=DAILY")).not.toThrow();
+    });
+  });
+
+  it("computeNextLazyOccurrence refuses a zero or negative INTERVAL up front instead of spinning or returning nothing", () => {
+    const from = new Date("2026-06-01T14:00:00.000Z");
+    expect(() =>
+      computeNextLazyOccurrence(
+        { rrule: "FREQ=DAILY;INTERVAL=0", recurrenceTimezone: "America/Chicago" },
+        from,
+        "completed",
+      ),
+    ).toThrow(/INTERVAL must be a positive integer/);
+    expect(() =>
+      computeNextLazyOccurrence(
+        { rrule: "FREQ=DAILY;INTERVAL=-1", recurrenceTimezone: "America/Chicago" },
+        from,
+        "completed",
+      ),
+    ).toThrow(/INTERVAL must be a positive integer/);
+    expect(() =>
+      computeNextLazyOccurrence(
+        { rrule: "FREQ=WEEKLYY", recurrenceTimezone: "America/Chicago" },
+        from,
+        "completed",
+      ),
+    ).toThrow(/unknown FREQ/);
+  });
 });

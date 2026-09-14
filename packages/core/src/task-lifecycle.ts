@@ -14,3 +14,13 @@ export function canCompleteTaskDirectly(task: { rrule: string | null }): boolean
 export function canActivateTask(task: { status: string }): boolean {
   return task.status === "inbox";
 }
+
+/** done|dropped -> active (Checkpoint 9.3, POST /tasks/:id/reopen). `inbox`
+ * has its own forward transition (activate) and `active` is already open,
+ * so both reject rather than silently no-op -- the route turns a false here
+ * into 409 task_not_reopenable. Takes the bare status, not the row: the
+ * mobile client decides whether to show a Reopen control from the same
+ * predicate without holding a full Task. */
+export function canReopenTask(status: string): boolean {
+  return status === "done" || status === "dropped";
+}

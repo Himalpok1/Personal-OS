@@ -1,7 +1,7 @@
 import { ApiClientError } from "@personal-os/api-client";
 import type { InboxItem } from "@personal-os/schema";
 import { describe, expect, it } from "vitest";
-import { canConfirmInboxItem, confirmErrorMessage } from "./confirm-state";
+import { canConfirmInboxItem, canFileInboxItem, confirmErrorMessage } from "./confirm-state";
 
 function item(overrides: Partial<InboxItem> = {}): InboxItem {
   return {
@@ -16,6 +16,7 @@ function item(overrides: Partial<InboxItem> = {}): InboxItem {
     confidence: null,
     entity_type: null,
     entity_id: null,
+    archived_at: null,
     created_at: "2026-09-01T00:00:00.000Z",
     ...overrides,
   };
@@ -50,9 +51,39 @@ describe("canConfirmInboxItem", () => {
     ).toBe(false);
   });
 
-  it("never offers confirmation for a status that is not needs_confirm", () => {
-    for (const status of ["pending", "parsed", "confirmed", "failed"] as const) {
+  it("never offers confirmation for a status the API refuses as not_awaiting_confirmation", () => {
+    for (const status of ["pending", "parsed", "confirmed"] as const) {
       expect(canConfirmInboxItem(item({ status, parse_result: NOTE }))).toBe(false);
+    }
+  });
+
+  // Checkpoint 9.3 contract 7: a `failed` row is confirmable when its
+  // preserved tool call is committable. Before 9.3 this returned false.
+  it("offers confirmation for a FAILED item whose preserved tool call is committable", () => {
+    const failedWithCall = {
+      ...NOTE,
+      failure: { reason: "retries_exhausted", mode: "confirm", failed_at: "2026-09-10T00:00:00Z" },
+    };
+    expect(canConfirmInboxItem(item({ status: "failed", parse_result: failedWithCall }))).toBe(true);
+    expect(canConfirmInboxItem(item({ status: "failed", parse_result: UNCLEAR }))).toBe(false);
+    // A failure marker stored ALONE (the auto-parse path) carries no call.
+    expect(
+      canConfirmInboxItem(
+        item({
+          status: "failed",
+          parse_result: { reason: "retries_exhausted", mode: "auto", failed_at: "2026-09-10T00:00:00Z" },
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("canFileInboxItem", () => {
+  it("is true for exactly needs_confirm and failed -- the two statuses confirm accepts", () => {
+    expect(canFileInboxItem({ status: "needs_confirm" })).toBe(true);
+    expect(canFileInboxItem({ status: "failed" })).toBe(true);
+    for (const status of ["pending", "parsed", "confirmed"] as const) {
+      expect(canFileInboxItem({ status })).toBe(false);
     }
   });
 });

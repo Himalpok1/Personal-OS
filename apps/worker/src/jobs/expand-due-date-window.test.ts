@@ -215,6 +215,90 @@ describe("expandDueDateWindowJob", () => {
 // bad parent is isolated, the good ones still expand, the sweep still FAILS so
 // pg-boss retries and eventually dead-letters, and nothing raw reaches the
 // thrown error or the log.
+// Checkpoint 9.3 review: a due_date series with no due_at is materialized once
+// at creation (POST /tasks and the capture commit both anchor the rule at the
+// creation instant) and used to be skipped by this job forever after, so it
+// stopped dead 90 days in. The job now anchors such a series on its earliest
+// existing occurrence -- the seed the creator wrote, already truncated to
+// seconds -- which reproduces the identical instants for the overlapping window
+// and continues the series beyond it.
+describe("expandDueDateWindowJob -- due_date series with no due_at", () => {
+  const db = buildTestDb();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  beforeEach(async () => {
+    await truncateTestTables(db);
+  });
+
+  it("continues a creation-materialized series past its original window with identical overlapping instants", async () => {
+    const taskId = await insertRecurringTask(db, {
+      dueAt: null,
+      rrule: "FREQ=DAILY;INTERVAL=1",
+    });
+    // Reproduce the creation-time materialization exactly as
+    // commit-parsed-entity / POST /tasks do it, but from a creation instant
+    // 60 days in the past: the rule anchored at that instant (wall clock,
+    // seconds precision), expanded 90 days forward from it.
+    const creationNow = new Date(Date.now() - 60 * DAY_MS);
+    const { expandDueDateWindow, toWallClockComponents, wallClockToNaiveDate } =
+      await import("@personal-os/core");
+    const seedRule = {
+      rrule: "FREQ=DAILY;INTERVAL=1",
+      recurrenceTimezone: "America/Chicago",
+      dtstart: toWallClockComponents(creationNow, "America/Chicago"),
+    };
+    const seeded = expandDueDateWindow(seedRule, 90, creationNow);
+    expect(seeded.length).toBeGreaterThanOrEqual(88);
+    for (const occurrence of seeded) {
+      await db.insert(occurrences).values({
+        parentType: "task",
+        parentId: taskId,
+        occursAt: occurrence.occursAt,
+        occursLocal: wallClockToNaiveDate(occurrence.occursLocal),
+        status: "scheduled",
+        lazyGenerated: false,
+      });
+    }
+    const before = await db.select().from(occurrences).where(eq(occurrences.parentId, taskId));
+    const beforeInstants = new Set(before.map((row) => row.occursAt.getTime()));
+    const seedAnchor = Math.min(...beforeInstants);
+
+    await expandDueDateWindowJob(db);
+
+    const after = await db.select().from(occurrences).where(eq(occurrences.parentId, taskId));
+    const afterInstants = after.map((row) => row.occursAt.getTime());
+    // Every pre-existing row survives untouched (ON CONFLICT DO NOTHING on the
+    // identical instants -- no parallel series a few hundred ms off).
+    expect(after.length).toBeGreaterThan(before.length);
+    for (const instant of beforeInstants) expect(afterInstants).toContain(instant);
+    // Every new row is a whole number of days after the seed anchor (same wall
+    // clock in America/Chicago, allowing for a one-hour DST shift), lands
+    // beyond the creation-time window, and inside the job's own 90-day window.
+    const added = after.filter((row) => !beforeInstants.has(row.occursAt.getTime()));
+    expect(added.length).toBeGreaterThan(0);
+    const creationHorizon = creationNow.getTime() + 90 * DAY_MS;
+    for (const row of added) {
+      const offset = (row.occursAt.getTime() - seedAnchor) % DAY_MS;
+      expect([0, 60 * 60 * 1000, 23 * 60 * 60 * 1000]).toContain(offset);
+      expect(row.occursAt.getTime()).toBeGreaterThan(creationHorizon - DAY_MS);
+      expect(row.occursAt.getTime()).toBeLessThanOrEqual(Date.now() + 91 * DAY_MS);
+      expect(row.status).toBe("scheduled");
+      expect(row.lazyGenerated).toBe(false);
+    }
+    // And a second run is a no-op.
+    await expandDueDateWindowJob(db);
+    const again = await db.select().from(occurrences).where(eq(occurrences.parentId, taskId));
+    expect(again).toHaveLength(after.length);
+  });
+
+  it("still skips a due_at-less series that has no occurrence at all", async () => {
+    const taskId = await insertRecurringTask(db, { dueAt: null });
+    await expandDueDateWindowJob(db);
+    const rows = await db.select().from(occurrences).where(eq(occurrences.parentId, taskId));
+    expect(rows).toHaveLength(0);
+  });
+});
+
 describe("expandDueDateWindowJob per-parent containment", () => {
   let db: Db;
   let records: Record<string, unknown>[];

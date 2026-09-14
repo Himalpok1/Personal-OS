@@ -6,16 +6,91 @@ import {
 
 const ALLOWED_COMPLETION_ANCHORED_PARTS = new Set(["FREQ", "INTERVAL", "WKST"]);
 
+// The full RFC 5545 FREQ vocabulary -- exactly the set the `rrule` package's
+// own parser accepts, so this check and rrulestr agree on what a frequency is.
+const RFC5545_FREQUENCIES = new Set([
+  "SECONDLY",
+  "MINUTELY",
+  "HOURLY",
+  "DAILY",
+  "WEEKLY",
+  "MONTHLY",
+  "YEARLY",
+]);
+
+const RFC5545_WEEKDAYS = new Set(["MO", "TU", "WE", "TH", "FR", "SA", "SU"]);
+
+/**
+ * Write-time validation of a completion-anchored rule (Checkpoint 9.3).
+ *
+ * Before this the check looked at part NAMES only, so `FREQ=WEEKLYY` and
+ * `FREQ=DAILY;INTERVAL=0` both passed at write time and then threw inside
+ * computeNextLazyOccurrence at the moment the owner completed the task --
+ * which, in the API's transactional complete/skip, rolled the completion
+ * itself back and 500'd forever. Worse, `INTERVAL=-1` makes the rrule
+ * iterator spin without terminating. The rule's grammar is deliberately tiny
+ * (docs/ARCHITECTURE.md: "Only FREQ and INTERVAL are meaningful"), so it is
+ * validated COMPLETELY here rather than merely name-checked:
+ *
+ *   - every part is `KEY=VALUE`, no empty parts, no duplicate keys;
+ *   - only FREQ / INTERVAL / WKST may appear (the existing BY* rejection);
+ *   - FREQ is required and must be an RFC 5545 frequency;
+ *   - INTERVAL, if present, is a positive integer;
+ *   - WKST, if present, is a weekday code.
+ *
+ * A rule that passes cannot be rejected by rrulestr, and a rule rrulestr
+ * would accept but that cannot be iterated (INTERVAL=0, INTERVAL=abc -- the
+ * parser does not validate INTERVAL at all) is rejected here. This module is
+ * client-reachable (`@personal-os/core/recurrence/editor` is imported by
+ * packages/schema and the Expo app), which is why it does not call rrulestr
+ * itself: the `rrule` package is loaded server-side through
+ * `createRequire`, a Node-only mechanism. The Node-side callers
+ * (computeNextLazyOccurrence, validateRecurrenceRule) still parse with
+ * rrulestr immediately after this check as belt and braces.
+ */
 export function validateCompletionAnchoredRule(rrule: string): void {
-  const parts = rrule.replace(/^RRULE:/i, "").split(";");
+  const parts = rrule
+    .trim()
+    .replace(/^RRULE:/i, "")
+    .split(";");
+  const seen = new Map<string, string>();
   for (const part of parts) {
-    const key = part.split("=")[0]?.trim().toUpperCase();
-    if (!key) continue;
+    const eqIdx = part.indexOf("=");
+    const key = (eqIdx === -1 ? part : part.slice(0, eqIdx)).trim().toUpperCase();
     if (!ALLOWED_COMPLETION_ANCHORED_PARTS.has(key)) {
       throw new Error(
         `completion-anchored recurrence rules may only use FREQ/INTERVAL, got "${key}" in "${rrule}"`,
       );
     }
+    if (eqIdx === -1) {
+      throw new Error(
+        `completion-anchored recurrence rule part "${key}" has no value in "${rrule}"`,
+      );
+    }
+    if (seen.has(key)) {
+      throw new Error(`completion-anchored recurrence rule repeats "${key}" in "${rrule}"`);
+    }
+    seen.set(key, part.slice(eqIdx + 1).trim());
+  }
+
+  const freq = seen.get("FREQ");
+  if (freq === undefined) {
+    throw new Error(`completion-anchored recurrence rules require FREQ, missing in "${rrule}"`);
+  }
+  if (!RFC5545_FREQUENCIES.has(freq.toUpperCase())) {
+    throw new Error(`completion-anchored recurrence rule has unknown FREQ "${freq}" in "${rrule}"`);
+  }
+
+  const interval = seen.get("INTERVAL");
+  if (interval !== undefined && !/^[1-9]\d*$/.test(interval)) {
+    throw new Error(
+      `completion-anchored recurrence rule INTERVAL must be a positive integer, got "${interval}" in "${rrule}"`,
+    );
+  }
+
+  const wkst = seen.get("WKST");
+  if (wkst !== undefined && !RFC5545_WEEKDAYS.has(wkst.toUpperCase())) {
+    throw new Error(`completion-anchored recurrence rule has unknown WKST "${wkst}" in "${rrule}"`);
   }
 }
 

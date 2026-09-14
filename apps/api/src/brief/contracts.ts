@@ -18,6 +18,15 @@ export interface BriefTaskItem {
   due_at: string | null;
   project_name: string | null;
   recurring: boolean;
+  // Checkpoint 9.3. Both are bounded scalars derived from TodayTaskItem and
+  // extend ADR-043's closed allowlist deliberately: `priority` is the stored
+  // smallint (lower value = higher priority, P1-style, per
+  // docs/ARCHITECTURE.md's Today semantics rule 6; null = unset) and
+  // `has_reminder` is `remind_at !== null` -- a boolean, never the instant,
+  // so the model can say WHICH items carry a reminder without a second
+  // timestamp to misreport. No other BriefInput field changes.
+  priority: number | null;
+  has_reminder: boolean;
 }
 
 export interface BriefEventItem {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTask, getTask, listTasks, updateTask } from "./tasks.js";
+import { ApiClientError } from "./client.js";
+import { createTask, getTask, listTasks, reopenTask, updateTask } from "./tasks.js";
 
 const taskRow = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -98,5 +99,37 @@ describe("tasks api client", () => {
       recurrence_anchor: "completion_date",
       recurrence_timezone: "America/Chicago",
     });
+  });
+
+  // Checkpoint 9.3: done|dropped -> active.
+  it("POSTs /tasks/:id/reopen as a bodyless request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(taskRow), { status: 200 }));
+    global.fetch = fetchMock;
+
+    const res = await reopenTask("http://localhost:3000", taskRow.id);
+    expect(res).toEqual(taskRow);
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe(`http://localhost:3000/tasks/${taskRow.id}/reopen`);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
+  });
+
+  it("surfaces a 409 task_not_reopenable as ApiClientError carrying the current status", async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "task_not_reopenable", status: "active" }), {
+        status: 409,
+      }),
+    );
+    await expect(reopenTask("http://localhost:3000", taskRow.id)).rejects.toMatchObject({
+      status: 409,
+      body: { error: "task_not_reopenable", status: "active" },
+    });
+    await expect(reopenTask("http://localhost:3000", taskRow.id)).rejects.toBeInstanceOf(
+      ApiClientError,
+    );
   });
 });

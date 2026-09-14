@@ -359,10 +359,19 @@ export async function buildTodayResponse(
     };
   });
 
+  // Archived captures (Checkpoint 9.3, migration 0017) leave the attention
+  // counts and the attention list alike -- archiving is exactly how a capture
+  // the owner has dealt with stops demanding attention. The response shape is
+  // unchanged: the predicate narrows what is counted, not what is reported.
   const inboxStatusRows = await db
     .select({ status: inboxItems.status, total: count() })
     .from(inboxItems)
-    .where(inArray(inboxItems.status, ["pending", "needs_confirm", "failed"]))
+    .where(
+      and(
+        inArray(inboxItems.status, ["pending", "needs_confirm", "failed"]),
+        isNull(inboxItems.archivedAt),
+      ),
+    )
     .groupBy(inboxItems.status);
   const inboxCountOf = (status: string): number =>
     Number(inboxStatusRows.find((row) => row.status === status)?.total ?? 0);
@@ -379,7 +388,9 @@ export async function buildTodayResponse(
       entityType: inboxItems.entityType,
     })
     .from(inboxItems)
-    .where(inArray(inboxItems.status, ["needs_confirm", "failed"]))
+    .where(
+      and(inArray(inboxItems.status, ["needs_confirm", "failed"]), isNull(inboxItems.archivedAt)),
+    )
     .orderBy(desc(inboxItems.capturedAt))
     .limit(INBOX_ITEMS_CAP);
 

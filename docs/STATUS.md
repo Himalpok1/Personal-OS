@@ -366,6 +366,100 @@ already-classified non-blocking debt (D1e, sleep-temperature spec, capture-short
 buffered-tap expiry, successor seed path, `bossReady` loss, unbounded event text, monitor URL
 guard) is carried unchanged.
 
+### Checkpoint 9.3 — Close the capture→task loop: IMPLEMENTED, VERIFIED (2026-09-13 22:00 CDT) — deployment and acceptance below
+
+**Selection (parallel evidence-based ranking, same session as the 9.2 closure).** Six read-only
+area audits (tasks/reminders/recurrence · search/knowledge · calendar/planning · capture/inbox ·
+Daily Brief + projects · health) produced 21 scored candidates; an architectural/dependency ranker
+and an adversarial prioritizer then ranked them independently on the owner's eight criteria
+(weights: daily value 3 · usage lift 3 · low cost 2 · low privacy risk 2 · dependency risk,
+shippability, architecture fit, blocking debt 1 each). **Both rankers converged on the same top
+four, in the same order, with no product-direction tie**, so no owner decision was required:
+
+| Rank | Candidate | Both rankers | Why |
+|---|---|---|---|
+| 1 | **D1** in-app "File as…" editor for `unclear`/`needs_confirm` captures | 4.43 / 61 | 3 of 11 production captures are stuck with no in-app route; the server-side ADR-060 `corrected_tool_call` hatch already exists and the client already plumbs the body — only the UI is missing |
+| 2 | **A2** task follow-through on the Rabbit (complete/reopen/snooze from the screen a reminder tap lands on) | 4.29 / 54 | a fired reminder opens an edit screen with no Complete; no reopen transition exists anywhere (a mis-tap on Done is permanent); no snooze exists |
+| 3 | **D2** inbox archive/dismiss (`archived_at`, one additive migration) | 4.00 / 47 | a Today counter that can never reach zero trains the owner to ignore it (the 8.5 friction item); adversarial ranker preferred zero migrations — included as a detachable lane |
+| 4 | **A1** recurrence integrity (three verified silent-loss paths, API + worker, no APK) | 3.93 / 52 | completion with pg-boss down loses the successor forever; a rule edit cannot repair it; a captured `due_date` recurring task has no occurrences until 03:00Z |
+| ride-along | **D4-min** confirm accepted on `failed`; **brief:2** priority + has_reminder scalars, measure() fix | 49 / 49 | API-only, minutes each, inside ADR-043's closed allowlist |
+| deferred | B1/B2/C4 search+event bounds · C2/C3 calendar authoring/planning · E2 health trends · brief:1 scheduled brief · projects (deprioritised outright: 0 projects, 0 open tasks) · E3/brief:3 health-in-brief (owner egress decision) | — | honest area verdicts: "not on its own" — search's lever is content volume; calendar bugs are latent and untriggered; health is passive by ADR-046 |
+
+**Bounded scope.** One migration (`0017`, `inbox_items.archived_at`, byte-pattern of `0016`), one
+APK, one api+worker deploy under the frozen order. Contracts: `POST /tasks/:id/reopen`; distinct
+`409 recurring_task_no_open_occurrence`; occurrence complete/skip idempotent on terminal rows with
+the completion-anchored successor inserted **in the same transaction** (worker job becomes a
+belt-and-braces re-check); `PATCH /tasks/:id` seeds/re-points the single open lazy occurrence;
+captured `due_date` recurring tasks materialize their window at commit; `POST /inbox/:id/archive`
+(idempotent, never deletes) with Today/search excluding and export including archived rows; confirm
+accepted on `failed`; new `/inbox/[id]` screen with File as task/note/event, Dismiss, human-readable
+parse summary and tap-through; capture follow-through ("Filed as …") with bounded polling; task
+detail gains status, Complete/Drop/Reopen/Start, snooze chips (pure DST-safe math in
+`packages/core/src/task-snooze.ts`), an error banner; Today completes occurrence rows directly via
+the `occurrence_id` it already receives; list-row Drop/Archive gain the confirm gate. **Out:** rrule
+in any correction, notification action buttons, recurring reminders (A3), long-press sheets,
+reclassify of auto-filed captures, anything in the deferred rows above.
+
+**Execution.** Five parallel implementation lanes with disjoint file ownership on per-lane clones of
+`personalos_test` (L1 api tasks/occurrences · L2 inbox archive + migration · L3 worker window-at-
+commit + Brief scalars · L4 mobile inbox · L5 mobile tasks), then four adversarial review lenses
+(recurrence invariants · API contracts/schema/migration · mobile correctness/privacy · Brief/AI/
+logging), fixes, full gates, frozen-order deployment, EAS build, in-place Rabbit install, physical
+acceptance. Same-session; no soak wait follows.
+
+**Implementation record.** All five lanes reported green on their clones (L4 one cross-lane export
+short, closed at integration). Integration added: the `archiveInboxItem` api-client binding; search
+results for an uncommitted capture now route to `/inbox/<id>`; the export inbox shape gains
+`archived_at` (additive); migration `0017` applied to the dev and shared-test databases with
+`db:reconcile` clean. **Adversarial review found 3 majors and 5 minors, all fixed in-checkpoint with
+tests that fail on the old code:**
+
+- *Recurrence (major ×3):* the new window-at-commit ran after the task insert, outside a
+  transaction, and `expandDueDateWindow` throws on a parser-emitted rule the tool schema never
+  validated — every `capture.parse` retry inserted another orphan task (reproduced: three rows from
+  one `"every monday"`). Now validation, instant resolution and expansion happen **before** any
+  insert and the task + occurrences commit in one transaction; and an unparseable rule is refused at
+  confirm with the existing token-only `409 parse_result_not_committable` (new shared
+  `hasCommittableRecurrence` in `packages/core`). `validateCompletionAnchoredRule` checked part
+  *names* only, so `FREQ=WEEKLYY` / `INTERVAL=0` were accepted at write and then threw inside the
+  in-transaction successor, rolling back the completion and 500ing forever — the validator now
+  validates the whole grammar (client-safe, no `rrulestr`), `validateRecurrenceRule` rejects a
+  missing FREQ and non-positive INTERVAL (a negative interval spins the iterator forever), and the
+  route computes the successor under a savepoint so a throw logs an ids-only warn, the completion
+  still commits, and the generate-lazy job's DLQ/alert carries the failure.
+- *Recurrence (minor ×3):* successors were generated for `dropped`/archived parents in both the
+  new API path and the worker (`parent_closed` skip in both); the completion-date seed resolved
+  `due_at` against `recurrence_timezone` while `tasks.due_at` used the capture zone (six-hour
+  disagreement with an offset-less time) — now one instant; a `due_date` series with no `due_at`
+  was materialized once and never re-expanded by the nightly job (`due_at IS NULL` skip) — the job
+  now anchors on the parent's earliest existing occurrence, never `created_at`.
+- *Contracts (minor ×2):* `PATCH /tasks/:id` accepted a BY*-bearing rule when the body omitted the
+  anchor (the schema refine fires only when the body names `completion_date`) — the route now
+  validates the **effective** rule and returns `400 validation_failed`; and search honoured
+  `include_archived` for inbox items although the `inbox_item` result member has no `archived`
+  flag — dismissed captures are now excluded unconditionally, per the contract.
+- *Mobile and Brief/AI/logging lenses:* no findings (mobile tsc clean; bundle-boundary and
+  inert-rendering guards pass; `ai-egress-guard` still pins exactly five call sites).
+
+**Verification (integrator, shared database, serial):** `pnpm build --force` 11/11 · `pnpm typecheck`
+21/21 · `eslint .` clean · `prettier --check .` clean · `git diff --check` clean · `gitleaks` — the
+same 18 pre-existing findings in ignored, untracked files, none tracked · **`pnpm test --force`
+21/21 tasks, 4,141 tests across 12 packages, zero failing** (api 918 · mobile 838 · worker 573 ·
+core 545 · schema 331 · health-providers 332 · api-client 157 · monitoring 151 · mail-providers
+116 · db 79 · calendar-providers 76 · ai-providers 25; was 3,853 at 9.1). One earlier full run
+showed 17 worker failures that vanished in isolation — a reviewer's vitest on the shared database
+during the run, the documented shared-DB collision, not a defect. **Migration invariant:** 18 `.sql`
+/ 18 journal entries, highest `0017`; the migration is `ADD COLUMN … timestamptz`, byte-pattern of
+`0016`, reconcile-allowlisted; forward-compatible with the serving images, so rollback stays
+image-only.
+
+**Recorded, not fixed (debt):** a sub-daily `due_date` rule (`FREQ=SECONDLY`) expands 90 days with
+no budget at commit — the same exposure `POST /tasks` already has; the `daily-respiratory-rate`
+spec still needs a live shape probe (unchanged); reminders still fire at most once per recurring
+task (A3, deferred).
+
+---
+
 **Phase 8 is closed.** The full checkpoint record — 8.0 foundation, 8.1 failure visibility, 8.2 the
 real calendar, 8.3 search + export, 8.4 capture front doors, the owner-terminated 8.5 soak, the 8.6
 decision gate and 8.6A/B/C/D — is archived verbatim in **`docs/history/phase-8.md`**. The closure
@@ -835,7 +929,7 @@ The Rabbit R1 runs `com.himal.personalos` versionCode 13, built from the same `7
 
 ## Current work
 
-**Phase 9 opportunity ranking → Checkpoint 9.3 selection and implementation** (see *Next action*).
+**Checkpoint 9.3 — implementation in progress** (five parallel lanes; see the 9.3 entry).
 
 ---
 

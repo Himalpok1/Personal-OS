@@ -1,5 +1,5 @@
 import type { TaskListParams } from "@personal-os/api-client";
-import type { TaskCreate, TaskUpdate } from "@personal-os/schema";
+import type { Task, TaskCreate, TaskUpdate } from "@personal-os/schema";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 
@@ -73,6 +73,32 @@ export function useDropTask() {
   const invalidate = useInvalidateTasks();
   return useMutation({
     mutationFn: (id: string) => api.dropTask(id),
+    onSuccess: invalidate,
+  });
+}
+
+/**
+ * The raw mutation config for POST /tasks/:id/reopen (Checkpoint 9.3,
+ * contract 1: done | dropped -> active), exported separately from the hook so
+ * `tasks.test.ts` can drive it through a bare `MutationObserver` without a
+ * render harness -- the same convention as `askCloudMutationOptions`.
+ *
+ * Reopen touches the task row only; the API leaves occurrences alone, so
+ * this invalidates "tasks" and nothing else, exactly like the sibling
+ * lifecycle hooks above. A 409 `task_not_reopenable` (the task is already
+ * open) is surfaced to the caller, not swallowed: the detail screen turns it
+ * into a status-specific message via components/task-actions-state.ts.
+ */
+export function reopenTaskMutationOptions(): { mutationFn: (id: string) => Promise<Task> } {
+  return {
+    mutationFn: (id: string) => api.reopenTask(id),
+  };
+}
+
+export function useReopenTask() {
+  const invalidate = useInvalidateTasks();
+  return useMutation({
+    ...reopenTaskMutationOptions(),
     onSuccess: invalidate,
   });
 }

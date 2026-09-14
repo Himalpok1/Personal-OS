@@ -11,9 +11,25 @@ import { isCommittableToolCall, readStoredParseResult, type InboxItem } from "@p
  * and no other feedback at all. Two production items failed exactly this way.
  */
 export function canConfirmInboxItem(item: InboxItem): boolean {
-  if (item.status !== "needs_confirm") return false;
+  if (!canFileInboxItem(item)) return false;
   const stored = readStoredParseResult(item.parse_result);
   return stored !== null && isCommittableToolCall(stored.toolCall);
+}
+
+/**
+ * Whether POST /inbox/:id/confirm will consider this item at all -- i.e.
+ * whether "File as task/note/event" (a confirm carrying `corrected_tool_call`)
+ * can be offered.
+ *
+ * Checkpoint 9.3 (contract 7, "D4-min"): `failed` joined `needs_confirm`. A
+ * row the dead-letter handler finalized as `failed` PRESERVES its stored tool
+ * call (StoredParseResultSchema.failure is optional for exactly that reason),
+ * and one that never had a committable call can still be filed by hand. Every
+ * other status is refused with `not_awaiting_confirmation`, so offering the
+ * controls there would only produce that error.
+ */
+export function canFileInboxItem(item: Pick<InboxItem, "status">): boolean {
+  return item.status === "needs_confirm" || item.status === "failed";
 }
 
 /**

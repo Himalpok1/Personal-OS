@@ -161,11 +161,14 @@ async function searchInboxItems(
   pattern: string,
   limit: number,
 ): Promise<EntitySlice<Extract<SearchResult, { type: "inbox_item" }>>> {
-  // No archive axis exists on this table, so `include_archived` is not
-  // applicable rather than ignored. Every status is searchable, including
-  // `failed` -- a capture whose parse failed is exactly the kind of thing a
-  // person goes looking for.
-  const where = textMatch(pattern, inboxItems.rawText);
+  // Since Checkpoint 9.3 (migration 0017) this table has a user archive axis.
+  // A dismissed capture is excluded UNCONDITIONALLY -- `include_archived`
+  // does not apply here, because the inbox_item result member carries no
+  // `archived` flag (unlike task/note), so an included row would be
+  // indistinguishable from a live one. Every status is still searchable,
+  // including `failed` -- a capture whose parse failed is exactly the kind of
+  // thing a person goes looking for.
+  const where = and(textMatch(pattern, inboxItems.rawText), isNull(inboxItems.archivedAt));
 
   const [rows, totals] = await Promise.all([
     db

@@ -1,9 +1,12 @@
 import {
+  expandDueDateWindow,
   parseFlexibleDatetime,
   resolveInstantToLocalUntil,
+  resolveParsedTaskRecurrence,
   toWallClockComponents,
-  validateCompletionAnchoredRule,
+  validateParsedTaskRecurrence,
   wallClockToNaiveDate,
+  type DueDateRecurrenceRule,
 } from "@personal-os/core";
 import { events, notes, occurrences, projects, tasks, type Db } from "@personal-os/db";
 import type { ParserToolCall } from "@personal-os/schema";
@@ -65,55 +68,134 @@ export async function commitParsedEntity(
         db,
         toolCall.args.project,
       );
-      if (toolCall.args.recurrence_anchor === "completion_date" && toolCall.args.rrule) {
-        validateCompletionAnchoredRule(toolCall.args.rrule);
-      }
-      const [row] = await db
-        .insert(tasks)
-        .values({
-          title: toolCall.args.title,
-          status: "inbox",
-          dueAt: toolCall.args.due_at
-            ? parseFlexibleDatetime(toolCall.args.due_at, ctx.timezone)
-            : undefined,
-          remindAt: toolCall.args.remind_at
-            ? parseFlexibleDatetime(toolCall.args.remind_at, ctx.timezone)
-            : undefined,
-          timezone: ctx.timezone,
-          priority: toolCall.args.priority,
-          projectId,
-          rrule: toolCall.args.rrule,
-          recurrenceTimezone: toolCall.args.rrule
-            ? (toolCall.args.recurrence_timezone ?? ctx.timezone)
-            : undefined,
-          recurrenceAnchor: toolCall.args.recurrence_anchor,
-        })
-        .returning({ id: tasks.id });
-      if (!row) throw new Error("insert into tasks returned no row");
+      // Same defaulting POST /tasks applies (apps/api/src/routes/tasks.ts):
+      // a rule with no stated anchor is due_date-anchored -- the reversible
+      // mistake docs/ARCHITECTURE.md tells the parser to default to -- and a
+      // task with no rule carries no anchor at all. Before Checkpoint 9.3 the
+      // parser's omitted anchor was written through as NULL, which neither
+      // generation strategy selects: the nightly window job filters on
+      // `recurrence_anchor = 'due_date'` and lazy generation on
+      // 'completion_date', so a captured "every Monday" task never produced a
+      // single occurrence and could never be completed.
+      //
+      // The defaulting lives in packages/core (resolveParsedTaskRecurrence) so
+      // that the committability check POST /inbox/:id/confirm runs judges
+      // EXACTLY the rule that is committed here.
+      const recurrence = resolveParsedTaskRecurrence(toolCall.args, ctx.timezone);
 
-      // "Exactly one open occurrence exists" for a completion-anchored task
-      // (docs/ARCHITECTURE.md) has to start somewhere -- nothing else ever
-      // creates the *first* one, since the nightly window job explicitly
-      // excludes completion-anchored rules and the lazy-generation job only
-      // runs *after* a completion. Seed it at creation time: due_at if the
-      // parser resolved one, otherwise "now" (e.g. "water the plants every
-      // 3 days" with no explicit start reads as "starting now").
-      if (toolCall.args.recurrence_anchor === "completion_date" && toolCall.args.rrule) {
-        const timezone = toolCall.args.recurrence_timezone ?? ctx.timezone;
-        const firstOccursAt = toolCall.args.due_at
-          ? parseFlexibleDatetime(toolCall.args.due_at, timezone)
-          : new Date();
-        await db.insert(occurrences).values({
-          parentType: "task",
-          parentId: row.id,
-          occursAt: firstOccursAt,
-          occursLocal: wallClockToNaiveDate(toWallClockComponents(firstOccursAt, timezone)),
-          status: "scheduled",
-          lazyGenerated: true,
-        });
+      // EVERYTHING THAT CAN THROW IS COMPUTED BEFORE ANY ROW IS WRITTEN.
+      //
+      // CreateTaskToolSchema validates neither `rrule` nor
+      // `recurrence_timezone` (both bare strings), so the parser can emit
+      // "every monday" or a zone Intl does not know. Before Checkpoint 9.3's
+      // review the task row was inserted first and the window expansion ran
+      // afterwards, outside any transaction -- so a bad rule threw AFTER the
+      // insert, pg-boss retried, and every retry inserted another orphan task
+      // row with no occurrence and no inbox link. Now: validate the rule,
+      // resolve every instant, expand the window, and only then open ONE
+      // transaction that writes the task and its occurrences together, exactly
+      // as POST /tasks does. A bad rule throws with zero rows written; a crash
+      // mid-write leaves nothing behind.
+      validateParsedTaskRecurrence(toolCall.args, ctx.timezone);
+      const dueAt = toolCall.args.due_at
+        ? parseFlexibleDatetime(toolCall.args.due_at, ctx.timezone)
+        : undefined;
+      const remindAt = toolCall.args.remind_at
+        ? parseFlexibleDatetime(toolCall.args.remind_at, ctx.timezone)
+        : undefined;
+      const effectiveNow = new Date();
+
+      type OccurrenceSeed = { occursAt: Date; occursLocal: Date; lazyGenerated: boolean };
+      let seeds: OccurrenceSeed[] = [];
+      if (recurrence) {
+        if (recurrence.recurrenceAnchor === "completion_date") {
+          // "Exactly one open occurrence exists" for a completion-anchored task
+          // (docs/ARCHITECTURE.md) has to start somewhere -- nothing else ever
+          // creates the *first* one, since the nightly window job explicitly
+          // excludes completion-anchored rules and the lazy-generation job only
+          // runs *after* a completion. Seed it at creation time: due_at if the
+          // parser resolved one, otherwise "now" (e.g. "water the plants every
+          // 3 days" with no explicit start reads as "starting now").
+          //
+          // `dueAt` is the SAME instant written to tasks.due_at -- resolved
+          // against the capture's timezone, as POST /tasks does
+          // (`firstOccursAt = dueAt ?? effectiveNow`). It used to be re-resolved
+          // against recurrence_timezone here, so an offset-less due_at with an
+          // explicit, different recurrence_timezone seeded the first occurrence
+          // at a different instant from the task's own due date.
+          const firstOccursAt = dueAt ?? effectiveNow;
+          seeds = [
+            {
+              occursAt: firstOccursAt,
+              occursLocal: wallClockToNaiveDate(
+                toWallClockComponents(firstOccursAt, recurrence.recurrenceTimezone),
+              ),
+              lazyGenerated: true,
+            },
+          ];
+        } else {
+          // due_date anchor: materialize the rolling 90-day window at commit,
+          // exactly as POST /tasks does (Checkpoint 9.3, contract 5). Before
+          // this the captured series had no occurrence until the nightly
+          // expand-window cron ran -- and, with no due_at, not even then, since
+          // that job skips a due_date task without one -- so a task captured
+          // in the morning was uncompletable all day: POST /tasks/:id/complete
+          // refuses a recurring task (409) and there was no occurrence to
+          // complete instead. Same rule shape, same 90-day window, same
+          // ON CONFLICT DO NOTHING on (parent_type, parent_id, occurs_at) so a
+          // pg-boss redelivery of the commit is idempotent against the rows
+          // the first delivery wrote.
+          const ruleAnchor = dueAt ?? effectiveNow;
+          const rule: DueDateRecurrenceRule = {
+            rrule: recurrence.rrule,
+            recurrenceTimezone: recurrence.recurrenceTimezone,
+            dtstart: toWallClockComponents(ruleAnchor, recurrence.recurrenceTimezone),
+          };
+          seeds = expandDueDateWindow(rule, 90, effectiveNow).map((occurrence) => ({
+            occursAt: occurrence.occursAt,
+            occursLocal: wallClockToNaiveDate(occurrence.occursLocal),
+            lazyGenerated: false,
+          }));
+        }
       }
 
-      return { committed: { entityType: "task", entityId: row.id }, unknownProjectReference };
+      const taskId = await db.transaction(async (tx) => {
+        const [row] = await tx
+          .insert(tasks)
+          .values({
+            title: toolCall.args.title,
+            status: "inbox",
+            dueAt,
+            remindAt,
+            timezone: ctx.timezone,
+            priority: toolCall.args.priority,
+            projectId,
+            rrule: recurrence?.rrule,
+            recurrenceTimezone: recurrence?.recurrenceTimezone,
+            recurrenceAnchor: recurrence?.recurrenceAnchor,
+          })
+          .returning({ id: tasks.id });
+        if (!row) throw new Error("insert into tasks returned no row");
+
+        for (const seed of seeds) {
+          await tx
+            .insert(occurrences)
+            .values({
+              parentType: "task",
+              parentId: row.id,
+              occursAt: seed.occursAt,
+              occursLocal: seed.occursLocal,
+              status: "scheduled",
+              lazyGenerated: seed.lazyGenerated,
+            })
+            .onConflictDoNothing({
+              target: [occurrences.parentType, occurrences.parentId, occurrences.occursAt],
+            });
+        }
+        return row.id;
+      });
+
+      return { committed: { entityType: "task", entityId: taskId }, unknownProjectReference };
     }
     case "create_note": {
       const { projectId, unknownProjectReference } = await resolveProjectId(

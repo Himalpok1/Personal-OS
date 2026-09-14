@@ -145,24 +145,32 @@ describe("capture.parse confirm mode", () => {
   });
 
   it("classifies a genuine failure by stage and rethrows it, leaking no message", async () => {
-    // A committable call whose commit cannot succeed: `create_task` with a
-    // completion-anchored BYDAY rule, which validateCompletionAnchoredRule
-    // rejects. Stands in for any real transient/permanent commit failure.
+    // A committable call whose commit fails at the database: the commit's
+    // own transaction is made to reject. Stands in for any real transient or
+    // permanent commit failure. (Until Checkpoint 9.3 this used a
+    // completion-anchored BYDAY rule as the lever; that is now REFUSED as
+    // not_committable before the commit, per the next test.)
     const id = await seed({
       toolCall: {
         tool: "create_task",
-        args: {
-          title: "Water the plants",
-          rrule: "FREQ=WEEKLY;BYDAY=MO,WE,FR",
-          recurrence_anchor: "completion_date",
-        },
+        args: { title: "Water the plants BYDAY=MO", rrule: "FREQ=DAILY;INTERVAL=3" },
       },
       confidenceFlags: [],
     });
+    class SimulatedOutage extends Error {
+      override name = "SimulatedOutage";
+    }
+    const transactionSpy = vi
+      .spyOn(db, "transaction")
+      .mockRejectedValue(new SimulatedOutage("connection reset BYDAY=MO"));
     const { records, restore } = captureLogs();
 
-    await expect(createCaptureParseHandler(db, boss)([confirmJob(id)])).rejects.toThrow();
-    restore();
+    try {
+      await expect(createCaptureParseHandler(db, boss)([confirmJob(id)])).rejects.toThrow();
+    } finally {
+      restore();
+      transactionSpy.mockRestore();
+    }
 
     const failure = records.find((r) => r["event"] === "capture.parse.failed");
     expect(failure).toMatchObject({ stage: "confirm_commit", mode: "confirm" });
@@ -171,6 +179,51 @@ describe("capture.parse confirm mode", () => {
     expect(String(failure!["error"])).toMatch(/^[A-Za-z][A-Za-z0-9_]{0,63}$/);
     expect(JSON.stringify(records)).not.toContain("BYDAY");
   });
+
+  // Checkpoint 9.3 review: CreateTaskToolSchema validates neither rrule nor
+  // recurrence_timezone, so a stored `create_task` can carry a rule the
+  // commit cannot materialize. That is as permanent as `unclear` -- a retry
+  // recomputes the same answer -- so it is refused, not thrown. Old code:
+  // rejected with AiJobError on every attempt (and, for a due_date rule,
+  // inserted an orphan task row each time).
+  it.each([
+    ["free-text rrule", { rrule: "every monday" }],
+    ["unknown FREQ", { rrule: "FREQ=WEEKLYY" }],
+    ["INTERVAL=0", { rrule: "FREQ=DAILY;INTERVAL=0" }],
+    [
+      "invalid recurrence_timezone",
+      { rrule: "FREQ=DAILY", recurrence_timezone: "Mars/Olympus_Mons" },
+    ],
+    [
+      "BY* on completion_date",
+      { rrule: "FREQ=WEEKLY;BYDAY=MO", recurrence_anchor: "completion_date" },
+    ],
+  ])(
+    "refuses a create_task whose recurrence cannot be materialized (%s) without throwing or writing",
+    async (_label, recurrenceArgs) => {
+      const id = await seed({
+        toolCall: { tool: "create_task", args: { title: "Water the plants", ...recurrenceArgs } },
+        confidenceFlags: ["recurrenceInferred"],
+      });
+      const { records, restore } = captureLogs();
+
+      await expect(createCaptureParseHandler(db, boss)([confirmJob(id)])).resolves.toBeUndefined();
+      restore();
+
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          event: "capture.parse.confirm_refused",
+          reason: "not_committable",
+        }),
+      );
+      expect(await db.select().from(tasks)).toHaveLength(0);
+      const [row] = await db.select().from(inboxItems).where(eq(inboxItems.id, id));
+      expect(row!.status).toBe("needs_confirm");
+      // The rule text is parser output and never reaches the log.
+      expect(JSON.stringify(records)).not.toContain("every monday");
+      expect(JSON.stringify(records)).not.toContain("WEEKLYY");
+    },
+  );
 
   it("skips a row that is no longer awaiting confirmation", async () => {
     const id = await seed(unclearStored, "confirmed");

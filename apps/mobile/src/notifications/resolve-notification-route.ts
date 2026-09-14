@@ -11,12 +11,13 @@
 //     from both the worker's monitor/alerts.ts and the API's heartbeat watchdog)
 //   - mail digests dispatch with `data.mailDigestDate` (Checkpoint 7.6)
 //
-// There is no inbox/[id] detail route, so a confirmation opens the Inbox
-// tab rather than a per-item screen. Monitoring has no per-incident screen
-// either, so an alert opens the monitoring screen, where the incident is listed
-// and can be acknowledged. A digest opens Today, which is where the digest card
-// lives -- there is no digest detail screen, and inventing a route the app does
-// not have would send the tap nowhere.
+// A confirmation opens the item's OWN screen, /inbox/<id> (Checkpoint 9.3,
+// contract 10) -- before that screen existed it opened the Inbox tab, where the
+// owner then had to find the row. Monitoring has no per-incident screen, so an
+// alert opens the monitoring screen, where the incident is listed and can be
+// acknowledged. A digest opens Today, which is where the digest card lives --
+// there is no digest detail screen, and inventing a route the app does not
+// have would send the tap nowhere.
 //
 // ORDER IS DELIBERATE AND IS A DECISION, not an accident of writing. taskId
 // keeps priority because a payload carrying both is reminder-shaped. The two new
@@ -28,10 +29,10 @@
 // routes accept it directly at the call site without a cast, while this
 // module still imports nothing from expo-router.
 export type NotificationRoute =
-  | "/(tabs)/inbox"
   | "/(tabs)"
   | "/monitor"
-  | `/tasks/${string}`;
+  | `/tasks/${string}`
+  | `/inbox/${string}`;
 
 export function resolveNotificationRoute(data: unknown): NotificationRoute | null {
   if (typeof data !== "object" || data === null) return null;
@@ -40,8 +41,10 @@ export function resolveNotificationRoute(data: unknown): NotificationRoute | nul
   const taskId = record["taskId"];
   if (typeof taskId === "string" && taskId.length > 0) return `/tasks/${taskId}`;
 
+  // The id is server-authored (the worker publishes `data: { inboxId }` from
+  // the row it just parsed); nothing in the notification's TEXT is consulted.
   const inboxId = record["inboxId"];
-  if (typeof inboxId === "string" && inboxId.length > 0) return "/(tabs)/inbox";
+  if (typeof inboxId === "string" && inboxId.length > 0) return `/inbox/${inboxId}`;
 
   // Monitoring alerts. Keyed on the INCIDENT id rather than the target id
   // because the incident is the thing that can be acknowledged, and a target

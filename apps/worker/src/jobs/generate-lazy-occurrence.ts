@@ -4,7 +4,7 @@ import {
   wallClockToNaiveDate,
 } from "@personal-os/core";
 import { occurrences, tasks, type Db } from "@personal-os/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Job } from "pg-boss";
 import { errorToken, log } from "../logger.js";
 import { OCCURRENCES_GENERATE_LAZY_QUEUE } from "../queue-names.js";
@@ -87,6 +87,54 @@ export async function generateOne(
     });
     return "skipped";
   }
+  // A dropped or archived parent recurs no further (Checkpoint 9.3 review).
+  // The nightly window job has excluded such parents since Phase 2 for the
+  // due_date strategy; this is the same rule for the lazy one. The API's
+  // transitionOccurrence already declines to enqueue for a closed parent, so
+  // reaching this branch means the parent closed between the completion and
+  // this run, or the job was enqueued directly -- either way, generating a
+  // successor would silently resurrect a task the owner closed.
+  if (task.status === "dropped" || task.archivedAt !== null) {
+    log.info("occurrences.generate_lazy.skipped", {
+      occurrenceId: data.occurrenceId,
+      taskId: task.id,
+      reason: "parent_closed",
+    });
+    return "skipped";
+  }
+
+  // Checkpoint 9.3: the API now inserts the successor IN THE SAME TRANSACTION
+  // as the completion/skip (apps/api/src/routes/occurrences.ts) and still
+  // enqueues this job as a belt-and-braces re-check. The common case is
+  // therefore that the successor already exists by the time this runs, and
+  // that is success. It was already success via the 23505 catch below, but
+  // that path first computes a candidate and attempts an insert, and the
+  // partial index only guards LAZY rows -- so this reads current state first
+  // and treats ANY open scheduled occurrence for the parent as "nothing to
+  // do", the same condition the dead-letter handler keys on
+  // (jobs/occurrences-dead-letter.ts): a completion-anchored task never has
+  // pre-expanded rows, so an open one can only be the initial occurrence or a
+  // successor, and either way the user has something to act on.
+  const [open] = await db
+    .select({ id: occurrences.id })
+    .from(occurrences)
+    .where(
+      and(
+        eq(occurrences.parentType, "task"),
+        eq(occurrences.parentId, task.id),
+        eq(occurrences.status, "scheduled"),
+      ),
+    )
+    .limit(1);
+  if (open) {
+    log.info("occurrences.generate_lazy.skipped", {
+      occurrenceId: data.occurrenceId,
+      taskId: task.id,
+      reason: "successor_exists",
+      openOccurrenceId: open.id,
+    });
+    return "successor_exists";
+  }
 
   // Re-validated defensively even though this should already have been
   // enforced at write time (see commit-parsed-entity.ts) -- hitting this
@@ -116,7 +164,9 @@ export async function generateOne(
     // one_open_occurrence_per_lazy_parent is the real safety net under
     // pg-boss's at-least-once delivery: a duplicate job run hitting this
     // constraint means the successor already exists, which is success, not
-    // an error to retry.
+    // an error to retry. The state read above makes this the RACE path only
+    // (two deliveries passing the read before either inserts); it must stay,
+    // because the read and the insert are not atomic.
     if (pgErrorCode(err) === UNIQUE_VIOLATION) {
       log.info("occurrences.generate_lazy.skipped", {
         occurrenceId: data.occurrenceId,

@@ -11,6 +11,7 @@ export * from "./recurrence/event-recurrence.js";
 export * from "./recurrence/lazy-next-occurrence.js";
 export * from "./recurrence/editor.js";
 export * from "./recurrence/validation.js";
+export * from "./recurrence/parsed-task-recurrence.js";
 export * from "./parse-confidence.js";
 export * from "./task-lifecycle.js";
 export * from "./device-auth.js";

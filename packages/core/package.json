@@ -8,6 +8,7 @@
   "exports": {
     ".": "./dist/index.js",
     "./timezone": "./dist/timezone.js",
+    "./task-snooze": "./dist/task-snooze.js",
     "./recurrence/editor": "./dist/recurrence/editor.js",
     "./health/*": "./dist/health/*.js",
     "./mail/*": "./dist/mail/*.js",

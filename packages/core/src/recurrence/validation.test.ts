@@ -126,6 +126,38 @@ describe("validateRecurrenceRule", () => {
       ).toThrow(/invalid RRULE syntax/i);
     });
 
+    // Checkpoint 9.3: rrulestr never validates INTERVAL and silently defaults
+    // a missing FREQ to YEARLY, so these used to pass and then fail (or, for
+    // a negative interval, never terminate) at expansion time.
+    it("rejects an INTERVAL the expansion cannot iterate", () => {
+      for (const rrule of [
+        "FREQ=DAILY;INTERVAL=0",
+        "FREQ=DAILY;INTERVAL=-1",
+        "FREQ=DAILY;INTERVAL=abc",
+        "FREQ=DAILY;INTERVAL=1.5",
+        "FREQ=WEEKLY;BYDAY=MO;INTERVAL=",
+      ]) {
+        expect(() => validateRecurrenceRule({ rrule, recurrenceTimezone: "UTC" })).toThrow(
+          /INTERVAL must be a positive integer/,
+        );
+      }
+    });
+
+    it("rejects a rule with no FREQ rather than letting rrulestr default it to YEARLY", () => {
+      expect(() =>
+        validateRecurrenceRule({ rrule: "INTERVAL=2;BYDAY=MO", recurrenceTimezone: "UTC" }),
+      ).toThrow(/FREQ is required/);
+    });
+
+    it("rejects an unknown FREQ and a free-text rule", () => {
+      expect(() =>
+        validateRecurrenceRule({ rrule: "FREQ=WEEKLYY", recurrenceTimezone: "UTC" }),
+      ).toThrow(/invalid RRULE syntax/);
+      expect(() =>
+        validateRecurrenceRule({ rrule: "every monday", recurrenceTimezone: "UTC" }),
+      ).toThrow(/invalid RRULE syntax/);
+    });
+
     it("rejects compound RRuleSet", () => {
       expect(() =>
         validateRecurrenceRule({

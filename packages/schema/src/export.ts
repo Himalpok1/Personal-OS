@@ -107,6 +107,8 @@ export const InboxItemExportSchema = z
     entity_type: InboxEntityTypeSchema.nullable(),
     entity_id: z.string().uuid().nullable(),
     created_at: z.string().datetime({ offset: true }),
+    /** Checkpoint 9.3: dismissed captures are exported too (ADR-059). */
+    archived_at: z.string().datetime({ offset: true }).nullable(),
   })
   .strict();
 export type InboxItemExport = z.infer<typeof InboxItemExportSchema>;

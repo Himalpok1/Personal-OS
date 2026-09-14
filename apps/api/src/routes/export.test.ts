@@ -199,6 +199,38 @@ describe("GET /export", () => {
     expect(body.projects[0]!.archived_at).not.toBeNull();
   });
 
+  // Checkpoint 9.3: inbox_items gained an archive axis (migration 0017). The
+  // export rule is ADR-059's -- archived rows are included unconditionally --
+  // and GET /inbox's default exclusion must NOT leak into this surface.
+  it("includes ARCHIVED inbox items too, counted honestly alongside live ones", async () => {
+    await app.db.insert(inboxItems).values([
+      {
+        rawText: "live capture",
+        source: "web",
+        capturedAt: new Date("2026-08-01T10:00:00Z"),
+        createdAt: new Date("2026-08-01T10:00:00Z"),
+        timezone: TZ,
+        status: "parsed",
+      },
+      {
+        rawText: "archived capture",
+        source: "web",
+        capturedAt: new Date("2026-08-02T10:00:00Z"),
+        createdAt: new Date("2026-08-02T10:00:00Z"),
+        timezone: TZ,
+        status: "failed",
+        archivedAt: new Date("2026-09-10T00:00:00Z"),
+      },
+    ]);
+
+    const body = await exportBody();
+    expect(body.counts.inbox_items).toEqual({ returned: 2, total: 2 });
+    expect(body.inbox_items.map((item) => item.raw_text)).toEqual([
+      "live capture",
+      "archived capture",
+    ]);
+  });
+
   it("orders each entity oldest-first with an id tie-break", async () => {
     const createdAt = new Date("2026-08-01T00:00:00Z");
     await app.db.insert(notes).values([
@@ -232,6 +264,7 @@ describe("GET /export", () => {
     const response = await get();
     const body = ExportResponseSchema.parse(response.json());
     expect(Object.keys(body.inbox_items[0]!).sort()).toEqual([
+      "archived_at",
       "captured_at",
       "created_at",
       "entity_id",

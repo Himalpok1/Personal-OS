@@ -26,9 +26,9 @@ export function searchResultHref(result: SearchResult): Href | null {
     case "note":
       return `/notes/${result.id}` as Href;
     case "inbox_item":
-      // There is no inbox-item detail screen. When the capture was committed to
-      // an entity, that entity is the useful destination; otherwise the Inbox
-      // tab is, which is where the row is visible.
+      // When the capture was committed to an entity, that entity is the useful
+      // destination; otherwise the capture's own detail screen (Checkpoint 9.3),
+      // where it can be filed or dismissed.
       if (result.entity_id !== null) {
         switch (result.entity_type) {
           case "task":
@@ -41,7 +41,7 @@ export function searchResultHref(result: SearchResult): Href | null {
             break;
         }
       }
-      return "/(tabs)/inbox" as Href;
+      return `/inbox/${result.id}` as Href;
     case "mail_message":
       // No per-message screen exists, and ADR-052 forbids the app acting on
       // mail, so there is nothing to navigate to. Null means "render this row

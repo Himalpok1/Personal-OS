@@ -9,7 +9,9 @@ export default function exportRoutes(app: FastifyInstance): void {
   // NO QUERY PARAMETERS AT ALL, which is the contract rather than an omission:
   // an export is the whole user-authored core or it is nothing, so there is no
   // filter to get wrong and no page to forget to turn. See
-  // ExportResponseSchema.
+  // ExportResponseSchema. That includes archived rows of every entity --
+  // since Checkpoint 9.3 (migration 0017) inbox items have an archive axis
+  // too, and GET /inbox's default exclusion deliberately does not reach here.
   //
   // Returns JSON with no Content-Disposition. This is a read endpoint, not a
   // file handoff: the caller decides whether the bytes become a file, and the

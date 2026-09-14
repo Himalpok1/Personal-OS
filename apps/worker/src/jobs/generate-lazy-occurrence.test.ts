@@ -1,3 +1,4 @@
+import { computeNextLazyOccurrence, wallClockToNaiveDate } from "@personal-os/core";
 import { occurrences, tasks, type Db } from "@personal-os/db";
 import { and, eq } from "drizzle-orm";
 import type { Job } from "pg-boss";
@@ -123,6 +124,111 @@ describe("occurrences.generate-lazy handler", () => {
     expect(records.map((r) => r["reason"])).toContain("successor_exists");
   });
 
+  // Checkpoint 9.3: POST /occurrences/:id/complete|skip inserts the successor
+  // in the same transaction as the status update and STILL enqueues this job
+  // as a belt-and-braces re-check, so "an open occurrence already exists" is
+  // now the common delivery, not the duplicate-delivery corner case. The job
+  // must be a no-op: no second row, no re-pointing of the one the API wrote,
+  // no throw.
+  describe("no-op when an open scheduled occurrence already exists (9.3)", () => {
+    // Deliberately NOT the instant the job would compute, so a re-pointed or
+    // re-inserted row is distinguishable from the one the API seeded.
+    const SEEDED_OCCURS_AT = new Date("2026-09-20T14:00:00Z");
+
+    async function insertOpenOccurrence(
+      db: Db,
+      taskId: string,
+      lazyGenerated: boolean,
+    ): Promise<string> {
+      const [row] = await db
+        .insert(occurrences)
+        .values({
+          parentType: "task",
+          parentId: taskId,
+          occursAt: SEEDED_OCCURS_AT,
+          occursLocal: new Date("2026-09-20T09:00:00Z"),
+          status: "scheduled",
+          lazyGenerated,
+        })
+        .returning({ id: occurrences.id });
+      return row!.id;
+    }
+
+    it.each([
+      ["lazy-generated (the API's in-transaction successor)", true],
+      ["not lazy-generated (outside the partial unique index)", false],
+    ])("leaves the existing open occurrence untouched when it is %s", async (_label, lazy) => {
+      const taskId = await insertCompletionAnchoredTask(db);
+      const occurrenceId = await insertDoneOccurrence(db, taskId);
+      const openId = await insertOpenOccurrence(db, taskId, lazy);
+
+      await expect(
+        createGenerateLazyOccurrenceHandler(db)([job({ occurrenceId, fromStatus: "completed" })]),
+      ).resolves.toBeUndefined();
+
+      const open = await openOccurrences(db, taskId);
+      expect(open).toHaveLength(1);
+      expect(open[0]!.id).toBe(openId);
+      expect(open[0]!.occursAt.toISOString()).toBe(SEEDED_OCCURS_AT.toISOString());
+      expect(open[0]!.lazyGenerated).toBe(lazy);
+
+      const skip = records.find((r) => r["event"] === "occurrences.generate_lazy.skipped");
+      expect(skip).toMatchObject({
+        level: "info",
+        occurrenceId,
+        taskId,
+        reason: "successor_exists",
+        openOccurrenceId: openId,
+      });
+      expect(records.some((r) => r["event"] === "occurrences.generate_lazy.failed")).toBe(false);
+    });
+
+    it("does not consult the open-occurrence guard for a different parent", async () => {
+      const taskId = await insertCompletionAnchoredTask(db);
+      const otherTaskId = await insertCompletionAnchoredTask(db);
+      const occurrenceId = await insertDoneOccurrence(db, taskId);
+      await insertOpenOccurrence(db, otherTaskId, true);
+
+      await createGenerateLazyOccurrenceHandler(db)([
+        job({ occurrenceId, fromStatus: "completed" }),
+      ]);
+
+      expect(await openOccurrences(db, taskId)).toHaveLength(1);
+      expect(await openOccurrences(db, otherTaskId)).toHaveLength(1);
+    });
+
+    // The state read and the insert are not atomic, so the 23505 path must
+    // survive as the race fallback. Provoked deterministically through the
+    // (parent_type, parent_id, occurs_at) unique index rather than the partial
+    // one: a closed row already sitting at the exact instant the job computes
+    // passes the open-occurrence read and then conflicts on insert.
+    it("treats a unique-index conflict on the insert as success, not a failure to retry", async () => {
+      const taskId = await insertCompletionAnchoredTask(db);
+      const occurrenceId = await insertDoneOccurrence(db, taskId);
+      const next = computeNextLazyOccurrence(
+        { rrule: "FREQ=DAILY;INTERVAL=3", recurrenceTimezone: "America/Chicago" },
+        new Date("2026-09-11T02:30:00Z"),
+        "completed",
+      );
+      await db.insert(occurrences).values({
+        parentType: "task",
+        parentId: taskId,
+        occursAt: next.occursAt,
+        occursLocal: wallClockToNaiveDate(next.occursLocal),
+        status: "skipped",
+        lazyGenerated: true,
+      });
+
+      await expect(
+        createGenerateLazyOccurrenceHandler(db)([job({ occurrenceId, fromStatus: "completed" })]),
+      ).resolves.toBeUndefined();
+
+      const skip = records.find((r) => r["reason"] === "successor_exists");
+      expect(skip).toMatchObject({ level: "info", occurrenceId, taskId });
+      expect(records.some((r) => r["event"] === "occurrences.generate_lazy.failed")).toBe(false);
+    });
+  });
+
   it.each([
     ["occurrence_missing", () => Promise.resolve({ occurrenceId: crypto.randomUUID() })],
     [
@@ -139,6 +245,29 @@ describe("occurrences.generate-lazy handler", () => {
     const skip = records.find((r) => r["event"] === "occurrences.generate_lazy.skipped");
     expect(skip).toMatchObject({ level: "warn", reason, occurrenceId });
   });
+
+  // Checkpoint 9.3 review: a dropped or archived parent used to get a
+  // successor anyway -- the lazy strategy was the one path that kept a closed
+  // task recurring. Old code: one new scheduled row per case.
+  it.each([
+    ["dropped", { status: "dropped" as const }],
+    ["archived", { archivedAt: new Date("2026-09-11T00:00:00Z") }],
+  ])(
+    "generates no successor for a %s parent and logs a parent_closed skip",
+    async (_label, overrides) => {
+      const taskId = await insertCompletionAnchoredTask(db, overrides);
+      const occurrenceId = await insertDoneOccurrence(db, taskId);
+
+      await expect(
+        createGenerateLazyOccurrenceHandler(db)([job({ occurrenceId, fromStatus: "completed" })]),
+      ).resolves.toBeUndefined();
+
+      expect(await openOccurrences(db, taskId)).toHaveLength(0);
+      const skip = records.find((r) => r["event"] === "occurrences.generate_lazy.skipped");
+      expect(skip).toMatchObject({ reason: "parent_closed", occurrenceId, taskId });
+      expect(records.some((r) => r["event"] === "occurrences.generate_lazy.failed")).toBe(false);
+    },
+  );
 
   // A data-integrity fault (a BY* part on a completion-anchored rule, which
   // write-time validation should have refused) is the realistic persistent

@@ -8,7 +8,13 @@ import { usePlaceholderColor } from "@/components/placeholder-color";
 import { useCapture } from "@/queries/capture";
 import { normalizeSharedText } from "@/capture-intent/normalize";
 import { useCaptureIntent } from "@/capture-intent/use-capture-intent";
+import {
+  followThroughLabel,
+  followThroughRoute,
+} from "@/components/inbox/capture-follow-through";
+import { useCaptureFollowThrough } from "@/components/inbox/use-capture-follow-through";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
+import { useRouter, type Href } from "expo-router";
 import {
   FLOATING_BUTTON_BOTTOM,
   FLOATING_BUTTON_BOTTOM_PX,
@@ -53,6 +59,12 @@ export function QuickAddFab() {
   const placeholderColor = usePlaceholderColor();
   const capture = useCapture();
   const outbox = useOutboxBadge();
+  const router = useRouter();
+  // Checkpoint 9.3 D3-lite: after a send, follow the capture until it is filed
+  // (bounded -- see components/inbox/capture-follow-through.ts) and say what
+  // it became, tappable. A queued (offline) capture has no inbox id yet and
+  // gets the existing "Saved offline" notice instead.
+  const followThrough = useCaptureFollowThrough();
 
   // Android share sheet and launcher shortcut (Checkpoint 8.4). Both open
   // THIS composer rather than submitting anything on their own. For a share
@@ -124,6 +136,9 @@ export function QuickAddFab() {
           setText("");
           setOpen(false);
           setShareId(null);
+          if (result.status === "sent") {
+            followThrough.start(result.inbox_id);
+          }
           if (result.status === "queued") {
             // Best-effort: the outbox already persisted it to SQLite and
             // will flush automatically on reconnect (see
@@ -195,6 +210,17 @@ export function QuickAddFab() {
         </View>
       ) : null}
 
+      {followThrough.state !== null ? (
+        <FollowThroughBanner
+          state={followThrough.state}
+          onOpen={(route) => {
+            followThrough.dismiss();
+            router.push(route as Href);
+          }}
+          onDismiss={followThrough.dismiss}
+        />
+      ) : null}
+
       <Modal visible={open} animationType="slide" transparent onRequestClose={closeSheet}>
         <View className="flex-1 justify-end bg-black/40" style={{ paddingBottom: keyboardHeight }}>
           {/* The bottom safe-area inset only applies when the keyboard is
@@ -248,5 +274,42 @@ export function QuickAddFab() {
         </View>
       </Modal>
     </>
+  );
+}
+
+// Sits just above the two floating buttons, full width between their insets.
+// Every string comes from followThroughLabel -- a fixed sentence plus the
+// parser's bounded title -- and lands in a <Text>; the tap destination comes
+// from followThroughRoute, which reads only server-authored ids.
+function FollowThroughBanner({
+  state,
+  onOpen,
+  onDismiss,
+}: {
+  state: NonNullable<ReturnType<typeof useCaptureFollowThrough>["state"]>;
+  onOpen: (route: string) => void;
+  onDismiss: () => void;
+}) {
+  const label =
+    state.phase === "filing" ? "Captured — filing…" : followThroughLabel(state.outcome);
+  const route = state.phase === "settled" ? followThroughRoute(state.outcome) : null;
+  if (label === null) return null;
+  return (
+    <Pressable
+      testID="capture-follow-through"
+      onPress={() => (route !== null ? onOpen(route) : onDismiss())}
+      accessibilityRole="button"
+      accessibilityLabel={route !== null ? `${label}. Open` : label}
+      className="absolute min-h-[44px] justify-center rounded-lg bg-neutral-900 px-4 py-2 dark:bg-neutral-100"
+      style={{
+        bottom: FLOATING_BUTTON_BOTTOM_PX + FLOATING_BUTTON_SIZE_PX + 12,
+        left: FLOATING_BUTTON_SIDE_INSET_PX,
+        right: FLOATING_BUTTON_SIDE_INSET_PX,
+      }}
+    >
+      <Text className="text-sm text-white dark:text-black" numberOfLines={2}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }

@@ -80,6 +80,7 @@ describe("InboxItemExportSchema", () => {
     entity_type: "task",
     entity_id: "22222222-2222-4222-8222-222222222222",
     created_at: "2026-08-01T10:00:00.000Z",
+    archived_at: null,
   };
 
   it("accepts the authored capture and its disposition", () => {

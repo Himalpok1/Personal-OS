@@ -35,7 +35,7 @@ describe("searchResultHref", () => {
     }
   });
 
-  it("routes an uncommitted inbox capture to the Inbox tab", () => {
+  it("routes an uncommitted inbox capture to its own detail screen", () => {
     const result: SearchResult = {
       ...base,
       type: "inbox_item",
@@ -43,10 +43,10 @@ describe("searchResultHref", () => {
       entity_type: null,
       entity_id: null,
     };
-    expect(searchResultHref(result)).toBe("/(tabs)/inbox");
+    expect(searchResultHref(result)).toBe(`/inbox/${base.id}`);
   });
 
-  it("falls back to the Inbox tab when entity_type is absent but an id is not", () => {
+  it("falls back to the capture's detail screen when entity_type is absent but an id is not", () => {
     const result: SearchResult = {
       ...base,
       type: "inbox_item",
@@ -54,7 +54,7 @@ describe("searchResultHref", () => {
       entity_type: null,
       entity_id: ENTITY_ID,
     };
-    expect(searchResultHref(result)).toBe("/(tabs)/inbox");
+    expect(searchResultHref(result)).toBe(`/inbox/${base.id}`);
   });
 
   it("gives a mail result NO destination -- no per-message screen exists", () => {

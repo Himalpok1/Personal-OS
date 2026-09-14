@@ -85,6 +85,33 @@ export function validateRecurrenceRule(params: ValidateRecurrenceRuleParams): vo
     }
   }
 
+  // rrulestr is a lenient parser: it accepts `INTERVAL=0`, `INTERVAL=-1` and
+  // `INTERVAL=abc` verbatim (the value is never validated), and a rule with
+  // no FREQ at all silently becomes YEARLY. None of those can be expanded --
+  // INTERVAL=0 yields nothing, a negative interval never terminates -- so
+  // they are rejected here, structurally, BEFORE the parse (Checkpoint 9.3).
+  // Anything else (unknown FREQ, unknown parts, malformed BY* values) is
+  // rrulestr's own rejection below.
+  const bareParts = rrule
+    .trim()
+    .replace(/^RRULE:/i, "")
+    .split(";")
+    .map((part) => {
+      const eqIdx = part.indexOf("=");
+      return {
+        key: (eqIdx === -1 ? part : part.slice(0, eqIdx)).trim().toUpperCase(),
+        value: eqIdx === -1 ? undefined : part.slice(eqIdx + 1).trim(),
+      };
+    });
+  if (!bareParts.some((part) => part.key === "FREQ")) {
+    throw new Error(`invalid RRULE syntax: "${rrule}" (FREQ is required)`);
+  }
+  for (const part of bareParts) {
+    if (part.key === "INTERVAL" && !/^[1-9]\d*$/.test(part.value ?? "")) {
+      throw new Error(`invalid RRULE syntax: "${rrule}" (INTERVAL must be a positive integer)`);
+    }
+  }
+
   let parsed;
   try {
     parsed = rrulestr(rrule, { forceset: false });

@@ -83,10 +83,13 @@ export const SearchQuerySchema = z
     // booleanQueryParam, never z.coerce.boolean() -- see pagination.ts's
     // comment on why the latter is silently broken for "?flag=false".
     //
-    // Applies to the two entities that HAVE a user archive axis (tasks,
-    // notes). It deliberately does NOT reach mail: `mail_messages.deleted_at`
-    // is a provider-reconciliation tombstone, not a user action, and a message
-    // the provider no longer returns is not something the user archived.
+    // Applies to the two entities whose result member carries an `archived`
+    // flag (tasks, notes). It deliberately does NOT reach mail:
+    // `mail_messages.deleted_at` is a provider-reconciliation tombstone, not a
+    // user action, and a message the provider no longer returns is not
+    // something the user archived. Nor does it reach inbox items (Checkpoint
+    // 9.3): a dismissed capture is excluded unconditionally because the
+    // inbox_item member has no `archived` flag to label it with.
     include_archived: booleanQueryParam(false),
   })
   .strict();

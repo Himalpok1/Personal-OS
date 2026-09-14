@@ -5,6 +5,7 @@ import {
 } from "@personal-os/ai-providers";
 import {
   computeConfidence,
+  hasCommittableRecurrence,
   isLowTranscriptionConfidence,
   type ConfidenceSignals,
 } from "@personal-os/core";
@@ -246,7 +247,19 @@ async function runConfirm(db: Db, row: typeof inboxItems.$inferSelect): Promise<
   // that guard existed, or a direct enqueue. Either way retrying cannot help:
   // commitParsedEntity throws unconditionally on `unclear`, which is exactly
   // how two production confirms burned five attempts each and changed nothing.
-  if (!isCommittableToolCall(stored.toolCall)) return "not_committable";
+  //
+  // The second half (Checkpoint 9.3): a `create_task` whose rrule cannot be
+  // parsed or whose recurrence_timezone Intl rejects. CreateTaskToolSchema
+  // validates neither, commitParsedEntity now refuses such a call before
+  // writing anything, and retrying it recomputes the same refusal -- so it is
+  // the same permanent class as `unclear`, judged by the same core helper the
+  // API's confirm route uses.
+  if (
+    !isCommittableToolCall(stored.toolCall) ||
+    !hasCommittableRecurrence(stored.toolCall, row.timezone)
+  ) {
+    return "not_committable";
+  }
   await commitAndUpdate(db, row.id, stored.toolCall, row.timezone, "confirmed");
   return "committed";
 }

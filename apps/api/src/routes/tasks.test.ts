@@ -1,6 +1,7 @@
+import { computeNextLazyOccurrence } from "@personal-os/core";
 import { occurrences, tasks } from "@personal-os/db";
 import type { Project, Task } from "@personal-os/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
@@ -431,6 +432,280 @@ describe("tasks routes", () => {
       expect(allOccs.filter((o) => o.status === "done")).toHaveLength(1);
       expect(allOccs.filter((o) => o.status === "skipped")).toHaveLength(1);
     });
+
+    // Checkpoint 9.3, shared contract 4: "Editing the rule regenerates only
+    // the single open occurrence" (docs/ARCHITECTURE.md). Before 9.3 a
+    // completion_date -> completion_date PATCH touched no occurrence at all.
+    describe("completion_date -> completion_date PATCH (branch F)", () => {
+      const rule = { rrule: "FREQ=DAILY;INTERVAL=3", tz: "America/Chicago" };
+
+      async function insertCompletionTask(
+        overrides: Partial<typeof tasks.$inferInsert> = {},
+      ): Promise<typeof tasks.$inferSelect> {
+        const [row] = await app.db
+          .insert(tasks)
+          .values({
+            title: "Water the plants",
+            status: "active",
+            timezone: rule.tz,
+            rrule: rule.rrule,
+            recurrenceTimezone: rule.tz,
+            recurrenceAnchor: "completion_date",
+            ...overrides,
+          })
+          .returning();
+        return row!;
+      }
+
+      async function scheduledOf(taskId: string) {
+        return app.db
+          .select()
+          .from(occurrences)
+          .where(and(eq(occurrences.parentId, taskId), eq(occurrences.status, "scheduled")));
+      }
+
+      it("rejects a BY*-bearing rrule with 400 when the body omits the anchor (effective rule validated)", async () => {
+        const task = await insertCompletionTask();
+        const before = await app.db.select().from(tasks).where(eq(tasks.id, task.id));
+
+        // The schema refine only fires when the body names
+        // recurrence_anchor = completion_date; the anchor here comes from the
+        // stored row, so only the route-level effective-rule check can catch it.
+        const response = await app.inject({
+          method: "PATCH",
+          url: `/tasks/${task.id}`,
+          payload: { rrule: "FREQ=WEEKLY;BYDAY=MO" },
+        });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toMatchObject({
+          error: "validation_failed",
+          issues: [{ path: ["rrule"] }],
+        });
+        const after = await app.db.select().from(tasks).where(eq(tasks.id, task.id));
+        expect(after).toEqual(before);
+      });
+
+      it("seeds one open lazy occurrence at due_at when none exists (the dead-letter repair path)", async () => {
+        const dueAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        const task = await insertCompletionTask({ dueAt });
+        expect(await scheduledOf(task.id)).toHaveLength(0);
+
+        const response = await app.inject({
+          method: "PATCH",
+          url: `/tasks/${task.id}`,
+          payload: { rrule: rule.rrule, recurrence_anchor: "completion_date" },
+        });
+        expect(response.statusCode).toBe(200);
+
+        const open = await scheduledOf(task.id);
+        expect(open).toHaveLength(1);
+        expect(open[0]!.lazyGenerated).toBe(true);
+        expect(open[0]!.occursAt.getTime()).toBe(dueAt.getTime());
+      });
+
+      it("seeds at effectiveNow when there is no due_at and no history", async () => {
+        const task = await insertCompletionTask();
+        const before = Date.now();
+        const response = await app.inject({
+          method: "PATCH",
+          url: `/tasks/${task.id}`,
+          payload: { title: "Water the plants (renamed)" },
+        });
+        expect(response.statusCode).toBe(200);
+        const open = await scheduledOf(task.id);
+        expect(open).toHaveLength(1);
+        expect(open[0]!.occursAt.getTime()).toBeGreaterThanOrEqual(before);
+        expect(open[0]!.occursAt.getTime()).toBeLessThanOrEqual(Date.now());
+      });
+
+      it("seeds from the last completion through the rule when history exists, not from a stale due_at", async () => {
+        const staleDue = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const task = await insertCompletionTask({ dueAt: staleDue });
+        const lastDone = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+        await app.db.insert(occurrences).values({
+          parentType: "task",
+          parentId: task.id,
+          occursAt: staleDue,
+          occursLocal: staleDue,
+          status: "done",
+          completedAt: lastDone,
+          lazyGenerated: true,
+        });
+
+        const response = await app.inject({
+          method: "PATCH",
+          url: `/tasks/${task.id}`,
+          payload: { rrule: "FREQ=DAILY;INTERVAL=5" },
+        });
+        expect(response.statusCode).toBe(200);
+
+        const open = await scheduledOf(task.id);
+        expect(open).toHaveLength(1);
+        const expected = computeNextLazyOccurrence(
+          { rrule: "FREQ=DAILY;INTERVAL=5", recurrenceTimezone: rule.tz },
+          lastDone,
+          "completed",
+        );
+        expect(open[0]!.occursAt.getTime()).toBe(expected.occursAt.getTime());
+        // The done row is untouched.
+        const all = await app.db
+          .select()
+          .from(occurrences)
+          .where(eq(occurrences.parentId, task.id));
+        expect(all.filter((o) => o.status === "done")).toHaveLength(1);
+      });
+
+      it("does not seed for a done or dropped task", async () => {
+        for (const status of ["done", "dropped"] as const) {
+          const task = await insertCompletionTask({ status });
+          const response = await app.inject({
+            method: "PATCH",
+            url: `/tasks/${task.id}`,
+            payload: { rrule: rule.rrule },
+          });
+          expect(response.statusCode).toBe(200);
+          expect(await scheduledOf(task.id)).toHaveLength(0);
+        }
+      });
+
+      it("re-points the open occurrence to a newly supplied due_at", async () => {
+        const task = await insertCompletionTask({ dueAt: new Date() });
+        const [open] = await app.db
+          .insert(occurrences)
+          .values({
+            parentType: "task",
+            parentId: task.id,
+            occursAt: new Date(),
+            occursLocal: new Date(),
+            status: "scheduled",
+            lazyGenerated: true,
+          })
+          .returning();
+        const newDue = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+
+        const response = await app.inject({
+          method: "PATCH",
+          url: `/tasks/${task.id}`,
+          payload: { due_at: newDue.toISOString() },
+        });
+        expect(response.statusCode).toBe(200);
+
+        const scheduled = await scheduledOf(task.id);
+        expect(scheduled).toHaveLength(1);
+        expect(scheduled[0]!.id).toBe(open!.id); // re-pointed, not replaced
+        expect(scheduled[0]!.occursAt.getTime()).toBe(newDue.getTime());
+      });
+
+      it("re-points the open occurrence from the last completion when only the rule changes", async () => {
+        const task = await insertCompletionTask();
+        const lastDone = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const oldNext = computeNextLazyOccurrence(
+          { rrule: rule.rrule, recurrenceTimezone: rule.tz },
+          lastDone,
+          "completed",
+        );
+        await app.db.insert(occurrences).values({
+          parentType: "task",
+          parentId: task.id,
+          occursAt: lastDone,
+          occursLocal: lastDone,
+          status: "done",
+          completedAt: lastDone,
+          lazyGenerated: true,
+        });
+        const [open] = await app.db
+          .insert(occurrences)
+          .values({
+            parentType: "task",
+            parentId: task.id,
+            occursAt: oldNext.occursAt,
+            occursLocal: oldNext.occursAt,
+            status: "scheduled",
+            lazyGenerated: true,
+          })
+          .returning();
+
+        const response = await app.inject({
+          method: "PATCH",
+          url: `/tasks/${task.id}`,
+          payload: { rrule: "FREQ=WEEKLY;INTERVAL=1" },
+        });
+        expect(response.statusCode).toBe(200);
+
+        const scheduled = await scheduledOf(task.id);
+        expect(scheduled).toHaveLength(1);
+        expect(scheduled[0]!.id).toBe(open!.id);
+        const expected = computeNextLazyOccurrence(
+          { rrule: "FREQ=WEEKLY;INTERVAL=1", recurrenceTimezone: rule.tz },
+          lastDone,
+          "completed",
+        );
+        expect(scheduled[0]!.occursAt.getTime()).toBe(expected.occursAt.getTime());
+        expect(scheduled[0]!.occursAt.getTime()).not.toBe(oldNext.occursAt.getTime());
+      });
+
+      it("leaves the open occurrence alone when neither the rule nor due_at changed", async () => {
+        const task = await insertCompletionTask({ dueAt: new Date() });
+        const occursAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+        await app.db.insert(occurrences).values({
+          parentType: "task",
+          parentId: task.id,
+          occursAt,
+          occursLocal: occursAt,
+          status: "scheduled",
+          lazyGenerated: true,
+        });
+
+        const response = await app.inject({
+          method: "PATCH",
+          url: `/tasks/${task.id}`,
+          payload: { title: "Renamed", priority: 2, rrule: rule.rrule },
+        });
+        expect(response.statusCode).toBe(200);
+
+        const scheduled = await scheduledOf(task.id);
+        expect(scheduled).toHaveLength(1);
+        expect(scheduled[0]!.occursAt.getTime()).toBe(occursAt.getTime());
+      });
+
+      it("leaves the open occurrence alone when the target collides with a historical row", async () => {
+        const task = await insertCompletionTask();
+        const historical = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000);
+        await app.db.insert(occurrences).values({
+          parentType: "task",
+          parentId: task.id,
+          occursAt: historical,
+          occursLocal: historical,
+          status: "done",
+          completedAt: historical,
+          lazyGenerated: true,
+        });
+        const occursAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+        await app.db.insert(occurrences).values({
+          parentType: "task",
+          parentId: task.id,
+          occursAt,
+          occursLocal: occursAt,
+          status: "scheduled",
+          lazyGenerated: true,
+        });
+
+        // Explicit due_at equal to the done row's instant would violate
+        // occurrences_parent_occurs_at_key -- the edit must still succeed.
+        const response = await app.inject({
+          method: "PATCH",
+          url: `/tasks/${task.id}`,
+          payload: { due_at: historical.toISOString() },
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json<Task>().due_at).toBe(historical.toISOString());
+
+        const scheduled = await scheduledOf(task.id);
+        expect(scheduled).toHaveLength(1);
+        expect(scheduled[0]!.occursAt.getTime()).toBe(occursAt.getTime());
+      });
+    });
   });
 
   it("resolves an offset-less due_at against the supplied timezone", async () => {
@@ -818,6 +1093,140 @@ describe("tasks routes", () => {
       const body = response.json<ErrorBody>();
       expect(body.error).toBe("recurring_task_use_occurrence");
       expect(body.occurrence_id).toBe(occurrence!.id);
+    });
+  });
+
+  // Checkpoint 9.3, shared contract 2.
+  it("409s recurring_task_no_open_occurrence when a recurring task has nothing open", async () => {
+    const [task] = await app.db
+      .insert(tasks)
+      .values({
+        title: "Recurring, successor lost",
+        status: "active",
+        timezone: "America/Chicago",
+        rrule: "FREQ=DAILY;INTERVAL=3",
+        recurrenceTimezone: "America/Chicago",
+        recurrenceAnchor: "completion_date",
+      })
+      .returning();
+    // A done occurrence is not "open" -- the 409 must not point at it.
+    await app.db.insert(occurrences).values({
+      parentType: "task",
+      parentId: task!.id,
+      occursAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+      occursLocal: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+      status: "done",
+      completedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+      lazyGenerated: true,
+    });
+
+    const response = await app.inject({ method: "POST", url: `/tasks/${task!.id}/complete` });
+    expect(response.statusCode).toBe(409);
+    expect(response.json<ErrorBody>()).toEqual({ error: "recurring_task_no_open_occurrence" });
+
+    const [row] = await app.db.select().from(tasks).where(eq(tasks.id, task!.id));
+    expect(row!.status).toBe("active");
+  });
+
+  // Checkpoint 9.3, shared contract 1.
+  describe("reopen", () => {
+    async function insertTask(overrides: Partial<typeof tasks.$inferInsert>) {
+      const [row] = await app.db
+        .insert(tasks)
+        .values({ title: "Reopen me", timezone: "America/Chicago", status: "active", ...overrides })
+        .returning();
+      return row!;
+    }
+
+    it("reopens a done task: active, completed_at cleared, updated_at bumped", async () => {
+      const completedAt = new Date("2026-09-01T12:00:00Z");
+      const task = await insertTask({
+        status: "done",
+        completedAt,
+        updatedAt: completedAt,
+      });
+
+      const response = await app.inject({ method: "POST", url: `/tasks/${task.id}/reopen` });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<Task>();
+      expect(body.status).toBe("active");
+      expect(body.completed_at).toBeNull();
+      expect(new Date(body.updated_at).getTime()).toBeGreaterThan(completedAt.getTime());
+    });
+
+    it("reopens a dropped task", async () => {
+      const task = await insertTask({ status: "dropped" });
+      const response = await app.inject({ method: "POST", url: `/tasks/${task.id}/reopen` });
+      expect(response.statusCode).toBe(200);
+      expect(response.json<Task>().status).toBe("active");
+    });
+
+    it("leaves occurrences exactly as they were", async () => {
+      const task = await insertTask({
+        status: "done",
+        completedAt: new Date(),
+        rrule: "FREQ=DAILY;INTERVAL=3",
+        recurrenceTimezone: "America/Chicago",
+        recurrenceAnchor: "completion_date",
+      });
+      const doneAt = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      await app.db.insert(occurrences).values([
+        {
+          parentType: "task",
+          parentId: task.id,
+          occursAt: doneAt,
+          occursLocal: doneAt,
+          status: "done",
+          completedAt: doneAt,
+          lazyGenerated: true,
+        },
+        {
+          parentType: "task",
+          parentId: task.id,
+          occursAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
+          occursLocal: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
+          status: "scheduled",
+          lazyGenerated: true,
+        },
+      ]);
+      const before = await app.db
+        .select()
+        .from(occurrences)
+        .where(eq(occurrences.parentId, task.id));
+
+      const response = await app.inject({ method: "POST", url: `/tasks/${task.id}/reopen` });
+      expect(response.statusCode).toBe(200);
+
+      const after = await app.db
+        .select()
+        .from(occurrences)
+        .where(eq(occurrences.parentId, task.id));
+      expect(after).toEqual(before);
+    });
+
+    it.each(["inbox", "active"])("409s task_not_reopenable from %s", async (status) => {
+      const task = await insertTask({ status });
+      const response = await app.inject({ method: "POST", url: `/tasks/${task.id}/reopen` });
+      expect(response.statusCode).toBe(409);
+      expect(response.json<ErrorBody>()).toEqual({ error: "task_not_reopenable", status });
+    });
+
+    it("404s for an unknown id and for an archived task", async () => {
+      const unknown = await app.inject({
+        method: "POST",
+        url: "/tasks/00000000-0000-0000-0000-000000000000/reopen",
+      });
+      expect(unknown.statusCode).toBe(404);
+
+      const archived = await insertTask({
+        status: "done",
+        completedAt: new Date(),
+        archivedAt: new Date(),
+      });
+      const response = await app.inject({ method: "POST", url: `/tasks/${archived.id}/reopen` });
+      expect(response.statusCode).toBe(404);
+      const [row] = await app.db.select().from(tasks).where(eq(tasks.id, archived.id));
+      expect(row!.status).toBe("done"); // untouched
     });
   });
 

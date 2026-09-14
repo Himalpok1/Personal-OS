@@ -1,11 +1,13 @@
-import { ApiClientError } from "@personal-os/api-client";
 import type { Task, TaskStatus } from "@personal-os/schema";
+import { confirmDestructive } from "@/components/confirm-destructive";
+import { classifyTaskActionError, completionTarget } from "@/components/task-actions-state";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import {
   useActivateTask,
   useArchiveTask,
   useCompleteTask,
   useDropTask,
+  useReopenTask,
   useTasks,
 } from "@/queries/tasks";
 import { FLOATING_CLEARANCE, FLOATING_CTA_CLEARANCE_NO_TABBAR } from "@/components/floating-layout";
@@ -28,18 +30,66 @@ function TaskRow({ task }: { task: Task }) {
   const complete = useCompleteTask();
   const completeOccurrence = useCompleteOccurrence();
   const drop = useDropTask();
+  const reopen = useReopenTask();
   const archive = useArchiveTask();
+  const [error, setError] = useState<string | null>(null);
 
+  const showFailure = (err: unknown) => {
+    const failure = classifyTaskActionError(err);
+    if (failure.kind === "message") setError(failure.message);
+  };
+
+  // A list row is a `Task`, which carries no occurrence_id, so `completionTarget`
+  // always resolves to the task endpoint here; the shared helper keeps the
+  // recurring 409 handling identical to Today's (Checkpoint 9.3): complete the
+  // named occurrence, or say that none is generated yet. Done stays one tap.
   const onComplete = () => {
-    complete.mutate(task.id, {
+    setError(null);
+    const target = completionTarget(task);
+    if (target.kind === "occurrence") {
+      completeOccurrence.mutate(target.occurrenceId, { onError: showFailure });
+      return;
+    }
+    complete.mutate(target.taskId, {
       onError: (err) => {
-        if (err instanceof ApiClientError && err.status === 409) {
-          const occurrenceId = (err.body as { occurrence_id?: string | null })?.occurrence_id;
-          if (occurrenceId) completeOccurrence.mutate(occurrenceId);
+        const failure = classifyTaskActionError(err);
+        if (failure.kind === "use_occurrence") {
+          completeOccurrence.mutate(failure.occurrenceId, { onError: showFailure });
+          return;
         }
+        setError(failure.message);
       },
     });
   };
+
+  // Drop and Archive were the two list-row actions the ledger recorded as
+  // unconfirmed ("List-row Archive and Drop still fire without confirmation")
+  // -- one fat-finger tap on the Rabbit's 480px row hid an item. Same gate
+  // and same copy as the detail screen.
+  const onDrop = () =>
+    confirmDestructive({
+      title: "Drop this task?",
+      message: "It moves to Dropped. You can reopen it later from there.",
+      confirmLabel: "Drop",
+      onConfirm: () => {
+        setError(null);
+        drop.mutate(task.id, { onError: showFailure });
+      },
+    });
+
+  const onArchive = () =>
+    confirmDestructive({
+      title: "Archive this task?",
+      message:
+        "This hides it from your lists. There's currently no way to view or restore it from the app.",
+      confirmLabel: "Archive",
+      onConfirm: () => {
+        setError(null);
+        archive.mutate(task.id, {
+          onError: () => setError("Couldn't archive this task. Please try again."),
+        });
+      },
+    });
 
   return (
     <Pressable
@@ -57,6 +107,9 @@ function TaskRow({ task }: { task: Task }) {
         ) : null}
         {task.rrule ? (
           <Text className="text-xs text-neutral-500 dark:text-neutral-400">Recurring</Text>
+        ) : null}
+        {error ? (
+          <Text className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</Text>
         ) : null}
       </View>
       {/* Each action Pressable stops propagation so it does not ALSO trigger
@@ -94,7 +147,7 @@ function TaskRow({ task }: { task: Task }) {
             <Pressable
               onPress={(e) => {
                 e.stopPropagation();
-                drop.mutate(task.id);
+                onDrop();
               }}
               hitSlop={8}
               disabled={drop.isPending}
@@ -104,10 +157,26 @@ function TaskRow({ task }: { task: Task }) {
             </Pressable>
           </>
         ) : null}
+        {task.status === "done" || task.status === "dropped" ? (
+          <Pressable
+            onPress={(e) => {
+              e.stopPropagation();
+              setError(null);
+              reopen.mutate(task.id, { onError: showFailure });
+            }}
+            hitSlop={8}
+            disabled={reopen.isPending}
+            accessibilityRole="button"
+            accessibilityLabel="Reopen task"
+            className="min-h-[44px] items-center justify-center rounded bg-blue-100 px-2 disabled:opacity-50 dark:bg-blue-950"
+          >
+            <Text className="text-xs text-blue-700 dark:text-blue-300">Reopen</Text>
+          </Pressable>
+        ) : null}
         <Pressable
           onPress={(e) => {
             e.stopPropagation();
-            archive.mutate(task.id);
+            onArchive();
           }}
           hitSlop={8}
           disabled={archive.isPending}

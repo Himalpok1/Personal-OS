@@ -1,4 +1,3 @@
-import { ApiClientError } from "@personal-os/api-client";
 import type {
   TodayEventItem,
   TodayInboxItem,
@@ -8,12 +7,14 @@ import type {
 } from "@personal-os/schema";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, type Href } from "expo-router";
+import { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { BriefCard } from "@/components/brief/brief-card";
 import { HealthTodayCard } from "@/components/health/health-today-card";
 import { MailDigestCard } from "@/components/mail/digest-today-card";
 import { ReminderNoticeCard } from "@/components/reminder-notice-card";
 import { FLOATING_CLEARANCE } from "@/components/floating-layout";
+import { classifyTaskActionError, completionTarget } from "@/components/task-actions-state";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import { useCompleteTask } from "@/queries/tasks";
 import { useToday } from "@/queries/today";
@@ -65,22 +66,45 @@ function useInvalidateAfterCompletion() {
   };
 }
 
-// Same completion rule as the Tasks list: completeTask first, fall back to
-// the occurrence on the recurring-task 409 (ApiClientError.body.occurrence_id).
+// Completion rule (Checkpoint 9.3): a row that carries `occurrence_id` IS
+// the materialized occurrence of a recurring task, so it completes that
+// occurrence directly -- one round trip, instead of the old
+// POST /tasks/:id/complete -> 409 -> POST /occurrences/:id/complete detour.
+// A row without one is a one-off task and goes through the task endpoint;
+// the recurring 409s that path can still return are classified in
+// components/task-actions-state.ts (use the named occurrence, or explain
+// that none is generated yet).
 function TaskRow({ item }: { item: TodayTaskItem }) {
   const router = useRouter();
   const complete = useCompleteTask();
   const completeOccurrence = useCompleteOccurrence();
   const invalidate = useInvalidateAfterCompletion();
+  const [error, setError] = useState<string | null>(null);
+
+  const showFailure = (err: unknown) => {
+    const failure = classifyTaskActionError(err);
+    if (failure.kind === "message") setError(failure.message);
+  };
 
   const onComplete = () => {
-    complete.mutate(item.id, {
+    setError(null);
+    const target = completionTarget(item);
+    if (target.kind === "occurrence") {
+      completeOccurrence.mutate(target.occurrenceId, { onSuccess: invalidate, onError: showFailure });
+      return;
+    }
+    complete.mutate(target.taskId, {
       onSuccess: invalidate,
       onError: (err) => {
-        if (err instanceof ApiClientError && err.status === 409) {
-          const occurrenceId = (err.body as { occurrence_id?: string | null })?.occurrence_id;
-          if (occurrenceId) completeOccurrence.mutate(occurrenceId, { onSuccess: invalidate });
+        const failure = classifyTaskActionError(err);
+        if (failure.kind === "use_occurrence") {
+          completeOccurrence.mutate(failure.occurrenceId, {
+            onSuccess: invalidate,
+            onError: showFailure,
+          });
+          return;
         }
+        setError(failure.message);
       },
     });
   };
@@ -136,6 +160,9 @@ function TaskRow({ item }: { item: TodayTaskItem }) {
             <Text className="text-xs text-neutral-500 dark:text-neutral-400">⟲</Text>
           ) : null}
         </View>
+        {error ? (
+          <Text className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</Text>
+        ) : null}
       </View>
     </Pressable>
   );

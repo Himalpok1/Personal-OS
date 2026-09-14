@@ -24,6 +24,7 @@ import type {
   TodayUpcomingDay,
 } from "@personal-os/schema";
 import { buildTodayResponse } from "../read-models/today.js";
+import { serializeBriefSnapshot } from "./prompt.js";
 import {
   BRIEF_DUE_TODAY_CAP,
   BRIEF_EVENTS_TODAY_CAP,
@@ -75,6 +76,8 @@ function toBriefTaskItem(item: TodayTaskItem): BriefTaskItem {
     project_name:
       item.project_name !== null ? truncated(item.project_name, BRIEF_TITLE_MAX_CHARS) : null,
     recurring: item.rrule !== null || Boolean(item.occurrence_id),
+    priority: item.priority,
+    has_reminder: item.remind_at !== null,
   };
 }
 
@@ -223,8 +226,23 @@ function toBriefProjectItem(item: TodayProjectSummary): BriefProjectItem {
   };
 }
 
+/**
+ * Serialized size, measured on the EXACT string the prompt embeds.
+ *
+ * CORRECTED AT CHECKPOINT 9.3. This used to be `JSON.stringify(input).length`
+ * -- compact -- while `buildBriefUserPrompt` sends `JSON.stringify(input,
+ * null, 2)`: the 8.6B design review recorded it as an unrecorded defect
+ * (docs/CHECKPOINT-8.6B-DESIGN.md, section 7) and made the Ask lane measure
+ * the exact string sent; the mail digest (`measureMailDigestInput`) always
+ * did. Pretty-printing adds two spaces of indentation per nesting level plus a
+ * newline per token, so a payload that measured under the 12,000 ceiling here
+ * could reach the model ~40% larger than the number every drop-ladder decision
+ * was made against. The serializer now lives in one place (prompt.ts's
+ * `serializeBriefSnapshot`) and both the ceiling and the prompt call it, so the
+ * two cannot drift again.
+ */
 function measure(input: BriefInput): number {
-  return JSON.stringify(input).length;
+  return serializeBriefSnapshot(input).length;
 }
 
 /**

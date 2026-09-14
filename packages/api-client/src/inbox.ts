@@ -1,7 +1,9 @@
 import {
+  InboxArchiveResponseSchema,
   InboxConfirmRequestSchema,
   InboxItemSchema,
   paginatedResponseSchema,
+  type InboxArchiveResponse,
   type InboxConfirmRequest,
   type InboxItem,
   type InboxItemStatus,
@@ -14,6 +16,8 @@ const InboxConfirmResponseSchema = z.object({ inbox_id: z.string().uuid(), statu
 
 export interface InboxListParams {
   status?: InboxItemStatus;
+  /** Archived captures are hidden unless this is true (Checkpoint 9.3). */
+  include_archived?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -35,5 +39,17 @@ export async function confirmInboxItem(
   return fetchJson(baseUrl, `/inbox/${id}/confirm`, InboxConfirmResponseSchema, {
     method: "POST",
     body: JSON.stringify(parsed),
+  });
+}
+
+/**
+ * Archives a capture (Checkpoint 9.3). Idempotent: a second call returns the
+ * `archived_at` the first one stamped. The row is never deleted and the entity
+ * the capture committed is never touched. Throws `ApiClientError` with
+ * `.code === "not_found"` (404) for an unknown id.
+ */
+export async function archiveInboxItem(baseUrl: string, id: string): Promise<InboxArchiveResponse> {
+  return fetchJson(baseUrl, `/inbox/${id}/archive`, InboxArchiveResponseSchema, {
+    method: "POST",
   });
 }

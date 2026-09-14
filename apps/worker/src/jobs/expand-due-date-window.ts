@@ -6,7 +6,7 @@ import {
   type DueDateRecurrenceRule,
 } from "@personal-os/core";
 import { events, occurrences, tasks, type Db } from "@personal-os/db";
-import { and, eq, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, min, ne } from "drizzle-orm";
 import type { Job } from "pg-boss";
 import { errorToken, log } from "../logger.js";
 import { OCCURRENCES_EXPAND_WINDOW_QUEUE } from "../queue-names.js";
@@ -39,6 +39,14 @@ function buildRule(params: {
     recurrenceCount: params.recurrenceCount ?? undefined,
     recurrenceExdates: params.recurrenceExdates ?? undefined,
   };
+}
+
+async function earliestOccurrenceOf(db: Db, taskId: string): Promise<Date | null> {
+  const [row] = await db
+    .select({ earliest: min(occurrences.occursAt) })
+    .from(occurrences)
+    .where(and(eq(occurrences.parentType, "task"), eq(occurrences.parentId, taskId)));
+  return row?.earliest ?? null;
 }
 
 async function upsertOccurrences(
@@ -112,6 +120,8 @@ export async function expandDueDateWindowJob(db: Db): Promise<void> {
   // message.
   const failures: FailedParentRef[] = [];
   let attempted = 0;
+  // due_date tasks with neither a due_at nor any occurrence to anchor on.
+  let unanchored = 0;
 
   const dueDateTasks = await db
     .select()
@@ -126,13 +136,36 @@ export async function expandDueDateWindowJob(db: Db): Promise<void> {
     );
 
   for (const task of dueDateTasks) {
-    if (!task.rrule || !task.recurrenceTimezone || !task.dueAt) continue;
+    if (!task.rrule || !task.recurrenceTimezone) continue;
     attempted += 1;
     try {
+      // A due_date series with no due_at (Checkpoint 9.3 review). Both
+      // POST /tasks and the capture commit materialize such a series at
+      // creation, anchoring the rule at the creation instant -- but this job
+      // used to skip any due_date task without a due_at, so the series was
+      // expanded exactly once and never again: after 90 days it simply
+      // stopped. The anchor the creator used is not stored anywhere, but its
+      // consequence is -- the earliest occurrence the series has ever had is
+      // the first instance of that anchored rule (the seed already truncated
+      // to seconds, which is what the wall-clock anchor drops), so anchoring
+      // on min(occurs_at) reproduces the identical instants for the
+      // overlapping window (ON CONFLICT DO NOTHING absorbs them) and continues
+      // the series beyond it. NOT created_at: it differs from the seed by the
+      // milliseconds the wall clock dropped and by the commit's own latency,
+      // and a rule anchored a few hundred milliseconds off would generate a
+      // second, parallel set of instants alongside every existing one.
+      // A series with no occurrence at all (a row written before the
+      // creation-time materialization existed) still has no anchor and is
+      // still skipped -- there is nothing to anchor on.
+      const anchorInstant = task.dueAt ?? (await earliestOccurrenceOf(db, task.id));
+      if (!anchorInstant) {
+        unanchored += 1;
+        continue;
+      }
       const rule = buildRule({
         rrule: task.rrule,
         recurrenceTimezone: task.recurrenceTimezone,
-        anchorInstant: task.dueAt,
+        anchorInstant,
         recurrenceUntil: task.recurrenceUntil,
         recurrenceCount: task.recurrenceCount,
         recurrenceExdates: task.recurrenceExdates,
@@ -194,6 +227,7 @@ export async function expandDueDateWindowJob(db: Db): Promise<void> {
     tasks: dueDateTasks.length,
     events: recurringEvents.length,
     attempted,
+    unanchored,
     failed: failures.length,
   });
 

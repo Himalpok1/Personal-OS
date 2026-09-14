@@ -103,6 +103,9 @@ function AppStack() {
       <Stack.Screen name="tasks/[id]" options={{ title: "Task" }} />
       <Stack.Screen name="tasks/new" options={{ title: "New Task" }} />
       <Stack.Screen name="notes/[id]" options={{ title: "Note" }} />
+      {/* Checkpoint 9.3: one captured item, reached from an Inbox row, a
+          confirmation push, or the capture follow-through banner. */}
+      <Stack.Screen name="inbox/[id]" options={{ title: "Capture" }} />
       <Stack.Screen name="notes/new" options={{ title: "New Note" }} />
       <Stack.Screen name="projects/[id]" options={{ title: "Project" }} />
       <Stack.Screen name="projects/new" options={{ title: "New Project" }} />

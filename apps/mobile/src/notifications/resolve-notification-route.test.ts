@@ -10,9 +10,10 @@ describe("resolveNotificationRoute", () => {
 
   // The worker's capture-parse.ts dispatches confirmations with
   // `data: { inboxId }`. Before this existed the tap foregrounded the app
-  // and navigated nowhere.
-  it("routes a capture-confirmation payload to the Inbox tab", () => {
-    expect(resolveNotificationRoute({ inboxId: "def" })).toBe("/(tabs)/inbox");
+  // and navigated nowhere; until Checkpoint 9.3 it opened the Inbox TAB and
+  // left the owner to find the row.
+  it("routes a capture-confirmation payload to that item's own screen", () => {
+    expect(resolveNotificationRoute({ inboxId: "def" })).toBe("/inbox/def");
   });
 
   it("prefers taskId when a payload carries both", () => {
@@ -31,7 +32,7 @@ describe("resolveNotificationRoute", () => {
     expect(resolveNotificationRoute({ taskId: "" })).toBeNull();
     expect(resolveNotificationRoute({ inboxId: "" })).toBeNull();
     // A non-string taskId must not shadow a usable inboxId.
-    expect(resolveNotificationRoute({ taskId: null, inboxId: "def" })).toBe("/(tabs)/inbox");
+    expect(resolveNotificationRoute({ taskId: null, inboxId: "def" })).toBe("/inbox/def");
   });
 });
 
@@ -98,7 +99,7 @@ describe("precedence is preserved for existing payloads", () => {
   it("still prefers inboxId over the new keys", () => {
     expect(
       resolveNotificationRoute({ inboxId: "i1", monitorIncidentId: "m1", mailDigestDate: "d" }),
-    ).toBe("/(tabs)/inbox");
+    ).toBe("/inbox/i1");
   });
 
   it("prefers a monitoring alert over a digest", () => {

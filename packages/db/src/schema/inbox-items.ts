@@ -36,6 +36,23 @@ export const inboxItems = pgTable(
     // application layer rather than the database.
     entityType: text("entity_type"),
     entityId: uuid("entity_id"),
+    /**
+     * Soft-delete (Checkpoint 9.3, migration 0017) -- the same independent
+     * archive axis `tasks`/`notes`/`projects` and, since 0016,
+     * `monitor_targets` use. An inbox row is the durable record of a capture
+     * (ADR-021: raw text is persisted BEFORE any parsing) and is the anchor
+     * `entity_type`/`entity_id` hang off, so it is never hard-deleted; before
+     * this column the only way to make a handled capture leave the Inbox
+     * screen and the Today attention counts was to leave it there forever.
+     * Archiving is orthogonal to `status`: any status may be archived, the
+     * status is left untouched, and the committed entity is never touched.
+     * Archived rows are excluded from GET /inbox by default (opt in with
+     * `include_archived`), from Today's three inbox counts and attention
+     * list, and from GET /search; GET /export includes them unconditionally
+     * (ADR-059). There is deliberately no restore path, matching `tasks`'
+     * own precedent (ARCHITECTURE.md: "no restore endpoint ships").
+     */
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

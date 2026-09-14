@@ -71,7 +71,7 @@ import {
   listHealthMetricStreams,
   syncHealthConnectionNow,
 } from "./health.js";
-import { confirmInboxItem, getInboxItem, listInbox } from "./inbox.js";
+import { archiveInboxItem, confirmInboxItem, getInboxItem, listInbox } from "./inbox.js";
 import { archiveNote, createNote, getNote, listNotes, updateNote } from "./notes.js";
 import { completeOccurrence, listOccurrences, skipOccurrence } from "./occurrences.js";
 import {
@@ -108,6 +108,7 @@ import {
   dropTask,
   getTask,
   listTasks,
+  reopenTask,
   updateTask,
 } from "./tasks.js";
 import { getAgenda } from "./agenda.js";
@@ -216,6 +217,7 @@ export function createApiClient(baseUrl: string) {
     listInbox: listInbox.bind(null, baseUrl),
     getInboxItem: getInboxItem.bind(null, baseUrl),
     confirmInboxItem: confirmInboxItem.bind(null, baseUrl),
+    archiveInboxItem: archiveInboxItem.bind(null, baseUrl),
 
     listTasks: listTasks.bind(null, baseUrl),
     getTask: getTask.bind(null, baseUrl),
@@ -225,6 +227,7 @@ export function createApiClient(baseUrl: string) {
     activateTask: activateTask.bind(null, baseUrl),
     completeTask: completeTask.bind(null, baseUrl),
     dropTask: dropTask.bind(null, baseUrl),
+    reopenTask: reopenTask.bind(null, baseUrl),
 
     listNotes: listNotes.bind(null, baseUrl),
     getNote: getNote.bind(null, baseUrl),

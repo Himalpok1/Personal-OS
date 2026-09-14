@@ -3,6 +3,7 @@ import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { DateTimeField } from "@/components/datetime-field";
 import { RecurrenceEditor } from "@/components/recurrence/recurrence-editor";
+import { TaskActions } from "@/components/task-actions";
 import { useProjects } from "@/queries/projects";
 import { useArchiveTask, useTask, useUpdateTask } from "@/queries/tasks";
 import { ApiClientError } from "@personal-os/api-client";
@@ -36,6 +37,12 @@ export default function EditTaskScreen() {
   const [dueAt, setDueAt] = useState<string | null>(null);
   const [remindAt, setRemindAt] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  // Save/Archive failures (Checkpoint 9.3). Previously `updateTask.mutate`
+  // had no onError at all, so a failed save left the form exactly as it was
+  // with nothing to say why -- and `router.back()` never happened, which was
+  // the only hint. The lifecycle actions carry their own banner inside
+  // <TaskActions>.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [recurrence, setRecurrence] = useState<RecurrenceEditorState>(() =>
     parseRRuleStringToEditorState(task?.rrule, {
       recurrenceTimezone: task?.recurrence_timezone,
@@ -106,24 +113,40 @@ export default function EditTaskScreen() {
   }
 
   const submit = () => {
+    setSaveError(null);
     const serialized = serializeEditorStateToRRule(recurrence);
-    updateTask.mutate({
-      id: task.id,
-      body: {
-        title: title.trim() || undefined,
-        body: body.trim(),
-        due_at: dueAt,
-        remind_at: remindAt,
-        project_id: projectId ?? null,
-        rrule: serialized.rrule,
-        recurrence_timezone: serialized.recurrence_timezone,
-        recurrence_anchor: serialized.recurrence_anchor,
-        recurrence_until: serialized.recurrence_until
-          ? serialized.recurrence_until.toISOString()
-          : null,
-        recurrence_count: serialized.recurrence_count,
+    updateTask.mutate(
+      {
+        id: task.id,
+        body: {
+          title: title.trim() || undefined,
+          body: body.trim(),
+          due_at: dueAt,
+          remind_at: remindAt,
+          project_id: projectId ?? null,
+          rrule: serialized.rrule,
+          recurrence_timezone: serialized.recurrence_timezone,
+          recurrence_anchor: serialized.recurrence_anchor,
+          recurrence_until: serialized.recurrence_until
+            ? serialized.recurrence_until.toISOString()
+            : null,
+          recurrence_count: serialized.recurrence_count,
+        },
       },
-    });
+      {
+        onSuccess: () => router.back(),
+        // Never the raw message -- `ApiClientError.message` is the
+        // developer-shaped `API error 400: validation_failed`.
+        onError: (err) =>
+          setSaveError(
+            err instanceof ApiClientError && err.code === "validation_failed"
+              ? "Couldn't save those changes: something in the form isn't valid."
+              : err instanceof ApiClientError && err.status === 404
+                ? "This task couldn't be found."
+                : "Couldn't save those changes. Please try again.",
+          ),
+      },
+    );
   };
 
   return (
@@ -141,6 +164,11 @@ export default function EditTaskScreen() {
       // only dismisses the keyboard instead of submitting.
       keyboardShouldPersistTaps="handled"
     >
+      {/* Status line + Start/Complete/Drop/Reopen + snooze chips. Sits above
+          the form so the one-tap follow-through (the point of 9.3) is reachable
+          without scrolling past the editor on a 480x640 screen. */}
+      <TaskActions task={task} />
+
       <View className="mb-4">
         <Text className="mb-1 text-sm text-neutral-500">Recurrence</Text>
         <RecurrenceEditor value={recurrence} onChange={setRecurrence} isTask={true} />
@@ -187,6 +215,12 @@ export default function EditTaskScreen() {
         ))}
       </View>
 
+      {saveError ? (
+        <Text className="mb-2 text-red-600" accessibilityRole="alert">
+          {saveError}
+        </Text>
+      ) : null}
+
       <Pressable
         onPress={submit}
         disabled={updateTask.isPending}
@@ -203,7 +237,13 @@ export default function EditTaskScreen() {
         title: "Archive this task?",
         message: "This hides it from your lists. There's currently no way to view or restore it from the app.",
         confirmLabel: "Archive",
-        onConfirm: () => archiveTask.mutate(task.id, { onSuccess: () => router.back() }),
+        onConfirm: () => {
+          setSaveError(null);
+          archiveTask.mutate(task.id, {
+            onSuccess: () => router.back(),
+            onError: () => setSaveError("Couldn't archive this task. Please try again."),
+          });
+        },
       })
         }
         disabled={archiveTask.isPending}

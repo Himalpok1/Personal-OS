@@ -1,20 +1,23 @@
 import {
   canActivateTask,
   canCompleteTaskDirectly,
+  canReopenTask,
+  computeNextLazyOccurrence,
   expandDueDateWindow,
   parseFlexibleDatetime,
   toWallClockComponents,
+  validateCompletionAnchoredRule,
   wallClockToNaiveDate,
   type DueDateRecurrenceRule,
 } from "@personal-os/core";
-import { occurrences, tasks } from "@personal-os/db";
+import { occurrences, tasks, type Db } from "@personal-os/db";
 import {
   TaskCreateSchema,
   TaskListQuerySchema,
   TaskSchema,
   TaskUpdateSchema,
 } from "@personal-os/schema";
-import { and, asc, count, desc, eq, gte, inArray, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 
 function toTaskResponse(row: typeof tasks.$inferSelect) {
@@ -63,6 +66,62 @@ async function findOpenOccurrenceId(app: FastifyInstance, taskId: string) {
     .orderBy(asc(occurrences.occursAt))
     .limit(1);
   return row?.id ?? null;
+}
+
+// Where a completion_date-anchored task's single open occurrence belongs
+// after a PATCH (branch F below). Precedence:
+//   1. a due_at supplied in this request -- the owner just said when;
+//   2. the most recent done/skipped occurrence's completion instant, run
+//      through the (new) rule -- what generate-lazy would have produced,
+//      which is the honest meaning of "regenerate" for a rule edit and the
+//      repair for a dead-lettered successor (seeding at a due_at that
+//      predates several completions would resurrect an overdue instance);
+//   3. due_at ?? effectiveNow -- the same seed POST /tasks uses when there is
+//      no history to anchor from.
+async function resolveLazyOccurrenceTarget(
+  tx: Parameters<Parameters<Db["transaction"]>[0]>[0],
+  input: {
+    taskId: string;
+    rrule: string;
+    recurrenceTimezone: string;
+    /** `undefined` when the request did not mention due_at; null when it
+     * cleared it. */
+    explicitDueAt: Date | null | undefined;
+    fallbackDueAt: Date | null;
+    effectiveNow: Date;
+  },
+): Promise<{ occursAt: Date; occursLocal: Date }> {
+  const wall = (instant: Date) =>
+    wallClockToNaiveDate(toWallClockComponents(instant, input.recurrenceTimezone));
+
+  if (input.explicitDueAt) {
+    return { occursAt: input.explicitDueAt, occursLocal: wall(input.explicitDueAt) };
+  }
+
+  const [lastTerminal] = await tx
+    .select({ status: occurrences.status, completedAt: occurrences.completedAt })
+    .from(occurrences)
+    .where(
+      and(
+        eq(occurrences.parentType, "task"),
+        eq(occurrences.parentId, input.taskId),
+        ne(occurrences.status, "scheduled"),
+        isNotNull(occurrences.completedAt),
+      ),
+    )
+    .orderBy(desc(occurrences.completedAt))
+    .limit(1);
+  if (lastTerminal?.completedAt) {
+    const next = computeNextLazyOccurrence(
+      { rrule: input.rrule, recurrenceTimezone: input.recurrenceTimezone },
+      lastTerminal.completedAt,
+      lastTerminal.status === "done" ? "completed" : "skipped",
+    );
+    return { occursAt: next.occursAt, occursLocal: wallClockToNaiveDate(next.occursLocal) };
+  }
+
+  const seed = input.fallbackDueAt ?? input.effectiveNow;
+  return { occursAt: seed, occursLocal: wall(seed) };
 }
 
 export default function tasksRoutes(app: FastifyInstance): void {
@@ -199,8 +258,36 @@ export default function tasksRoutes(app: FastifyInstance): void {
     const body = TaskUpdateSchema.parse(request.body);
     const effectiveNow = new Date();
 
-    const row = await app.db.transaction(async (tx) => {
-      const [existing] = await tx.select().from(tasks).where(eq(tasks.id, request.params.id));
+    let row: typeof tasks.$inferSelect | null;
+    try {
+      row = await runTaskUpdate(app.db, request.params.id, body, effectiveNow);
+    } catch (err: unknown) {
+      if (err instanceof InvalidEffectiveRuleError) {
+        return reply.code(400).send({
+          error: "validation_failed",
+          issues: [{ code: "custom", path: ["rrule"], message: err.message }],
+        });
+      }
+      throw err;
+    }
+    if (!row) return reply.code(404).send({ error: "not_found" });
+    return toTaskResponse(row);
+  });
+
+  registerTaskActionRoutes(app);
+}
+
+class InvalidEffectiveRuleError extends Error {}
+
+async function runTaskUpdate(
+  db: Db,
+  id: string,
+  body: ReturnType<typeof TaskUpdateSchema.parse>,
+  effectiveNow: Date,
+): Promise<typeof tasks.$inferSelect | null> {
+  {
+    const row = await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(tasks).where(eq(tasks.id, id));
       if (!existing) return null;
 
       const newTitle = body.title !== undefined ? body.title : existing.title;
@@ -239,6 +326,18 @@ export default function tasksRoutes(app: FastifyInstance): void {
           body.recurrence_anchor !== undefined
             ? (body.recurrence_anchor ?? "due_date")
             : ((existing.recurrenceAnchor as "due_date" | "completion_date" | null) ?? "due_date");
+        // The schema refine only runs when the body itself names
+        // recurrence_anchor = completion_date; a body that changes only the
+        // rrule on an already completion-anchored task bypasses it. Validate
+        // the EFFECTIVE rule here so a BY*-bearing or unparseable rule can
+        // never be persisted and then throw inside a later complete/skip.
+        if (newRecurrenceAnchor === "completion_date" && newRrule) {
+          try {
+            validateCompletionAnchoredRule(newRrule);
+          } catch (err: unknown) {
+            throw new InvalidEffectiveRuleError(err instanceof Error ? err.message : String(err));
+          }
+        }
         const targetTz = newRecurrenceTimezone ?? existing.timezone;
         newRecurrenceUntil =
           body.recurrence_until !== undefined
@@ -302,6 +401,82 @@ export default function tasksRoutes(app: FastifyInstance): void {
               .onConflictDoNothing({
                 target: [occurrences.parentType, occurrences.parentId, occurrences.occursAt],
               });
+          } else {
+            // F. Completion-Date Task -> Completion-Date Task (Checkpoint 9.3).
+            // docs/ARCHITECTURE.md: "Editing the rule regenerates only the
+            // single open occurrence". Until 9.3 this branch did not exist, so
+            // re-saving the rule after a dead-lettered successor created
+            // nothing (the repair-path gap the 9.0 review recorded), and a
+            // changed due date or interval left the open occurrence where it
+            // was. Now: no open occurrence and the task is open -> seed one;
+            // one exists and the rule or due date changed -> re-point it.
+            // Done and skipped rows are never touched.
+            const ruleChanged =
+              newRrule !== existing.rrule || newRecurrenceTimezone !== existing.recurrenceTimezone;
+            const dueChanged =
+              body.due_at !== undefined &&
+              (newDueAt?.getTime() ?? null) !== (existing.dueAt?.getTime() ?? null);
+            const taskOpen = existing.status === "inbox" || existing.status === "active";
+
+            const [open] = await tx
+              .select()
+              .from(occurrences)
+              .where(
+                and(
+                  eq(occurrences.parentType, "task"),
+                  eq(occurrences.parentId, existing.id),
+                  eq(occurrences.status, "scheduled"),
+                ),
+              )
+              .orderBy(asc(occurrences.occursAt))
+              .limit(1);
+
+            if (taskOpen && (!open || ruleChanged || dueChanged)) {
+              const target = await resolveLazyOccurrenceTarget(tx, {
+                taskId: existing.id,
+                rrule: newRrule!,
+                recurrenceTimezone: newRecurrenceTimezone!,
+                explicitDueAt: body.due_at !== undefined ? newDueAt : undefined,
+                fallbackDueAt: newDueAt,
+                effectiveNow,
+              });
+              if (!open) {
+                await tx
+                  .insert(occurrences)
+                  .values({
+                    parentType: "task",
+                    parentId: existing.id,
+                    occursAt: target.occursAt,
+                    occursLocal: target.occursLocal,
+                    status: "scheduled",
+                    lazyGenerated: true,
+                  })
+                  .onConflictDoNothing();
+              } else if (target.occursAt.getTime() !== open.occursAt.getTime()) {
+                // occurrences_parent_occurs_at_key is a plain unique index, so
+                // re-pointing onto an instant a done/skipped row already holds
+                // would abort the whole transaction. Leave the open row where
+                // it is in that case rather than fail the edit.
+                const [collision] = await tx
+                  .select({ id: occurrences.id })
+                  .from(occurrences)
+                  .where(
+                    and(
+                      eq(occurrences.parentType, "task"),
+                      eq(occurrences.parentId, existing.id),
+                      eq(occurrences.occursAt, target.occursAt),
+                      ne(occurrences.id, open.id),
+                    ),
+                  )
+                  .limit(1);
+                if (!collision) {
+                  await tx
+                    .update(occurrences)
+                    .set({ occursAt: target.occursAt, occursLocal: target.occursLocal })
+                    .where(eq(occurrences.id, open.id));
+                }
+              }
+            }
           }
         } else {
           // newRecurrenceAnchor === "due_date"
@@ -382,16 +557,16 @@ export default function tasksRoutes(app: FastifyInstance): void {
           recurrenceExdates: hasRecurrence ? newRecurrenceExdates : null,
           updatedAt: effectiveNow,
         })
-        .where(eq(tasks.id, request.params.id))
+        .where(eq(tasks.id, id))
         .returning();
 
-      return updated;
+      return updated ?? null;
     });
+    return row;
+  }
+}
 
-    if (!row) return reply.code(404).send({ error: "not_found" });
-    return toTaskResponse(row);
-  });
-
+function registerTaskActionRoutes(app: FastifyInstance): void {
   // Soft-delete: sets archived_at, touches nothing else -- occurrences,
   // item_tags, and inbox_items lineage all stay exactly as they were.
   // Idempotent -- re-archiving an already-archived task is a no-op.
@@ -431,6 +606,17 @@ export default function tasksRoutes(app: FastifyInstance): void {
     if (!existing) return reply.code(404).send({ error: "not_found" });
     if (!canCompleteTaskDirectly(existing)) {
       const occurrenceId = await findOpenOccurrenceId(app, existing.id);
+      // Checkpoint 9.3: a recurring task with NOTHING open is a distinct
+      // condition from one whose completion should go through an occurrence.
+      // The old body sent `occurrence_id: null` under the same error, which a
+      // client could only read as "use the occurrence... which one?". The
+      // realistic causes are a dead-lettered successor or a task captured
+      // before the parser materialized windows; the fix on the API side is
+      // PATCH /tasks/:id (which now seeds one -- see the completion_date
+      // branch above), and the client can say so instead of guessing.
+      if (!occurrenceId) {
+        return reply.code(409).send({ error: "recurring_task_no_open_occurrence" });
+      }
       return reply
         .code(409)
         .send({ error: "recurring_task_use_occurrence", occurrence_id: occurrenceId });
@@ -438,6 +624,29 @@ export default function tasksRoutes(app: FastifyInstance): void {
     const [row] = await app.db
       .update(tasks)
       .set({ status: "done", completedAt: new Date(), updatedAt: new Date() })
+      .where(eq(tasks.id, request.params.id))
+      .returning();
+    if (!row) throw new Error("update on tasks returned no row for an id that was just found");
+    return toTaskResponse(row);
+  });
+
+  // done|dropped -> active (Checkpoint 9.3). Clears completed_at, touches
+  // nothing else: occurrences are left exactly as they are -- a reopened
+  // recurring task keeps its history and, if its successor already exists,
+  // that open occurrence -- and archived_at is an independent axis, but an
+  // archived task is 404 here (a reopen on something hidden from every list
+  // would be a state change nobody can see). inbox and active are refused
+  // with 409 rather than treated as a no-op, so a client acting on a stale
+  // row learns its view is stale.
+  app.post<{ Params: { id: string } }>("/tasks/:id/reopen", async (request, reply) => {
+    const existing = await findTask(app, request.params.id);
+    if (!existing || existing.archivedAt) return reply.code(404).send({ error: "not_found" });
+    if (!canReopenTask(existing.status)) {
+      return reply.code(409).send({ error: "task_not_reopenable", status: existing.status });
+    }
+    const [row] = await app.db
+      .update(tasks)
+      .set({ status: "active", completedAt: null, updatedAt: new Date() })
       .where(eq(tasks.id, request.params.id))
       .returning();
     if (!row) throw new Error("update on tasks returned no row for an id that was just found");

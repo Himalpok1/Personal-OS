@@ -12,6 +12,7 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
 import { collectBriefInput } from "./collect-input.js";
+import { buildBriefUserPrompt, serializeBriefSnapshot } from "./prompt.js";
 import {
   BRIEF_DUE_TODAY_CAP,
   BRIEF_EVENTS_TODAY_CAP,
@@ -168,6 +169,8 @@ describe("collectBriefInput", () => {
         due_at: atLocal(TZ, "2026-08-20", 9).toISOString(),
         project_name: null,
         recurring: false,
+        priority: null,
+        has_reminder: false,
       },
     ]);
     expect(input.due_today.items).toEqual([
@@ -176,6 +179,101 @@ describe("collectBriefInput", () => {
         due_at: occursAt.toISOString(),
         project_name: null,
         recurring: true,
+        priority: null,
+        has_reminder: false,
+      },
+    ]);
+  });
+
+  // Checkpoint 9.3: two bounded scalars join BriefTaskItem so the brief can
+  // order by priority and say which items carry a reminder. `priority` is the
+  // stored value verbatim (lower = higher, null = unset); `has_reminder` is a
+  // boolean derived from remind_at, never the instant itself.
+  it("derives priority and has_reminder from the Today task item (9.3)", async () => {
+    const now = atLocal(TZ, "2026-08-20", 12);
+
+    await app.db.insert(tasks).values([
+      {
+        title: "P1 with reminder",
+        timezone: TZ,
+        status: "active",
+        priority: 1,
+        dueAt: atLocal(TZ, "2026-08-20", 9),
+        remindAt: atLocal(TZ, "2026-08-20", 8),
+      },
+      {
+        title: "P3 no reminder",
+        timezone: TZ,
+        status: "active",
+        priority: 3,
+        dueAt: atLocal(TZ, "2026-08-20", 15),
+      },
+      {
+        title: "Unset priority",
+        timezone: TZ,
+        status: "active",
+        dueAt: atLocal(TZ, "2026-08-20", 16),
+        remindAt: atLocal(TZ, "2026-08-20", 15, 30),
+      },
+    ]);
+
+    const { input } = await collectBriefInput(app.db, { tz: TZ, now });
+
+    expect(input.overdue.items).toEqual([
+      {
+        title: "P1 with reminder",
+        due_at: atLocal(TZ, "2026-08-20", 9).toISOString(),
+        project_name: null,
+        recurring: false,
+        priority: 1,
+        has_reminder: true,
+      },
+    ]);
+    const byTitle = Object.fromEntries(input.due_today.items.map((item) => [item.title, item]));
+    expect(byTitle["P3 no reminder"]).toMatchObject({ priority: 3, has_reminder: false });
+    expect(byTitle["Unset priority"]).toMatchObject({ priority: null, has_reminder: true });
+
+    // The reminder INSTANT never reaches the payload -- only the boolean.
+    const serialized = serializeBriefSnapshot(input);
+    expect(serialized).not.toContain(atLocal(TZ, "2026-08-20", 8).toISOString());
+    expect(serialized).not.toContain(atLocal(TZ, "2026-08-20", 15, 30).toISOString());
+    expect(serialized).not.toContain("remind_at");
+  });
+
+  it("carries priority and has_reminder on a recurring occurrence row, from its parent", async () => {
+    const now = atLocal(TZ, "2026-08-20", 12);
+    const [parent] = await app.db
+      .insert(tasks)
+      .values({
+        title: "Recurring P2",
+        timezone: TZ,
+        status: "active",
+        priority: 2,
+        rrule: "FREQ=DAILY;INTERVAL=1",
+        recurrenceAnchor: "due_date",
+        recurrenceTimezone: TZ,
+        dueAt: atLocal(TZ, "2026-08-19", 18),
+        remindAt: atLocal(TZ, "2026-08-19", 17),
+      })
+      .returning();
+    const occursAt = atLocal(TZ, "2026-08-20", 18);
+    await app.db.insert(occurrences).values({
+      parentType: "task",
+      parentId: parent!.id,
+      occursAt,
+      occursLocal: wallClockToNaiveDate(toWallClockComponents(occursAt, TZ)),
+      status: "scheduled",
+    });
+
+    const { input } = await collectBriefInput(app.db, { tz: TZ, now });
+    expect(input.due_today.items).toEqual([
+      {
+        title: "Recurring P2",
+        due_at: occursAt.toISOString(),
+        project_name: null,
+        recurring: true,
+        priority: 2,
+        has_reminder: true,
       },
     ]);
   });
@@ -360,7 +458,7 @@ describe("collectBriefInput", () => {
     expect(input.inbox.needs_confirm_count).toBe(20);
     expect(input.inbox.snippets.length).toBeLessThanOrEqual(BRIEF_INBOX_SNIPPET_CAP);
 
-    const size = JSON.stringify(input).length;
+    const size = serializeBriefSnapshot(input).length;
     expect(size).toBeLessThanOrEqual(MAX_BRIEF_INPUT_CHARS);
   });
 
@@ -413,7 +511,7 @@ describe("collectBriefInput", () => {
     // Does not throw, stays bounded, and -- the point of the fix -- the
     // time-critical sections still carry real items rather than being
     // emptied to fit.
-    const size = JSON.stringify(input).length;
+    const size = serializeBriefSnapshot(input).length;
     expect(size).toBeLessThanOrEqual(MAX_BRIEF_INPUT_CHARS);
     expect(input.overdue.items.length).toBeGreaterThan(0);
     expect(input.due_today.items.length).toBeGreaterThan(0);
@@ -593,5 +691,68 @@ describe("collectBriefInput", () => {
     expect(item!.all_day).toBe(true);
     expect(item!.starts_at).toBeNull();
     expect(item!.date).toBe("2026-08-25");
+  });
+});
+
+// Checkpoint 9.3: the whole-payload ceiling is measured on the EXACT string
+// the prompt sends. The collector used to measure the compact form while
+// buildBriefUserPrompt sent the pretty one (docs/CHECKPOINT-8.6B-DESIGN.md,
+// section 7, "an unrecorded defect found by the 8.6 critic"), so a snapshot
+// could pass the ceiling and still reach the model well over it.
+describe("collectBriefInput -- ceiling measured on the serialization the prompt sends (9.3)", () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    app = await buildTestApp();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(async () => {
+    await truncateTestTables(app);
+  });
+
+  it("the snapshot embedded in the user prompt is byte-identical to what the ceiling measured, and is under it", async () => {
+    const now = atLocal(TZ, "2026-08-20", 12);
+    const longTitle = "T".repeat(BRIEF_TITLE_MAX_CHARS + 80);
+    const longLocation = "L".repeat(BRIEF_LOCATION_MAX_CHARS + 40);
+    const [project] = await app.db
+      .insert(projects)
+      .values({ name: "P".repeat(BRIEF_TITLE_MAX_CHARS + 40), status: "active" })
+      .returning();
+    await app.db.insert(tasks).values(
+      Array.from({ length: 30 }, (_, i) => ({
+        title: longTitle,
+        timezone: TZ,
+        status: "active" as const,
+        projectId: project!.id,
+        priority: (i % 4) + 1,
+        remindAt: atLocal(TZ, "2026-08-20", 7),
+        dueAt: new Date(atLocal(TZ, "2026-08-20", i < 15 ? 1 : 13).getTime() + i * 60_000),
+      })),
+    );
+    await app.db.insert(events).values(
+      Array.from({ length: 12 }, (_, i) => ({
+        title: longTitle,
+        timezone: TZ,
+        location: longLocation,
+        startsAt: atLocal(TZ, "2026-08-20", i),
+      })),
+    );
+
+    const { input } = await collectBriefInput(app.db, { tz: TZ, now });
+
+    const prompt = buildBriefUserPrompt(input);
+    const open = prompt.indexOf("<snapshot>\n") + "<snapshot>\n".length;
+    const close = prompt.lastIndexOf("\n</snapshot>");
+    const embedded = prompt.slice(open, close);
+
+    expect(embedded).toBe(serializeBriefSnapshot(input));
+    expect(embedded.length).toBeLessThanOrEqual(MAX_BRIEF_INPUT_CHARS);
+    // The old, compact measurement is strictly smaller than what is sent --
+    // which is exactly why measuring it was a defect, not a stylistic choice.
+    expect(JSON.stringify(input).length).toBeLessThan(embedded.length);
   });
 });

@@ -69,3 +69,11 @@ export async function completeTask(baseUrl: string, id: string): Promise<Task> {
 export async function dropTask(baseUrl: string, id: string): Promise<Task> {
   return fetchJson(baseUrl, `/tasks/${id}/drop`, TaskSchema, { method: "POST" });
 }
+
+// done|dropped -> active. Throws ApiClientError with status 409
+// (`err.body.error === "task_not_reopenable"`, `err.body.status` carrying
+// the task's current status) from inbox/active, and 404 for an unknown or
+// archived task -- see apps/api/src/routes/tasks.ts.
+export async function reopenTask(baseUrl: string, id: string): Promise<Task> {
+  return fetchJson(baseUrl, `/tasks/${id}/reopen`, TaskSchema, { method: "POST" });
+}

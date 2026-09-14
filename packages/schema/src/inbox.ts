@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CaptureSourceSchema } from "./capture.js";
+import { booleanQueryParam } from "./pagination.js";
 import { ParserToolCallSchema } from "./parser-tools.js";
 
 export const InboxItemStatusSchema = z.enum([
@@ -33,10 +34,23 @@ export const InboxItemSchema = z.object({
   confidence: z.number().nullable(),
   entity_type: InboxEntityTypeSchema.nullable(),
   entity_id: z.string().uuid().nullable(),
+  // Soft-delete axis (Checkpoint 9.3, migration 0017), orthogonal to
+  // `status`: an archived row keeps whatever status it had and its committed
+  // entity is untouched. Non-null means "handled; leave the Inbox and the
+  // Today attention counts". There is no restore path, matching tasks.
+  archived_at: z.string().datetime({ offset: true }).nullable(),
   created_at: z.string().datetime({ offset: true }),
 });
 
 export type InboxItem = z.infer<typeof InboxItemSchema>;
+
+// POST /inbox/:id/archive response. Idempotent: a second call returns the
+// archived_at the first one stamped, never a fresh instant.
+export const InboxArchiveResponseSchema = z.object({
+  id: z.string().uuid(),
+  archived_at: z.string().datetime({ offset: true }),
+});
+export type InboxArchiveResponse = z.infer<typeof InboxArchiveResponseSchema>;
 
 // The shape capture.parse persists into inbox_items.parse_result. It was
 // previously an interface private to apps/worker, which is why the API's
@@ -123,6 +137,9 @@ export type InboxConfirmRefusal = z.infer<typeof InboxConfirmRefusalSchema>;
 
 export const InboxListQuerySchema = z.object({
   status: InboxItemStatusSchema.optional(),
+  // booleanQueryParam, never z.coerce.boolean() -- see pagination.ts. Same
+  // convention as every other list endpoint with an archive axis.
+  include_archived: booleanQueryParam(false),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });

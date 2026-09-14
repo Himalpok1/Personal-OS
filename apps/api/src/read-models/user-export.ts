@@ -104,6 +104,7 @@ function toInboxItemPayload(row: typeof inboxItems.$inferSelect) {
     entity_type: row.entityType,
     entity_id: row.entityId,
     created_at: row.createdAt.toISOString(),
+    archived_at: row.archivedAt ? row.archivedAt.toISOString() : null,
   };
 }
 

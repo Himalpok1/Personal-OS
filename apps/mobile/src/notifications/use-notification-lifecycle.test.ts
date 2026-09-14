@@ -119,7 +119,8 @@ describe("handleNotificationResponse", () => {
 
     handleNotificationResponse(response, asRouter(router), handledIdRef);
 
-    expect(router.navigate).toHaveBeenCalledWith("/(tabs)/inbox");
+    // Checkpoint 9.3: a confirmation opens the item's own screen, not the tab.
+    expect(router.navigate).toHaveBeenCalledWith("/inbox/inbox-def");
   });
 
   it("does not act on the same response twice", () => {
