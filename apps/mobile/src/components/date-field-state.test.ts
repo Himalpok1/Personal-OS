@@ -36,13 +36,12 @@ describe("formatDateFieldLabel", () => {
 });
 
 describe("serializePickedDate", () => {
-  it("reads the picked Date's LOCAL calendar date, never its UTC date", () => {
-    // 23:30 local on the 15th: in any negative-offset zone the UTC date is
-    // already the 16th. The field must say the 15th, the day that was picked.
-    const picked = new Date(2026, 8, 15, 23, 30);
-    expect(serializePickedDate(picked)).toBe("2026-09-15");
-    // Same day at 00:30 -- positive-offset zones would put UTC on the 14th.
-    expect(serializePickedDate(new Date(2026, 8, 15, 0, 30))).toBe("2026-09-15");
+  it("reads the picked Date as the Material dialog reports it: UTC midnight of the chosen day", () => {
+    // Sep 18 picked -> selectedDateMillis = Sep 18 00:00Z, which is Sep 17
+    // 19:00 in America/Chicago. The local reading gave the 17th (the Rabbit
+    // R1 off-by-one at the 9.5 acceptance); the field must say the 18th.
+    expect(serializePickedDate(new Date(Date.UTC(2026, 8, 18)))).toBe("2026-09-18");
+    expect(serializePickedDate(new Date(Date.UTC(2026, 0, 1)))).toBe("2026-01-01");
   });
 
   it("round-trips through the picker's initial date on the same calendar day", () => {
@@ -51,20 +50,20 @@ describe("serializePickedDate", () => {
 });
 
 describe("pickerInitialDate", () => {
-  it("opens on the stored date at local noon", () => {
+  it("opens on the stored date, as UTC midnight of that calendar day (the dialog's convention)", () => {
     const initial = pickerInitialDate("2026-09-15");
-    expect(initial.getFullYear()).toBe(2026);
-    expect(initial.getMonth()).toBe(8);
-    expect(initial.getDate()).toBe(15);
-    expect(initial.getHours()).toBe(12);
+    expect(initial.getUTCFullYear()).toBe(2026);
+    expect(initial.getUTCMonth()).toBe(8);
+    expect(initial.getUTCDate()).toBe(15);
+    expect(initial.getUTCHours()).toBe(0);
   });
 
-  it("falls back to today (at noon) for an absent or unreadable value", () => {
+  it("falls back to today for an absent or unreadable value", () => {
     const now = new Date(2026, 8, 20, 3, 15);
     for (const value of [null, undefined, "", "garbage"]) {
       const initial = pickerInitialDate(value, now);
-      expect(initial.getDate()).toBe(20);
-      expect(initial.getHours()).toBe(12);
+      expect(initial.getUTCDate()).toBe(20);
+      expect(initial.getUTCHours()).toBe(0);
     }
     // The caller's `now` is not mutated.
     expect(now.getHours()).toBe(3);

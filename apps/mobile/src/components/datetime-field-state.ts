@@ -23,9 +23,32 @@ export function deviceTimezone(): string {
  * never chose.
  */
 export function combineDateAndTime(datePart: Date, timePart: Date): Date {
-  const combined = new Date(datePart);
-  combined.setHours(timePart.getHours(), timePart.getMinutes(), 0, 0);
-  return combined;
+  // The Material date dialog reports `selectedDateMillis`, which is UTC
+  // MIDNIGHT of the chosen calendar day (verified in @expo/ui's
+  // DatePickerView.kt), not a local instant. Reading it with local getters
+  // in any zone west of UTC yields the PREVIOUS day (Sep 18 00:00Z is Sep 17
+  // 19:00 in Chicago) -- the off-by-one found on the Rabbit R1 at the 9.5
+  // acceptance. The calendar day therefore comes from the UTC components;
+  // the wall-clock time from the time dialog is local.
+  return new Date(
+    datePart.getUTCFullYear(),
+    datePart.getUTCMonth(),
+    datePart.getUTCDate(),
+    timePart.getHours(),
+    timePart.getMinutes(),
+    0,
+    0,
+  );
+}
+
+/**
+ * The instant to open the Material DATE dialog on so it highlights the
+ * local calendar day of `instant`: the dialog reads its initial millis as a
+ * UTC date, so a local evening instant west of UTC would otherwise open on
+ * the next day.
+ */
+export function datePickerInitialInstant(instant: Date): Date {
+  return new Date(Date.UTC(instant.getFullYear(), instant.getMonth(), instant.getDate()));
 }
 
 /** Serializes a picked instant for the API, carrying the zone's real offset. */

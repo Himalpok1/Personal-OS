@@ -8,11 +8,10 @@ import { formatLocalDate, formatShortDate, parseLocalDate } from "@/utils/local-
  *
  * Values are bare `YYYY-MM-DD` calendar dates, never instants -- the shape
  * `events.start_date`/`end_date` store and the rule utils/local-date.ts
- * exists to enforce. A picked Date is read on the DEVICE's local calendar
- * (formatLocalDate), because the picker dialog itself builds its result on
- * the device clock; the one thing this module must never do is
- * `.toISOString().slice(0, 10)` (the UTC date, off by one in any
- * negative-offset zone after ~19:00 local -- utils/all-day-seed.ts).
+ * exists to enforce. A picked Date from the Material dialog is UTC MIDNIGHT
+ * of the chosen day (see serializePickedDate), so the day is read from its
+ * UTC components; a real local INSTANT (a stored starts_at, "now") must
+ * never be sliced that way -- utils/all-day-seed.ts.
  */
 
 const LOCAL_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -32,19 +31,24 @@ export function formatDateFieldLabel(value: string | null | undefined): string |
 }
 
 /**
- * The date a picker should open on: the current value, else today. Returned
- * at LOCAL NOON rather than local midnight: the dialog takes an ISO instant,
- * and a local-midnight instant serialised in a negative-offset zone reads as
- * the previous UTC day, which is where the Material date picker would then
- * open. Noon is on the same calendar day at every offset on Earth.
+ * The date a picker should open on: the current value, else today.
  */
 export function pickerInitialDate(value: string | null | undefined, now = new Date()): Date {
   const date = isLocalDate(value) ? parseLocalDate(value) : new Date(now);
-  date.setHours(12, 0, 0, 0);
-  return date;
+  // UTC midnight of the local calendar day: the dialog reads its initial
+  // millis as a UTC date, the same convention its result uses.
+  return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
 }
 
-/** Serializes a picked Date as the device-local calendar date. */
+/**
+ * Serializes a picked Date as a calendar date. The Material date dialog
+ * reports `selectedDateMillis` -- UTC MIDNIGHT of the chosen day, not a
+ * local instant (verified in @expo/ui's DatePickerView.kt) -- so the day is
+ * read from the UTC components. Reading it on the device's local calendar
+ * gave the PREVIOUS day in every zone west of UTC (the off-by-one found on
+ * the Rabbit R1 at the 9.5 acceptance).
+ */
 export function serializePickedDate(date: Date): string {
-  return formatLocalDate(date);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
 }

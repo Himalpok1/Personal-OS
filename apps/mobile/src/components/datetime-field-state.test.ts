@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   combineDateAndTime,
+  datePickerInitialInstant,
   formatFieldLabel,
   isPastInstant,
   pickerInitialInstant,
@@ -12,8 +13,9 @@ import {
 // is already stored as well as what a picker now produces.
 describe("combineDateAndTime", () => {
   it("takes the calendar date from one picker and the wall clock from the other", () => {
-    // The date dialog's time and the time dialog's date are both meaningless.
-    const datePart = new Date(2026, 8, 15, 3, 47, 12, 345);
+    // The date dialog reports UTC MIDNIGHT of the chosen day (Material3
+    // selectedDateMillis); the time dialog's date is meaningless.
+    const datePart = new Date(Date.UTC(2026, 8, 15));
     const timePart = new Date(2026, 0, 1, 14, 30, 59, 999);
     const combined = combineDateAndTime(datePart, timePart);
 
@@ -24,9 +26,19 @@ describe("combineDateAndTime", () => {
     expect(combined.getMinutes()).toBe(30);
   });
 
+  it("keeps the PICKED day in a zone west of UTC (the Rabbit R1 off-by-one, 9.5 acceptance)", () => {
+    // Sep 18 00:00Z is Sep 17 19:00 in America/Chicago. Reading the date
+    // part with local getters returned the 17th; the user picked the 18th.
+    const picked = new Date(Date.UTC(2026, 8, 18));
+    const combined = combineDateAndTime(picked, new Date(2026, 0, 1, 7, 18));
+    expect(combined.getDate()).toBe(18);
+    expect(combined.getHours()).toBe(7);
+    expect(combined.getMinutes()).toBe(18);
+  });
+
   it("zeroes seconds and milliseconds, which no picker offers", () => {
     const combined = combineDateAndTime(
-      new Date(2026, 8, 15, 3, 47, 12, 345),
+      new Date(Date.UTC(2026, 8, 15)),
       new Date(2026, 0, 1, 14, 30, 59, 999),
     );
     expect(combined.getSeconds()).toBe(0);
@@ -34,10 +46,10 @@ describe("combineDateAndTime", () => {
   });
 
   it("does not mutate either input", () => {
-    const datePart = new Date(2026, 8, 15, 3, 0, 0);
+    const datePart = new Date(Date.UTC(2026, 8, 15, 3));
     const timePart = new Date(2026, 0, 1, 14, 30, 0);
     combineDateAndTime(datePart, timePart);
-    expect(datePart.getHours()).toBe(3);
+    expect(datePart.getUTCHours()).toBe(3);
     expect(timePart.getDate()).toBe(1);
   });
 });
@@ -104,5 +116,18 @@ describe("isPastInstant", () => {
   it("never flags an absent or unreadable value -- it is informational, not validation", () => {
     expect(isPastInstant(null, now)).toBe(false);
     expect(isPastInstant("garbage", now)).toBe(false);
+  });
+});
+
+describe("datePickerInitialInstant", () => {
+  it("opens the date dialog on the LOCAL calendar day of the instant (UTC midnight of that day)", () => {
+    // 23:30 local on the 15th: the raw instant's UTC date is already the
+    // 16th in any zone west of UTC, which is where the dialog would open.
+    const local = new Date(2026, 8, 15, 23, 30);
+    const initial = datePickerInitialInstant(local);
+    expect(initial.getUTCFullYear()).toBe(2026);
+    expect(initial.getUTCMonth()).toBe(8);
+    expect(initial.getUTCDate()).toBe(15);
+    expect(initial.getUTCHours()).toBe(0);
   });
 });

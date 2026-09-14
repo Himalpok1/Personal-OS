@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import {
   combineDateAndTime,
+  datePickerInitialInstant,
   formatFieldLabel,
   isPastInstant,
   pickerInitialInstant,
@@ -102,7 +103,7 @@ export function DateTimeField({
       {pickingDate ? (
         <Host style={HOST_STYLE}>
           <DatePickerDialog
-          initialDate={pickerInitialInstant(value).toISOString()}
+          initialDate={datePickerInitialInstant(pickerInitialInstant(value)).toISOString()}
           onDateSelected={(date) => {
             setPickingDate(false);
             setDraftDate(date);
