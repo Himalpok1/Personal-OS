@@ -6,8 +6,11 @@
 MINIMUM DURATION** at `2026-09-14T01:53:37.600Z`, 25 minutes in — no adoption conclusion is
 permitted (`docs/SOAK-9.2.md`). **Checkpoint 9.3 — Close the capture→task loop — is IMPLEMENTED,
 DEPLOYED and ACCEPTED (2026-09-14)**: in-app filing of unclear captures, inbox dismiss, task
-complete/reopen/snooze, recurrence integrity; migration level **18**; Rabbit R1 versionCode **14**.
-No further Phase 9 checkpoint is selected yet. Phase 8 closed the same day
+complete/reopen/snooze, recurrence integrity. **Checkpoint 9.4 — Dependable recurring tasks and
+reminders — is IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-14)**: repeat presets, one successor
+rule for every writer, occurrence snooze/reopen, per-occurrence reminders with Done / Snooze 1h /
+Tomorrow 9am actions, nightly lazy repair; migration level **19** (`0018`); Rabbit R1 versionCode
+**15** (ADR-063). No further Phase 9 checkpoint is selected yet. Phase 8 closed the same day
 Checkpoint 9.0 shipped (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail
 `docs/history/phase-8.md`).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
@@ -42,16 +45,17 @@ what is true *now*, it is in this file.
 
 ## Production state at a glance
 
-Verified first-hand at the Checkpoint 9.1 acceptance, 2026-09-13 ~02:05Z (Checkpoint 9.0's own
+Verified first-hand at the Checkpoint 9.4 acceptance, 2026-09-14 ~07:31Z (Checkpoint 9.0's own
 2026-09-12 acceptance evidence is preserved in the Checkpoint 9.0 entry below).
 
 | | |
 |---|---|
-| Migration level | **18** (`0000`–`0017`); local and production agree; `0017` = `inbox_items.archived_at` (9.3) |
-| Serving commit | api, worker **and web** all **`8132f3b`** (Checkpoint 9.3, 2026-09-14T03:02Z). Provenance is by compose `working_dir` (`personal-os-9.3-release` for all three); the images carry no commit label. Rollback images `personal-os-{api,worker,web}:rollback-pre-9.3`, tagged by resolved digest (earlier `rollback-pre-*` tags preserved underneath). |
+| Migration level | **19** (`0000`–`0018`); local and production agree; `0018` = `occurrences.snoozed_until` (9.4), byte-pattern of `0016`/`0017` |
+| Serving commit | api, worker **and web** all **`e7b195e`** (Checkpoint 9.4, 2026-09-14T07:09Z). Provenance is by compose `working_dir` (`personal-os-9.4-release` for all three); the images carry no commit label. Rollback images `personal-os-{api,worker,web}:rollback-pre-9.4`, tagged by resolved digest (earlier `rollback-pre-*` tags preserved underneath). |
 | Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30; `GET /health` → `ok` / `connected` / `stale:false` |
-| Rabbit R1 | `com.himal.personalos` **versionCode 14**, built from `8132f3b` (EAS build `5357add1…`), installed in place 2026-09-13 22:19 CDT with SecureStore credential, primary-device row, exact-alarm appop and `firstInstallTime` (2026-08-19) all preserved — no re-pair. Carries the 9.1 UI plus the 9.3 inbox detail / file-as / dismiss screen, task actions and snooze. |
+| Rabbit R1 | `com.himal.personalos` **versionCode 15**, built from `e7b195e` (EAS build `eea50789…`), installed in place 2026-09-14 02:1x CDT with SecureStore credential, primary-device row, exact-alarm appop, `POST_NOTIFICATIONS` and `firstInstallTime` (2026-08-19) all preserved — no re-pair. Carries the 9.4 Repeat field, task-detail recurrence summary / Next line / Skip / Undo, occurrence snooze, and the `reminder` notification category. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · **notification-shade capture (9.1)** — a persistent local "Capture" notification on its own channel, tap opens the same composer; verified live on the Rabbit R1 across two sequential taps (the rearm-with-a-fresh-identifier fix), producing a real `inbox_items` row (`source: "web"`, parsed as a task, archived after verification). |
+| Reminders (9.4) | Scheduled by the primary device from **`GET /reminders`** — one item per one-off task with a reminder and one per open occurrence of a recurring task (derived from the parent's `remind_at` wall clock and its day-offset from `due_at`, in `recurrence_timezone`; `snoozed_until` overrides). Deterministic identifiers `reminder:<key>:<instant>`, exact alarms (`window=0 exactAllowReason=permission`, verified in `dumpsys alarm`), category `reminder` with **Done / Snooze 1h / Tomorrow 9am** — all `opensAppToForeground: true` (a non-foregrounding action is lost when the process is dead; verified in the installed expo-notifications source). Verified live on the Rabbit R1 with the app process killed (`am kill`, not force-stop — force-stop puts the package in Android's stopped state, which cancels every alarm): both a Snooze 1h and a Done from the shade opened the app to the task with the outcome banner, mutated the right occurrence, dismissed the notification and re-armed the next alarm. |
 | Notification channels (9.1) | `reminders` (MAX, unchanged, local reminders only) · `alerts` (HIGH, new — integration/monitor alerts) · `updates` (DEFAULT, new — confirmations + mail digest) · `capture` (LOW, new — the local shortcut only, never through `notifications.dispatch`). All four verified independently listed and toggleable in Android's per-app notification settings on the Rabbit R1; a live test alert (via the existing `notifications.dispatch` job, `category: "alert"`) delivered on the `alerts` channel at `importance=4`. |
 | Integrations | Google Health **active** · Google Calendar **active** · Gmail **active**. Health stream `daily-heart-rate-variability` **re-enabled 2026-09-12T23:58Z** after 9.0 corrected its value spec from a live shape observation: `available_in_window`, `first_data_date 2026-09-11`, one stored row with the deep-sleep RMSSD in `breakdown`, 24/24 streams succeeded on the acceptance pass. |
 | Calendar sync | 2 of 5 calendars enabled (owner's real primary + the dedicated test calendar). 98 events. **The Rabbit R1 Settings screen now renders this correctly (9.1)** — verified live, before and after a force-stop + cold relaunch, where it previously showed all five as OFF regardless of real state. |
@@ -60,11 +64,12 @@ Verified first-hand at the Checkpoint 9.1 acceptance, 2026-09-13 ~02:05Z (Checkp
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
 | Backups | **None, by design** (ADR-024) |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE**. No CI, no Actions workflow, no repository secret. |
-| Test baseline | **4,141 tests across 12 packages** (9.3; was 3,853 at 9.1, 3,788 at 9.0, 3,668 at the Phase 8 closeout — see *Last verification*) |
-| pg-boss | **29 queues** (`worker.started` count; `pgboss.queue` reads 30 with the internal `__pgboss__send-it`), 10 schedules. DLQs on `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues and — since 9.0 — **`occurrences.generate-lazy` → `.dead` and `occurrences.expand-window` → `.dead`**, both verified attached in production `pgboss.queue` and both consumed by registered workers. Every retrying queue now has a dead-letter queue. |
+| Test baseline | **4,636 tests across 12 packages** (9.4; was 4,141 at 9.3, 3,853 at 9.1, 3,788 at 9.0, 3,668 at the Phase 8 closeout — see *Last verification*) |
+| pg-boss | **29 queues** (`worker.started` count; `pgboss.queue` reads 30 with the internal `__pgboss__send-it`), 10 schedules. DLQs on `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues and — since 9.0 — **`occurrences.generate-lazy` → `.dead` and `occurrences.expand-window` → `.dead`**, both verified attached in production `pgboss.queue` and both consumed by registered workers. Every retrying queue now has a dead-letter queue. **`occurrences.expand-window` has a phase 2 since 9.4**: idempotent repair of any completion-anchored parent left with no open occurrence, per-parent contained, failures (including an insert collision that leaves no open row, `reason: collision`) counted into the same `OccurrencesJobError` → dead letter → alert. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C, windows unchanged) · **`health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now`, no window constant (9.0)**. 9.0 acceptance: 9 + 1 expired states deleted exactly as preflighted, rerun deleted 0. **The first scheduled run is 2026-09-13T04:00Z** and had not yet occurred. |
-| Alert keys | Occurrence-scoped (ADR-058). First live emission `health-sync-alert:…:breaker:daily-heart-rate-variability:2026-09-12:…` accepted 2026-09-12T03:00:14Z. 9.0 adds two producers, unexercised in production by design: `occurrences.generate-lazy.dead:<occurrenceId>` and `occurrences.expand-window.dead:<UTC date>`. |
+| Alert keys | Occurrence-scoped (ADR-058). First live emission `health-sync-alert:…:breaker:daily-heart-rate-variability:2026-09-12:…` accepted 2026-09-12T03:00:14Z. 9.0 adds two producers, unexercised in production by design: `occurrences.generate-lazy.dead:<occurrenceId>` and `occurrences.expand-window.dead:<UTC date>` — the latter now also covers a failed phase-2 lazy repair (9.4; body wording "could not be expanded or repaired overnight"). No new producer in 9.4. |
 | Search / export / Ask / Monitor CRUD | `GET /search`, `GET /export`, `POST /ask`, `GET/POST/DELETE /ai/task-routes`, `/monitor/targets` CRUD — all live, perimeter-only |
+| Recurrence routes (9.4) | `POST /occurrences/:id/snooze` (task-only, ≤ 31 days, `409 occurrence_not_open` / `occurrence_not_task`, `400 validation_failed` path `until`) · `POST /occurrences/:id/reopen` (latest terminal only; withdraws the open successor of a completion-anchored parent; `409 occurrence_not_reopenable` / `task_not_open` / `occurrence_not_task`) · `GET /occurrences?order=asc|desc` · `GET /reminders?horizon_days=` · `due_date` rules validated at `POST/PATCH /tasks` (`400 validation_failed`, token-only `unsupported_frequency` / `embedded_until_count` / `invalid_rrule`) · `POST /tasks/:id/complete` redirects to the earliest **effective** open occurrence (`greatest(occurs_at, snoozed_until)`). All verified live through real routes on 2026-09-14 (smoke rows archived). |
 | 404 logging | **Unknown routes never log or echo their query string (9.0).** A `setNotFoundHandler` replaces Fastify's `basic404`; the `req` serializer drops the whole query for `request.is404`, for every `OPTIONS` (served by `@fastify/cors`'s `OPTIONS *`), and for malformed URLs (`frameworkErrors`). Verified live with four sentinel values: 0 occurrences in the api log; body `{"error":"not_found"}`. |
 
 ---
@@ -452,10 +457,11 @@ during the run, the documented shared-DB collision, not a defect. **Migration in
 `0016`, reconcile-allowlisted; forward-compatible with the serving images, so rollback stays
 image-only.
 
-**Recorded, not fixed (debt):** a sub-daily `due_date` rule (`FREQ=SECONDLY`) expands 90 days with
-no budget at commit — the same exposure `POST /tasks` already has; the `daily-respiratory-rate`
-spec still needs a live shape probe (unchanged); reminders still fire at most once per recurring
-task (A3, deferred).
+**Recorded, not fixed (debt):** ~~a sub-daily `due_date` rule (`FREQ=SECONDLY`) expands 90 days with
+no budget at commit~~ — **CLOSED by 9.4** (`validateTaskDueDateRule` refuses sub-daily frequencies
+at POST/PATCH; capture commit already validated); the `daily-respiratory-rate`
+spec still needs a live shape probe (unchanged); ~~reminders still fire at most once per recurring
+task (A3, deferred)~~ — **CLOSED by 9.4** (`GET /reminders`, one alarm per occurrence).
 
 **Deployment — COMPLETE (2026-09-14T03:02Z), frozen order.** Commit **`8132f3b`** pushed to `origin`
 first. `git archive` of `8132f3b` shipped to `/home/himallinux/personal-os-9.3-release` (896 tracked
@@ -513,6 +519,165 @@ invalidate, external writes do not).
 **Post-acceptance production health:** `/health` `ok`/`connected`/`stale:false`; all four containers
 `RestartCount=0`; 0 pg-boss jobs failed/retry/active; migration 18; three integrations `active`;
 0 open incidents; 0 api warn/error and 0 worker error lines since the redeploy.
+
+### Checkpoint 9.4 — Dependable recurring tasks and reminders: IMPLEMENTED, DEPLOYED, ACCEPTED (2026-09-14)
+
+**Objective (owner-directed).** A user can create a task that repeats, receive its reminder
+reliably, act on it from the Rabbit R1, and have the next occurrence appear correctly without silent
+loss or duplicate successors. Commit **`e7b195e`** on `phase-9-reliability` (from `c8ad0c0`); one
+migration, **`0018_occurrence_snooze`** (`occurrences.snoozed_until timestamptz`, level **19**);
+decision record **ADR-063**. Three parallel read-only audits (recurrence model, reminder runtime,
+mobile UX), one core lane, then four parallel implementation lanes (api, worker, mobile
+notifications, mobile UX) on per-lane database clones, six adversarial review lenses, four fixer
+passes, integrator gates, frozen-order deployment, EAS build, in-place install, physical acceptance —
+all in one session.
+
+**What the audits found first.** Snooze was a `PATCH due_at` that, on a `due_date` series, deleted
+every future occurrence and re-anchored the whole series (a weekly-Monday task snoozed to Tuesday
+became a Tuesday task); Today leaked a recurring parent as Overdue/Due-today whenever its next
+occurrence was more than seven days out; a `PATCH` on a `due_at`-less series anchored at `now`
+while the nightly job anchored at `min(occurs_at)` — a parallel-series generator; reminders derived
+from the parent's single `remind_at` fired once per recurring task, ever (the A3 debt); no
+occurrence reopen existed; `due_date` rules were never validated on the API path (500 on garbage);
+and `FREQ=MONTHLY;BYMONTHDAY=31` silently skipped every short month. Action buttons: the installed
+expo-notifications 57.0.12 source shows a `opensAppToForeground: false` action is parked in a
+static in-process list and lost when the process is dead (ADR-060's direct-reply finding applies
+to plain buttons), while a foregrounding action rides the default-tap path already proven cold-start
+on the Rabbit in 9.1 — so every action foregrounds.
+
+**Contract shipped (detail in ADR-063 and `docs/ARCHITECTURE.md` "Recurrence design").**
+- *Presets:* Never / Daily / Weekdays / Weekly (explicit `BYDAY`) / Monthly (`BYMONTHDAY`, `-1`
+  for a month-end due date) / Every N days, plus "After I complete it" (completion anchor,
+  `FREQ`+`INTERVAL` only). Bare legacy `FREQ=WEEKLY`/`MONTHLY` map to their presets; anything else
+  is "Custom" with the Phase 4 editor behind "Edit advanced…", never clobbered.
+- *Successor:* previous occurrence's wall-clock time on the completion date + INTERVAL by pure
+  calendar arithmetic (month-end clamped), **strictly after** the completed row's own instant, computed
+  through one core function with one shared `wallTimeOfNaiveTimestamp` by all five writers. A
+  collision that leaves no open row is a warn + re-check at the API, a throw at the worker (→ DLQ →
+  alert), a counted failure in the nightly repair — never a false "successor exists".
+- *Nightly repair (phase 2 of `expand-window`):* any open completion-anchored parent with terminal
+  history and no open occurrence gets its successor inserted idempotently. `bossReady=false` is not a
+  loss (in-transaction successor since 9.3); `boss.send` failing after the commit is a warn + 200.
+- *Anchor:* `due_at ?? min(occurs_at) ?? now`, floored to whole seconds (a millisecond anchor dropped
+  the first expanded instance), persisted as `due_at` by POST /tasks and capture commit; an
+  unchanged effective rule (normalised, part-order-insensitive) causes no occurrence churn on PATCH.
+- *Snooze:* `snoozed_until` on the occurrence; effective instant `greatest(occurs_at, snoozed_until)`
+  in one SQL helper feeding Today, Agenda, review contexts, project summaries and the complete
+  redirect — a snooze may only defer; a day-before reminder snoozed by an hour moves the reminder,
+  never the due. One-off tasks keep the 9.3 `due_at`/`remind_at` PATCH.
+- *Reopen:* latest terminal row only; a completion-anchored parent's open successor is withdrawn in
+  the same transaction (derived state; the partial unique index forbids two open lazy rows).
+  `POST /tasks/:id/reopen` on a recurring parent guarantees an open occurrence.
+- *Reminders:* `GET /reminders` (one-off tasks with a 1 h grace; derived occurrence reminders
+  strictly future so a fresh successor never fires instantly); device schedules with deterministic
+  identifiers and the `reminder` category; `${identifier}:${actionIdentifier}` dedupe released on
+  failure; every mutation cancels the scheduled entry and dismisses the presented one; pre-9.4
+  alarms replaced once; a missed one-off reminder within the grace is presented on the next reconcile
+  (Android drops a past `DATE` trigger silently — verified in the native source).
+
+**Adversarial review (six lenses, all findings routed to fixers, all closed with tests that fail on
+the old code).** *Blocker (found independently by the recurrence and data-integrity lenses):* the
+new wall-clock successor rule date-quantised the next instant, so completing or skipping a lazy
+successor on the day it was generated computed its **own** `occurs_at` → unique-key collision →
+every writer reported "successor exists" while zero open rows remained — a silent series death and
+a 9.4 regression; closed by the strictly-after bound plus the honesty rule above, and proven live
+(complete → +3 d 09:00 → same-day complete of the successor → +6 d 09:00, exactly one open row).
+*Majors:* PATCH branch F / task reopen ignored `wallTime` (three lenses); the millisecond anchor
+dropped the first occurrence; snooze could pull the due instant earlier; `selectNextOccurrence`
+preferred an upcoming row over an overdue one; the complete redirect ordered by raw `occurs_at`;
+`boss.send` failure → 500 for a recorded completion; snooze/reopen accepted on event occurrences;
+retrying a failed shade action was swallowed for the process lifetime; typing an UNTIL date in the
+inline advanced editor threw during render. *Minors:* reopen of a non-latest terminal withdrew the
+wrong successor; branch C seeded nothing on collision; completion-anchored monthly from the 31st
+skipped a month; negative reminder offsets clamped; Feb-28 last-day inconsistency; one unguarded
+rule computation could log an rrule; Undo paging; stale "Due <anchor>" on recurring list rows;
+stale-notification snooze got "try again" for a permanent 409; legacy alarms retained without
+buttons; missed reminders never presented; banner lost when already on the task screen. *Privacy
+lens:* every new log line is ids/counts/tokens, event names satisfy the logger grammar, no
+`err.message` reaches a log or response, no new egress, `GET /reminders` is in the egress-guard
+body-reader inventory (title only, strict shape).
+
+**Verification (integrator, shared database, serial):** `pnpm build --force` 11/11 · `pnpm typecheck`
+21/21 · `eslint .` clean · `prettier --check .` clean · `git diff --check` clean · `gitleaks` — the
+same 18 pre-existing findings in ignored, untracked files, git history clean · **`pnpm test --force`
+21/21 tasks, 4,636 tests across 12 packages, zero failing** (api 1,020 · mobile 1,062 · core 682 ·
+worker 605 · schema 331 · health-providers 332 · api-client 157 · monitoring 151 · mail-providers
+116 · db 79 · calendar-providers 76 · ai-providers 25; was 4,141 at 9.3). **Migration invariant:** 19
+`.sql` / 19 journal entries, highest `0018`; `ADD COLUMN … timestamp with time zone`, nullable, no
+default — forward-compatible with the serving images, so rollback stays image-only.
+
+**Deployment — COMPLETE (2026-09-14T07:09Z), frozen order.** `e7b195e` pushed to `origin` first.
+`git archive` shipped to `/home/himallinux/personal-os-9.4-release` (935 tracked files; no `.env`, no
+`google-services.json`, no `node_modules`). Rollback images tagged by resolved digest
+`:rollback-pre-9.4` for api (`805157d6…`), worker (`334f2b57…`) and web (`b65fd511…`). All three
+built with the running containers untouched (verified by digest). New api image verified to carry
+`0018_occurrence_snooze.sql`, `/occurrences/:id/snooze`, `/reminders` and the `greatest(` helper;
+worker image carries `reconcileLazyParents` and `wallTimeOfNaiveTimestamp`. `drizzle-kit migrate`
+from the new api image with `--no-deps` and the explicit `MIGRATIONS_DATABASE_URL` pass-through:
+**18 → 19**, `occurrences.snoozed_until timestamptz` nullable present. `api` recreated alone →
+`(healthy)`, `/health` `ok`/`connected`/`stale:false`, `GET /reminders` 200; `worker` recreated alone
+→ `worker.started queues:29 schedules:10`; `web` recreated alone → 200 on Tailscale Serve `:8443`.
+`postgres` never named. All four containers `RestartCount=0`.
+
+**Production API acceptance — PASSED (through real routes; every smoke row archived afterwards,
+none deleted).** Daily `due_date` task with a reminder → 89 scheduled rows, `/reminders` derives
+08:30 CDT per occurrence (44 in the 45-day horizon). Completion-anchored every-3-days task: complete
+the seed → exactly one lazy successor at **09:00 CDT +3 d** (previous wall time, not tap time);
+second complete idempotent `200 done`; **same-day complete of the successor → next at +6 d, exactly
+one open row** (the blocker repro). Snooze the open occurrence +5 d → `snoozed_until` set, rule and
+`due_at` untouched; snooze earlier than `occurs_at` accepted (reminder moves, due does not); past
+`until` → 400, terminal row → `409 occurrence_not_open`. Reopen the latest done row → successor
+withdrawn (`withdrawn_successor_id`), reopened row `scheduled`, exactly one open; reopen of a
+withdrawn row → 404. PATCH title + same rule → occurrence ids byte-identical; PATCH to weekdays →
+64 rows, Sat/Sun absent; `FREQ=HOURLY` → `400 unsupported_frequency`; `rrule: null` → 0 scheduled
+rows, the task's reminder key flips from `occ:` to `task:`. Today shows the chore exactly once via
+its occurrence, never as a bare parent. pg-boss: two `occurrences.generate-lazy` re-checks
+`completed`, 0 failed/retry, 0 new `notification_dispatch_log` rows.
+
+**Physical Rabbit R1 acceptance — PASSED (2026-09-14 02:18–02:31 CDT), first-hand.** EAS build
+`eea50789…` from `e7b195e`, versionCode 14 → 15 (auto-incremented, remote keystore reused);
+`adb install -r` → `Success`; versionCode 15, signature `ad63266e` unchanged, `firstInstallTime`
+2026-08-19 preserved, exact-alarm appop `allow`, `POST_NOTIFICATIONS` granted, no re-pair. Cold
+launch → Today renders, 0 crash lines. A daily task with a reminder created server-side was
+reconciled into **45 exact alarms** (`window=0 exactAllowReason=permission`, one per occurrence).
+With the process **killed** (`am kill`) the reminder fired on the `reminders` channel at
+`importance=5` with the body "Due 2:31 AM · repeats" and **Done / Snooze 1h / Tomorrow 9am**
+buttons. **Snooze 1h** from the shade: app opened to the task with "Snoozed until 3:24 AM from
+reminder", "⟲ Daily", "Next: … · snoozed"; server `snoozed_until` set, rule untouched; notification
+dismissed; alarm re-armed exact at 03:24:28. In-app **Complete** → today's row done, "Next: Sep 15",
+alarm re-armed for tomorrow, "Undo last Done" shown; **Undo** → row scheduled again, snooze cleared,
+no extra successor. On a second task (every 2 days after completion), **Done** from the shade with
+the process killed again: "Completed from reminder", "⟳ Every 2 days after I complete it", "Next:
+Sep 16, 2:40 AM" (successor at the previous wall time), notification dismissed, worker re-check
+`completed` as a no-op, next reminder armed 12 minutes before it. **New task form:** Title · Notes ·
+Due date · **Repeat** chips (Never · Daily · Weekdays · Weekly · Monthly · Every N days · "After I
+complete it") · summary "Weekly on Mon" · the amber no-due-date hint · Reminder · Create → server
+row `FREQ=WEEKLY;BYDAY=MO`, `recurrence_timezone` America/Chicago, anchor persisted as `due_at`,
+first occurrence equal to it, 13 weekly rows. Tasks list shows "⟲ Daily" / "⟲ Every 2 days after I
+complete it" with no stale "Due <anchor>". **Cold launch after `am kill`:** Today shows Overdue 1 /
+Due today 1, one card per instance with the ⟲ glyph, successors under Upcoming, no duplicates.
+After archiving the smoke rows the device dropped every smoke alarm on its next reconcile (0
+remaining). **Test-method note, recorded:** `am force-stop` puts the package into Android's stopped
+state, which cancels all of its alarms — the first attempt found 0 alarms and no notification for
+that reason; a real dead process (memory reclaim, `am kill`) keeps them.
+
+**Post-acceptance production health:** `/health` `ok`/`connected`/`stale:false`; all four containers
+`RestartCount=0`; 0 pg-boss jobs failed/retry; migration 19; three integrations `active`; 0 open
+incidents; 0 api and 0 worker warn/error lines since the redeploy.
+
+**Recorded, not fixed (debt):** nonexistent spring-forward wall-clock times resolve one hour early
+(pre-existing `date-fns-tz` behaviour, now inherited by derived reminders and lazy `wallTime`); a
+90-day window that crosses a fall-back yields 90 rows, not 91 (day 90's wall clock lands an hour past
+the absolute horizon); completion-anchored monthly clamps from the completion date's day, so a
+series done on the 31st drifts to the 28th; `MAX_SNOOZE_DAYS` is elapsed days; reminder titles are
+unbounded (user-authored, local only); snooze targets and weekly/monthly `BY*` derive in the device
+and rule zones respectively, which differ only when the device travels; a stale "from reminder"
+banner persists on the task screen until it is left; the `singletonKey` on the generate-lazy send
+is inert under pg-boss `standard` policy (documented; never switch policy); a permanently malformed
+completion rule re-alerts once per night through `expand-window.dead:<date>` until the owner edits or
+drops the task (the ADR-062 date-bucket design); `apps/mobile`'s own eslint config reports one
+pre-existing `react-hooks/purity` error in `app/monitor/index.tsx:214` (8.6D, untouched by 9.4; the
+root `eslint .` gate ignores `apps/mobile/**`).
 
 ---
 
@@ -949,10 +1114,13 @@ an intentionally-logged field — are recorded in the ledger below.
 audit → parallel implementation → integration → adversarial review → fixes → full tests →
 deployment → production acceptance. No soak or observation wait between checkpoints; no separate
 planning-only checkpoints when implementation is clear; reversible decisions are not owner gates.
-Production mutations remain serialized and every standing guardrail holds. **Checkpoint 9.3 is
-complete; the next checkpoint is not yet selected** (the 9.3 ranking's next tier, in order: C2
-Rabbit-native event authoring, B1/C4 search term matching + event text bounds, A3 recurring
-reminders, E2 health trend context).
+Production mutations remain serialized and every standing guardrail holds. **Checkpoint 9.4 is
+complete; the next checkpoint is not yet selected.** From the 9.3 ranking's next tier, A3 (recurring
+reminders) is now done inside 9.4; the remaining candidates in order are C2 Rabbit-native event
+authoring, B1/C4 search term matching + event text bounds, and E2 health trend context. The
+highest-value next step on the evidence of this checkpoint is **C2 (event authoring on the Rabbit)**:
+the task loop is now closed end to end, while events remain the one core entity with hand-typed ISO
+fields and no recurrence field on the device.
 
 ---
 
@@ -976,23 +1144,38 @@ the one-line summary is:
 | **9.1** | Daily-use: notification-shade capture (no new native code), dedicated `alerts`/`updates`/`capture` Android channels, the Rabbit calendar-toggle fix. **Deployed and accepted 2026-09-13**, all three verified on the physical Rabbit R1. |
 | **9.2** | 21-day adoption soak. **OWNER-TERMINATED after 25 min** (`2026-09-14T01:28:10.274Z` → `2026-09-14T01:53:37.600Z`; intended end `2026-10-05T01:28:10.274Z`). **No adoption conclusion.** Reviewed read-only observer tooling retained in `scripts/soak/`; record in `docs/SOAK-9.2.md`. |
 | **9.3** | Close the capture→task loop: `/inbox/[id]` file-as/dismiss screen, capture follow-through, task complete/reopen/snooze, direct occurrence completion, recurrence integrity (in-transaction successor, validated rules, closed-parent guard), inbox archive (migration `0017`), Brief priority scalars. **Deployed (api/worker/web) and accepted on the Rabbit R1 (versionCode 14) 2026-09-14.** |
+| **9.4** | Dependable recurring tasks and reminders: repeat presets, one strictly-after wall-clock successor rule for every writer, nightly lazy repair, occurrence snooze (migration `0018`) and reopen, per-occurrence reminders with Done / Snooze 1h / Tomorrow 9am actions, Today never buckets a recurring parent. **Deployed (api/worker/web, level 19) and accepted on the Rabbit R1 (versionCode 15) 2026-09-14** (ADR-063). |
 
-**Production is at migration level 17** and serves api/worker images built from `77ea112` and a web
-image built from `ca04e57`. All three Google integrations are active. Monitoring runs against five
+**Production is at migration level 19** and serves api, worker and web images built from `e7b195e`. All three Google integrations are active. Monitoring runs against five
 active targets including both Tailscale Serve routes, with full CRUD. A daily retention cron bounds
 `monitor_checks`/`mail_messages`/`mail_digests`/`mail_sync_runs`/`health_sync_runs` and sweeps
 expired `health_oauth_states`/`mail_oauth_states`. Every retrying pg-boss queue has a dead-letter queue.
-The Rabbit R1 runs `com.himal.personalos` versionCode 13, built from the same `77ea112`.
+The Rabbit R1 runs `com.himal.personalos` versionCode 15, built from the same `e7b195e`.
 
 ## Current work
 
-**None in progress.** Checkpoint 9.3 closed 2026-09-14.
+**None in progress.** Checkpoint 9.4 closed 2026-09-14.
 
 ---
 
 ## Last verification
 
-**Checkpoint 9.3 (2026-09-13/14).** Branch `phase-9-reliability`, HEAD `8132f3b` (from `643a563`, the
+**Checkpoint 9.4 (2026-09-14).** Branch `phase-9-reliability`, HEAD `e7b195e` (from `c8ad0c0`, the
+9.3 acceptance record, verified clean and equal to origin). Foundation (migration, wire schemas,
+api-client bindings) by the integrator; one core lane; four parallel implementation lanes on
+per-lane clones of `personalos_test` (`personalos_test_a…f`, `CREATE DATABASE … TEMPLATE`, dropped
+afterwards); six adversarial review lenses; four fixer passes (1 blocker, ~12 majors, ~15 minors, all
+closed with regression tests); integrator gates on the shared database, serially: `pnpm build
+--force` 11/11 · `pnpm typecheck` 21/21 · `eslint .` clean · `prettier --check .` clean · `git diff
+--check` clean · `gitleaks` — the same 18 pre-existing findings in ignored, untracked files, git
+history clean · `pnpm test --force` **21/21 tasks, 4,636 tests across 12 packages, zero failing**
+(api 1,020 · mobile 1,062 · core 682 · worker 605 · health-providers 332 · schema 331 · api-client 157
+· monitoring 151 · mail-providers 116 · db 79 · calendar-providers 76 · ai-providers 25). **Migration
+invariant:** 19 `.sql` / 19 journal entries, highest `0018`; production `drizzle.__drizzle_migrations`
+18 → 19 by a migrate run from the new api image. Production and physical-device acceptance: recorded
+in full under *Phase 9 → Checkpoint 9.4* above.
+
+**Checkpoint 9.3 (2026-09-13/14)** — retained for reference. Branch `phase-9-reliability`, HEAD `8132f3b` (from `643a563`, the
 9.2 termination record, verified clean and equal to origin). Five parallel implementation lanes on
 per-lane clones of `personalos_test` (`personalos_test_a…e`, created with `CREATE DATABASE …
 TEMPLATE`, dropped afterwards), four adversarial review lenses, one fixer pass (3 majors, 5 minors,
@@ -1055,7 +1238,18 @@ clean; full evidence in `docs/PHASE-8-CLOSEOUT.md`.
 
 ## Next action
 
-Rank the Phase 9 product candidates (tasks/reminders/recurrence · search/knowledge · calendar/
+Select the next Phase 9 checkpoint from the remaining ranked tier — recommended **C2, Rabbit-native
+event authoring** (Material pickers and the Repeat field on `events/new.tsx` / `events/[id].tsx`,
+reusing 9.4's task-repeat building blocks) — and begin implementation in the same session under the
+accelerated operating model. Pause for the owner only on a product-direction tie at significant
+scope.
+
+Open, non-blocking, carried forward from 9.4: the spring-forward early-resolution note; the 90/91-row
+fall-back window; completion-anchored monthly drift to the 28th; unbounded reminder titles; the
+nightly re-alert for a permanently malformed completion rule; the pre-existing mobile-config lint
+error in `app/monitor/index.tsx`.
+
+*(Retained for reference — the 9.3 selection brief.)* Rank the Phase 9 product candidates (tasks/reminders/recurrence · search/knowledge · calendar/
 planning · capture/inbox · Daily Brief · projects · health intelligence) on daily value, usage
 lift, cost, dependency risk, privacy risk, incremental shippability, architectural fit and blocking
 debt — using parallel read-only audit agents over the existing closeout, debt and product documents

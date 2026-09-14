@@ -262,6 +262,10 @@ notes (
 )
 ```
 
+### Snooze is an occurrence property, never a rule edit (Checkpoint 9.4)
+
+`occurrences.snoozed_until` defers ONE instance of a recurring task. `occurs_at` stays the row's identity (the nightly window job re-inserts on it), the parent's `due_at` stays the series anchor, and the rule is untouched. The effective instant every read model buckets on is `greatest(occurs_at, snoozed_until)` — a snooze may only defer; snoozing the reminder to an instant before the due instant moves the reminder, never the due. A one-off task snoozes by moving its own `due_at`/`remind_at`, as before.
+
 ### Occurrences
 
 ```sql
@@ -365,6 +369,7 @@ Consequences worth accepting deliberately:
 - **A never-completed task never spawns a successor.** That's correct. You get one open "water the plants," not fourteen overdue ones staring at you after a trip.
 - **Only `FREQ` and `INTERVAL` are meaningful.** `BYDAY=MO,WE,FR` is incoherent relative to an arbitrary completion instant. Validate at write time and reject `BY*` parts on completion-anchored rules rather than silently ignoring them.
 - **Skipping anchors from the skip timestamp**, same as completion. Marking "skip" on a plant-watering means the next one is three days from now, not three days from a due date you already blew past.
+- **The successor keeps the previous occurrence's wall-clock time, and lands strictly after it (Checkpoint 9.4, ADR-063).** The next occurrence is `local date of the completion + INTERVAL`, at the completed row's own time-of-day in `recurrence_timezone`, by plain calendar arithmetic (months clamped to their length) — never at the instant the owner happened to tap Done. Because a completion INTERVAL days early would otherwise land on the completed row's own instant, the computed instant must be strictly after it; every writer (API complete/skip, worker re-check, nightly repair, rule edit, task reopen) computes it through one function, and a collision that leaves no open occurrence is a loud failure, never a silent "successor exists".
 - **Editing the rule** regenerates only the single open occurrence; there's no window to rebuild.
 
 The parser can infer the anchor from phrasing — "every 3 days after I…", "every N days" on a chore-shaped verb — and should default to `due_date` when ambiguous, since that's the reversible mistake.
