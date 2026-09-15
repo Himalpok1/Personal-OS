@@ -142,11 +142,12 @@ The project is phase-gated.
 
 **`docs/STATUS.md` is the canonical statement of the current phase and of what is approved next. Read it before assuming scope.** This section states the rule; it does not track the phase number.
 
-As of Checkpoint 9.0 (2026-09-12): **Phases 0–8 are complete and production-deployed at migration
-level 17.** Phase 8 (ADR-056) closed under ADR-061; its record is `docs/history/phase-8.md` and its
+As of Checkpoint 9.6 (2026-09-15): **Phases 0–8 are complete and production-deployed at migration
+level 20.** Phase 8 (ADR-056) closed under ADR-061; its record is `docs/history/phase-8.md` and its
 closure evidence plus the Phase 9 starting brief are in `docs/PHASE-8-CLOSEOUT.md`. **Phase 9 is
-open; Checkpoint 9.0 (reliability & privacy housekeeping, ADR-062) is deployed and accepted, and no
-further Phase 9 checkpoint is approved** — the product theme is an owner decision. ADR-056's standing
+open under the accelerated operating model; Checkpoints 9.0, 9.1, 9.3, 9.4, 9.5 and 9.6
+(ADR-062 … ADR-065) are deployed and accepted, 9.2 was owner-terminated, and no further Phase 9
+checkpoint is selected** — the next product direction is an owner decision. ADR-056's standing
 rules carry forward regardless of phase: read-only intelligence before write-capable intelligence, no
 unrestricted full-content cloud egress, no pgvector or Postgres image change without its own
 infrastructure ADR, and every new alert producer carries an occurrence-scoped dedupe key (ADR-058).
