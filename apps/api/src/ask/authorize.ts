@@ -47,6 +47,20 @@ export async function askRouteEnabled(db: Db): Promise<boolean> {
 }
 
 /**
+ * Checkpoint 9.7 consent vintage: when the `ask` route row was created. The
+ * row's presence is the switch (8.6B); its `created_at` records WHICH
+ * disclosure the owner consented under. Returns null when no row exists.
+ * Read-only; no grant required because it reads no user content.
+ */
+export async function askRouteConsentedAt(db: Db): Promise<Date | null> {
+  const [row] = await db
+    .select({ createdAt: aiTaskRoutes.createdAt })
+    .from(aiTaskRoutes)
+    .where(eq(aiTaskRoutes.taskName, ASK_TASK_NAME));
+  return row?.createdAt ?? null;
+}
+
+/**
  * Checks the switch and, if it is on, mints a fresh, single-use grant bound to
  * this HTTP request. Returns `null` when Cloud Ask is disabled -- the route
  * maps that to `409 cloud_ask_disabled` having read no `notes`/`tasks` row at

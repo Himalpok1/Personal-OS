@@ -1,12 +1,45 @@
-import type { SearchDateFilter, SearchResponse, SearchResult } from "@personal-os/schema";
+import type {
+  AiTaskRouteInfo,
+  RemindersResponse,
+  SearchDateFilter,
+  SearchResponse,
+  SearchResult,
+  TodayResponse,
+} from "@personal-os/schema";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+// react-dom is a dependency (react-native-web needs it) but @types/react-dom
+// is not, and this test is the only importer: a server render is the one way
+// to mount a hooked screen without a DOM or a render library.
+// @ts-expect-error -- no declaration file for react-dom/server in this app
+import { renderToString } from "react-dom/server";
 import { FlatList, Pressable, SafeAreaView, Text, TextInput, View } from "react-native";
-import { describe, expect, it, vi } from "vitest";
-import {
+import { afterEach, describe, expect, it, vi } from "vitest";
+import SearchScreen, {
   SearchResultRow,
   SearchView,
   type SearchViewProps,
   type SearchViewState,
 } from "@/app/search/index";
+import { ASK_PRESETS } from "@/components/ask/ask-presets";
+import { AskView, type AskViewProps } from "@/components/ask/ask-view";
+import { AI_TASK_ROUTES_QUERY_KEY } from "@/queries/ask";
+import { api } from "@/queries/client";
+
+// The real AskView, wrapped in a spy so the props the SCREEN hands it can be
+// read back after a mount -- what the input holds, which chip is selected,
+// whether the field auto-focuses, and the callbacks a tap would run.
+vi.mock("@/components/ask/ask-view", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/components/ask/ask-view")>();
+  return { ...original, AskView: vi.fn(original.AskView) };
+});
+
+// The route params the screen reads on mount, settable per test. Replaces the
+// aliased `src/__mocks__/expo-router.ts` for THIS file only.
+let routeParams: Record<string, string> = {};
+vi.mock("expo-router", () => ({
+  useRouter: () => ({ push: () => {}, replace: () => {}, back: () => {}, setParams: () => {} }),
+  useLocalSearchParams: () => routeParams,
+}));
 
 // Same hand-rolled render walk every render-style test in this app uses -- see
 // components/brief/brief-card.test.tsx for the full explanation. There is no
@@ -458,8 +491,8 @@ describe("SearchView -- states", () => {
     const notes = deepRender(findByTestId(tree, "search-results").props.ListHeaderComponent);
     expect(getTextContent(findByTestId(notes, "search-ignored"))).toBe("Ignored: ninth, tenth");
     // Ordered after the chip: the chip explains the window, the note the words.
-    const texts = findAll(notes, (n) => n.type === Text).map((n: { props: { testID?: string } }) =>
-      n.props.testID,
+    const texts = findAll(notes, (n) => n.type === Text).map(
+      (n: { props: { testID?: string } }) => n.props.testID,
     );
     expect(texts.indexOf("search-ignored")).toBeGreaterThan(texts.indexOf("search-date-chip"));
     expectInertText(notes);
@@ -666,5 +699,343 @@ describe("SearchResultRow", () => {
     // The row hands back the RESULT; the destination is derived from its
     // server-authored type and uuid by searchResultHref, never from the title.
     expect(onSelect).toHaveBeenCalledWith(hostile);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Checkpoint 9.7: `/search?mode=ask&preset=<key>` NEVER submits on its own.
+// ---------------------------------------------------------------------------
+//
+// These mount the REAL default export -- hooks, query client and all -- through
+// react-dom/server's `renderToString`, which runs every `useState` initializer
+// and the whole render body exactly as a device mount does. It does not run
+// effects, and that is not a gap here: the screen imports no `useEffect` at
+// all (pinned by the source guard below), so its render body IS everything
+// that runs on mount. If a future edit auto-submitted a preset -- in the
+// body or by adding an effect -- one of these tests fails.
+
+const ASK_ROUTE: AiTaskRouteInfo = {
+  task_name: "ask",
+  primary_model_id: "11111111-1111-4111-8111-111111111111",
+  connection_name: "My OpenAI",
+  provider_type: "openai",
+  base_url_host: null,
+  enabled: true,
+};
+
+function emptyToday(): TodayResponse {
+  return {
+    generated_at: "2026-09-14T12:00:00.000Z",
+    effective_now: "2026-09-14T12:00:00.000Z",
+    tz: "America/Chicago",
+    local_date: "2026-09-14",
+    summary: {
+      overdue_total: 0,
+      due_today_total: 0,
+      inbox_attention_total: 0,
+      active_project_count: 0,
+    },
+    overdue: { items: [], total: 0 },
+    due_today: { items: [], total: 0 },
+    events_today: { items: [] },
+    upcoming: { days: [] },
+    inbox: { pending_count: 0, needs_confirm_count: 0, failed_count: 0, items: [] },
+    projects: { active_count: 0, items: [] },
+    reviews: {
+      daily: { period_start: "2026-09-14", review_id: null, status: null, last_completed_at: null },
+      weekly: {
+        period_start: "2026-09-14",
+        review_id: null,
+        status: null,
+        last_completed_at: null,
+      },
+    },
+    brief: null,
+  };
+}
+
+function busyToday(): TodayResponse {
+  const today = emptyToday();
+  return {
+    ...today,
+    summary: { ...today.summary, due_today_total: 1 },
+    due_today: {
+      items: [
+        {
+          id: ID,
+          title: "Pay rent",
+          due_at: "2026-09-14T14:00:00.000Z",
+          remind_at: null,
+          timezone: "America/Chicago",
+          priority: 1,
+          project_id: null,
+          project_name: null,
+          rrule: null,
+          parent_task_id: null,
+          occurrence_id: null,
+          snoozed_until: null,
+        },
+      ],
+      total: 1,
+    },
+  };
+}
+
+/** A cached `/reminders` list holding nothing -- what the device has on a genuinely empty day. */
+const NO_REMINDERS: RemindersResponse = { items: [], horizon_days: 45 };
+
+function mountSearchScreen(
+  params: Record<string, string>,
+  today?: TodayResponse,
+  /** `null` means the device has NO cached reminders list at all. */
+  reminders: RemindersResponse | null = NO_REMINDERS,
+): { html: string; askViewProps: AskViewProps | null } {
+  routeParams = params;
+  vi.mocked(AskView).mockClear();
+  const queryClient = new QueryClient();
+  // Cloud Ask is ON for these mounts, as it would be on a device that shows
+  // the Today chip at all; the cached /today and /reminders are whatever the
+  // caller seeds. An EMPTY day needs both: the empty-day check refuses to
+  // call a day empty while the reminders cache cannot vouch for it.
+  queryClient.setQueryData(AI_TASK_ROUTES_QUERY_KEY, [ASK_ROUTE]);
+  if (today) queryClient.setQueryData(["today"], today);
+  if (reminders) queryClient.setQueryData(["reminders"], reminders);
+  const html = renderToString(
+    <QueryClientProvider client={queryClient}>
+      <SearchScreen />
+    </QueryClientProvider>,
+  );
+  const calls = vi.mocked(AskView).mock.calls;
+  const askViewProps = calls.length > 0 ? (calls[calls.length - 1]![0] as AskViewProps) : null;
+  return { html, askViewProps };
+}
+
+describe("SearchScreen mounted with preset= (Checkpoint 9.7)", () => {
+  afterEach(() => {
+    routeParams = {};
+    vi.restoreAllMocks();
+  });
+
+  it("opens Ask mode with the chip selected and the question pre-filled, and calls api.askCloud ZERO times", () => {
+    const spy = vi.spyOn(api, "askCloud").mockResolvedValue({
+      answer: "should not happen",
+      sources: [],
+      redactions: 0,
+      model_id: null,
+    });
+
+    const { html, askViewProps } = mountSearchScreen({ mode: "ask", preset: "focus" });
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(askViewProps).not.toBeNull();
+    expect(askViewProps!.question).toBe(ASK_PRESETS[0]!.question);
+    expect(askViewProps!.question).toBe("What should I focus on today?");
+    expect(askViewProps!.selectedPreset).toBe("focus");
+    expect(askViewProps!.canSubmit).toBe(true);
+    // Nothing was submitted: the idle prompt is what shows, not a loading line.
+    expect(askViewProps!.state).toEqual({ kind: "idle" });
+    expect(html).toContain('data-testid="ask-idle"');
+    expect(html).not.toContain('data-testid="ask-loading"');
+    expect(html).toContain('data-testid="ask-preset-focus"');
+  });
+
+  it("does NOT auto-focus the input when a preset is pre-filled (the keyboard would cover the screen)", () => {
+    const withPreset = mountSearchScreen({ mode: "ask", preset: "tomorrow" }).askViewProps!;
+    expect(withPreset.autoFocus).toBe(false);
+    expect(withPreset.question).toBe("Summarize tomorrow");
+    expect(withPreset.selectedPreset).toBe("tomorrow");
+
+    // ...and DOES when Ask mode is opened without one.
+    const withoutPreset = mountSearchScreen({ mode: "ask" }).askViewProps!;
+    expect(withoutPreset.autoFocus).toBe(true);
+    expect(withoutPreset.question).toBe("");
+    expect(withoutPreset.selectedPreset).toBeNull();
+  });
+
+  it("an unknown preset key is ignored: Ask mode opens empty, nothing selected, nothing sent", () => {
+    const spy = vi.spyOn(api, "askCloud");
+    const { askViewProps } = mountSearchScreen({ mode: "ask", preset: "settings" });
+    expect(spy).not.toHaveBeenCalled();
+    expect(askViewProps!.question).toBe("");
+    expect(askViewProps!.selectedPreset).toBeNull();
+    expect(askViewProps!.autoFocus).toBe(true);
+  });
+
+  it("a preset alone (no mode=) still opens Ask mode -- the param is meaningless in search mode", () => {
+    const { html, askViewProps } = mountSearchScreen({ preset: "slipping" });
+    expect(askViewProps!.question).toBe("What's slipping?");
+    expect(html).not.toContain('data-testid="search-input"');
+  });
+
+  it("with no params at all, the screen is the search screen, untouched", () => {
+    const spy = vi.spyOn(api, "askCloud");
+    const { html, askViewProps } = mountSearchScreen({});
+    expect(spy).not.toHaveBeenCalled();
+    expect(askViewProps).toBeNull();
+    expect(html).toContain('data-testid="search-input"');
+    expect(html).not.toContain('data-testid="ask-input"');
+  });
+});
+
+describe("SearchScreen submissions -- scope and the empty-day short-circuit (Checkpoint 9.7)", () => {
+  afterEach(() => {
+    routeParams = {};
+    vi.restoreAllMocks();
+  });
+
+  function askSpy() {
+    return vi.spyOn(api, "askCloud").mockResolvedValue({
+      answer: "ok",
+      sources: [],
+      redactions: 0,
+      model_id: null,
+      citations_present: true,
+    });
+  }
+
+  it("a preset chip tap on a BUSY day sends its exact question with scope 'today'", async () => {
+    const spy = askSpy();
+    const { askViewProps } = mountSearchScreen({ mode: "ask" }, busyToday());
+    askViewProps!.onSelectPreset(ASK_PRESETS[1]!);
+    await Promise.resolve();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]![0]).toMatchObject({ question: "What's slipping?", scope: "today" });
+    expect(typeof (spy.mock.calls[0]![0] as { tz?: string }).tz).toBe("string");
+  });
+
+  it("a preset chip tap on an EMPTY day sends NOTHING -- answered locally", async () => {
+    const spy = askSpy();
+    const { askViewProps } = mountSearchScreen({ mode: "ask" }, emptyToday());
+    for (const preset of ASK_PRESETS) askViewProps!.onSelectPreset(preset);
+    await Promise.resolve();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("pressing Ask on a pre-filled preset on an EMPTY day sends NOTHING either", async () => {
+    const spy = askSpy();
+    const { askViewProps } = mountSearchScreen({ mode: "ask", preset: "focus" }, emptyToday());
+    askViewProps!.onSubmit();
+    await Promise.resolve();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("pressing Ask on a pre-filled preset on a BUSY day sends it with scope 'today'", async () => {
+    const spy = askSpy();
+    const { askViewProps } = mountSearchScreen({ mode: "ask", preset: "focus" }, busyToday());
+    askViewProps!.onSubmit();
+    await Promise.resolve();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]![0]).toMatchObject({
+      question: "What should I focus on today?",
+      scope: "today",
+    });
+  });
+
+  it("a preset on an empty day whose REMINDERS cache is empty is still answered locally", async () => {
+    const spy = askSpy();
+    const { askViewProps } = mountSearchScreen({ mode: "ask" }, emptyToday(), NO_REMINDERS);
+    askViewProps!.onSelectPreset(ASK_PRESETS[2]!);
+    await Promise.resolve();
+    expect(spy).not.toHaveBeenCalled();
+    expect(askViewProps!.state).toEqual({ kind: "idle" });
+  });
+
+  it("a reminder inside the 7-day horizon makes the day NOT empty, so the preset is sent", async () => {
+    // The case /today cannot show: a task due next month with a reminder
+    // tomorrow. The server's Today context lists it, so the device must not
+    // answer "nothing" on its behalf.
+    const spy = askSpy();
+    const soon: RemindersResponse = {
+      horizon_days: 45,
+      items: [
+        {
+          key: `task:${ID}`,
+          task_id: ID,
+          occurrence_id: null,
+          title: "Renew the insurance",
+          remind_at: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
+          due_at: null,
+          timezone: "America/Chicago",
+          recurring: false,
+        },
+      ],
+    };
+    const { askViewProps } = mountSearchScreen({ mode: "ask" }, emptyToday(), soon);
+    askViewProps!.onSelectPreset(ASK_PRESETS[0]!);
+    await Promise.resolve();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]![0]).toMatchObject({ scope: "today" });
+  });
+
+  it("an empty day with NO reminders cache sends the preset -- nothing is asserted from ignorance", async () => {
+    const spy = askSpy();
+    const { askViewProps } = mountSearchScreen({ mode: "ask" }, emptyToday(), null);
+    askViewProps!.onSelectPreset(ASK_PRESETS[0]!);
+    await Promise.resolve();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("TWO submits in one tick send ONE request -- a second Send never re-transmits the bodies", async () => {
+    // `askMutation.isPending` is a render-time snapshot, and the keyboard's
+    // send key is never disabled, so without the in-flight guard both calls
+    // would read it as false and transmit the question and its matching
+    // note/task text twice.
+    const spy = askSpy();
+    const { askViewProps } = mountSearchScreen({ mode: "ask", preset: "focus" }, busyToday());
+    askViewProps!.onSubmit();
+    askViewProps!.onSubmit();
+    await Promise.resolve();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a preset chip tapped twice in one tick also sends once", async () => {
+    const spy = askSpy();
+    const { askViewProps } = mountSearchScreen({ mode: "ask" }, busyToday());
+    askViewProps!.onSelectPreset(ASK_PRESETS[1]!);
+    askViewProps!.onSelectPreset(ASK_PRESETS[1]!);
+    await Promise.resolve();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a preset before /today has loaded is still sent -- an empty day is never assumed", async () => {
+    const spy = askSpy();
+    const { askViewProps } = mountSearchScreen({ mode: "ask", preset: "focus" });
+    askViewProps!.onSubmit();
+    await Promise.resolve();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("search/index.tsx source guard -- no effect can ever submit", () => {
+  const source = Object.values(
+    (
+      import.meta as unknown as {
+        glob: (p: string, o: Record<string, unknown>) => Record<string, string>;
+      }
+    ).glob("../app/search/index.tsx", { query: "?raw", import: "default", eager: true }),
+  )[0]!;
+
+  it("imports no useEffect/useLayoutEffect -- the render body is everything that runs on mount", () => {
+    expect(source).not.toMatch(/useEffect|useLayoutEffect/);
+  });
+
+  it("calls askMutation.mutate in exactly one place, inside the tap-driven submit", () => {
+    const calls = source.match(/askMutation\.mutate\(/g) ?? [];
+    expect(calls).toHaveLength(1);
+    const submitStart = source.indexOf("const submit = (text: string) =>");
+    expect(submitStart).toBeGreaterThan(0);
+    expect(source.indexOf("askMutation.mutate(")).toBeGreaterThan(submitStart);
+  });
+
+  it("free text is sent with scope 'both' and a preset with 'today' -- the plan decides, nothing else", () => {
+    expect(source).toContain("planAskSubmission(");
+    expect(source).toContain("scope: plan.scope");
+  });
+
+  it("guards submit on the in-flight ref BEFORE anything else it does", () => {
+    const body = source.slice(source.indexOf("const submit = (text: string) =>"));
+    const guard = body.indexOf("askInFlight.current");
+    expect(guard).toBeGreaterThan(0);
+    expect(guard).toBeLessThan(body.indexOf("planAskSubmission("));
   });
 });

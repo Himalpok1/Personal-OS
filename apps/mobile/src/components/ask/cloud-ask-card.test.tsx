@@ -12,18 +12,20 @@ import { ApiClientError } from "@personal-os/api-client";
 import { Pressable, Text, View } from "react-native";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  useAskConsentOutdated,
   useAskEnabled,
   useAskModels,
   useDisableCloudAsk,
   useEnableCloudAsk,
 } from "@/queries/ask";
-import { CloudAskCard } from "./cloud-ask-card";
+import { ASK_CONSENT_OUTDATED_TEXT, ASK_DISCLOSURE_TEXT, CloudAskCard } from "./cloud-ask-card";
 
 vi.mock("@/queries/ask", () => ({
   useAskEnabled: vi.fn(),
   useAskModels: vi.fn(),
   useEnableCloudAsk: vi.fn(),
   useDisableCloudAsk: vi.fn(),
+  useAskConsentOutdated: vi.fn(),
 }));
 
 const HOST_TYPES = new Set<unknown>([View, Text, Pressable]);
@@ -130,6 +132,7 @@ beforeEach(() => {
   mockModels();
   mockEnable();
   mockDisable();
+  vi.mocked(useAskConsentOutdated).mockReturnValue(false);
 });
 
 describe("off state", () => {
@@ -142,7 +145,10 @@ describe("off state", () => {
   it("always shows the disclosure and the model picker while off -- no extra reveal step", () => {
     const tree = render();
     const disclosure = findByTestId(tree, "cloud-ask-disclosure-text");
-    expect(getTextContent(disclosure)).toContain("full text of your matching notes and tasks");
+    expect(getTextContent(disclosure)).toBe(ASK_DISCLOSURE_TEXT);
+    expect(
+      findByTestId(tree, "cloud-ask-model-33333333-3333-4333-8333-333333333333"),
+    ).toBeDefined();
   });
 
   it("names each model's connection so the user knows who receives content", () => {
@@ -185,24 +191,66 @@ describe("the disclosure text itself", () => {
     expect(text).not.toContain("never leaves");
   });
 
-  it("mentions that captures are already, separately, sent to AI for parsing", () => {
+  it("is EXACTLY the Checkpoint 9.7 text -- every class of data that leaves, named", () => {
+    // Pinned byte-for-byte: this is the consent the server's vintage check
+    // (`ask_consent_outdated`) exists to protect. A wording change here is a
+    // change to what the owner agreed to and needs its own re-consent.
+    expect(ASK_DISCLOSURE_TEXT).toBe(
+      "Sends your question to the model you choose, along with: matching notes and tasks " +
+        "(up to 4, bodies included, secrets redacted by pattern only); the titles, times and " +
+        "project names of your tasks, reminders and calendar events for today and the next 7 " +
+        "days (calendar titles and locations were written by whoever created the invitation); " +
+        "tasks you completed in the last 7 days; the text of up to 5 unfiled captures; project " +
+        "names and task counts; and whether your reviews are done. Nothing is stored. Personal " +
+        "OS cannot verify how the provider handles it.",
+    );
+  });
+
+  it("names the seven-day windows, the calendar provenance, captures and the no-storage rule", () => {
     const tree = render();
     const text = getTextContent(findByTestId(tree, "cloud-ask-disclosure-text"));
+    expect(text).toContain("today and the next 7 days");
+    expect(text).toContain("written by whoever created the invitation");
+    expect(text).toContain("completed in the last 7 days");
+    expect(text).toContain("up to 5 unfiled captures");
+    expect(text).toContain("Nothing is stored.");
+    expect(text).toContain("cannot verify how the provider handles it");
+  });
+
+  it("does not describe the redaction as more than it is", () => {
+    const text = ASK_DISCLOSURE_TEXT.toLowerCase();
+    expect(text).toContain("redacted by pattern only");
+    expect(text).not.toContain("all secrets");
+    expect(text).not.toContain("guaranteed");
+  });
+
+  it("mentions, beside the disclosure, that captures are already, separately, sent to AI for parsing", () => {
+    const tree = render();
+    const text = getTextContent(findByTestId(tree, "cloud-ask-context-text"));
     expect(text).toContain("capture parsing");
     expect(text).toContain("already sends the text of every new capture");
   });
 
-  it("says Personal OS cannot verify the provider's handling", () => {
-    const tree = render();
-    const text = getTextContent(findByTestId(tree, "cloud-ask-disclosure-text"));
-    expect(text).toContain("cannot verify how the provider you pick handles");
-  });
-
   it("says disabling stops new questions immediately but one in flight may finish", () => {
     const tree = render();
-    const text = getTextContent(findByTestId(tree, "cloud-ask-disclosure-text"));
+    const text = getTextContent(findByTestId(tree, "cloud-ask-context-text"));
     expect(text).toContain("stops new questions immediately");
     expect(text).toContain("already in flight may still finish");
+  });
+
+  it("the context paragraph is hidden with the disclosure once Cloud Ask is on", () => {
+    mockEnabled({
+      enabled: true,
+      route: {
+        task_name: "ask",
+        primary_model_id: "33333333-3333-4333-8333-333333333333",
+        connection_name: "My OpenAI",
+        provider_type: "openai",
+        base_url_host: null,
+        enabled: true,
+      },
+    });
+    expect(findByTestId(render(), "cloud-ask-context-text")).toBeUndefined();
   });
 });
 
@@ -269,5 +317,53 @@ describe("loading and unreadable states", () => {
     expect(text).toContain("Can't reach Personal OS");
     expect(text).not.toContain("On —");
     expect(findByTestId(tree, "cloud-ask-disclosure")).toBeUndefined();
+  });
+});
+
+describe("consent outdated (Checkpoint 9.7)", () => {
+  const ROUTE = {
+    task_name: "ask",
+    primary_model_id: "33333333-3333-4333-8333-333333333333",
+    connection_name: "My OpenAI",
+    provider_type: "openai",
+    base_url_host: null,
+    enabled: true,
+  };
+
+  it("shows nothing about it while the flag is false", () => {
+    mockEnabled({ enabled: true, route: ROUTE });
+    const tree = render();
+    expect(findByTestId(tree, "cloud-ask-consent-outdated")).toBeUndefined();
+    expect(getTextContent(findByTestId(tree, "cloud-ask-disable"))).toBe("Disable Cloud Ask");
+  });
+
+  it("on an enabled row, names the situation and turns Disable into the re-enable step", () => {
+    mockEnabled({ enabled: true, route: ROUTE });
+    vi.mocked(useAskConsentOutdated).mockReturnValue(true);
+    const tree = render();
+    expect(getTextContent(findByTestId(tree, "cloud-ask-consent-outdated"))).toBe(
+      ASK_CONSENT_OUTDATED_TEXT,
+    );
+    expect(ASK_CONSENT_OUTDATED_TEXT).toBe(
+      "Cloud Ask was enabled under an older disclosure. Re-enable to continue.",
+    );
+    const button = findByTestId(tree, "cloud-ask-disable");
+    expect(getTextContent(button)).toBe("Disable, then re-enable below");
+    // The SAME delete mutation -- there is no in-place re-point (the server
+    // refuses one), so re-enabling is delete-then-pick-a-model by design.
+    const mutate = vi.fn();
+    mockDisable({ mutate });
+    findByTestId(render(), "cloud-ask-disable").props.onPress();
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate).toHaveBeenCalledWith();
+  });
+
+  it("is irrelevant while off: the picker and the current disclosure are what show", () => {
+    vi.mocked(useAskConsentOutdated).mockReturnValue(true);
+    const tree = render();
+    expect(findByTestId(tree, "cloud-ask-consent-outdated")).toBeUndefined();
+    expect(getTextContent(findByTestId(tree, "cloud-ask-disclosure-text"))).toBe(
+      ASK_DISCLOSURE_TEXT,
+    );
   });
 });

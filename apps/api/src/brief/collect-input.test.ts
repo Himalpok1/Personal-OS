@@ -355,6 +355,30 @@ describe("collectBriefInput", () => {
     expect(input.inbox.snippets[0]!.endsWith("…")).toBe(true);
   });
 
+  it("redacts a secret-shaped string from an inbox snippet BEFORE truncating (9.7 ride-along)", async () => {
+    const now = atLocal(TZ, "2026-08-20", 12);
+    // A Groq-shaped key (the production transcription provider) placed so the
+    // truncation cut would land INSIDE it: redact-then-truncate leaves no
+    // prefix of it; truncate-then-redact would ship a fragment.
+    const secret = "gsk_" + "Q".repeat(40);
+    const filler = "s".repeat(BRIEF_INBOX_SNIPPET_MAX_CHARS - 10);
+    await app.db.insert(inboxItems).values({
+      rawText: `${filler} ${secret} tail`,
+      source: "web",
+      capturedAt: now,
+      timezone: TZ,
+      status: "needs_confirm",
+    });
+
+    const { input } = await collectBriefInput(app.db, { tz: TZ, now });
+    expect(input.inbox.snippets).toHaveLength(1);
+    const snippet = input.inbox.snippets[0]!;
+    expect(snippet).not.toContain(secret);
+    expect(snippet).not.toContain("gsk_Q");
+    expect(snippet.length).toBeLessThanOrEqual(BRIEF_INBOX_SNIPPET_MAX_CHARS);
+    expect(serializeBriefSnapshot(input)).not.toContain("gsk_Q");
+  });
+
   it("stays under MAX_BRIEF_INPUT_CHARS even when every section is stuffed far past its cap with max-length titles", async () => {
     const now = atLocal(TZ, "2026-08-20", 12);
     const longTitle = "T".repeat(BRIEF_TITLE_MAX_CHARS + 80);

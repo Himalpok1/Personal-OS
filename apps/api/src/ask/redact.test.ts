@@ -128,3 +128,54 @@ describe("buildAskContext (Checkpoint 8.6B design §7-8)", () => {
     expect(context.contextChars).toBeLessThan(ASK_MAX_CONTEXT_CHARS);
   });
 });
+
+describe("buildAskContext -- Checkpoint 9.7 options", () => {
+  it("with no options is byte-identical to the option-less call (the 8.6B path is unchanged)", () => {
+    const candidates = [candidate({ id: "a" }), candidate({ id: "b", title: "Second" })];
+    const bare = buildAskContext(candidates);
+    const empty = buildAskContext(candidates, {});
+    expect(empty).toEqual(bare);
+    expect(bare.records.map((r) => r.ref)).toEqual([1, 2]);
+    expect(bare.serializedRecords).toBe(JSON.stringify(bare.records));
+  });
+
+  it("refOffset shifts every ref: refs become refOffset+1.. in order", () => {
+    const context = buildAskContext([candidate({ id: "a" }), candidate({ id: "b" })], {
+      refOffset: 12,
+    });
+    expect(context.records.map((r) => r.ref)).toEqual([13, 14]);
+    expect(context.serializedRecords).toContain('"ref":13');
+  });
+
+  it("maxRecords caps the candidate set BEFORE the drop ladder, keeping rank order", () => {
+    const context = buildAskContext(
+      [
+        candidate({ id: "a", title: "A" }),
+        candidate({ id: "b", title: "B" }),
+        candidate({ id: "c", title: "C" }),
+      ],
+      { maxRecords: 2 },
+    );
+    expect(context.records.map((r) => r.title)).toEqual(["A", "B"]);
+    expect(context.survivingCandidates.map((c) => c.id)).toEqual(["a", "b"]);
+  });
+
+  it("maxChars narrows the ceiling and the ladder drops whole records to fit it", () => {
+    const body = "b".repeat(1000);
+    const many = [1, 2, 3, 4].map((n) => candidate({ id: String(n), body }));
+    const wide = buildAskContext(many);
+    expect(wide.records).toHaveLength(4);
+    const narrow = buildAskContext(many, { maxChars: 2500 });
+    expect(narrow.records.length).toBeLessThan(4);
+    expect(narrow.records.length).toBeGreaterThan(0);
+    expect(narrow.contextChars).toBeLessThanOrEqual(2500);
+    expect(narrow.serializedRecords.length).toBe(narrow.contextChars);
+  });
+
+  it("the drop ladder preserves the offset numbering of the survivors", () => {
+    const body = "b".repeat(1000);
+    const many = [1, 2, 3, 4].map((n) => candidate({ id: String(n), body }));
+    const narrow = buildAskContext(many, { maxChars: 2500, refOffset: 5 });
+    expect(narrow.records[0]!.ref).toBe(6);
+  });
+});

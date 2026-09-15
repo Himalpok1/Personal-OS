@@ -486,6 +486,52 @@ explainable.** `GET /search?q=&tz=&types=&order=&limit=&include_archived=`:
   the bounded, id-cited interfaces a later READ-ONLY lane may call. No agent runtime exists and
   Cloud Ask is unchanged.
 
+## Personal intelligence — read-only (Checkpoint 9.7, ADR-066)
+
+Personal OS explains, summarizes and prioritizes the owner's own information without modifying it.
+The shape is fixed and is NOT an agent:
+
+```
+Personal OS database  →  Bounded Context Builder  →  ONE model call  →  cited insight
+                          (buildTodayContext)         (ask/generate.ts)   (validated [n] refs)
+```
+
+The model never touches the database, search, the filesystem or an integration. It receives exactly
+two fenced blocks in the user role — `<today>` (the `TodayContext`) and, for free-text questions,
+`<records>` (the 8.6B lexical selection) — and returns text.
+
+- **`TodayContext`** (`packages/schema/src/intelligence-tools.ts`) is a closed `.strict()` allowlist
+  built only from existing read models with one `effectiveNow`: overdue, due today, upcoming (7 d),
+  events today, reminders (7 d), recently completed (7 d), projects touched, open loops (unfiled
+  captures, stalled projects, projects with no next action, snoozed-within-horizon, review status).
+  Items carry an ordinal `ref`, never an id; every time is a wall-clock string in the request `tz`;
+  bodies, descriptions, `rrule`, `goal`, review prose, sync links, health, mail and monitor data are
+  inexpressible. Both project lists carry an honest `total` alongside their items. Ceiling 12 000
+  chars on the exact string sent — a contract, not a preference: a preset-aware drop ladder empties
+  unprotected sections first and, if JSON escaping still leaves it over, trims protected ones too.
+  Every dropped section keeps its honest `total`.
+- **`POST /ask { question, tz?, scope? }`.** Without `tz` it is the 8.6B request and response,
+  byte-shape-identical (the versionCode 18 client). `scope: "today"` — every preset chip — selects
+  no note/task body at all; `scope: "both"` adds ≤ 4 lexically matched records (≤ 5 000 chars),
+  whose refs continue after the HIGHEST Today ref assigned (never the surviving citation count — the
+  drop ladder leaves gaps). `scope` without `tz` is `400 validation_failed`. The concatenated USER
+  prompt is ≤ 18 000 chars (12 000 + 5 000 + 512 + 238 framing = 17 750; the static system prompt is
+  not counted), 800 output tokens, one call, no retries, nothing stored.
+- **Citations.** `sources[{ref, type, id, title, section, detail, occurs_at?}]` are zipped server-side
+  after the call. Every `[n]` in the answer must resolve (`502 ask_uncited` otherwise); an answer with
+  none is returned with `citations_present: false`; a malformed numeric group (`[0]`, `[3-1]`,
+  `[1.5]`) counts as unresolved rather than vanishing. Section/detail labels are server-authored so a
+  ranking claim can be checked on the row (`[1] Overdue · P1 · title` — the detail never repeats the
+  section word). Ranking claims themselves are not machine-verified.
+- **Consent.** The `ask` route row is the switch; its disclosure names every class that leaves. A row
+  created before `ASK_TODAY_CONSENT_FROM` is refused `409 ask_consent_outdated` on a `tz` request until
+  it is re-created under the new disclosure.
+- **Future agent compatibility (designed, not built).** `READ_TOOL_NAMES` and their schemas define the
+  read-only tools a later agent ADR would bind; `buildTodayContext(ReadContext)` is already the
+  `get_today_context` implementation. No tool runtime, no write tool, no `posops_app` for any agent;
+  Guard 4 in `ai-egress-guard.test.ts` enforces the no-write, no-`ai`-import rule under
+  `apps/api/src/intelligence/`.
+
 ## The parse pipeline
 
 1. `POST /capture` → insert `inbox_items` row, status `pending`, return 202.

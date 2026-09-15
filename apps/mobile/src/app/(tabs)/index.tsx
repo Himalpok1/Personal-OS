@@ -15,12 +15,21 @@ import { MailDigestCard } from "@/components/mail/digest-today-card";
 import { ReminderNoticeCard } from "@/components/reminder-notice-card";
 import { FLOATING_CLEARANCE } from "@/components/floating-layout";
 import { classifyTaskActionError, completionTarget } from "@/components/task-actions-state";
+import { useAskEnabled } from "@/queries/ask";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import { useCompleteTask } from "@/queries/tasks";
 import { useToday } from "@/queries/today";
 import { eventDetailHref } from "@/utils/event-navigation";
 import { eventTimeLabel } from "@/utils/event-time-label";
 import { addLocalDays, formatHeaderDate, parseLocalDate } from "@/utils/local-date";
+
+/**
+ * Where the "Ask about today" chip goes (Checkpoint 9.7). `preset=focus`
+ * pre-selects that chip on the search screen's Ask mode and pre-fills its
+ * question; it never submits. Typed like `(tabs)/_layout.tsx`'s SEARCH_ROUTE:
+ * the generated route types know `/search` but not its query string.
+ */
+export const ASK_ABOUT_TODAY_HREF = "/search?mode=ask&preset=focus" as Href;
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, {
@@ -91,7 +100,10 @@ function TaskRow({ item }: { item: TodayTaskItem }) {
     setError(null);
     const target = completionTarget(item);
     if (target.kind === "occurrence") {
-      completeOccurrence.mutate(target.occurrenceId, { onSuccess: invalidate, onError: showFailure });
+      completeOccurrence.mutate(target.occurrenceId, {
+        onSuccess: invalidate,
+        onError: showFailure,
+      });
       return;
     }
     complete.mutate(target.taskId, {
@@ -174,13 +186,7 @@ function TaskRow({ item }: { item: TodayTaskItem }) {
   );
 }
 
-function SectionHeader({
-  title,
-  tone,
-}: {
-  title: string;
-  tone: "red" | "blue" | "neutral";
-}) {
+function SectionHeader({ title, tone }: { title: string; tone: "red" | "blue" | "neutral" }) {
   const toneClass =
     tone === "red"
       ? "text-red-600 dark:text-red-400"
@@ -211,7 +217,10 @@ function EventRow({ event }: { event: TodayEventItem }) {
           value is a range like "14:30–15:00" (11 chars at text-xs, ~80px),
           so 96px leaves margin. Narrower risks a two-line wrap here, which
           would misalign the row -- this Text has no numberOfLines. */}
-      <Text className="w-24 shrink-0 text-xs text-neutral-500 dark:text-neutral-400" numberOfLines={1}>
+      <Text
+        className="w-24 shrink-0 text-xs text-neutral-500 dark:text-neutral-400"
+        numberOfLines={1}
+      >
         {timeRange}
       </Text>
       <View className="flex-1">
@@ -331,10 +340,7 @@ function ProjectCard({ project }: { project: TodayProjectSummary }) {
           className="h-3 w-3 rounded-full"
           style={{ backgroundColor: project.color ?? "#999999" }}
         />
-        <Text
-          className="flex-1 text-base font-medium text-black dark:text-white"
-          numberOfLines={1}
-        >
+        <Text className="flex-1 text-base font-medium text-black dark:text-white" numberOfLines={1}>
           {project.name}
         </Text>
         {project.stalled ? (
@@ -344,9 +350,7 @@ function ProjectCard({ project }: { project: TodayProjectSummary }) {
             </Text>
           </View>
         ) : null}
-        <View
-          className={`rounded px-2 py-0.5 ${PROJECT_STATUS_CHIP[project.status]}`}
-        >
+        <View className={`rounded px-2 py-0.5 ${PROJECT_STATUS_CHIP[project.status]}`}>
           <Text className="text-[10px] uppercase">{project.status}</Text>
         </View>
       </View>
@@ -456,9 +460,7 @@ function ReviewBanner({
         accessibilityRole="button"
         className="min-h-[44px] flex-row items-center justify-between rounded-xl border border-blue-200 bg-blue-50 px-4 active:bg-blue-100 dark:border-blue-900 dark:bg-blue-950 dark:active:bg-blue-900"
       >
-        <Text className="text-sm font-medium text-blue-700 dark:text-blue-300">
-          {resumeTitle}
-        </Text>
+        <Text className="text-sm font-medium text-blue-700 dark:text-blue-300">{resumeTitle}</Text>
         <Text className="text-sm font-semibold text-blue-700 dark:text-blue-300">→</Text>
       </Pressable>
     );
@@ -487,6 +489,9 @@ function ReviewBanner({
 export default function TodayScreen() {
   const router = useRouter();
   const { data, isLoading, isError, refetch } = useToday();
+  // Shares the search screen's query key, so enabling Cloud Ask in Settings
+  // shows the chip here without a restart -- and Today never waits on it.
+  const askEnabled = useAskEnabled().enabled;
 
   if (isLoading) {
     return (
@@ -560,6 +565,24 @@ export default function TodayScreen() {
           count={data.summary.active_project_count}
           onPress={() => router.push("/(tabs)/projects")}
         />
+        {/* Checkpoint 9.7 ("Ask about today"). Rendered ONLY while the "ask"
+            task route exists -- the same switch that hides the Ask mode on
+            the search screen -- so an owner who never opted in never sees
+            it. The route param only pre-selects the "focus" chip and
+            pre-fills its question; nothing is sent until they tap Ask. */}
+        {askEnabled ? (
+          <Pressable
+            testID="today-ask-chip"
+            onPress={() => router.push(ASK_ABOUT_TODAY_HREF)}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Ask about today"
+          >
+            <View className="min-h-[44px] items-center justify-center rounded-full border border-blue-300 bg-blue-50 px-3 py-2 dark:border-blue-800 dark:bg-blue-950">
+              <Text className="text-sm text-blue-700 dark:text-blue-300">Ask about today</Text>
+            </View>
+          </Pressable>
+        ) : null}
       </View>
 
       <View className="mt-3 gap-2 px-4">
@@ -615,7 +638,9 @@ export default function TodayScreen() {
             Nothing overdue.
           </Text>
         ) : (
-          data.overdue.items.map((item) => <TaskRow key={item.occurrence_id ?? item.id} item={item} />)
+          data.overdue.items.map((item) => (
+            <TaskRow key={item.occurrence_id ?? item.id} item={item} />
+          ))
         )}
       </View>
 
@@ -626,7 +651,9 @@ export default function TodayScreen() {
             Nothing due today.
           </Text>
         ) : (
-          data.due_today.items.map((item) => <TaskRow key={item.occurrence_id ?? item.id} item={item} />)
+          data.due_today.items.map((item) => (
+            <TaskRow key={item.occurrence_id ?? item.id} item={item} />
+          ))
         )}
       </View>
 

@@ -1,19 +1,24 @@
 import type { AskResponse, AskSource } from "@personal-os/schema";
 import { Pressable, ScrollView, SafeAreaView, Text, TextInput, View } from "react-native";
 import { describe, expect, it, vi } from "vitest";
-import { AskSourceRow, AskView, type AskState, type AskViewProps } from "./ask-view";
+import { ASK_PRESETS } from "./ask-presets";
+import {
+  ASK_NO_CITATIONS_COPY,
+  ASK_NOTHING_TODAY_COPY,
+  ASK_NOTHING_UPCOMING_COPY,
+  AskSourceRow,
+  AskView,
+  askNothingCopyFor,
+  askSourceHeaderText,
+  askSourceRowText,
+  type AskState,
+  type AskViewProps,
+} from "./ask-view";
 
 // Same hand-rolled render walk as __tests__/search-screen.test.tsx (this app
 // has no render library in its dependencies). ScrollView and SafeAreaView
 // join the host set so the walk stops at them.
-const HOST_TYPES = new Set<unknown>([
-  View,
-  Text,
-  Pressable,
-  SafeAreaView,
-  TextInput,
-  ScrollView,
-]);
+const HOST_TYPES = new Set<unknown>([View, Text, Pressable, SafeAreaView, TextInput, ScrollView]);
 
 function deepRender(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(deepRender);
@@ -81,6 +86,9 @@ function renderView(overrides: Partial<AskViewProps> = {}): unknown {
     canSubmit: false,
     placeholderColor: "#737373",
     keyboardHeight: 0,
+    onSelectPreset: vi.fn(),
+    selectedPreset: null,
+    autoFocus: true,
     ...overrides,
   };
   return deepRender(AskView(props));
@@ -150,8 +158,13 @@ describe("AskView -- the always-visible footer disclosure", () => {
       { kind: "error", message: "x" },
       { kind: "ready", response: response() },
     ] as AskState[]) {
-      const footer = findByTestId(renderView({ state, connectionName: "Groq Production" }), "ask-footer");
-      expect(getTextContent(footer)).toBe("Sends matching notes and tasks to Groq Production.");
+      const footer = findByTestId(
+        renderView({ state, connectionName: "Groq Production" }),
+        "ask-footer",
+      );
+      expect(getTextContent(footer)).toBe(
+        "Sends your question, today's schedule and matching notes/tasks to Groq Production",
+      );
     }
   });
 });
@@ -207,6 +220,8 @@ describe("AskView -- redactions", () => {
   });
 });
 
+const ID = "11111111-1111-4111-8111-111111111111";
+
 const SOURCES: AskSource[] = [
   { ref: 1, type: "note", id: "11111111-1111-4111-8111-111111111111", title: "Recipe idea" },
   { ref: 2, type: "task", id: "22222222-2222-4222-8222-222222222222", title: "Renew insurance" },
@@ -218,10 +233,105 @@ describe("AskView -- sources", () => {
     expect(findByTestId(tree, "ask-sources")).toBeUndefined();
   });
 
-  it("renders each source as [ref] Type · title", () => {
+  it("renders each 8.6B-shaped source (no section) as [ref] Type · title", () => {
     const tree = renderView({ state: { kind: "ready", response: response({ sources: SOURCES }) } });
-    expect(getTextContent(findByTestId(tree, "ask-source-1"))).toBe("[1] Note · Recipe idea");
-    expect(getTextContent(findByTestId(tree, "ask-source-2"))).toBe("[2] Task · Renew insurance");
+    expect(getTextContent(findByTestId(tree, "ask-source-1-header"))).toBe("[1] Note");
+    expect(getTextContent(findByTestId(tree, "ask-source-1-title"))).toBe("Recipe idea");
+    expect(getTextContent(findByTestId(tree, "ask-source-2-header"))).toBe("[2] Task");
+    expect(getTextContent(findByTestId(tree, "ask-source-2-title"))).toBe("Renew insurance");
+    // The one-string form is still exported for callers that need it.
+    expect(askSourceRowText(SOURCES[0]!)).toBe("[1] Note · Recipe idea");
+  });
+
+  it("puts the header and the TITLE on separate lines, so 480px never cuts the title", () => {
+    const sources: AskSource[] = [
+      {
+        ref: 1,
+        type: "task",
+        id: ID,
+        title: "Renew the homeowners insurance policy before the deductible changes",
+        section: "overdue",
+        detail: "P1",
+      },
+    ];
+    const tree = renderView({ state: { kind: "ready", response: response({ sources }) } });
+
+    const header = findByTestId(tree, "ask-source-1-header");
+    const title = findByTestId(tree, "ask-source-1-title");
+    expect(getTextContent(header)).toBe("[1] Overdue · P1");
+    expect(header.props.numberOfLines).toBe(1);
+    expect(getTextContent(title)).toBe(sources[0]!.title);
+    expect(title.props.numberOfLines).toBe(2);
+    // The accessibility label still carries the whole title.
+    expect(findByTestId(tree, "ask-source-1").props.accessibilityLabel).toBe(
+      `Open task: ${sources[0]!.title}`,
+    );
+  });
+
+  it("askSourceHeaderText: the detail carries no section word of its own (9.7 server)", () => {
+    expect(
+      askSourceHeaderText({ ref: 4, type: "task", id: ID, title: "Nap", section: "snoozed", detail: "until 15:00" }),
+    ).toBe("[4] Snoozed · until 15:00");
+    expect(askSourceHeaderText({ ref: 5, type: "note", id: ID, title: "Recipe" })).toBe("[5] Note");
+  });
+
+  it("renders a 9.7 source as [ref] <server section label> · <detail> · <title>", () => {
+    const sources: AskSource[] = [
+      { ref: 1, type: "task", id: ID, title: "Pay rent", section: "overdue", detail: "P1" },
+      {
+        ref: 2,
+        type: "event",
+        id: ID,
+        title: "Standup",
+        section: "event",
+        detail: "14:30",
+        occurs_at: "2026-09-14T19:30:00.000Z",
+      },
+      { ref: 3, type: "inbox_item", id: ID, title: "call the insurance guy", section: "capture" },
+      { ref: 4, type: "task", id: ID, title: "Water plants", section: "due_today" },
+      { ref: 5, type: "task", id: ID, title: "Taxes", section: "upcoming", detail: "Sep 16" },
+      { ref: 6, type: "task", id: ID, title: "Gym", section: "reminder", detail: "07:00" },
+      { ref: 7, type: "task", id: ID, title: "Old", section: "completed" },
+      {
+        ref: 8,
+        type: "task",
+        id: ID,
+        title: "Ship 9.7",
+        section: "project",
+        detail: "Personal OS",
+      },
+      { ref: 9, type: "task", id: ID, title: "Nap", section: "snoozed", detail: "15:00" },
+      { ref: 10, type: "note", id: ID, title: "Recipe", section: "record" },
+    ];
+    const tree = renderView({ state: { kind: "ready", response: response({ sources }) } });
+    const row = (ref: number) =>
+      `${getTextContent(findByTestId(tree, `ask-source-${ref}-header`))} · ${getTextContent(
+        findByTestId(tree, `ask-source-${ref}-title`),
+      )}`;
+    expect(row(1)).toBe("[1] Overdue · P1 · Pay rent");
+    expect(row(2)).toBe("[2] Event · 14:30 · Standup");
+    expect(row(3)).toBe("[3] Capture · call the insurance guy");
+    expect(row(4)).toBe("[4] Due today · Water plants");
+    expect(row(5)).toBe("[5] Upcoming · Sep 16 · Taxes");
+    expect(row(6)).toBe("[6] Reminder · 07:00 · Gym");
+    expect(row(7)).toBe("[7] Completed · Old");
+    expect(row(8)).toBe("[8] Project · Personal OS · Ship 9.7");
+    expect(row(9)).toBe("[9] Snoozed · 15:00 · Nap");
+    // `record` (a lexically matched row) reads as its type, exactly as 8.6B did.
+    expect(row(10)).toBe("[10] Note · Recipe");
+  });
+
+  it("askSourceRowText: an event or capture with no section falls back to its type label", () => {
+    expect(askSourceRowText({ ref: 1, type: "event", id: ID, title: "Dentist" })).toBe(
+      "[1] Event · Dentist",
+    );
+    expect(askSourceRowText({ ref: 2, type: "inbox_item", id: ID, title: "buy milk" })).toBe(
+      "[2] Capture · buy milk",
+    );
+    // An empty detail is omitted rather than rendered as a dangling separator.
+    expect(askSourceRowText({ ref: 3, type: "task", id: ID, title: "x", detail: "" })).toBe(
+      "[3] Task · x",
+    );
   });
 
   it("navigates via the callback, handing back the exact source object", () => {
@@ -274,6 +384,114 @@ describe("AskView -- untrusted text is rendered inertly", () => {
     // The row hands back the whole source; the destination is derived
     // elsewhere (utils/ask-navigation.ts) from type+id only, never from title.
     expect(onSelectSource).toHaveBeenCalledWith(hostile);
+  });
+});
+
+describe("AskView -- citations_present (Checkpoint 9.7)", () => {
+  it("renders the fixed 'cites nothing' line above the answer when the server says false", () => {
+    const tree = renderView({
+      state: { kind: "ready", response: response({ citations_present: false }) },
+    });
+    const line = findByTestId(tree, "ask-no-citations");
+    expect(getTextContent(line)).toBe(ASK_NO_CITATIONS_COPY);
+    expect(ASK_NO_CITATIONS_COPY).toBe("This answer cites nothing you can open.");
+    // Above, not below: the container's first child is the notice.
+    const container = findByTestId(tree, "ask-answer-container");
+    const children = findAll(container, (n) => n.props?.testID !== undefined);
+    expect(children[1]?.props?.testID).toBe("ask-no-citations");
+    expect(children[2]?.props?.testID).toBe("ask-answer");
+  });
+
+  it("renders no such line when citations are present, or on an 8.6B-shaped response", () => {
+    expect(
+      findByTestId(
+        renderView({ state: { kind: "ready", response: response({ citations_present: true }) } }),
+        "ask-no-citations",
+      ),
+    ).toBeUndefined();
+    expect(
+      findByTestId(
+        renderView({ state: { kind: "ready", response: response() } }),
+        "ask-no-citations",
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe("AskView -- preset chips (Checkpoint 9.7)", () => {
+  it("renders the three chips, each labelled, none selected for free text", () => {
+    const tree = renderView({ selectedPreset: null });
+    expect(findByTestId(tree, "ask-presets")).toBeDefined();
+    for (const preset of ASK_PRESETS) {
+      const chip = findByTestId(tree, `ask-preset-${preset.key}`);
+      expect(getTextContent(chip)).toBe(preset.label);
+      expect(chip.props.accessibilityState.selected).toBe(false);
+    }
+  });
+
+  it("marks exactly the selected chip", () => {
+    const tree = renderView({ selectedPreset: "slipping" });
+    expect(findByTestId(tree, "ask-preset-slipping").props.accessibilityState.selected).toBe(true);
+    expect(findByTestId(tree, "ask-preset-focus").props.accessibilityState.selected).toBe(false);
+    expect(findByTestId(tree, "ask-preset-tomorrow").props.accessibilityState.selected).toBe(false);
+  });
+
+  it("a chip tap hands back the exact preset definition, once, and nothing else", () => {
+    const onSelectPreset = vi.fn();
+    const onSubmit = vi.fn();
+    const tree = renderView({ onSelectPreset, onSubmit });
+    findByTestId(tree, "ask-preset-tomorrow").props.onPress();
+    expect(onSelectPreset).toHaveBeenCalledTimes(1);
+    expect(onSelectPreset).toHaveBeenCalledWith(ASK_PRESETS[2]);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("disables every chip while a question is in flight", () => {
+    const tree = renderView({ state: { kind: "submitting" } });
+    for (const preset of ASK_PRESETS) {
+      expect(findByTestId(tree, `ask-preset-${preset.key}`).props.disabled).toBe(true);
+    }
+  });
+
+  it("the chips sit inside the ScrollView, above the input, so the keyboard cannot hide them", () => {
+    const tree = renderView({});
+    const scroll = findAll(tree, (n) => n.type === ScrollView)[0];
+    expect(scroll).toBeDefined();
+    const order = findAll(scroll, (n) => n.props?.testID !== undefined).map(
+      (n) => n.props.testID as string,
+    );
+    expect(order.indexOf("ask-presets")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("ask-presets")).toBeLessThan(order.indexOf("ask-input"));
+    expect(order.indexOf("ask-input")).toBeLessThan(order.indexOf("ask-submit"));
+  });
+
+  it("honours autoFocus so a deep-linked preset does not raise the keyboard", () => {
+    expect(findByTestId(renderView({ autoFocus: true }), "ask-input").props.autoFocus).toBe(true);
+    expect(findByTestId(renderView({ autoFocus: false }), "ask-input").props.autoFocus).toBe(false);
+  });
+});
+
+describe("AskView -- nothing_today (Checkpoint 9.7)", () => {
+  it("renders the fixed local answer, and no answer container or sources", () => {
+    const tree = renderView({ state: { kind: "nothing_today", preset: "focus" } });
+    expect(getTextContent(findByTestId(tree, "ask-nothing-today"))).toBe(ASK_NOTHING_TODAY_COPY);
+    expect(ASK_NOTHING_TODAY_COPY).toBe("Nothing is due, scheduled or waiting today.");
+    expect(findByTestId(tree, "ask-answer-container")).toBeUndefined();
+    expect(findByTestId(tree, "ask-loading")).toBeUndefined();
+  });
+
+  it("answers the 'Summarize tomorrow' chip about the WINDOW it asked about, not today", () => {
+    const tree = renderView({ state: { kind: "nothing_today", preset: "tomorrow" } });
+    expect(getTextContent(findByTestId(tree, "ask-nothing-today"))).toBe(
+      ASK_NOTHING_UPCOMING_COPY,
+    );
+    expect(ASK_NOTHING_UPCOMING_COPY).toBe("Nothing is due or scheduled in the next 7 days.");
+  });
+
+  it("askNothingCopyFor: only `tomorrow` speaks about the horizon", () => {
+    expect(askNothingCopyFor("focus")).toBe(ASK_NOTHING_TODAY_COPY);
+    expect(askNothingCopyFor("slipping")).toBe(ASK_NOTHING_TODAY_COPY);
+    expect(askNothingCopyFor("tomorrow")).toBe(ASK_NOTHING_UPCOMING_COPY);
   });
 });
 

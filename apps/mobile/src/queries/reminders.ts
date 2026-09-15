@@ -31,3 +31,22 @@ export function useReminders(options: { enabled?: boolean } = {}) {
     refetchInterval: 60_000,
   });
 }
+
+/**
+ * READ-ONLY view of the cached `/reminders` list (Checkpoint 9.7): the Ask
+ * empty-day short-circuit consults it so a reminder inside the server's
+ * seven-day context window -- which `/today` cannot show -- keeps a preset
+ * from being answered "nothing" locally. `enabled: false` means this observer
+ * never fetches, never polls and never refetches on focus or reconnect; it
+ * only reflects whatever `useReminders` (the primary device's reconciliation
+ * loop) has already put in the cache, and reads `undefined` on web or before
+ * that loop has run -- which the check treats as "cannot vouch", not "empty".
+ */
+export function useCachedReminders() {
+  return useQuery({
+    queryKey: REMINDERS_QUERY_KEY,
+    queryFn: () => api.listReminders(),
+    enabled: false,
+    staleTime: Infinity,
+  });
+}

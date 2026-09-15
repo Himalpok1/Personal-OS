@@ -166,10 +166,13 @@ function orderEventsForDay(items: readonly EventRangeItem[]): EventRangeItem[] {
   ];
 }
 
-function toTodayEventItem(
-  item: EventRangeItem,
-  meta: { projectId: string | null; rrule: string | null } | undefined,
-): TodayEventItem {
+interface TodayEventMeta {
+  projectId: string | null;
+  rrule: string | null;
+  origin: TodayEventItem["origin"];
+}
+
+function toTodayEventItem(item: EventRangeItem, meta: TodayEventMeta | undefined): TodayEventItem {
   return {
     id: item.id,
     title: item.title,
@@ -187,6 +190,10 @@ function toTodayEventItem(
     rrule: meta?.rrule ?? null,
     parent_event_id: item.parent_event_id ?? null,
     occurs_at: item.occurs_at,
+    // Checkpoint 9.7: ownership (ADR-064), from the same meta query. Omitted
+    // -- not null -- when the meta row is missing, so a consumer reads
+    // "unknown" and treats it as external (the safe direction).
+    ...(meta?.origin !== undefined ? { origin: meta.origin } : {}),
   };
 }
 
@@ -374,15 +381,25 @@ export async function buildTodayResponse(
   // project_id/rrule are stripped by EventRangeItemSchema (not declared
   // there), so fetch them for the candidate event ids directly. Recurring
   // instances share their series row's id; detached children carry their own.
-  const eventMetaById = new Map<string, { projectId: string | null; rrule: string | null }>();
+  const eventMetaById = new Map<string, TodayEventMeta>();
   const candidateEventIds = [...new Set(assembled.items.map((item) => item.id))];
   if (candidateEventIds.length > 0) {
     const metaRows = await db
-      .select({ id: events.id, projectId: events.projectId, rrule: events.rrule })
+      .select({
+        id: events.id,
+        projectId: events.projectId,
+        rrule: events.rrule,
+        origin: events.origin,
+      })
       .from(events)
       .where(inArray(events.id, candidateEventIds));
     for (const row of metaRows) {
-      eventMetaById.set(row.id, { projectId: row.projectId, rrule: row.rrule });
+      eventMetaById.set(row.id, {
+        projectId: row.projectId,
+        rrule: row.rrule,
+        // CHECKed to local|external by the events_origin constraint (0019).
+        origin: row.origin as TodayEventMeta["origin"],
+      });
     }
   }
   const toEventItem = (item: EventRangeItem): TodayEventItem =>

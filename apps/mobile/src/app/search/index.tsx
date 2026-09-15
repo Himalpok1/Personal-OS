@@ -1,21 +1,26 @@
 import {
   ASK_QUESTION_MIN_CHARS,
   SEARCH_QUERY_MIN_CHARS,
+  type AskPreset,
   type SearchResponse,
   type SearchResult,
 } from "@personal-os/schema";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { FlatList, Pressable, SafeAreaView, Text, TextInput, View } from "react-native";
+import { planAskSubmission } from "@/components/ask/empty-day";
 import { AskView, type AskState } from "@/components/ask/ask-view";
 import { askErrorMessage } from "@/components/ask/ask-errors";
+import { askPresetOf, findAskPreset } from "@/components/ask/ask-presets";
 import { AskModeToggle, type SearchAskMode } from "@/components/ask/mode-toggle";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { usePlaceholderColor } from "@/components/placeholder-color";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { useAskCloud, useAskEnabled } from "@/queries/ask";
+import { useCachedReminders } from "@/queries/reminders";
 import { useSearch } from "@/queries/search";
+import { useToday } from "@/queries/today";
 import { askSourceHref } from "@/utils/ask-navigation";
 import {
   searchDateFilterChip,
@@ -372,16 +377,45 @@ export function SearchView({
   );
 }
 
+/**
+ * The route params a deep link may carry (Checkpoint 9.7): Today's "Ask about
+ * today" chip pushes `/search?mode=ask&preset=focus`. A `preset=` ONLY selects
+ * that chip and pre-fills its question; NOTHING is submitted without a tap --
+ * this screen has no effect that submits, and `search-screen.test.tsx` mounts
+ * it with the param and proves `api.askCloud` is never called.
+ */
 export default function SearchScreen() {
+  const params = useLocalSearchParams<{ mode?: string; preset?: string }>();
+  const initialPreset = findAskPreset(params.preset);
   const [query, setQuery] = useState("");
-  const [question, setQuestion] = useState("");
-  const [mode, setMode] = useState<SearchAskMode>("search");
+  const [question, setQuestion] = useState(initialPreset?.question ?? "");
+  const [mode, setMode] = useState<SearchAskMode>(
+    params.mode === "ask" || initialPreset !== null ? "ask" : "search",
+  );
+  // The empty-day short-circuit's own state: WHICH preset was answered locally
+  // (no request left; the copy is keyed on it) and that answer is what the
+  // screen shows until the next submission. Not a mutation result, so it
+  // cannot live in `askMutation`.
+  const [answeredLocally, setAnsweredLocally] = useState<AskPreset | null>(null);
+  // In-flight guard for `submit` (9.7 review): `askMutation.isPending` is a
+  // render-time snapshot, so two sends inside one tick -- the keyboard's send
+  // key is never disabled -- would both read it as false and re-transmit the
+  // question and its matching bodies. The ref is set the moment a request is
+  // handed to the mutation and cleared when that request settles.
+  const askInFlight = useRef(false);
   const router = useRouter();
   const placeholderColor = usePlaceholderColor();
   const keyboardHeight = useKeyboardHeight();
   const { data, isError, refetch, stale } = useSearch(query);
   const askEnabled = useAskEnabled();
   const askMutation = useAskCloud();
+  // The `/today` the owner already loaded, consulted for the empty-day
+  // short-circuit. Same query key Today renders from, so the warm cache is
+  // read first -- but this IS a live `useQuery` (30 s staleTime), and it will
+  // refetch on mount or focus once that cache is stale; it is not free. The
+  // reminders view beside it is cache-only and never fetches.
+  const today = useToday();
+  const reminders = useCachedReminders();
 
   // Ask is a MODE inside this screen, never a sixth tab or a third header
   // icon -- and it is HIDDEN, not merely disabled, whenever the "ask" task
@@ -395,14 +429,53 @@ export default function SearchScreen() {
   if (effectiveMode === "ask") {
     const trimmedQuestion = question.trim();
     const canSubmit = trimmedQuestion.length >= ASK_QUESTION_MIN_CHARS;
+    // A chip is "selected" exactly when the input holds its question,
+    // byte-for-byte -- the same match the server applies. Editing one
+    // character turns the submission back into free text.
+    const selectedPreset = askPresetOf(trimmedQuestion);
 
     const askState: AskState = askMutation.isPending
       ? { kind: "submitting" }
-      : askMutation.isError
-        ? { kind: "error", message: askErrorMessage(askMutation.error) }
-        : askMutation.data
-          ? { kind: "ready", response: askMutation.data }
-          : { kind: "idle" };
+      : answeredLocally !== null
+        ? { kind: "nothing_today", preset: answeredLocally }
+        : askMutation.isError
+          ? { kind: "error", message: askErrorMessage(askMutation.error) }
+          : askMutation.data
+            ? { kind: "ready", response: askMutation.data }
+            : { kind: "idle" };
+
+    // THE ONE PLACE A QUESTION IS SUBMITTED. Called only from a tap (the Ask
+    // button, the keyboard's send key, or a preset chip) -- never from an
+    // effect or from mount, which is what keeps `preset=` a pre-fill and not
+    // a request. A preset goes out with `scope: "today"` (no note/task body
+    // is selected server-side for it); free text with `scope: "both"`. A
+    // preset on an empty day is answered here, locally, and sends nothing.
+    const submit = (text: string) => {
+      if (askMutation.isPending || askInFlight.current) return;
+      const trimmed = text.trim();
+      if (trimmed.length < ASK_QUESTION_MIN_CHARS) return;
+      const plan = planAskSubmission(
+        trimmed,
+        today.data,
+        (q) => askPresetOf(q)?.key ?? null,
+        reminders.data,
+      );
+      if (plan.kind === "nothing_today") {
+        askMutation.reset();
+        setAnsweredLocally(plan.preset);
+        return;
+      }
+      setAnsweredLocally(null);
+      askInFlight.current = true;
+      askMutation.mutate(
+        { question: plan.question, scope: plan.scope },
+        {
+          onSettled: () => {
+            askInFlight.current = false;
+          },
+        },
+      );
+    };
 
     return (
       <AskView
@@ -410,10 +483,18 @@ export default function SearchScreen() {
         onQuestionChange={setQuestion}
         state={askState}
         canSubmit={canSubmit}
-        onSubmit={() => {
-          if (!canSubmit) return;
-          askMutation.mutate(trimmedQuestion);
+        onSubmit={() => submit(question)}
+        onSelectPreset={(preset) => {
+          setQuestion(preset.question);
+          submit(preset.question);
         }}
+        selectedPreset={selectedPreset?.key ?? null}
+        // Opened from a deep link with a preset pre-filled: leave the keyboard
+        // down -- it would cover half of a 640px screen for a question the
+        // owner did not come here to edit.
+        // Recorded debt (9.7 review): on a COLD deep link the params can read
+        // empty for a frame while routes load, so the keyboard may flash up.
+        autoFocus={initialPreset === null}
         onSelectSource={(source) => router.push(askSourceHref(source))}
         connectionName={askEnabled.route?.connection_name ?? ""}
         placeholderColor={placeholderColor}

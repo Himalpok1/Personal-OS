@@ -28,3 +28,4 @@ export * from "./search.js";
 export * from "./text-bounds.js";
 export * from "./export.js";
 export * from "./ask.js";
+export * from "./intelligence-tools.js";

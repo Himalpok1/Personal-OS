@@ -4,7 +4,17 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./client";
-import { askCloudMutationOptions, findAskRoute, joinModelsWithConnections } from "./ask";
+import { ApiClientError } from "@personal-os/api-client";
+import {
+  ASK_CONSENT_OUTDATED_QUERY_KEY,
+  AI_TASK_ROUTES_QUERY_KEY,
+  askCloudMutationOptions,
+  findAskRoute,
+  handleAskCloudError,
+  handleDisableCloudAskSuccess,
+  joinModelsWithConnections,
+} from "./ask";
+import { deviceTimezone } from "./today";
 
 const ROUTE: AiTaskRouteInfo = {
   task_name: "ask",
@@ -96,43 +106,115 @@ describe("askCloudMutationOptions", () => {
     expect(askCloudMutationOptions().retry).toBe(0);
   });
 
-  it(
-    "NEVER fires api.askCloud on a focus regain or a reconnect -- only mutate() does",
-    async () => {
-      // This is the regression the brief calls out by name: a `useQuery` in
-      // this app's config would retry and refetch on window focus/reconnect,
-      // which would silently re-transmit the user's note/task bodies with no
-      // tap. A `useMutation` (what `askCloudMutationOptions` is built for)
-      // never does either, for ANY event the library fires -- proven here
-      // against the real `MutationObserver`, `focusManager` and
-      // `onlineManager` from `@tanstack/react-query`, not a reimplementation
-      // of them.
-      const spy = vi.spyOn(api, "askCloud").mockResolvedValue({
-        answer: "ok",
-        sources: [],
-        redactions: 0,
-        model_id: null,
-      });
+  it("NEVER fires api.askCloud on a focus regain or a reconnect -- only mutate() does", async () => {
+    // This is the regression the brief calls out by name: a `useQuery` in
+    // this app's config would retry and refetch on window focus/reconnect,
+    // which would silently re-transmit the user's note/task bodies with no
+    // tap. A `useMutation` (what `askCloudMutationOptions` is built for)
+    // never does either, for ANY event the library fires -- proven here
+    // against the real `MutationObserver`, `focusManager` and
+    // `onlineManager` from `@tanstack/react-query`, not a reimplementation
+    // of them.
+    const spy = vi.spyOn(api, "askCloud").mockResolvedValue({
+      answer: "ok",
+      sources: [],
+      redactions: 0,
+      model_id: null,
+    });
 
-      const queryClient = new QueryClient();
-      const observer = new MutationObserver(queryClient, askCloudMutationOptions());
+    const queryClient = new QueryClient();
+    const observer = new MutationObserver(queryClient, askCloudMutationOptions());
 
-      focusManager.setFocused(false);
-      focusManager.setFocused(true);
-      onlineManager.setOnline(false);
-      onlineManager.setOnline(true);
-      // Let any microtask/timer the managers might have queued run.
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    onlineManager.setOnline(false);
+    onlineManager.setOnline(true);
+    // Let any microtask/timer the managers might have queued run.
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(spy).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled();
 
-      // ...and the wiring genuinely works: a deliberate mutate() call DOES
-      // reach api.askCloud, exactly once, with the exact question passed.
-      await observer.mutate("a real question");
-      expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy).toHaveBeenCalledWith("a real question");
-    },
-  );
+    // ...and the wiring genuinely works: a deliberate mutate() call DOES
+    // reach api.askCloud, exactly once, with the exact question passed.
+    await observer.mutate({ question: "a real question", scope: "both" });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith({
+      question: "a real question",
+      scope: "both",
+      tz: deviceTimezone(),
+    });
+  });
+
+  it("ALWAYS sends the device timezone, and passes the caller's scope through unchanged", async () => {
+    // `tz` is what turns the Today context on server-side (Checkpoint 9.7);
+    // the server never guesses a zone, so omitting it would silently turn
+    // "today" back into the 8.6B notes-and-tasks-only request. `scope` is
+    // the caller's decision -- a preset says "today", free text says "both"
+    // -- and this layer must never rewrite it.
+    const spy = vi.spyOn(api, "askCloud").mockResolvedValue({
+      answer: "ok",
+      sources: [],
+      redactions: 0,
+      model_id: null,
+      citations_present: true,
+    });
+    const observer = new MutationObserver(new QueryClient(), askCloudMutationOptions());
+    await observer.mutate({ question: "What should I focus on today?", scope: "today" });
+    expect(spy).toHaveBeenLastCalledWith({
+      question: "What should I focus on today?",
+      scope: "today",
+      tz: deviceTimezone(),
+    });
+    const sent = spy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(typeof sent.tz).toBe("string");
+    expect((sent.tz as string).length).toBeGreaterThan(0);
+    // Exactly these three keys -- the request schema is `.strict()`, so an
+    // extra key here would be a 400 on the wire.
+    expect(Object.keys(sent).sort()).toEqual(["question", "scope", "tz"]);
+  });
+});
+
+describe("handleAskCloudError -- the consent-outdated flag (Checkpoint 9.7)", () => {
+  it("remembers a 409 ask_consent_outdated in the query cache for the Settings card", () => {
+    const queryClient = new QueryClient();
+    expect(queryClient.getQueryData(ASK_CONSENT_OUTDATED_QUERY_KEY)).toBeUndefined();
+    handleAskCloudError(queryClient, new ApiClientError(409, "ask_consent_outdated"));
+    expect(queryClient.getQueryData(ASK_CONSENT_OUTDATED_QUERY_KEY)).toBe(true);
+  });
+
+  it("leaves the flag alone for every other failure, and never touches the routes cache for them", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(AI_TASK_ROUTES_QUERY_KEY, [ROUTE]);
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    for (const err of [
+      new ApiClientError(502, "ask_uncited"),
+      new ApiClientError(504, "ask_timeout"),
+      new Error("network"),
+      null,
+    ]) {
+      handleAskCloudError(queryClient, err);
+    }
+    expect(queryClient.getQueryData(ASK_CONSENT_OUTDATED_QUERY_KEY)).toBeUndefined();
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it("is cleared by a successful disable, which also refreshes the routes list", () => {
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    handleAskCloudError(queryClient, new ApiClientError(409, "ask_consent_outdated"));
+    expect(queryClient.getQueryData(ASK_CONSENT_OUTDATED_QUERY_KEY)).toBe(true);
+    handleDisableCloudAskSuccess(queryClient);
+    expect(queryClient.getQueryData(ASK_CONSENT_OUTDATED_QUERY_KEY)).toBe(false);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: AI_TASK_ROUTES_QUERY_KEY });
+  });
+
+  it("still invalidates the routes list on cloud_ask_disabled (8.6B behaviour unchanged)", () => {
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    handleAskCloudError(queryClient, new ApiClientError(409, "cloud_ask_disabled"));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: AI_TASK_ROUTES_QUERY_KEY });
+    expect(queryClient.getQueryData(ASK_CONSENT_OUTDATED_QUERY_KEY)).toBeUndefined();
+  });
 });
 
 // Belt-and-suspenders source guard, same convention as

@@ -99,21 +99,43 @@ function toWireRecord(processed: ProcessedCandidate, ref: number): AskContextRec
   };
 }
 
+export interface BuildAskContextOptions {
+  /**
+   * Checkpoint 9.7: refs are assigned `refOffset + 1 ..` so the `<records>`
+   * ordinals continue after the `<today>` block's own citations rather than
+   * colliding with them. Default 0 -- the 8.6B numbering, refs from 1.
+   */
+  refOffset?: number;
+  /** Ceiling on the exact serialized string. Default `ASK_MAX_CONTEXT_CHARS`. */
+  maxChars?: number;
+  /** Cap on records BEFORE the drop ladder runs (the rank order is kept). Default: no cap. */
+  maxRecords?: number;
+}
+
 /**
  * Redacts, bounds and serializes `candidates` (already ranked and capped by
  * `selectAskContext`) into the final context. Drops lowest-ranked records
  * WHOLE -- never slicing a body mid-record -- until the serialized array fits
- * `ASK_MAX_CONTEXT_CHARS`. `candidates` must already be in rank order (best
- * first); this function only ever drops from the end.
+ * the ceiling (`ASK_MAX_CONTEXT_CHARS` unless `options.maxChars` narrows it).
+ * `candidates` must already be in rank order (best first); this function only
+ * ever drops from the end. With no `options` the behaviour is byte-identical
+ * to Checkpoint 8.6B (redact.test.ts pins this).
  */
-export function buildAskContext(candidates: readonly AskCandidateRecord[]): AskContext {
-  const processed = candidates.map(processCandidate);
+export function buildAskContext(
+  candidates: readonly AskCandidateRecord[],
+  options: BuildAskContextOptions = {},
+): AskContext {
+  const refOffset = options.refOffset ?? 0;
+  const maxChars = options.maxChars ?? ASK_MAX_CONTEXT_CHARS;
+  const capped =
+    options.maxRecords === undefined ? candidates : candidates.slice(0, options.maxRecords);
+  const processed = capped.map(processCandidate);
 
   for (let n = processed.length; n > 0; n--) {
     const survivors = processed.slice(0, n);
-    const records = survivors.map((p, index) => toWireRecord(p, index + 1));
+    const records = survivors.map((p, index) => toWireRecord(p, refOffset + index + 1));
     const serializedRecords = JSON.stringify(records);
-    if (serializedRecords.length <= ASK_MAX_CONTEXT_CHARS) {
+    if (serializedRecords.length <= maxChars) {
       return {
         records,
         survivingCandidates: survivors.map((p) => p.source),

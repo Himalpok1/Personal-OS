@@ -3,6 +3,7 @@
 // bundle apps/mobile ships via this package).
 import { isValidTimezone } from "@personal-os/core/timezone";
 import { z } from "zod";
+import { EventOriginSchema } from "./events.js";
 import { InboxItemStatusSchema } from "./inbox.js";
 import { ProjectStatusSchema } from "./projects.js";
 
@@ -65,6 +66,11 @@ export const TodayEventItemSchema = z.object({
   rrule: z.string().nullable(),
   parent_event_id: z.string().uuid().nullable(),
   occurs_at: z.string().datetime({ offset: true }).nullable(),
+  // Checkpoint 9.7 (ADR-064 ownership, surfaced): OPTIONAL so every existing
+  // producer and fixture stays valid; absent means unknown, and every consumer
+  // that cares (the Ask lane's untrusted-text provenance) treats unknown as
+  // external -- the safe direction.
+  origin: EventOriginSchema.optional(),
 });
 export type TodayEventItem = z.infer<typeof TodayEventItemSchema>;
 

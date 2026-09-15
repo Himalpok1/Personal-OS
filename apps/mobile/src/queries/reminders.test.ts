@@ -22,14 +22,14 @@ vi.mock("@tanstack/react-query", () => ({
 const apiMock = vi.hoisted(() => ({ listReminders: vi.fn() }));
 vi.mock("./client", () => ({ api: apiMock }));
 
-const { REMINDERS_QUERY_KEY, useReminders } = await import("./reminders");
+const { REMINDERS_QUERY_KEY, useCachedReminders, useReminders } = await import("./reminders");
 
 interface QueryOptions {
   queryKey: readonly unknown[];
   queryFn: () => unknown;
   enabled: boolean;
   staleTime: number;
-  refetchInterval: number;
+  refetchInterval?: number;
 }
 
 beforeEach(() => {
@@ -67,5 +67,20 @@ describe("useReminders", () => {
     reactNativeMock.platform.os = "web";
     expect((useReminders() as unknown as QueryOptions).enabled).toBe(false);
     expect((useReminders({ enabled: true }) as unknown as QueryOptions).enabled).toBe(false);
+  });
+});
+
+describe("useCachedReminders (Checkpoint 9.7, the Ask empty-day check)", () => {
+  it("shares the [\"reminders\"] key, so it reads exactly what useReminders cached", () => {
+    const options = useCachedReminders() as unknown as QueryOptions;
+    expect(options.queryKey).toEqual(REMINDERS_QUERY_KEY);
+  });
+
+  it("NEVER fetches on its own: disabled, no polling, never stale", () => {
+    const options = useCachedReminders() as unknown as QueryOptions;
+    expect(options.enabled).toBe(false);
+    expect(options.refetchInterval).toBeUndefined();
+    expect(options.staleTime).toBe(Infinity);
+    expect(apiMock.listReminders).not.toHaveBeenCalled();
   });
 });

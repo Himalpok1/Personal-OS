@@ -160,6 +160,15 @@ const EXPECTED_BODY_READERS = new Set([
   "apps/api/src/read-models/agenda.ts",
   "apps/api/src/read-models/project-summaries.ts",
   "apps/api/src/read-models/recent-completed.ts",
+  // Checkpoint 9.4 / 9.7: the reminders read model (extracted from
+  // routes/reminders.ts by 9.7 so the Ask lane's Today context can share it)
+  // joins tasks to derive one reminder per occurrence. It selects the TITLE
+  // (the primary device puts it in the local notification, exactly as the
+  // pre-9.4 GET /tasks feed already did), the instants and the timezone --
+  // never `body`, and the response is parsed through the strict
+  // RemindersResponseSchema, which has no body field. The route is now a
+  // thin caller and no longer references the table itself.
+  "apps/api/src/read-models/reminders.ts",
   "apps/api/src/read-models/review-contexts.ts",
   "apps/api/src/read-models/search.ts",
   "apps/api/src/read-models/today.ts",
@@ -167,13 +176,6 @@ const EXPECTED_BODY_READERS = new Set([
   "apps/api/src/routes/notes.ts",
   "apps/api/src/routes/occurrences.ts",
   "apps/api/src/routes/projects.ts",
-  // Checkpoint 9.4: GET /reminders joins tasks to derive one reminder per
-  // occurrence. It selects the TITLE (the primary device puts it in the local
-  // notification, exactly as the pre-9.4 GET /tasks feed already did), the
-  // instants and the timezone -- never `body`, and the response is parsed
-  // through the strict RemindersResponseSchema, which has no body field. No
-  // model is involved. Reviewed here rather than widened silently.
-  "apps/api/src/routes/reminders.ts",
   "apps/api/src/routes/tasks.ts",
   "apps/worker/src/jobs/expand-due-date-window.ts",
   "apps/worker/src/jobs/generate-lazy-occurrence.ts",
@@ -232,5 +234,150 @@ describe("no cast near the Cloud Ask authorization boundary (Checkpoint 8.6B des
 
   it("checked at least the ask/ module's own files", () => {
     expect(filesToCheck.some((file) => file.startsWith(askDir))).toBe(true);
+  });
+});
+
+// ===========================================================================
+// GUARD 4 -- the intelligence lane is read-only and provider-free.
+// ===========================================================================
+//
+// Checkpoint 9.7 (ADR-066, design §6/§10). apps/api/src/intelligence/ holds the
+// ONE context builder the Ask lane calls today and a future read-only agent
+// tool would bind unchanged. Two properties make that lane safe to grow:
+// it can never call a model itself (no `ai`, no `@personal-os/ai-providers`,
+// no dynamic `import("ai")`, no `require(`) and it can never write, nor reach
+// into the worker. A future write-shaped tool is additionally impossible by
+// NAME: every entry in READ_TOOL_NAMES must match /^(search|get)_/ -- read as
+// text, the queue-parity technique, so the check cannot be satisfied by a
+// re-export.
+//
+// THREE BYPASSES THE 9.7 REVIEW FOUND IN THE FIRST DRAFT, all closed below:
+//   * `db.execute(sql`DELETE …`)` and `.transaction(` wrote without ever
+//     naming `.insert(`/`.update(`/`.delete(` -- both are now denied outright,
+//     and any `sql` template whose first keyword is a write verb fails too.
+//   * a dynamic `await import("ai")` evaded the static import patterns.
+//   * `stripLineComments` strips `//` inside a STRING literal as well as in a
+//     comment, so a denied token placed after a `//` in a string vanished
+//     before the scan. The import ALLOWLIST closes that class generally: it
+//     reads the ORIGINAL source (no stripping) and fails on ANY import
+//     specifier outside a short reviewed set, so a new capability cannot
+//     arrive at all -- the denylist alone could only ever chase shapes.
+const INTELLIGENCE_DIR = path.join(API_SRC, "intelligence");
+const SCHEMA_TOOLS_FILE = path.join(REPO_ROOT, "packages/schema/src/intelligence-tools.ts");
+
+const FORBIDDEN_INTELLIGENCE_IMPORTS: readonly [string, RegExp][] = [
+  ['from "ai"', /from\s*["']ai["']/],
+  ["@personal-os/ai-providers", /["']@personal-os\/ai-providers(?:\/[^"']*)?["']/],
+  ["apps/worker", /from\s*["'][^"']*(?:apps\/worker|\.\.\/\.\.\/\.\.\/worker)[^"']*["']/],
+];
+const FORBIDDEN_INTELLIGENCE_WRITE_VERBS: readonly [string, RegExp][] = [
+  [".insert(", /\.insert\s*\(/],
+  [".update(", /\.update\s*\(/],
+  [".delete(", /\.delete\s*\(/],
+  ["sql.raw", /\bsql\.raw\b/],
+  ["onConflict", /\bonConflict/],
+  // `db.execute(sql`DELETE …`)` and `db.transaction(tx => tx.insert(...))`
+  // both write without naming any verb above. Neither has a read-only use in
+  // this lane -- every read goes through an existing read model -- so both
+  // are denied outright rather than pattern-matched for intent.
+  [".execute(", /\.execute\s*\(/],
+  [".transaction(", /\.transaction\s*\(/],
+  // A dynamic import evades every static `from "ai"` pattern.
+  ['import("ai")', /\bimport\s*\(\s*["'`]ai["'`]\s*\)/],
+  ["require(", /\brequire\s*\(/],
+  // Any `sql` template whose first keyword is a write verb, whatever it is
+  // then passed to. Case-insensitive and whitespace/newline tolerant.
+  ["sql`<write verb>", /sql\s*`\s*(?:insert|update|delete|truncate|alter|create|drop)\b/i],
+];
+
+/**
+ * The COMPLETE set of import specifiers a non-test file under
+ * apps/api/src/intelligence/ may name. An allowlist rather than a denylist,
+ * because a denylist can only forbid the capabilities someone already thought
+ * of: anything outside this set -- a provider package, `node:fs`, a route, a
+ * worker path, a db table module -- fails here and must be argued for.
+ * Read from the ORIGINAL source, so a comment-stripping trick cannot hide one.
+ */
+const ALLOWED_INTELLIGENCE_IMPORTS: readonly RegExp[] = [
+  /^@personal-os\/core\/[\w./-]+$/,
+  /^@personal-os\/schema$/,
+  /^@personal-os\/db$/, // type-only: the Db type on ReadContext
+  /^fastify$/, // type-only: FastifyRequest
+  /^\.\.\/read-models\/[\w.-]+\.js$/,
+  /^\.\.\/ask\/authorize\.js$/,
+  /^\.\/[\w.-]+\.js$/, // siblings within intelligence/
+];
+
+/**
+ * Every import/export specifier in a file, static and dynamic alike. Quotes
+ * only -- a backtick after `from` is prose in a comment ("never from
+ * `citations.length`"), never a module specifier, and a template-literal
+ * specifier is a dynamic import, which `require(`/`import("ai")` already deny.
+ */
+const IMPORT_SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["']([^"']+)["']/g;
+
+function importSpecifiers(contents: string): string[] {
+  return [...contents.matchAll(IMPORT_SPECIFIER)].map((m) => m[1]!);
+}
+
+describe("the intelligence lane is read-only and provider-free (Checkpoint 9.7, Guard 4)", () => {
+  const files = walk(INTELLIGENCE_DIR);
+
+  it("walks real files under apps/api/src/intelligence", () => {
+    expect(files.map(relToRepo)).toContain("apps/api/src/intelligence/today-context.ts");
+    expect(files.map(relToRepo)).toContain("apps/api/src/intelligence/read-context.ts");
+  });
+
+  it("imports neither the AI SDK, nor the provider package, nor anything from apps/worker", () => {
+    const offenders: string[] = [];
+    for (const file of files) {
+      const code = stripLineComments(readFileSync(file, "utf8"));
+      for (const [label, pattern] of FORBIDDEN_INTELLIGENCE_IMPORTS) {
+        if (pattern.test(code)) offenders.push(`${relToRepo(file)}: ${label}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("contains no write verb -- insert/update/delete/sql.raw/onConflict", () => {
+    const offenders: string[] = [];
+    for (const file of files) {
+      const code = stripLineComments(readFileSync(file, "utf8"));
+      for (const [label, pattern] of FORBIDDEN_INTELLIGENCE_WRITE_VERBS) {
+        if (pattern.test(code)) offenders.push(`${relToRepo(file)}: ${label}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("imports only from the reviewed allowlist -- a new capability cannot arrive quietly", () => {
+    const offenders: string[] = [];
+    for (const file of files) {
+      // Deliberately NOT comment-stripped: the allowlist must see the file as
+      // the module loader does.
+      for (const specifier of importSpecifiers(readFileSync(file, "utf8"))) {
+        if (!ALLOWED_INTELLIGENCE_IMPORTS.some((pattern) => pattern.test(specifier))) {
+          offenders.push(`${relToRepo(file)}: ${specifier}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("actually collects the imports it checks, so a broken matcher cannot pass by finding none", () => {
+    const all = files.flatMap((file) => importSpecifiers(readFileSync(file, "utf8")));
+    expect(all).toContain("@personal-os/schema");
+    expect(all).toContain("../read-models/today.js");
+    expect(all.length).toBeGreaterThan(8);
+  });
+
+  it("every READ_TOOL_NAMES entry is search_* or get_* -- no write-shaped tool can be named", () => {
+    const source = readFileSync(SCHEMA_TOOLS_FILE, "utf8");
+    const block = /export const READ_TOOL_NAMES = \[([\s\S]*?)\] as const;/.exec(source);
+    expect(block, "READ_TOOL_NAMES literal not found in intelligence-tools.ts").not.toBeNull();
+    const names = [...(block![1] ?? "").matchAll(/["']([^"']+)["']/g)].map((m) => m[1]!);
+    expect(names.length).toBeGreaterThanOrEqual(5);
+    for (const name of names)
+      expect(name, `${name} is not a read-shaped tool name`).toMatch(/^(search|get)_/);
   });
 });

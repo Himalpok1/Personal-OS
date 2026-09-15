@@ -1,6 +1,6 @@
 import { ApiClientError } from "@personal-os/api-client";
 import { describe, expect, it } from "vitest";
-import { askErrorMessage, isCloudAskDisabledError } from "./ask-errors";
+import { askErrorMessage, isAskConsentOutdatedError, isCloudAskDisabledError } from "./ask-errors";
 
 // Every status/code pair `POST /ask` can return (Checkpoint 8.6B design's
 // error taxonomy), each pinned to its required copy.
@@ -22,9 +22,35 @@ describe("askErrorMessage", () => {
     expect(askErrorMessage(new ApiClientError(502, "ask_failed"))).toBe(
       "The AI provider request failed.",
     );
+    // Also what a pre-9.7 server answers to a request carrying `tz` (its
+    // `.strict()` schema rejects the key), so the copy must not claim the
+    // question's length was the problem.
     expect(askErrorMessage(new ApiClientError(400, "validation_failed"))).toBe(
-      "That question is too short or too long.",
+      "That question couldn't be sent. Check its length, or update the server.",
     );
+  });
+
+  it("maps the two Checkpoint 9.7 codes, and never echoes any server-supplied body", () => {
+    // Both carry a body here to prove nothing from it reaches the copy: the
+    // route returns no free-text reason, but even if one appeared it must
+    // stay on the wire.
+    const uncited = askErrorMessage(
+      new ApiClientError(502, "ask_uncited", { error: "ask_uncited", unresolved: [7, 9] }),
+    );
+    expect(uncited).toBe(
+      "The answer referred to something that isn't in your data, so it was discarded. Try again.",
+    );
+    expect(uncited).not.toContain("7");
+    const outdated = askErrorMessage(
+      new ApiClientError(409, "ask_consent_outdated", { error: "ask_consent_outdated" }),
+    );
+    expect(outdated).toBe("Cloud Ask's scope changed. Re-enable it in Settings to continue.");
+  });
+
+  it("an uncited answer WAS sent and answered -- the copy must not imply otherwise", () => {
+    const message = askErrorMessage(new ApiClientError(502, "ask_uncited")).toLowerCase();
+    expect(message).not.toContain("nothing was sent");
+    expect(message).not.toContain("wasn't sent");
   });
 
   it("never implies nothing was sent for a timeout -- a request DID leave the device", () => {
@@ -71,5 +97,18 @@ describe("isCloudAskDisabledError", () => {
     expect(isCloudAskDisabledError(new ApiClientError(504, "ask_timeout"))).toBe(false);
     expect(isCloudAskDisabledError(new Error("cloud_ask_disabled"))).toBe(false);
     expect(isCloudAskDisabledError(null)).toBe(false);
+  });
+});
+
+describe("isAskConsentOutdatedError", () => {
+  it("is true only for the ask_consent_outdated code", () => {
+    expect(isAskConsentOutdatedError(new ApiClientError(409, "ask_consent_outdated"))).toBe(true);
+  });
+
+  it("is false for every other code, status, or value", () => {
+    expect(isAskConsentOutdatedError(new ApiClientError(409, "cloud_ask_disabled"))).toBe(false);
+    expect(isAskConsentOutdatedError(new ApiClientError(502, "ask_uncited"))).toBe(false);
+    expect(isAskConsentOutdatedError(new Error("ask_consent_outdated"))).toBe(false);
+    expect(isAskConsentOutdatedError(null)).toBe(false);
   });
 });

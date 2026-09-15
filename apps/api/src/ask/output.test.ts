@@ -52,3 +52,30 @@ describe("containsLinkShapedContent", () => {
     );
   });
 });
+
+describe("sanitizeAskAnswer -- Checkpoint 9.7 untrustedInputs (external event text)", () => {
+  it("with no untrustedInputs a dotted token echoing nothing survives (8.6B behaviour unchanged)", () => {
+    const result = sanitizeAskAnswer("Meeting at portal.internal at 14:30.");
+    expect(result.text).toContain("portal.internal");
+  });
+
+  it("strips a host-shaped token that echoes an external event title/location (provenance layer)", () => {
+    const untrusted = ["Sync with vendor at portal.internal"];
+    const result = sanitizeAskAnswer("Your 14:30 meeting is at portal.internal [1].", untrusted);
+    expect(result.text).not.toContain("portal.internal");
+    expect(result.text).toContain("[link removed]");
+    expect(result.linksRemoved).toBe(1);
+  });
+
+  it("does not strip the owner's own dotted text when it is NOT in untrustedInputs", () => {
+    const untrusted = ["Dentist"];
+    const result = sanitizeAskAnswer("Your note mentions v18.2.1 in index.ts [2].", untrusted);
+    expect(result.text).toContain("v18.2.1");
+    expect(result.text).toContain("index.ts");
+  });
+
+  it("containsLinkShapedContent honours the same untrustedInputs as the filter", () => {
+    expect(containsLinkShapedContent("at portal.internal", ["portal.internal"])).toBe(true);
+    expect(containsLinkShapedContent("at portal.internal")).toBe(false);
+  });
+});

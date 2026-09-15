@@ -20,6 +20,7 @@ import { assertGrant } from "./authorize.js";
 import {
   ASK_ATTEMPT_TIMEOUT_MS,
   ASK_MAX_OUTPUT_TOKENS,
+  ASK_PROMPT_MAX_CHARS,
   ASK_TASK_NAME,
   AskGenerationFailedError,
   AskProviderDisabledError,
@@ -72,14 +73,29 @@ function isAbortLikeError(error: unknown): boolean {
  * the caller persists nothing regardless, but an empty or unfilterable answer
  * is still a failure, not a success with a hole in it.
  */
+export interface GenerateAskAnswerOptions {
+  /**
+   * Checkpoint 9.7: the EXACT serialized Today context (`TodayContextBuild.serialized`)
+   * to embed in a `<today>` fence, or null/undefined for the 8.6B prompt shape.
+   */
+  serializedToday?: string | null;
+  /**
+   * Externally-authored strings the prompt carried (external event titles and
+   * locations), for the output filter's provenance layer. Default empty.
+   */
+  untrustedInputs?: readonly string[];
+}
+
 export async function generateAskAnswer(
   db: Db,
   grant: unknown,
   question: string,
   serializedRecords: string,
   encryptionKey: string,
+  options: GenerateAskAnswerOptions = {},
 ): Promise<GeneratedAskAnswer> {
   assertGrant(grant);
+  const untrustedInputs = options.untrustedInputs ?? [];
 
   // NoProviderConfiguredError propagates unchanged -- it means the "ask" row
   // itself vanished between authorizeCloudAsk's check and this call (a race,
@@ -98,7 +114,16 @@ export async function generateAskAnswer(
   }
 
   const systemPrompt = buildAskSystemPrompt();
-  const userPrompt = buildAskUserPrompt(question, serializedRecords);
+  const userPrompt = buildAskUserPrompt(question, serializedRecords, options.serializedToday);
+  // Concatenated USER-prompt ceiling (design §9 D5; the system prompt is not
+  // counted). Worst case with Today present is 12 000 (today) + 5 000
+  // (records) + 512 (question) + 238 (framing) = 17 750 ≤ 18 000, so this is
+  // a guard against a future change to any of those four numbers, not a
+  // routine path. Asserting BEFORE the model is resolved would be cheaper,
+  // but it is asserted here so the prompt string measured is the one sent.
+  if (userPrompt.length > ASK_PROMPT_MAX_CHARS) {
+    throw new AskGenerationFailedError();
+  }
   const startedAt = performance.now();
 
   try {
@@ -124,12 +149,12 @@ export async function generateAskAnswer(
 
     // THE OUTPUT FILTER RUNS INSIDE THE ATTEMPT, before anything is returned,
     // matching the Brief and digest's discipline.
-    const sanitized = sanitizeAskAnswer(generated.text);
+    const sanitized = sanitizeAskAnswer(generated.text, untrustedInputs);
     const text = sanitized.text;
     if (text.length === 0) {
       throw new AskGenerationFailedError();
     }
-    if (containsLinkShapedContent(text)) {
+    if (containsLinkShapedContent(text, untrustedInputs)) {
       throw new AskGenerationFailedError();
     }
 

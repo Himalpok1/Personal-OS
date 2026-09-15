@@ -13,6 +13,7 @@
 // never disagree about "now".
 
 import { captureEffectiveNow, truncateField } from "@personal-os/core";
+import { redactSecrets } from "@personal-os/core/ask/redact-secrets";
 import { stripUnsummarizableCharacters } from "@personal-os/core/mail/provider-strings";
 import type { Db } from "@personal-os/db";
 import type {
@@ -266,7 +267,12 @@ export async function collectBriefInput(
   const inboxSnippets = today.inbox.items
     .filter((item): item is TodayInboxItem & { raw_text: string } => item.raw_text !== null)
     .slice(0, BRIEF_INBOX_SNIPPET_CAP)
-    .map((item) => truncated(item.raw_text, BRIEF_INBOX_SNIPPET_MAX_CHARS));
+    // Checkpoint 9.7 ride-along: REDACT, THEN truncate (the Ask lane's
+    // redact.ts ordering) -- a secret split by the cut would leave a prefix
+    // too short for redactSecrets' patterns to match and ship it anyway.
+    // redactSecrets control-strips internally, so `truncated`'s own strip is
+    // a harmless no-op on its output. Prefix-shape only, not DLP (ADR-066).
+    .map((item) => truncated(redactSecrets(item.raw_text).text, BRIEF_INBOX_SNIPPET_MAX_CHARS));
 
   let input: BriefInput = {
     generated_at: effectiveNow.toISOString(),

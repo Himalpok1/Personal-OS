@@ -15,7 +15,10 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
 import { authorizeCloudAsk, AskUnauthorizedError, type CloudAskGrant } from "./authorize.js";
+import { ASK_QUESTION_MAX_CHARS, TODAY_CONTEXT_MAX_CHARS } from "@personal-os/schema";
 import {
+  ASK_PROMPT_MAX_CHARS,
+  ASK_RECORDS_MAX_CHARS_WITH_TODAY,
   AskGenerationFailedError,
   AskProviderDisabledError,
   AskTimeoutError,
@@ -34,6 +37,7 @@ vi.mock("ai", async () => {
 const { resolveModelForTask } = await import("@personal-os/ai-providers");
 const { generateText } = await import("ai");
 const { generateAskAnswer } = await import("./generate.js");
+const { buildAskUserPrompt } = await import("./prompt.js");
 
 function fakeModel(tag: string): LanguageModel {
   return { modelId: tag } as unknown as LanguageModel;
@@ -223,5 +227,110 @@ describe("generateAskAnswer (Checkpoint 8.6B)", () => {
     const result = await generateAskAnswer(app.db, grant, "q", "[]", "key");
     expect(result.answer).not.toContain("https://");
     expect(result.answer).toContain("[link removed]");
+  });
+});
+
+describe("generateAskAnswer -- Checkpoint 9.7 options", () => {
+  let app: FastifyInstance;
+  let grant: CloudAskGrant;
+
+  beforeAll(async () => {
+    app = await buildTestApp();
+  });
+  afterAll(async () => {
+    await app.close();
+  });
+  beforeEach(async () => {
+    await truncateTestTables(app);
+    vi.clearAllMocks();
+    const [connection] = await app.db
+      .insert(aiProviderConnections)
+      .values({
+        name: "Test provider",
+        providerType: "openai_compatible",
+        baseUrl: "https://example.invalid/v1",
+        apiKeyCiphertext: Buffer.from("ciphertext"),
+        apiKeyIv: Buffer.from("iv"),
+        apiKeyAuthTag: Buffer.from("authtag"),
+      })
+      .returning();
+    const [model] = await app.db
+      .insert(aiModels)
+      .values({ providerConnectionId: connection!.id, modelId: "test-model" })
+      .returning();
+    await app.db.insert(aiTaskRoutes).values({ taskName: "ask", primaryModelId: model!.id });
+    const minted = await authorizeCloudAsk(fakeRequest("req-9-7"), app.db);
+    if (!minted) throw new Error("test setup: expected a grant");
+    grant = minted;
+  });
+
+  it("without options the prompt has no <today> fence (8.6B shape)", async () => {
+    vi.mocked(resolveModelForTask).mockResolvedValue(singleCandidateChain("m"));
+    vi.mocked(generateText).mockResolvedValue(fakeGenerateTextResult("ok [1]"));
+    await generateAskAnswer(app.db, grant, "q?", '[{"ref":1}]', "key");
+    const call = vi.mocked(generateText).mock.calls[0]![0] as Record<string, unknown>;
+    expect(String(call["prompt"])).not.toContain("<today>");
+    expect(String(call["prompt"])).toContain("<records>");
+  });
+
+  it("embeds serializedToday verbatim in a <today> fence and still makes exactly ONE call with the closed argument set", async () => {
+    vi.mocked(resolveModelForTask).mockResolvedValue(singleCandidateChain("m"));
+    vi.mocked(generateText).mockResolvedValue(fakeGenerateTextResult("Nothing is due. [1]"));
+    const today = '{"local_date":"2026-09-15","overdue":{"items":[{"ref":1}],"total":1}}';
+    await generateAskAnswer(app.db, grant, "q?", "[]", "key", { serializedToday: today });
+    expect(generateText).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(generateText).mock.calls[0]![0] as Record<string, unknown>;
+    expect(String(call["prompt"])).toContain("<today>\n" + today + "\n</today>");
+    expect(String(call["prompt"])).not.toContain("<records>");
+    expect(call["maxRetries"]).toBe(0);
+    expect(call["experimental_telemetry"]).toEqual({ isEnabled: false });
+  });
+
+  it("passes untrustedInputs to the output filter so an echoed external host is stripped", async () => {
+    vi.mocked(resolveModelForTask).mockResolvedValue(singleCandidateChain("m"));
+    vi.mocked(generateText).mockResolvedValue(
+      fakeGenerateTextResult("Your meeting is at portal.internal today [1]."),
+    );
+    const result = await generateAskAnswer(app.db, grant, "q?", "[]", "key", {
+      serializedToday: "{}",
+      untrustedInputs: ["Vendor sync at portal.internal"],
+    });
+    expect(result.answer).not.toContain("portal.internal");
+    expect(result.answer).toContain("[link removed]");
+  });
+
+  it("refuses a concatenated prompt over ASK_PROMPT_MAX_CHARS with AskGenerationFailedError and NO model call", async () => {
+    vi.mocked(resolveModelForTask).mockResolvedValue(singleCandidateChain("m"));
+    vi.mocked(generateText).mockResolvedValue(fakeGenerateTextResult("never"));
+    // Not reachable through the route at the shipped ceilings (12 000 +
+    // 5 000 + 512 + 238 framing = 17 750 ≤ 18 000 on the USER prompt; the
+    // system prompt is excluded) -- forced here by handing generate.ts an
+    // oversized string directly.
+    const oversized = '{"pad":"' + "x".repeat(ASK_PROMPT_MAX_CHARS) + '"}';
+    await expect(
+      generateAskAnswer(app.db, grant, "q?", "[]", "key", { serializedToday: oversized }),
+    ).rejects.toThrow(AskGenerationFailedError);
+    expect(generateText).not.toHaveBeenCalled();
+  });
+});
+
+describe("the prompt ceiling arithmetic (Checkpoint 9.7 review)", () => {
+  it("worst-case USER prompt (today + records + question + framing) fits ASK_PROMPT_MAX_CHARS", () => {
+    // The framing is measured, not assumed: buildAskUserPrompt's fixed text
+    // around three one-character payloads.
+    const framing = buildAskUserPrompt("Q", "R", "T").length - 3;
+    expect(framing).toBe(238);
+    const worstCase =
+      TODAY_CONTEXT_MAX_CHARS + ASK_RECORDS_MAX_CHARS_WITH_TODAY + ASK_QUESTION_MAX_CHARS + framing;
+    expect(worstCase).toBe(17_750);
+    expect(worstCase).toBeLessThanOrEqual(ASK_PROMPT_MAX_CHARS);
+  });
+
+  it("the ceiling is on the user prompt: the system prompt is not counted and would not fit if it were", async () => {
+    const { buildAskSystemPrompt } = await import("./prompt.js");
+    const framing = buildAskUserPrompt("Q", "R", "T").length - 3;
+    const worstCase =
+      TODAY_CONTEXT_MAX_CHARS + ASK_RECORDS_MAX_CHARS_WITH_TODAY + ASK_QUESTION_MAX_CHARS + framing;
+    expect(worstCase + buildAskSystemPrompt().length).toBeGreaterThan(ASK_PROMPT_MAX_CHARS);
   });
 });
