@@ -19,7 +19,6 @@
     "expo-file-system": "~57.0.3",
     "expo-font": "~57.0.1",
     "expo-glass-effect": "~57.0.1",
-    "expo-image": "~57.0.3",
     "expo-linking": "~57.0.6",
     "expo-network": "~57.0.1",
     "expo-notifications": "~57.0.12",
@@ -27,10 +26,8 @@
     "expo-secure-store": "~57.0.1",
     "expo-splash-screen": "~57.0.6",
     "expo-sqlite": "~57.0.1",
-    "expo-status-bar": "~57.0.1",
     "expo-symbols": "~57.0.2",
     "expo-system-ui": "~57.0.2",
-    "expo-web-browser": "~57.0.2",
     "nativewind": "^4.2.1",
     "react": "19.2.3",
     "react-compiler-runtime": "^1.0.0",
@@ -45,7 +42,6 @@
     "react-native-worklets": "0.10.1"
   },
   "devDependencies": {
-    "@babel/plugin-transform-react-jsx": "^7.29.7",
     "@expo/config-plugins": "^57.0.8",
     "@types/react": "~19.2.2",
     "babel-preset-expo": "~57.0.7",
@@ -58,7 +54,6 @@
   "scripts": {
     "postinstall": "pnpm --filter '@personal-os/api-client...' build",
     "start": "expo start",
-    "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",
     "android:ui-test": "./scripts/run-ui-test-android.sh",
     "ios": "expo run:ios",

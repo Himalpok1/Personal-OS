@@ -1,4 +1,3 @@
-import type { EventListParams } from "@personal-os/api-client";
 import type {
   Event,
   EventCancelOccurrence,
@@ -37,16 +36,8 @@ const UI_TEST_EVENT: Event = {
   sync: null,
 };
 
-const eventsKey = (params: EventListParams = {}) => ["events", params] as const;
 const eventKey = (id: string) => ["events", id] as const;
 const eventsRangeKey = (query: EventRangeQuery) => ["events", "range", query] as const;
-
-export function useEvents(params: EventListParams = {}) {
-  return useQuery({
-    queryKey: eventsKey(params),
-    queryFn: () => api.listEvents(params),
-  });
-}
 
 export function useEvent(id: string | undefined) {
   return useQuery({

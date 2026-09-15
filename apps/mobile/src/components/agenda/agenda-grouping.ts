@@ -1,28 +1,23 @@
 // Pure, React-free display/date helpers for the Agenda screen -- kept
 // testable with plain vitest and no React Native mocking, same taste as
 // notifications/reconcile.ts and components/calendar/grid-math.ts.
+import { addLocalDays, parseLocalDate } from "@/utils/local-date";
 
-/** Parse a "YYYY-MM-DD" date string into local wall-clock Date components
- * (midnight local time) -- mirrors (tabs)/index.tsx's parseLocalDate so a
- * weekday/date computation never drifts through a UTC conversion. */
-export function parseLocalDate(date: string): Date {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(year!, (month ?? 1) - 1, day ?? 1);
-}
-
-function formatLocalDate(d: Date): string {
-  const pad = (n: number): string => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
+// Re-exported for backward compatibility: this module used to define its own
+// copy of parseLocalDate (byte-identical to @/utils/local-date's), which had
+// drifted into a second implementation of the same local-midnight parsing
+// rule. Consolidated onto the one canonical helper; no behavior change.
+export { parseLocalDate };
 
 /** Add (or subtract, for a negative count) whole calendar days to a
  * "YYYY-MM-DD" date string using local wall-clock date arithmetic --
  * correct across month-end and year-end rollovers by construction, since
- * it never touches an instant/offset, only calendar-date fields. */
+ * it never touches an instant/offset, only calendar-date fields.
+ *
+ * Delegates to @/utils/local-date's addLocalDays, which is the same
+ * algorithm this function used to duplicate inline. */
 export function addLocalCalendarDays(date: string, days: number): string {
-  const d = parseLocalDate(date);
-  d.setDate(d.getDate() + days);
-  return formatLocalDate(d);
+  return addLocalDays(date, days);
 }
 
 /** The server caps an Agenda request's span at 90 days inclusive

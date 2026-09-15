@@ -31,8 +31,6 @@ export const healthKeys = {
     [...healthKeys.all, "sleep", from, to, limit, offset] as const,
   workouts: (from: string, to: string, limit: number, offset: number) =>
     [...healthKeys.all, "workouts", from, to, limit, offset] as const,
-  connections: () => [...healthKeys.all, "connections"] as const,
-  streams: (connectionId: string) => [...healthKeys.all, "streams", connectionId] as const,
 };
 
 // ---------------------------------------------------------------------------

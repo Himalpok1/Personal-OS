@@ -54,7 +54,6 @@ export {
   civil,
   createFakeGoogleHealthClient,
   rollupBucket,
-  samplePoint,
   type FakeCall,
   type FakeGoogleHealthClient,
   type FakeGoogleHealthOptions,

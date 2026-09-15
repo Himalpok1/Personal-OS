@@ -4,7 +4,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 
 const projectsKey = (params: ProjectListParams = {}) => ["projects", params] as const;
-const projectKey = (id: string) => ["projects", id] as const;
 const projectSummariesKey = (includeArchived: boolean) =>
   ["projects", "summaries", includeArchived] as const;
 const projectDetailKey = (id: string) => ["projects", "detail", id] as const;
@@ -21,14 +20,6 @@ export function useProjects(params: ProjectListParams = {}) {
   return useQuery({
     queryKey: projectsKey(params),
     queryFn: () => api.listProjects(params),
-  });
-}
-
-export function useProject(id: string | undefined) {
-  return useQuery({
-    queryKey: projectKey(id ?? ""),
-    queryFn: () => api.getProject(id!),
-    enabled: id !== undefined,
   });
 }
 

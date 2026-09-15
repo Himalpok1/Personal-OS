@@ -126,8 +126,3 @@ export function flushOutbox(options: { ignoreBackoff?: boolean } = {}): Promise<
 export async function getOutboxStats(): Promise<{ pending: number; failed: number }> {
   return (await getOutboxRepository()).count();
 }
-
-export async function getOutboxCount(): Promise<number> {
-  const { pending, failed } = await getOutboxStats();
-  return pending + failed;
-}

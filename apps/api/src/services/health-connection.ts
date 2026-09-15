@@ -15,7 +15,7 @@ import {
   revokeHealthToken,
   type GoogleHealthClient,
 } from "@personal-os/health-providers";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { env } from "../env.js";
 
 // The single internal service both the GET callback and any manual completion
@@ -503,10 +503,4 @@ export async function needsForcedConsent(db: Db): Promise<boolean> {
     toEncryptedSecret(row.refreshTokenCiphertext, row.refreshTokenIv, row.refreshTokenAuthTag) ===
     null
   );
-}
-
-/** Count of stored connections. Used only to keep the single-connection rule. */
-export async function countHealthConnections(db: Db): Promise<number> {
-  const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(healthConnections);
-  return row?.n ?? 0;
 }

@@ -2,7 +2,6 @@ import {
   GoogleHealthApiError,
   type ApiCivilDateTime,
   type ApiDailyRollupDataPoint,
-  type ApiDataPoint,
   type DailyRollUpRequest,
   type DailyRollUpResponse,
   type DataPointPage,
@@ -154,13 +153,4 @@ export function createFakeGoogleHealthClient(
       return Promise.resolve().then(() => drain(reconcileQueues, req.dataType, "reconcile"));
     },
   };
-}
-
-/** A sample data point, for list/reconcile scripting. */
-export function samplePoint(
-  valueField: string,
-  value: unknown,
-  extra: Partial<ApiDataPoint> = {},
-): ApiDataPoint {
-  return { [valueField]: value, ...extra };
 }

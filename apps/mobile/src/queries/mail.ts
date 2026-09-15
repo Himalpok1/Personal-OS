@@ -16,11 +16,6 @@ export function useMailConnections() {
   return useQuery({ queryKey: connectionsKey, queryFn: () => api.listMailConnections() });
 }
 
-export function useInvalidateMailConnections() {
-  const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: connectionsKey });
-}
-
 /**
  * Mints a FRESH authorize URL for each attempt.
  *

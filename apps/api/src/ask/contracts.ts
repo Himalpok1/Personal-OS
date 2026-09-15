@@ -98,22 +98,20 @@ export const ASK_MAX_ANSWER_CHARS = 4000;
 // through when it is 4xx, so the two 5xx classes below are caught and replied
 // to explicitly by the route, exactly like BriefGenerationTimeoutError and
 // BriefGenerationFailedError.
-
-export class AskDisabledError extends Error {
-  readonly statusCode = 409;
-  readonly code = "cloud_ask_disabled";
-  constructor() {
-    super("Cloud Ask is not enabled");
-    this.name = "AskDisabledError";
-  }
-}
+//
+// Three states in this taxonomy have no class here: a disabled route
+// (`cloud_ask_disabled`, when `authorizeCloudAsk` returns null), no matching
+// corpus rows (`no_relevant_context`), and a concurrent request
+// (`ask_in_flight`, the process-level `askInFlight` flag). routes/ask.ts
+// replies to all three directly with `reply.code(...).send(...)` rather than
+// throwing and catching by name, so no class was ever instantiated for them.
 
 /**
  * Route present, but the configured connection is disabled or otherwise
  * unusable (resolve-model.ts's `loadModel` throws a plain Error for this --
  * never NoProviderConfiguredError, which means "no route at all" and is
- * mapped to AskDisabledError above instead, per the design's "two 409s for
- * one state" resolution).
+ * mapped to `cloud_ask_disabled` directly by the route instead, per the
+ * design's "two 409s for one state" resolution).
  */
 export class AskProviderDisabledError extends Error {
   readonly statusCode = 409;
@@ -121,24 +119,6 @@ export class AskProviderDisabledError extends Error {
   constructor() {
     super("the configured AI provider is unavailable");
     this.name = "AskProviderDisabledError";
-  }
-}
-
-export class AskNoRelevantContextError extends Error {
-  readonly statusCode = 422;
-  readonly code = "no_relevant_context";
-  constructor() {
-    super("nothing in the corpus matched the question");
-    this.name = "AskNoRelevantContextError";
-  }
-}
-
-export class AskInFlightError extends Error {
-  readonly statusCode = 429;
-  readonly code = "ask_in_flight";
-  constructor() {
-    super("an Ask request is already in progress");
-    this.name = "AskInFlightError";
   }
 }
 

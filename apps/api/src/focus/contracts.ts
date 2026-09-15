@@ -3,8 +3,9 @@
 // class-per-error-code pattern.
 //
 // This lane deliberately reuses two of Ask's existing states rather than
-// inventing parallel ones: "Cloud Ask disabled" (`AskDisabledError`'s
-// `cloud_ask_disabled`, applied here via `authorizeCloudAsk` returning null)
+// inventing parallel ones: "Cloud Ask disabled" (`cloud_ask_disabled`,
+// applied here via `authorizeCloudAsk` returning null, exactly as
+// routes/ask.ts replies to it directly with no error class of its own)
 // and "the configured connection is unusable" (`AskProviderDisabledError`,
 // imported directly from `../ask/contracts.js`) are genuinely the same
 // underlying state -- Suggested Focus uses the SAME "ask" task route as its

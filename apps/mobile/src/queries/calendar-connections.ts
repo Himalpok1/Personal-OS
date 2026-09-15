@@ -165,16 +165,6 @@ export function useCalendarTargets() {
   return { ...query, targets: query.data?.items ?? NO_TARGETS };
 }
 
-export function useLinkableCalendars() {
-  const { data: connectionsData } = useCalendarConnections();
-  const activeConnections = (connectionsData?.items ?? []).filter(
-    (connection) => connection.status === "active",
-  );
-
-  // Return connections list and a helper
-  return { activeConnections };
-}
-
 export function useLinkEventToCalendar() {
   const queryClient = useQueryClient();
   return useMutation({
