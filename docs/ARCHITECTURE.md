@@ -486,7 +486,7 @@ explainable.** `GET /search?q=&tz=&types=&order=&limit=&include_archived=`:
   the bounded, id-cited interfaces a later READ-ONLY lane may call. No agent runtime exists and
   Cloud Ask is unchanged.
 
-## Personal intelligence — read-only (Checkpoint 9.7, ADR-066)
+## Personal intelligence — read-only (Checkpoints 9.7–9.8, ADR-066/067)
 
 Personal OS explains, summarizes and prioritizes the owner's own information without modifying it.
 The shape is fixed and is NOT an agent:
@@ -531,6 +531,40 @@ two fenced blocks in the user role — `<today>` (the `TodayContext`) and, for f
   `get_today_context` implementation. No tool runtime, no write tool, no `posops_app` for any agent;
   Guard 4 in `ai-egress-guard.test.ts` enforces the no-write, no-`ai`-import rule under
   `apps/api/src/intelligence/`.
+
+### Suggested Focus (Checkpoint 9.8, ADR-067)
+
+A second, narrower lane on the same `TodayContext` substrate — not a second lineage. Where Ask is
+open Q&A, Suggested Focus is a single fixed action: pick one task and say why.
+
+```
+buildTodayContext(preset: "focus")  →  ONE model call, ≤1 citation  →  {suggestion, source}
+(the SAME context Ask's own "focus"    (apps/api/src/focus/generate.ts,
+ preset chip already builds)            outside apps/api/src/intelligence/ —
+                                         Guard 4 still applies unmodified)
+```
+
+- **`POST /focus/suggestion { tz }`.** Reuses the `ask` `ai_task_routes` row as its consent switch
+  (no new row, no new disclosure surface — one sentence appended to the existing one) and
+  `resolveModelForTask(db, "ask", …)` as its model resolver. Candidates are exactly the tasks in the
+  built context's `overdue`/`due_today` sections. Below `FOCUS_MIN_CANDIDATES` (2), the route refuses
+  (`409 focus_not_enough_candidates`) **before resolving any provider** — "avoid unnecessary AI calls"
+  is a server-enforced precondition, not a prompt instruction.
+- **A narrower citation contract than Ask's.** The model must cite **exactly one** ref, validated
+  against the overdue/due-today ref set only — never the full `TodayContext` ref space, so a citation
+  of an `upcoming` or `reminder` item is exactly as invalid as an invented one (`502 focus_uncited`).
+- **Client-side gating, never a disabled state.** Below the candidate threshold, or when Cloud Ask is
+  off, the affordance renders nothing at all — not a greyed-out button — mirroring the "Ask about
+  today" chip's own `askEnabled ? (...) : null` idiom. The model call fires only on an explicit tap,
+  never on mount, proven the same way 9.7's preset chips are (a source-regex guard,
+  `today-suggested-focus.test.ts`, following `today-ask-chip.test.ts`'s precedent).
+- **Never stored, never scheduled, no new notification channel.** Fully manual, matching D5's "gentle
+  suggestion under a fully manual trigger" resolution — the suggestion's tone is a nudge, its
+  mechanism is always an explicit tap.
+- **A second call site in Guard 1's closed set.** `apps/api/src/focus/generate.ts` is added as the
+  sixth pinned `generateText` caller, living outside `apps/api/src/intelligence/` exactly as
+  `apps/api/src/ask/generate.ts` does, so Guard 4's per-directory import/write denylist needed no
+  change to accommodate a second lane.
 
 ## The parse pipeline
 

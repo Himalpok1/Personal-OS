@@ -3,15 +3,17 @@
 **Project:** Personal OS — single-user, self-hosted life dashboard.
 **Current phase:** **Phase 9 — OPEN, accelerated operating model.** 9.0 (reliability & privacy),
 9.1 (daily-use), 9.3 (capture→task loop), 9.4 (dependable recurring tasks and reminders), 9.5
-(calendar authoring) and 9.6 (search foundation + content bounds) are deployed and accepted. **9.2
-(21-day adoption soak) was OWNER-TERMINATED BEFORE MINIMUM DURATION** — no adoption conclusion is
-permitted (`docs/SOAK-9.2.md`). **Checkpoint 9.7 — Personal intelligence, read-only ("Ask about
-today") — is IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-15Z)**: Cloud Ask (8.6B) is widened with a
-body-free, id-free `TodayContext` built only from existing read models under one `effectiveNow`,
-plus three preset questions on the Today screen; every citation is validated server-side; nothing
-is stored; no migration (level stays **20**); worker untouched; Rabbit R1 versionCode **19**
-(ADR-066). No further Phase 9 checkpoint is selected yet. Phase 8 closed the same day Checkpoint
-9.0 shipped (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail `docs/history/phase-8.md`).
+(calendar authoring), 9.6 (search foundation + content bounds) and 9.7 (personal intelligence,
+"Ask about today") are deployed and accepted. **9.2 (21-day adoption soak) was OWNER-TERMINATED
+BEFORE MINIMUM DURATION** — no adoption conclusion is permitted (`docs/SOAK-9.2.md`). **Checkpoint
+9.8 — Suggested Focus, a narrow cited AI suggestion over today's overdue/due-today tasks — is
+IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-15Z)**: reuses Ask's `TodayContext`/"focus" preset and
+its `ask` consent switch entirely — no new `ai_task_routes` row, no new intelligence lineage; the
+model must cite exactly one task from a candidate set of at least two, or the route refuses before
+calling any provider; nothing is stored; no migration (level stays **20**); worker untouched; Rabbit
+R1 versionCode **20** (ADR-067). No further Phase 9 checkpoint is selected yet. Phase 8 closed the
+same day Checkpoint 9.0 shipped (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail
+`docs/history/phase-8.md`).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
 
 ---
@@ -44,15 +46,15 @@ what is true *now*, it is in this file.
 
 ## Production state at a glance
 
-Verified first-hand at the Checkpoint 9.7 acceptance, 2026-09-15 ~04:35Z (earlier checkpoints'
+Verified first-hand at the Checkpoint 9.8 acceptance, 2026-09-15 ~08:15Z (earlier checkpoints'
 own acceptance evidence is preserved in their own entries below).
 
 | | |
 |---|---|
 | Migration level | **20** (`0000`–`0019`, unchanged since 9.5); local and production agree |
-| Serving commit | api **and web** at **`9b4db0d`** (Checkpoint 9.7, 2026-09-15T04:14Z); **worker untouched, still `8f6ffe1`** (Checkpoint 9.6 — no worker file changed). Provenance is by compose `working_dir` (`personal-os-9.7-release` for api/web); the images carry no commit label. Rollback images `personal-os-{api,web}:rollback-pre-9.7`, tagged by resolved digest (earlier `rollback-pre-*` tags preserved underneath; no `personal-os-worker:rollback-pre-9.7` was needed or created). |
+| Serving commit | api **and web** at **`a08311d`** (Checkpoint 9.8, api recreated 2026-09-15T08:08Z, web 2026-09-15T08:09Z); **worker untouched, still `8f6ffe1`** (Checkpoint 9.6 — no worker file changed across 9.7 or 9.8). Provenance is by compose `working_dir` (`personal-os-9.8-release` for api/web); the images carry no commit label. Rollback images `personal-os-{api,web}:rollback-pre-9.8`, tagged by resolved digest (earlier `rollback-pre-*` tags preserved underneath; no `personal-os-worker:rollback-pre-9.8` was needed or created). |
 | Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30; `GET /health` → `ok` / `connected` / `stale:false` |
-| Rabbit R1 | `com.himal.personalos` **versionCode 19**, built from `9b4db0d` (EAS build `9591cf56…`), installed in place 2026-09-15T04:31Z with SecureStore credential, primary-device row, exact-alarm appop, `POST_NOTIFICATIONS` and `firstInstallTime` (2026-08-19) all preserved — no re-pair, signature `ad63266e` unchanged. Carries the 9.7 "Ask about today" flow: an "Ask about today" chip on Today (hidden unless Cloud Ask is enabled), three preset chips in Ask mode, cited sources with server-authored section/detail labels navigating to task/note/event/inbox/project screens, the rewritten Cloud Ask disclosure. |
+| Rabbit R1 | `com.himal.personalos` **versionCode 20**, built from `a08311d` (EAS build `f4d8499e…`), installed in place with SecureStore credential, primary-device row, exact-alarm appop, `POST_NOTIFICATIONS` and `firstInstallTime` (2026-08-19) all preserved — no re-pair, signature unchanged. Carries the 9.7 "Ask about today" flow (chip, three preset chips, cited sources) plus the 9.8 "Suggested Focus" card on Today: a deterministic strip that renders for free, and one tap-triggered, cited AI suggestion, hidden entirely below two candidates or when Cloud Ask is off. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · **notification-shade capture (9.1)** — a persistent local "Capture" notification on its own channel, tap opens the same composer; verified live on the Rabbit R1 across two sequential taps (the rearm-with-a-fresh-identifier fix), producing a real `inbox_items` row (`source: "web"`, parsed as a task, archived after verification). |
 | Reminders (9.4) | Scheduled by the primary device from **`GET /reminders`** — one item per one-off task with a reminder and one per open occurrence of a recurring task (derived from the parent's `remind_at` wall clock and its day-offset from `due_at`, in `recurrence_timezone`; `snoozed_until` overrides). Deterministic identifiers `reminder:<key>:<instant>`, exact alarms (`window=0 exactAllowReason=permission`, verified in `dumpsys alarm`), category `reminder` with **Done / Snooze 1h / Tomorrow 9am** — all `opensAppToForeground: true` (a non-foregrounding action is lost when the process is dead; verified in the installed expo-notifications source). Verified live on the Rabbit R1 with the app process killed (`am kill`, not force-stop — force-stop puts the package in Android's stopped state, which cancels every alarm): both a Snooze 1h and a Done from the shade opened the app to the task with the outcome banner, mutated the right occurrence, dismissed the notification and re-armed the next alarm. |
 | Notification channels (9.1) | `reminders` (MAX, unchanged, local reminders only) · `alerts` (HIGH, new — integration/monitor alerts) · `updates` (DEFAULT, new — confirmations + mail digest) · `capture` (LOW, new — the local shortcut only, never through `notifications.dispatch`). All four verified independently listed and toggleable in Android's per-app notification settings on the Rabbit R1; a live test alert (via the existing `notifications.dispatch` job, `category: "alert"`) delivered on the `alerts` channel at `importance=4`. |
@@ -63,7 +65,7 @@ own acceptance evidence is preserved in their own entries below).
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress |
 | Backups | **None, by design** (ADR-024) |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE**. No CI, no Actions workflow, no repository secret. |
-| Test baseline | **5,735 tests across 12 packages** (9.7 at `9b4db0d`; was 5,495 at 9.6, 5,062 at 9.5, 4,636 at 9.4, 4,141 at 9.3, 3,853 at 9.1, 3,788 at 9.0, 3,668 at the Phase 8 closeout — see *Last verification*) |
+| Test baseline | **5,815 tests across 12 packages** (9.8 at `a08311d`; was 5,735 at 9.7, 5,495 at 9.6, 5,062 at 9.5, 4,636 at 9.4, 4,141 at 9.3, 3,853 at 9.1, 3,788 at 9.0, 3,668 at the Phase 8 closeout — see *Last verification*) |
 | pg-boss | **29 queues** (`worker.started` count; `pgboss.queue` reads 30 with the internal `__pgboss__send-it`), 10 schedules. DLQs on `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues and — since 9.0 — **`occurrences.generate-lazy` → `.dead` and `occurrences.expand-window` → `.dead`**, both verified attached in production `pgboss.queue` and both consumed by registered workers. Every retrying queue now has a dead-letter queue. **`occurrences.expand-window` has a phase 2 since 9.4**: idempotent repair of any completion-anchored parent left with no open occurrence, per-parent contained, failures (including an insert collision that leaves no open row, `reason: collision`) counted into the same `OccurrencesJobError` → dead letter → alert. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C, windows unchanged) · **`health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now`, no window constant (9.0)**. 9.0 acceptance: 9 + 1 expired states deleted exactly as preflighted, rerun deleted 0. **The first scheduled run is 2026-09-13T04:00Z** and had not yet occurred. |
 | Alert keys | Occurrence-scoped (ADR-058). 9.5 adds `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (unexercised in production by design). First live emission `health-sync-alert:…:breaker:daily-heart-rate-variability:2026-09-12:…` accepted 2026-09-12T03:00:14Z. 9.0 adds two producers, unexercised in production by design: `occurrences.generate-lazy.dead:<occurrenceId>` and `occurrences.expand-window.dead:<UTC date>` — the latter now also covers a failed phase-2 lazy repair (9.4; body wording "could not be expanded or repaired overnight"). No new producer in 9.4. |
@@ -71,6 +73,7 @@ own acceptance evidence is preserved in their own entries below).
 | Content bounds (9.6) | `packages/schema/src/text-bounds.ts`: titles/names 512 · task body 4000 · note body 20 000 · event description 4000 · event location 512 · project goal 2000 · parser reason 1000 / project ref 200 · capture 4000 (unchanged). User-typed → `400 validation_failed` with field path; provider/model/STT text (Google + CalDAV ingest, PTT transcript, parser tool args before validation, calendar display names) → truncated at write, surrogate-safe, counts-only log (`ptt.transcript_truncated`, `capture.parse.tool_args_truncated`, `calendar.sync.text_bounded`). Read schemas, export and the stored parse-result union stay unbounded. DB columns unchanged (`text`, no CHECK). |
 | Export / Ask / Monitor CRUD | `GET /export`, `POST /ask` (widened 9.7 — see below), `GET/POST/DELETE /ai/task-routes`, `/monitor/targets` CRUD — all live, perimeter-only |
 | Personal intelligence (9.7) | `POST /ask { question, tz?, scope? }`. Without `tz`: byte-shape-identical to 8.6B (task/note sources only, no `citations_present`) — proven against a frozen copy of the pre-9.7 schema, so the versionCode 18 client keeps working. With `tz`: a body-free, id-free `TodayContext` (overdue/due-today/upcoming/events/reminders/recently-completed/open-loops, one `effectiveNow`, wall-clock times in the request zone, honest totals, 12 000-char ceiling, preset-aware drop ladder) is embedded beside the 8.6B lexical `<records>` block (≤ 5 000 chars / ≤ 4 records when Today is present). `scope: "today"` (every preset chip) selects **no** note/task body at all. Every `[n]` in the answer must resolve to a real source or the call is refused (`502 ask_uncited`); sources carry server-authored `section`/`detail` labels (`[1] Overdue · P1 · title`) so a ranking claim is checkable without opening the item. A row consented before the 9.7 release instant is refused `409 ask_consent_outdated` on a `tz` request until re-created under the new disclosure. Nothing is stored; `ask` ships **OFF** (no row in production by default — the owner enables it from Settings). Future-agent tool contract (`READ_TOOL_NAMES` + schemas + budgets) defined in `packages/schema`, no runtime, no writes, no `posops_readonly` role yet (ADR-066). |
+| Suggested Focus (9.8) | `POST /focus/suggestion { tz }` — reuses the `ask` route as its consent switch (no new row, no new disclosure surface) and `buildTodayContext(preset: "focus")`, the identical context Ask's own "focus" preset chip already builds. Candidates are the tasks in `overdue`/`due_today`; below `FOCUS_MIN_CANDIDATES` (2) the route refuses (`409 focus_not_enough_candidates`) **before resolving any provider** — no model call below two candidates. The model must cite **exactly one** candidate, validated against the overdue/due-today ref set only (never the full Today ref space); zero or multiple citations, or one outside that set, is `502 focus_uncited`. `apps/api/src/focus/generate.ts` is Guard 1's sixth pinned `generateText` call site, living outside `apps/api/src/intelligence/` so Guard 4 needed no change. Mobile: a deterministic strip renders for free from data Today already fetches; the one AI line fires only on an explicit tap, never on mount (source-regex-guarded, mirroring `today-ask-chip.test.ts`); a `useRef` reentrancy guard in the Today screen (not local state in the reused hookless card) stops a rapid double-tap from firing two requests. Nothing is stored; no new notification channel; fully manual (ADR-067). |
 | Recurrence routes (9.4) | `POST /occurrences/:id/snooze` (task-only, ≤ 31 days, `409 occurrence_not_open` / `occurrence_not_task`, `400 validation_failed` path `until`) · `POST /occurrences/:id/reopen` (latest terminal only; withdraws the open successor of a completion-anchored parent; `409 occurrence_not_reopenable` / `task_not_open` / `occurrence_not_task`) · `GET /occurrences?order=asc|desc` · `GET /reminders?horizon_days=` · `due_date` rules validated at `POST/PATCH /tasks` (`400 validation_failed`, token-only `unsupported_frequency` / `embedded_until_count` / `invalid_rrule`) · `POST /tasks/:id/complete` redirects to the earliest **effective** open occurrence (`greatest(occurs_at, snoozed_until)`). All verified live through real routes on 2026-09-14 (smoke rows archived). |
 | 404 logging | **Unknown routes never log or echo their query string (9.0).** A `setNotFoundHandler` replaces Fastify's `basic404`; the `req` serializer drops the whole query for `request.is404`, for every `OPTIONS` (served by `@fastify/cors`'s `OPTIONS *`), and for malformed URLs (`frameworkErrors`). Verified live with four sentinel values: 0 occurrences in the api log; body `{"error":"not_found"}`. |
 
@@ -1147,6 +1150,149 @@ remains duplicated across three call sites (Ask, Brief, mail digest) — extract
 attempted, per the owner's explicit scope fence; D1e (device-token auth on `/ai/*` writes) remains
 deferred; no `posops_readonly` role exists yet (not needed until a tool loop is approved).
 
+### Checkpoint 9.8 — Suggested Focus, a narrow cited AI suggestion: IMPLEMENTED, DEPLOYED, ACCEPTED (2026-09-15)
+
+**Objective (owner-approved design gate, D1–D5 plus one added product constraint).** Move from
+"user asks → AI answers" toward "user opens Today → understands what matters", without becoming an
+agent, without a second intelligence lineage, and without spending a model call the owner didn't
+ask for. A parallel six-lane read-only design gate (existing-architecture audit, product-opportunity
+analysis, context architecture, AI-behavior design, privacy/security, future-agent compatibility)
+recommended **Option E** — a bounded combination, not any option as originally scoped — over the
+brief's own Options A (full Brief v2), B (change tracking), C (weekly review intelligence) and D (a
+dedicated dashboard, rejected outright as redundant with the app's established behind-Settings
+minimalism for low-frequency surfaces). The owner approved D1=E, D2 (deterministic-on-load +
+tap-triggered AI), D3=never-store, D4=no-feedback-yet, D5=fully-manual, and added: **no model call
+below two meaningful candidates** ("zero focus candidates" and "only one obvious candidate" must
+both produce no AI call). Full design-gate report and the D1–D5 rationale: this session's plan file
+(`personal-os-checkpoint-happy-minsky.md`); the locked decision is ADR-067.
+
+**Contract shipped, built almost entirely from 9.7's own reuse surface — zero new intelligence
+lineage.** `POST /focus/suggestion { tz }` calls `buildTodayContext(preset: "focus")` — the IDENTICAL
+function and preset Ask's own "What should I focus on?" chip already builds — as its only data
+source, and reuses the `ask` `ai_task_routes` row as its consent switch (no new row, one sentence
+appended to the existing disclosure) and `ASK_TODAY_CONSENT_FROM` as its vintage check, unchanged.
+Candidates are the tasks in the built context's `overdue`/`due_today` sections; below
+`FOCUS_MIN_CANDIDATES` (2) the route refuses (`409 focus_not_enough_candidates`) **before resolving
+any provider** — the product constraint is server-enforced, not merely a prompt instruction. The
+model must cite **exactly one** candidate (stricter than Ask, which tolerates zero), validated
+against the overdue/due-today ref set only — never the full Today ref space, so a citation of an
+`upcoming` or `reminder` ref is exactly as invalid as an invented one (`502 focus_uncited`).
+`apps/api/src/focus/generate.ts` lives outside `apps/api/src/intelligence/` (a sibling of
+`apps/api/src/ask/`, exactly mirroring how Ask's own `generate.ts` avoids that directory) and becomes
+Guard 1's **sixth** pinned `generateText` call site — the egress-guard pattern's first extension
+since its five-site baseline, and it held without modification to Guard 4. Mobile: a deterministic
+strip (existing Overdue/Due-today chips) renders for free; the affordance is entirely absent (never
+disabled) below the threshold or when Cloud Ask is off; the one AI line fires only on an explicit
+tap, never on mount.
+
+**Implementation.** Foundation (the frozen wire contract — `packages/schema/src/focus.ts`,
+`packages/api-client/src/focus.ts`) written first by the integrator, matching the 9.6 precedent that
+worked well. Two parallel implementation lanes then ran in isolated git worktrees (API, mobile) built
+to that one contract. One lane's worktree was provisioned stale (120 commits behind, no 9.7
+infrastructure) and its `Write`/`Bash` tools were hard-jailed to it — it fully designed the mobile
+implementation by reading the correct worktree but could not write to it; the integrator applied its
+design directly to the main tree, verifying every claimed file/line against the live codebase rather
+than pasting blind. The API lane's worktree was healthy and merged by direct file copy after a
+byte-for-byte diff confirmed its copy of the shared contract matched the integrator's exactly.
+
+**Adversarial review (two lenses, API and mobile) found one MAJOR, closed before deployment.** The
+mobile `not_enough_candidates` render state was a genuine dead end: `useMutation`'s `error`/`data`
+persist until a NEW `mutate()` call settles, and nothing offered a way back to `idle`, so a real,
+everyday race — the owner completing one of exactly two overdue tasks between page load and the tap,
+or (independently) `today-context.ts`'s own pre-existing "LAST RESORT" drop-ladder pass touching even
+a *protected* section under a quote-heavy-title budget overflow — could strand the card permanently.
+Fixed with a "Check again" retry (cheap and safe: a re-refusal makes no model call, since the gate is
+checked before any provider is resolved). A MINOR finding — a rapid double-tap on the retry buttons
+could fire two `POST /focus/suggestion` requests before React's next render made `isPending` visible
+to the closure — is fixed with a `useRef`-based synchronous reentrancy guard
+(`focusRequestInFlightRef`) in the Today screen, not local state in the reused component, because
+this app's hookless-component convention (`AskView`'s established pattern, restated in
+`cloud-ask-card.tsx`'s own module comment) means the card cannot own `useState` without breaking its
+no-renderer test harness. A route comment overstating the "focus" preset's drop-ladder guarantee was
+corrected to name the pre-existing last-resort exception (inherited from 9.7, not introduced here);
+the underlying security/correctness property — `candidateCount` is always computed from the exact
+same post-ladder object serialized into the prompt — needed no code change.
+
+**Verification (integrator, shared database, serial):** `pnpm build --force` 11/11 · `pnpm typecheck`
+21/21 · `eslint .` clean (root; mobile's own `expo lint` run separately, also clean) · `prettier
+--check .` clean · `git diff --check` clean · `gitleaks detect` — the same 21 pre-existing findings
+in ignored, untracked files (`.env`, two `google-services.json`, `export.log`), none tracked ·
+`pnpm test --force` **21/21 tasks, zero failing** — api **1,382** tests (+49: `focus/{contracts
+implicitly, generate, output, prompt}.test.ts`, `routes/focus.test.ts`, the widened
+`ai-egress-guard.test.ts`), mobile **1,367** (+31: `queries/focus.test.ts`,
+`components/focus/suggested-focus-card.test.tsx`, `__tests__/today-suggested-focus.test.ts`, the
+updated `cloud-ask-card.test.tsx` pin), core/schema/api-client/worker/health-providers/monitoring/
+calendar-providers/mail-providers/db/ai-providers unchanged (worker byte-unchanged: no file in it
+touched). **5,815 tests across 12 packages total.** **Migration invariant:** 20 `.sql` / 20 journal
+entries, unchanged; `packages/db` byte-unchanged.
+
+**Deployment — COMPLETE (2026-09-15T08:09Z), frozen order.** Commit **`a08311d`** pushed to `origin`
+first (from `1441025`, the 9.7 acceptance record). `git archive` of `a08311d` shipped to
+`/home/himallinux/personal-os-9.8-release` (1,024 tracked files; no `.env`, no `google-services.json`
+— was 1,008 at 9.7, +16 new files, zero removed, matching the diff exactly). Rollback images tagged
+**by resolved digest** `:rollback-pre-9.8` for api (`df197726…`) and web (`08359502…`) — **worker not
+tagged**, no worker file changed. api + web built (running containers untouched, verified by digest).
+New api image verified to carry `apps/api/dist/focus/{contracts,generate,output,prompt}.js`,
+`apps/api/dist/routes/focus.js`, and `focusRoutes` registered twice in `server.js` (import +
+`app.register`); migration folder highest still `0019_event_authoring.sql`, 20 files. `drizzle-kit
+migrate` from the new api image with `--no-deps` and the explicit `MIGRATIONS_DATABASE_URL`
+pass-through applied nothing (**20 → 20**, confirmed by direct row count before and after). `api`
+recreated alone → `(healthy)`, `/health` `ok`/`connected`/`stale:false`; `web` recreated alone → `200`
+on its published host port (`127.0.0.1:8081`, which Tailscale Serve `:8443` proxies to — plain
+`curl localhost:8443` fails by design, `tailscaled`'s own binding, not a regression). `postgres` and
+`worker` never named or recreated. All four containers `RestartCount=0`.
+
+**Production API acceptance — PASSED (through real routes; every smoke row archived afterwards, Cloud
+Ask disabled afterward, none deleted).** Baseline: 0 overdue, 0 due-today, `ask` route absent.
+Enabled `ask` on the existing `gpt-4.1`/`My OpenAI` row (the ADR-044/9.7 precedent — zero new
+credential surface). `POST /focus/suggestion` with 0 candidates → `409 focus_not_enough_candidates,
+candidate_count:0`. One smoke overdue task created → same request → still `409, candidate_count:1` —
+**no model call on either path**, confirmed by the absence of any `intelligence.focus.completed` or
+`ai.usage` log line for these two requests. A second smoke task created (2 candidates) → `200` with a
+real, correctly-cited suggestion: the model picked the P1 task over the P3 one, cited it `[1]`,
+`source.section:"overdue"`, `source.detail:"P1"`. The one `intelligence.focus.completed` log line for
+this call carries **only** counts/tokens (`candidateCount:2, contextChars:1521, latencyMs:2627,
+usageIn/Out/Total`, `outcome:"answered"`) — no suggestion text, no task titles, no context. Both smoke
+tasks archived → counts back to `0/0`. `DELETE /ai/task-routes/ask` → `204` → confirmed `409
+cloud_ask_disabled` again — **Cloud Ask ships OFF in production**, per D3/ADR-061, unchanged by this
+checkpoint.
+
+**Physical Rabbit R1 acceptance — PASSED (2026-09-15 ~08:26–08:29Z), first-hand.** EAS build
+`f4d8499e…` from `a08311d` (`fingerprint fa2179e0…`, 13m25s) → versionCode **19 → 20** (auto-
+incremented, remote keystore reused). `adb install -r` of the 117 MB APK → `Success` (an in-place
+replace is refused by Android on a certificate mismatch, so the success is the signing-continuity
+proof); post-install: versionCode 20, signature `ad63266e` unchanged, `firstInstallTime` 2026-08-19
+preserved, exact-alarm appop still `allow`, `POST_NOTIFICATIONS` still granted — no re-pair. Cold
+launch (0 candidates, Cloud Ask off, the shipped default) → Today renders, **neither** the "Ask about
+today" chip nor the Suggested Focus card present — 0 crash lines in logcat. Two smoke tasks created
+server-side and Cloud Ask re-enabled for the on-device pass; cold relaunch → "Overdue 2" chip plus a
+"Suggest focus" pill directly beneath the Ask chip. Tapped it: a real, correctly-worded suggestion
+rendered ("You might consider paying the water bill now since it is overdue by two days and marked
+as a higher priority…[1]") with the source row `[1] Overdue · P2 · [9.8 device smoke] Pay water
+bill` and a "Suggest again" button. Tapped the source row → opened the real Task detail screen for
+the exact cited task (type+id navigation, never model text). Backed out, tapped **"Suggest again"** →
+a fresh, differently-worded suggestion generated, same cited task, no crash — proving the retry path
+and the reentrancy guard live, not just in mocked tests. One smoke task archived (down to 1
+candidate) → cold relaunch → the Suggested Focus card **rendered nothing at all** (not a disabled
+button) — proving the hard "only one obvious candidate" exclusion on real device state, not just
+against a fixture. Final smoke task archived, Cloud Ask disabled, cold relaunch → identical to the
+very first screenshot (Overdue 0, no chip, no card). **0 crash lines across the entire session.**
+
+**Post-acceptance production health:** `/health` `ok`/`connected`/`stale:false`; all four containers
+`RestartCount=0`; 0 pg-boss jobs failed/retry/active; migration 20 (unchanged); 0 unarchived smoke
+rows (`select count(*) from tasks where title like '[9.8%' and archived_at is null` → 0); 0 `ask`
+task routes (OFF, as shipped); 0 api warn/error lines in the ~20 minutes since the redeploy; 0 crash
+lines on the Rabbit R1.
+
+**Recorded, not fixed (debt):** the "focus" preset's drop-ladder protection is not absolute — a rare,
+quote-heavy-title budget overflow can still trim `overdue`/`due_today` via the pre-existing
+last-resort pass (inherited from 9.7, corrected in a route comment, not in behavior — see ADR-067);
+`isAbortLikeError` is now duplicated a **fourth** time (`focus/generate.ts`), the established accepted
+pattern, not extracted; D1e (device-token auth on `/ai/*` writes) remains deferred; D4 (feedback) was
+deliberately not built, with a one-line extensibility comment at the card's `ready` branch for a
+future thumbs-up/down without restructuring; Options B ("what changed") and C (weekly review
+intelligence) remain deferred, needing a last-seen watermark and week-bucketed carry-forward diffing
+respectively, neither of which exists today.
 
 **Phase 8 is closed.** The full checkpoint record — 8.0 foundation, 8.1 failure visibility, 8.2 the
 real calendar, 8.3 search + export, 8.4 capture front doors, the owner-terminated 8.5 soak, the 8.6
@@ -1615,21 +1761,47 @@ the one-line summary is:
 | **9.6** | Search foundation + content bounds: every text field bounded at write (reject typed, truncate provider/model/STT), six-entity tokenised search with a fallback ladder, date tokens, explainable integer scoring, `getItemContext`, mobile search UX with sections/chips/date chip, bounded inputs. **Deployed (api/worker/web, level 20, no migration) and accepted on the Rabbit R1 (versionCode 18) 2026-09-15Z** (ADR-065). |
 | **9.4** | Dependable recurring tasks and reminders: repeat presets, one strictly-after wall-clock successor rule for every writer, nightly lazy repair, occurrence snooze (migration `0018`) and reopen, per-occurrence reminders with Done / Snooze 1h / Tomorrow 9am actions, Today never buckets a recurring parent. **Deployed (api/worker/web, level 19) and accepted on the Rabbit R1 (versionCode 15) 2026-09-14** (ADR-063). |
 | **9.7** | Personal intelligence, read-only: Cloud Ask widened with a bounded, id-free, wall-clock-only `TodayContext` and three preset questions ("Ask about today"); validated citations (`502 ask_uncited` on an unresolvable ref); nothing stored; no migration; worker untouched; the read-only future-agent tool contract defined (not integrated). **Deployed (api/web, level 20, no migration) and accepted on the Rabbit R1 (versionCode 19) 2026-09-15** (ADR-066). |
+| **9.8** | Suggested Focus: a narrow, cited AI suggestion over today's overdue/due-today tasks, reusing Ask's `TodayContext`/"focus" preset and its `ask` consent switch entirely — zero new intelligence lineage, zero new consent surface. No model call below two candidates (server-enforced); exactly one citation required, validated against the narrower candidate ref set. Deterministic summary renders for free; the AI line is always an explicit tap. Nothing stored; no migration; worker untouched. **Deployed (api/web, level 20, no migration) and accepted on the Rabbit R1 (versionCode 20) 2026-09-15** (ADR-067). |
 
-**Production is at migration level 20** and serves api and web images built from `9b4db0d`, worker still at `8f6ffe1` (untouched by 9.7). All three Google integrations are active. Monitoring runs against five
+**Production is at migration level 20** and serves api and web images built from `a08311d`, worker still at `8f6ffe1` (untouched since 9.6). All three Google integrations are active. Monitoring runs against five
 active targets including both Tailscale Serve routes, with full CRUD. A daily retention cron bounds
 `monitor_checks`/`mail_messages`/`mail_digests`/`mail_sync_runs`/`health_sync_runs` and sweeps
 expired `health_oauth_states`/`mail_oauth_states`. Every retrying pg-boss queue has a dead-letter queue.
 Calendar events authored in Personal OS sync outward to the owner's chosen writable calendar; imported
-events are read-only. Search covers tasks, notes, events, projects, captures and mail with an explainable score, and every text field is bounded at write. Cloud Ask, when the owner enables it, can now also answer questions about today's schedule with cited sources. The Rabbit R1 runs `com.himal.personalos` versionCode 19, built from `9b4db0d`.
+events are read-only. Search covers tasks, notes, events, projects, captures and mail with an explainable score, and every text field is bounded at write. Cloud Ask, when the owner enables it, can answer questions about today's schedule with cited sources, and can now also suggest one task to focus on. The Rabbit R1 runs `com.himal.personalos` versionCode 20, built from `a08311d`.
 
 ## Current work
 
-**None in progress.** Checkpoint 9.7 closed 2026-09-15Z.
+**None in progress.** Checkpoint 9.8 closed 2026-09-15Z.
 
 ---
 
 ## Last verification
+
+**Checkpoint 9.8 (2026-09-15).** Branch `phase-9-reliability`, HEAD `a08311d` (from `1441025`, the
+9.7 acceptance record, verified clean and equal to origin). Design gate: three parallel read-only
+research lanes (existing intelligence/brief architecture, read-models/search reuse surface, AI safety
+infra/mobile UI) grounded a 14-section recommendation report in the live codebase rather than the
+docs alone; the owner approved D1=Option E, D2/D3/D4/D5, plus the two-candidate-minimum constraint,
+in one message with no back-and-forth. Foundation (the frozen `packages/schema/src/focus.ts` +
+`packages/api-client/src/focus.ts` contract) written by the integrator first; two parallel
+implementation lanes (API, mobile) launched in isolated worktrees — one worktree was stale and its
+write tools jailed to it, so its fully-researched design was applied to the main tree by the
+integrator directly, each claim re-verified against the live files before writing (exact navigation
+helper name, response field names, `AskSourceRow` type-compatibility all confirmed, not assumed); the
+other worktree's diff was merged after a byte-for-byte match against the shared contract. Two
+adversarial review lenses (API, mobile) found and the integrator fixed 1 major (a `not_enough_
+candidates` dead end) and 1 minor (a double-tap race) before deployment; a second minor (an
+overstated drop-ladder guarantee in a code comment) was corrected. Integrator gates, serially:
+`pnpm build --force` 11/11 · `pnpm typecheck` 21/21 · `eslint .` clean (root; mobile's own `expo
+lint` separately, also clean) · `prettier --check .` clean · `git diff --check` clean · `gitleaks` —
+the same 21 pre-existing findings in ignored, untracked files, none tracked · `pnpm test --force`
+**21/21 tasks, 5,815 tests across 12 packages, zero failing** (api 1,382 · mobile 1,367 · core 898 ·
+worker 698 · schema 477 · health-providers 332 · api-client 171 · monitoring 151 ·
+calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25; was 5,735 at 9.7). **Migration
+invariant:** 20 `.sql` / 20 journal entries, unchanged; `packages/db` byte-unchanged; production
+`drizzle.__drizzle_migrations` 20 before and after a proven no-op `migrate`. Production and
+physical-device acceptance: recorded in full under *Phase 9 → Checkpoint 9.8* above.
 
 **Checkpoint 9.7 (2026-09-15).** Branch `phase-9-reliability`, HEAD `9b4db0d` (from `b998646`,
 the 9.6 acceptance record, verified clean and equal to origin). Design gate: six parallel read-only
@@ -1762,21 +1934,29 @@ clean; full evidence in `docs/PHASE-8-CLOSEOUT.md`.
 
 ## Next action
 
-Select the next Phase 9 checkpoint. 9.7 shipped the first read-only intelligence lane ADR-056
-sequenced; the 9.3 ranked tiers are now exhausted except E2 (health trend context). Candidates now:
-**widen the intelligence lane** (implement `get_calendar_context`/`get_task_context`, or a real
-tool-calling agent loop over `READ_TOOL_NAMES` — needs its own ADR, a `posops_readonly` role, and a
-budgeted multi-use grant), **E2 health trends**, or a **new 21-day adoption soak** (a new checkpoint
-with a new baseline; the reviewed observer tooling in `scripts/soak/` is reusable). This is a
-product-direction choice — pause for the owner.
+Select the next Phase 9 checkpoint. 9.7 shipped the first read-only intelligence lane and 9.8 added
+a second, narrower one on the same substrate; ADR-056's read-only-before-write-capable sequencing is
+now exercised twice. The 9.3 ranked tiers are exhausted except E2 (health trend context). Candidates
+now: **widen the intelligence lane further** (implement `get_calendar_context`/`get_task_context`,
+build Option B "what changed" — needs a last-seen watermark — or Option C weekly review intelligence
+— needs week-bucketed carry-forward diffing — both deferred by the 9.8 design gate as genuinely
+new backend work, not a context-reuse win like Suggested Focus was), **a real tool-calling agent loop**
+over `READ_TOOL_NAMES` (needs its own ADR, a `posops_readonly` role, and a budgeted multi-use grant),
+**E2 health trends**, or a **new 21-day adoption soak** (a new checkpoint with a new baseline; the
+reviewed observer tooling in `scripts/soak/` is reusable). This is a product-direction choice —
+pause for the owner.
+
+Open, non-blocking, carried forward from 9.8: the "focus" preset's drop-ladder protection is not
+absolute (a rare quote-heavy-title overflow can still trim `overdue`/`due_today` via the pre-existing
+9.7 last-resort pass — a route comment now names this, behavior unchanged); `isAbortLikeError` is
+duplicated a fourth time (`apps/api/src/focus/generate.ts`); D4 (feedback) has a one-line
+extensibility comment but no built affordance; Options B/C (above) remain unbuilt.
 
 Open, non-blocking, carried forward from 9.7: citation validation proves a ref exists, never that a
 ranking/priority/time claim is true (mitigated by section/detail labels, not closed); `redactSecrets`
 is pattern-based, not DLP; `snoozed_within_horizon.total` is honest only within Today's own capped
 7-day lists; the Brief lane still sends UTC instants for the model to convert, unlike the
-wall-clock-only `TodayContext`; `isAbortLikeError` and the hardened-`generateText` block remain
-duplicated across three call sites (Ask, Brief, mail digest) — extraction was explicitly deferred by
-the owner, not attempted; D1e (device-token auth on `/ai/*` writes) remains deferred; no
+wall-clock-only `TodayContext`; D1e (device-token auth on `/ai/*` writes) remains deferred; no
 `posops_readonly` role exists yet.
 
 
