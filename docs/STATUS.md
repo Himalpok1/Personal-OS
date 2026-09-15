@@ -1,20 +1,18 @@
 # Project Status
 
 **Project:** Personal OS — single-user, self-hosted life dashboard.
-**Current phase:** **Phase 9 — OPEN, accelerated operating model.** 9.0 (reliability & privacy),
-9.1 (daily-use), 9.3 (capture→task loop), 9.4 (dependable recurring tasks and reminders), 9.5
-(calendar authoring), 9.6 (search foundation + content bounds) and 9.7 (personal intelligence,
-"Ask about today") are deployed and accepted. **9.2 (21-day adoption soak) was OWNER-TERMINATED
-BEFORE MINIMUM DURATION** — no adoption conclusion is permitted (`docs/SOAK-9.2.md`). **Checkpoint
-9.8 — Suggested Focus, a narrow cited AI suggestion over today's overdue/due-today tasks — is
-IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-15Z)**: reuses Ask's `TodayContext`/"focus" preset and
-its `ask` consent switch entirely — no new `ai_task_routes` row, no new intelligence lineage; the
-model must cite exactly one task from a candidate set of at least two, or the route refuses before
-calling any provider; nothing is stored; no migration (level stays **20**); worker untouched; Rabbit
-R1 versionCode **20** (ADR-067). No further Phase 9 checkpoint is selected yet. Phase 8 closed the
-same day Checkpoint 9.0 shipped (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail
-`docs/history/phase-8.md`).
-**Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/`
+**Current phase:** **Phase 10 — OPEN.** Phase 9 (9.0–9.8, accelerated operating model) is complete
+through Checkpoint 9.8 (Suggested Focus, 2026-09-15) with no further Phase 9 checkpoint selected;
+the owner opened Phase 10 — **Codebase Consolidation & Agent Readiness** — as the next checkpoint
+rather than resuming Phase 9's product track. **Checkpoint 10.0 — a behavior-preserving cleanup and
+agent-readiness audit — is IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-15)**: proven-dead code and
+four orphaned Expo dependencies removed across mobile/API, zero user-visible behavior change, zero
+migration (level stays **20**), worker untouched, new `docs/AGENT-READINESS.md` canonical-boundary
+inventory, and a `tags`/`item_tags` schema classification (safe-to-drop, not acted on — an owner
+decision). Rabbit R1 versionCode **21**. See *Phase 10 → Checkpoint 10.0* below. Phase 9's own
+checkpoint history (9.0–9.8) is unchanged and remains below Phase 10 in this file. Phase 8 closed
+2026-09-12 (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail `docs/history/phase-8.md`).
+**Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
 
 ---
 
@@ -52,9 +50,9 @@ own acceptance evidence is preserved in their own entries below).
 | | |
 |---|---|
 | Migration level | **20** (`0000`–`0019`, unchanged since 9.5); local and production agree |
-| Serving commit | api **and web** at **`a08311d`** (Checkpoint 9.8, api recreated 2026-09-15T08:08Z, web 2026-09-15T08:09Z); **worker untouched, still `8f6ffe1`** (Checkpoint 9.6 — no worker file changed across 9.7 or 9.8). Provenance is by compose `working_dir` (`personal-os-9.8-release` for api/web); the images carry no commit label. Rollback images `personal-os-{api,web}:rollback-pre-9.8`, tagged by resolved digest (earlier `rollback-pre-*` tags preserved underneath; no `personal-os-worker:rollback-pre-9.8` was needed or created). |
+| Serving commit | api **and web** at **`7dee309`** (Checkpoint 10.0, api recreated 2026-09-15T18:48Z, web 2026-09-15T18:49Z); **worker untouched, still `8f6ffe1`** (Checkpoint 9.6 — no worker file has changed across 9.7, 9.8, or 10.0). Provenance is by compose `working_dir` (`personal-os-10.0-release` for api/web); the images carry no commit label. Rollback images `personal-os-{api,web}:rollback-pre-10.0`, tagged by resolved digest (every earlier `rollback-pre-*` tag preserved underneath; no `personal-os-worker:rollback-pre-10.0` was needed or created). |
 | Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30; `GET /health` → `ok` / `connected` / `stale:false` |
-| Rabbit R1 | `com.himal.personalos` **versionCode 20**, built from `a08311d` (EAS build `f4d8499e…`), installed in place with SecureStore credential, primary-device row, exact-alarm appop, `POST_NOTIFICATIONS` and `firstInstallTime` (2026-08-19) all preserved — no re-pair, signature unchanged. Carries the 9.7 "Ask about today" flow (chip, three preset chips, cited sources) plus the 9.8 "Suggested Focus" card on Today: a deterministic strip that renders for free, and one tap-triggered, cited AI suggestion, hidden entirely below two candidates or when Cloud Ask is off. |
+| Rabbit R1 | `com.himal.personalos` **versionCode 21**, built from `7dee309` (EAS build `24cf8e1c…`), installed in place with SecureStore credential, primary-device row, exact-alarm appop, `POST_NOTIFICATIONS` and `firstInstallTime` (2026-08-19) all preserved — no re-pair, signature unchanged. Carries the same 9.7 "Ask about today" flow and 9.8 "Suggested Focus" card as before; Checkpoint 10.0 changed only dead code and unused dependencies, verified by a live regression walk with zero visible change. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · **notification-shade capture (9.1)** — a persistent local "Capture" notification on its own channel, tap opens the same composer; verified live on the Rabbit R1 across two sequential taps (the rearm-with-a-fresh-identifier fix), producing a real `inbox_items` row (`source: "web"`, parsed as a task, archived after verification). |
 | Reminders (9.4) | Scheduled by the primary device from **`GET /reminders`** — one item per one-off task with a reminder and one per open occurrence of a recurring task (derived from the parent's `remind_at` wall clock and its day-offset from `due_at`, in `recurrence_timezone`; `snoozed_until` overrides). Deterministic identifiers `reminder:<key>:<instant>`, exact alarms (`window=0 exactAllowReason=permission`, verified in `dumpsys alarm`), category `reminder` with **Done / Snooze 1h / Tomorrow 9am** — all `opensAppToForeground: true` (a non-foregrounding action is lost when the process is dead; verified in the installed expo-notifications source). Verified live on the Rabbit R1 with the app process killed (`am kill`, not force-stop — force-stop puts the package in Android's stopped state, which cancels every alarm): both a Snooze 1h and a Done from the shade opened the app to the task with the outcome banner, mutated the right occurrence, dismissed the notification and re-armed the next alarm. |
 | Notification channels (9.1) | `reminders` (MAX, unchanged, local reminders only) · `alerts` (HIGH, new — integration/monitor alerts) · `updates` (DEFAULT, new — confirmations + mail digest) · `capture` (LOW, new — the local shortcut only, never through `notifications.dispatch`). All four verified independently listed and toggleable in Android's per-app notification settings on the Rabbit R1; a live test alert (via the existing `notifications.dispatch` job, `category: "alert"`) delivered on the `alerts` channel at `importance=4`. |
@@ -1317,6 +1315,189 @@ never hard-deletes a monitor target.
 
 ---
 
+## Phase 10 — OPEN (2026-09-15)
+
+### Checkpoint 10.0 — Codebase consolidation & agent readiness: IMPLEMENTED, DEPLOYED, ACCEPTED (2026-09-15)
+
+**Objective (owner-directed).** Not a product checkpoint: remove proven-dead code, reduce
+dependency/API ambiguity, map canonical service boundaries, and leave Personal OS cleaner before
+Canvas integration and future Hermes/OpenClaw agent work — a behavior-preserving cleanup with
+**zero intentional user-visible change**. Commit **`7dee309`** on `phase-9-reliability` (from
+`82fef97`, the 9.8 acceptance record, verified clean and equal to origin). **No migration — level
+stays 20; worker byte-unchanged.** No ADR: nothing here is an architectural decision.
+
+**Execution model.** Eight parallel evidence-gathering/cleanup lanes launched at once, each with a
+strict, disjoint file-ownership boundary to avoid concurrent-write collisions in the shared working
+tree (Lane C's dependency work was folded into Lane AC's package.json ownership rather than split,
+specifically to avoid two lanes racing on the same file): **A/C** mobile starter-script +
+dependency audit, **I** an independent adversarial cross-check of the same dependency candidates
+from scratch, **B** mobile theme-scaffold cleanup, **D** dead mobile hooks/queries + duplicate
+date-parsing consolidation, **E** API/worker dead-code cleanup, **F** historical-script
+disposition, **G** a read-only `tags`/`item_tags` schema classification, **H** a canonical
+service-boundary audit for `docs/AGENT-READINESS.md`. Every deletion required positive
+zero-reference evidence (repo-wide grep, barrel-export check, config/plugin check, transitive
+dependency-graph check) — "no TypeScript import found" was explicitly treated as insufficient
+evidence on its own for a native Expo dependency, per the brief's own caution.
+
+**What was removed, with the evidence that justified it:**
+
+- **`apps/mobile/scripts/reset-project.js`** and its `package.json` script entry — the standard
+  Expo-template script that can move/wipe the mobile source tree. Confirmed unused: no CI (none
+  exists in this repo), no doc requiring it beyond one stale `README.md` line, no other script
+  calling it.
+- **The `create-expo-app` theme scaffold**: `ThemedText`, `ThemedView`, `constants/theme.ts`,
+  `use-theme.ts`, `use-color-scheme.ts`/`.web.ts` — a closed, fully unused graph (zero references
+  outside itself, confirmed by file mtimes matching the original 2026-08-15 scaffold commit while
+  every sibling file had been touched since). NativeWind, the app's real styling system per
+  `docs/ARCHITECTURE.md`, is untouched — and critically, the app's *real*, active `useColorScheme`
+  (imported directly from `nativewind`, used in `_layout.tsx` and `placeholder-color.ts`) is a
+  different symbol entirely and was correctly left alone.
+- **Four orphaned Expo dependencies**: `expo-image`, `expo-status-bar`, `expo-web-browser`,
+  `@babel/plugin-transform-react-jsx`. Two independent audits (Lane AC and adversarial Lane I, run
+  from scratch without seeing each other's work) converged on the identical split: these four have
+  zero JS/TS usage AND zero transitive requirer in the resolved dependency graph (`pnpm why`), so
+  removing them shrinks the actual installed/autolinked footprint. **`expo-glass-effect`,
+  `expo-symbols`, `expo-font` were deliberately KEPT** — both audits independently found they are
+  *already* required, at the identical version, as real (non-peer, non-optional) dependencies of
+  `expo-router`/`expo` themselves, so removing the explicit pin would shrink nothing while
+  forfeiting `expo-doctor`'s SDK-version-matrix validation. `@expo/ui` was confirmed load-bearing
+  (the Rabbit R1's Material date/time pickers, active since Checkpoints 8.4/9.4/9.5) and untouched.
+  Verified live: a cache-cleared `expo export --platform web`, run twice, bundled cleanly with the
+  JSX transform still resolving correctly (via `babel-preset-expo`'s own declared dependency) — one
+  non-blocking upstream fragility was flagged and recorded below, not fixed, since it isn't caused
+  by this checkpoint.
+- **Six dead mobile query/outbox exports**, each with a confirmed zero-reference repo-wide search:
+  `useProject` (superseded by `useProjectDetail`), `useEvents` (superseded by `useEventsInRange`),
+  `useLinkableCalendars` (a never-wired Phase-4-era stub, distinct from the still-live
+  `useAvailableGoogleCalendars`/`useAvailableCalendars`), `useInvalidateMailConnections` (every real
+  mutation already invalidates inline), `getOutboxCount` (a wrapper around the still-used
+  `getOutboxStats`, itself kept — it has two real UI consumers), and two unused `healthKeys`
+  sub-key builders with no corresponding hook anywhere.
+- **A duplicate agenda date-parsing implementation** in `agenda-grouping.ts` — byte-for-byte
+  identical to `utils/local-date.ts`'s `parseLocalDate`, and identical modulo a parameter name for
+  `formatLocalDate` — consolidated onto the canonical helper. A dedicated adversarial review
+  confirmed CONFIRMED SAFE: neither implementation ever used a UTC-based Date method (both are pure
+  local-midnight calendar arithmetic), the existing `local-date.test.ts` fixture already pins the
+  DST/leap-year/rollover edge cases this project has been burned by before, and the full mobile
+  suite plus a live on-device Agenda screen check (`2026-09-15 – 2026-12-13`, correct) confirmed
+  zero behavior delta.
+- **Three long-dormant API error classes** (`AskDisabledError`, `AskNoRelevantContextError`,
+  `AskInFlightError`, added in the original Checkpoint 8.6B commit and never instantiated, thrown,
+  or caught since — the `/ask` and `/focus` routes have always replied directly with
+  `reply.code().send()`) and one unused health-connection helper (`countHealthConnections` — the
+  actual single-connection invariant it was claimed to support is enforced by
+  `completeHealthConnection`'s own inline query, confirmed unchanged).
+- **One unused test-fixture export**, `samplePoint` in `packages/health-providers`'s Google Health
+  fake client — zero references anywhere including its own test file.
+
+**Adversarial review (four lenses, all CONFIRMED clean, zero blockers).** Reachability (grep-based
+false positives on symbol-name substrings, e.g. `useProject` matching inside `usePauseProject`,
+individually verified and ruled out; the two transient API test failures during review were the
+documented shared-test-DB collision from a concurrent reviewer process, confirmed clean on an
+isolated clone); mobile/build regression (a live, cache-cleared `expo export --platform web`, run
+twice, plus `expo-doctor` and a full literal-string sweep of `app.config.ts`/`eas.json`); date/time
+behavior (see above); privacy/security (the egress guard's six pinned `generateText` call sites and
+import/write denylist unaffected; ADR-058's occurrence-scoped dedupe-key contract unaffected; full
+privacy/redaction/dedupe test sweep across `apps/worker`/`packages/core`/`packages/monitoring`
+green).
+
+**Verification.** `pnpm build --force` 11/11 · `pnpm typecheck` 21/21 · `eslint .` clean ·
+`prettier --check .` clean · `git diff --check` clean · `gitleaks` — the same 18 pre-existing
+findings in ignored, untracked files, git history clean · `pnpm test` **21/21 tasks, 5,815 tests
+across 12 packages, zero failing — the exact same count as the Checkpoint 9.8 baseline**, meaning
+zero test coverage was lost to any deletion (none of the removed symbols had a dedicated test).
+**Migration invariant:** 20 `.sql` / 20 journal entries, unchanged; `packages/db` byte-unchanged
+outside the two-line fixture cleanup in `health-providers`.
+
+**Deployment — COMPLETE (2026-09-15T18:49Z), frozen order.** `7dee309` pushed to `origin` first.
+`git archive` shipped to `/home/himallinux/personal-os-10.0-release` (1,017 tracked files — 1,024 at
+9.8 minus the 7 deleted mobile files; no `.env`, no `google-services.json`). Rollback images tagged
+by resolved digest `:rollback-pre-10.0` for api (`217419c5…`) and web (`4a174af4…`) — **worker not
+tagged**, no worker file changed. api + web built (running containers untouched, verified by
+digest); the new api image was verified to contain zero occurrences of `AskDisabledError`/
+`countHealthConnections` and all 20 migrations present. `drizzle-kit migrate` from the new api image
+with `--no-deps` and the explicit `MIGRATIONS_DATABASE_URL` pass-through applied nothing (**20 →
+20**, confirmed by direct row count before and after). `api` recreated alone → `(healthy)`,
+`/health` `ok`/`connected`/`stale:false`; `web` recreated alone → `200` on its published host port.
+`postgres` and `worker` never named or recreated. All four containers `RestartCount=0`.
+
+**Production API acceptance — PASSED.** 0 api/worker warn/error log lines in the 5 minutes following
+redeploy; `GET /today` and `GET /search?q=test` both `200`; migration count unchanged at 20; 0
+pg-boss jobs failed/retry/active; 0 open monitor incidents; all three integrations (`google_health`,
+`gmail`, `gcal`) `active`; `ai_task_routes` has 0 `ask` rows — **Cloud Ask remains OFF by default**,
+unchanged by this checkpoint.
+
+**Rabbit R1 — EAS build `24cf8e1c…` from `7dee309`, versionCode 20 → 21** (auto-incremented, remote
+keystore reused). `adb install -r` of the 106 MB APK → `Success` (an in-place replace only succeeds
+on a matching signature, so this is the signing-continuity proof). Preserved: `firstInstallTime`
+2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS` granted — no re-pair.
+
+**Physical Rabbit R1 regression walk — PASSED, first-hand, zero crash lines in logcat across the
+entire session.** Cold launch → Today renders correctly (Overdue 0, Due today 0, Inbox 3, no
+Ask/Suggested-Focus chips, matching Cloud Ask OFF). Search → typed "task" → real "Mail" result
+returned. Calendar Month view → correct, current date highlighted. **Calendar Agenda view → date
+range header reads exactly `2026-09-15 – 2026-12-13`, directly exercising the consolidated
+date-parsing code on-device.** Inbox → renders real historical items (9.1 smoke test, 8.6A note,
+8.4 cold-share note) correctly. Settings → Connected Calendars renders correctly (exercises the
+edited `calendar-connections.ts`), Mail section renders correctly (exercises the edited
+`mail.ts`), Cloud Ask disclosure and AI provider list render correctly, Notification diagnostics
+renders correctly. Projects → list and detail both render correctly (exercises the edited
+`projects.ts` and the canonical `useProjectDetail`). Notes → renders correctly. Quick Capture →
+composer sheet opens correctly (exercises the edited `outbox/queue.ts`). Notification-shade capture
+→ the persistent "Capture" notification (`capture-shortcut-2`, channel `capture`) is confirmed
+still present in the shade. No smoke data was created — every screen was verified against real
+existing production data, since the objective was regression-freedom, not feature re-verification.
+
+**Post-acceptance production health:** `/health` `ok`/`connected`/`stale:false`; all four containers
+`RestartCount=0`; 0 pg-boss jobs failed/retry/active; migration 20 (unchanged); three integrations
+`active`; 0 open incidents; 0 crash lines on the Rabbit R1.
+
+**New deliverable: `docs/AGENT-READINESS.md`.** A canonical-boundary inventory for future
+Hermes/OpenClaw agent work — for each domain (search, Today intelligence, tasks, recurrence,
+events, calendar reads, notifications, AI), the canonical service/route to call, its read/write
+nature, auth/consent boundary, idempotency behavior, input/output schema, privacy sensitivity, and
+whether direct future-agent exposure is a safe candidate, needs a wrapper, or is prohibited. Also
+records: the ADR-066 future-agent tool contract's current implementation status (3 of 5 tools
+bound: `search_personal_items`, `get_item_context`, `get_today_context`; `get_calendar_context`/
+`get_task_context` remain schema-only); the `isAbortLikeError` four-way duplication across AI call
+sites (already-tracked accepted debt, deliberately not extracted — a refactor, not proven-dead
+cleanup); and the `tags`/`item_tags` schema classification (below).
+
+**Schema classification — read-only, no action taken.** `tags`/`item_tags` were audited and
+classified **safe-to-drop**: zero rows in production after a month of live use, zero code
+references anywhere in the 12-package monorepo, unmodified since the single Phase 1 commit that
+created them, and — the most telling signal — absent from both ADR-059's and ADR-065's explicit
+enumerations of every table holding user data. **Not dropped.** Dropping a table is irreversible
+under ADR-024's no-backup posture and is categorically different from deleting dead TypeScript; the
+recommendation is recorded for an explicit future owner decision, and no migration was written
+solely to act on it.
+
+**Dead-code tooling decision: deferred, not adopted.** Evaluated `knip`-style static dead-export
+scanning against this specific codebase's dynamic patterns and concluded the signal would be weak:
+Lane H's manual zero-consumer sweep of every `packages/*` barrel export found 252 of 1,040 exports
+with no external reference, and all but one were either (a) TypeScript `interface`/`type`
+companions to Zod schemas — the expected steady state of a schema-first monorepo where a consumer
+routinely parses through a schema without ever spelling its inferred type name — or (b) the
+ADR-066 future-agent tool contract's deliberately-unconsumed-today schemas. A naive scanner would
+flag hundreds of these as false positives, and this repo has no CI to run it in automatically
+(confirmed: no `.github/workflows` exists), so it would add local friction without enforcement. The
+manual, evidence-based multi-lane audit process this checkpoint itself used is judged more
+effective at this codebase's current scale; revisit if the false-positive-prone patterns above
+(Zod-schema type companions, forward-designed contracts) ever shrink relative to genuine dead code.
+
+**Recorded, not fixed (new debt from this checkpoint):** `react-native-css-interop`'s babel
+entrypoint (used by `nativewind/babel`) references `@babel/plugin-transform-react-jsx` by a bare
+string without declaring it as its own dependency; it currently resolves correctly only because
+`babel-preset-expo` happens to declare the identical package, confirmed by a live, twice-run,
+cache-cleared `expo export --platform web`. Not caused by this checkpoint (the phantom-dependency
+pattern predates it and is a third-party package's own design, not something Personal OS's
+`package.json` can fix by re-adding its own now-redundant pin) — worth an upstream note if a future
+Expo/nativewind SDK bump ever breaks the alignment. `apps/mobile/README.md` still references
+`npm run reset-project` (stale boilerplate text, zero functional impact, left untouched since it
+falls outside every lane's owned-file scope this checkpoint).
+
+---
+
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
 **Phase 7 is closed.** Checkpoints 7.0–7.8B and the full Checkpoint 7.9 record — the open
@@ -1723,17 +1904,18 @@ an intentionally-logged field — are recorded in the ledger below.
 
 ## Current objective
 
-**Phase 9 product development, accelerated operating model (owner direction, 2026-09-14).** Parallel
-audit → parallel implementation → integration → adversarial review → fixes → full tests →
-deployment → production acceptance. No soak or observation wait between checkpoints; no separate
-planning-only checkpoints when implementation is clear; reversible decisions are not owner gates.
-Production mutations remain serialized and every standing guardrail holds. **Checkpoint 9.7 is
-complete; the next checkpoint is not yet selected.** Personal OS now has a first read-only
-intelligence surface built on the 9.6 retrieval layer, exactly as ADR-056 sequenced. The 9.3
-ranking's tiers are now exhausted except E2 (health trend context, an owner egress decision if it
-ever reaches the Brief). Whether the next checkpoint widens the intelligence lane further (e.g. the
-`get_calendar_context`/`get_task_context` tool implementations, or a real agent loop under its own
-ADR), a health trend view, or a new adoption soak is a product-direction choice.
+**Phase 10 opened for codebase consolidation and agent readiness (owner direction, 2026-09-15).**
+Checkpoint 10.0 — a behavior-preserving cleanup pass ahead of Canvas integration and future
+Hermes/OpenClaw agent work — is complete (see *Phase 10 → Checkpoint 10.0* above). The Phase 9
+accelerated operating model (parallel audit → parallel implementation → integration → adversarial
+review → fixes → full tests → deployment → production acceptance, no soak waits, reversible
+decisions are not owner gates) carried over unchanged into how 10.0 itself was executed. Personal
+OS still has a first read-only intelligence surface (9.7) and a second, narrower one (9.8) built on
+the 9.6 retrieval layer, exactly as ADR-056 sequenced; that product track is unchanged by 10.0.
+Whether the next checkpoint resumes Phase 9's product track (widening the intelligence lane, e.g.
+the `get_calendar_context`/`get_task_context` tool implementations, or a real agent loop under its
+own ADR), a health trend view (E2), a new adoption soak, or the Canvas/Hermes-OpenClaw work this
+checkpoint was preparing for is a product-direction choice for the owner.
 
 ---
 
@@ -1762,21 +1944,37 @@ the one-line summary is:
 | **9.4** | Dependable recurring tasks and reminders: repeat presets, one strictly-after wall-clock successor rule for every writer, nightly lazy repair, occurrence snooze (migration `0018`) and reopen, per-occurrence reminders with Done / Snooze 1h / Tomorrow 9am actions, Today never buckets a recurring parent. **Deployed (api/worker/web, level 19) and accepted on the Rabbit R1 (versionCode 15) 2026-09-14** (ADR-063). |
 | **9.7** | Personal intelligence, read-only: Cloud Ask widened with a bounded, id-free, wall-clock-only `TodayContext` and three preset questions ("Ask about today"); validated citations (`502 ask_uncited` on an unresolvable ref); nothing stored; no migration; worker untouched; the read-only future-agent tool contract defined (not integrated). **Deployed (api/web, level 20, no migration) and accepted on the Rabbit R1 (versionCode 19) 2026-09-15** (ADR-066). |
 | **9.8** | Suggested Focus: a narrow, cited AI suggestion over today's overdue/due-today tasks, reusing Ask's `TodayContext`/"focus" preset and its `ask` consent switch entirely — zero new intelligence lineage, zero new consent surface. No model call below two candidates (server-enforced); exactly one citation required, validated against the narrower candidate ref set. Deterministic summary renders for free; the AI line is always an explicit tap. Nothing stored; no migration; worker untouched. **Deployed (api/web, level 20, no migration) and accepted on the Rabbit R1 (versionCode 20) 2026-09-15** (ADR-067). |
+| **10.0** | Codebase consolidation & agent readiness: proven-dead mobile/API code removed (Expo starter scaffold, 6 dead query/outbox exports, 3 dormant API error classes, 1 unused health-connection helper, 1 unused test fixture), 4 orphaned Expo dependencies removed (`expo-image`/`expo-status-bar`/`expo-web-browser`/`@babel/plugin-transform-react-jsx`), a duplicate date-parsing implementation consolidated, new `docs/AGENT-READINESS.md` canonical-boundary inventory, `tags`/`item_tags` classified safe-to-drop (not acted on). Zero behavior change, zero migration, worker untouched. **Deployed (api/web, level 20, no migration) and accepted on the Rabbit R1 (versionCode 21) 2026-09-15.** |
 
-**Production is at migration level 20** and serves api and web images built from `a08311d`, worker still at `8f6ffe1` (untouched since 9.6). All three Google integrations are active. Monitoring runs against five
+**Production is at migration level 20** and serves api and web images built from `7dee309`, worker still at `8f6ffe1` (untouched since 9.6). All three Google integrations are active. Monitoring runs against five
 active targets including both Tailscale Serve routes, with full CRUD. A daily retention cron bounds
 `monitor_checks`/`mail_messages`/`mail_digests`/`mail_sync_runs`/`health_sync_runs` and sweeps
 expired `health_oauth_states`/`mail_oauth_states`. Every retrying pg-boss queue has a dead-letter queue.
 Calendar events authored in Personal OS sync outward to the owner's chosen writable calendar; imported
-events are read-only. Search covers tasks, notes, events, projects, captures and mail with an explainable score, and every text field is bounded at write. Cloud Ask, when the owner enables it, can answer questions about today's schedule with cited sources, and can now also suggest one task to focus on. The Rabbit R1 runs `com.himal.personalos` versionCode 20, built from `a08311d`.
+events are read-only. Search covers tasks, notes, events, projects, captures and mail with an explainable score, and every text field is bounded at write. Cloud Ask, when the owner enables it, can answer questions about today's schedule with cited sources, and can now also suggest one task to focus on. The Rabbit R1 runs `com.himal.personalos` versionCode 21, built from `7dee309`.
 
 ## Current work
 
-**None in progress.** Checkpoint 9.8 closed 2026-09-15Z.
+**None in progress.** Checkpoint 10.0 closed 2026-09-15.
 
 ---
 
 ## Last verification
+
+**Checkpoint 10.0 (2026-09-15).** Branch `phase-9-reliability`, HEAD `7dee309` (from `82fef97`, the
+9.8 acceptance record, verified clean and equal to origin). Eight parallel lanes (evidence-gathering
+and cleanup combined, strict disjoint file ownership) plus an independent adversarial dependency
+cross-check, followed by four parallel adversarial review lenses (reachability, mobile/build
+regression via a live `expo export --platform web`, date/time behavior equivalence, privacy/
+security guard integrity) — zero blockers, zero regressions found. Integrator gates, serially:
+`pnpm build --force` 11/11 · `pnpm typecheck` 21/21 · `eslint .` clean · `prettier --check .` clean
+· `git diff --check` clean · `gitleaks` — the same 18 pre-existing findings in ignored, untracked
+files, git history clean · `pnpm test` **21/21 tasks, 5,815 tests across 12 packages, zero
+failing — identical to the 9.8 baseline**, confirming zero coverage lost to any deletion. **Migration
+invariant:** 20 `.sql` / 20 journal entries, unchanged; `packages/db` byte-unchanged outside a
+two-line fixture cleanup; production `drizzle.__drizzle_migrations` 20 before and after a proven
+no-op `migrate`. Production and physical-device acceptance: recorded in full under *Phase 10 →
+Checkpoint 10.0* above.
 
 **Checkpoint 9.8 (2026-09-15).** Branch `phase-9-reliability`, HEAD `a08311d` (from `1441025`, the
 9.7 acceptance record, verified clean and equal to origin). Design gate: three parallel read-only
@@ -1934,17 +2132,34 @@ clean; full evidence in `docs/PHASE-8-CLOSEOUT.md`.
 
 ## Next action
 
-Select the next Phase 9 checkpoint. 9.7 shipped the first read-only intelligence lane and 9.8 added
-a second, narrower one on the same substrate; ADR-056's read-only-before-write-capable sequencing is
-now exercised twice. The 9.3 ranked tiers are exhausted except E2 (health trend context). Candidates
-now: **widen the intelligence lane further** (implement `get_calendar_context`/`get_task_context`,
-build Option B "what changed" — needs a last-seen watermark — or Option C weekly review intelligence
-— needs week-bucketed carry-forward diffing — both deferred by the 9.8 design gate as genuinely
-new backend work, not a context-reuse win like Suggested Focus was), **a real tool-calling agent loop**
-over `READ_TOOL_NAMES` (needs its own ADR, a `posops_readonly` role, and a budgeted multi-use grant),
-**E2 health trends**, or a **new 21-day adoption soak** (a new checkpoint with a new baseline; the
-reviewed observer tooling in `scripts/soak/` is reusable). This is a product-direction choice —
-pause for the owner.
+**Checkpoint 10.0 (codebase consolidation & agent readiness) is complete.** It was explicitly not a
+product checkpoint — no candidate below was advanced or foreclosed by it. `docs/AGENT-READINESS.md`
+now gives whatever comes next (a real agent loop, or the Canvas/Hermes-OpenClaw work 10.0 was
+preparing for) a canonical-boundary map to build from rather than a fresh audit. Two items from
+10.0 are recorded for an explicit future owner decision, not carried as blocking debt: the
+`tags`/`item_tags` safe-to-drop schema classification (a table drop is irreversible under ADR-024
+and is the owner's call), and the deferred dead-code-tooling (`knip`) decision (revisit only if the
+codebase's Zod-schema-companion/forward-design-export ratio shifts).
+
+Select the next Phase 9 (or later) checkpoint. 9.7 shipped the first read-only intelligence lane and
+9.8 added a second, narrower one on the same substrate; ADR-056's read-only-before-write-capable
+sequencing is now exercised twice. The 9.3 ranked tiers are exhausted except E2 (health trend
+context). Candidates now: **widen the intelligence lane further** (implement
+`get_calendar_context`/`get_task_context`, build Option B "what changed" — needs a last-seen
+watermark — or Option C weekly review intelligence — needs week-bucketed carry-forward diffing —
+both deferred by the 9.8 design gate as genuinely new backend work, not a context-reuse win like
+Suggested Focus was), **a real tool-calling agent loop** over `READ_TOOL_NAMES` (needs its own ADR, a
+`posops_readonly` role, and a budgeted multi-use grant — `docs/AGENT-READINESS.md` §1–2 is the
+starting map), **E2 health trends**, a **new 21-day adoption soak** (a new checkpoint with a new
+baseline; the reviewed observer tooling in `scripts/soak/` is reusable), or the **Canvas/
+Hermes-OpenClaw integration** this checkpoint was explicitly preparing for. This is a
+product-direction choice — pause for the owner.
+
+Open, non-blocking, carried forward from 10.0: `react-native-css-interop`'s babel entrypoint
+references `@babel/plugin-transform-react-jsx` by a bare string without declaring it as its own
+dependency, currently resolving only via `babel-preset-expo`'s own declared dependency on the same
+package (not caused by 10.0, worth an upstream note if a future SDK bump ever breaks the alignment);
+`apps/mobile/README.md` still references `npm run reset-project` (stale boilerplate text only).
 
 Open, non-blocking, carried forward from 9.8: the "focus" preset's drop-ladder protection is not
 absolute (a rare quote-heavy-title overflow can still trim `overdue`/`due_today` via the pre-existing
