@@ -7,18 +7,29 @@ import type {
 } from "@personal-os/schema";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, type Href } from "expo-router";
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { BriefCard } from "@/components/brief/brief-card";
 import { HealthTodayCard } from "@/components/health/health-today-card";
 import { MailDigestCard } from "@/components/mail/digest-today-card";
 import { ReminderNoticeCard } from "@/components/reminder-notice-card";
+import {
+  SuggestedFocusCard,
+  type SuggestedFocusState,
+} from "@/components/focus/suggested-focus-card";
 import { FLOATING_CLEARANCE } from "@/components/floating-layout";
 import { classifyTaskActionError, completionTarget } from "@/components/task-actions-state";
 import { useAskEnabled } from "@/queries/ask";
+import {
+  focusCandidateCount,
+  focusErrorMessage,
+  isFocusNotEnoughCandidatesError,
+  useSuggestFocus,
+} from "@/queries/focus";
 import { useCompleteOccurrence } from "@/queries/occurrences";
 import { useCompleteTask } from "@/queries/tasks";
 import { useToday } from "@/queries/today";
+import { askSourceHref } from "@/utils/ask-navigation";
 import { eventDetailHref } from "@/utils/event-navigation";
 import { eventTimeLabel } from "@/utils/event-time-label";
 import { addLocalDays, formatHeaderDate, parseLocalDate } from "@/utils/local-date";
@@ -493,6 +504,41 @@ export default function TodayScreen() {
   // shows the chip here without a restart -- and Today never waits on it.
   const askEnabled = useAskEnabled().enabled;
 
+  // Checkpoint 9.8 ("Suggested Focus"). The mutation object IS the state
+  // machine, mirroring how the search screen derives AskState directly from
+  // its own mutation rather than a parallel useState -- mutate() is called
+  // ONLY from the card's own button tap, never here and never on mount (see
+  // suggested-focus-card.test.tsx and queries/focus.test.ts for the proof).
+  //
+  // focusRequestInFlightRef guards a rapid double-tap on "Suggest again" /
+  // "Try again" / "Check again" (9.8 adversarial review): `isPending` is
+  // REACT STATE and does not become visible to a second tap until the next
+  // render, so it cannot by itself stop two `.mutate()` calls fired within
+  // the same frame. A ref updates synchronously and is checked before
+  // `.mutate()` ever runs, closing that window without adding local
+  // `useState` to the hookless SuggestedFocusCard (which this app's test
+  // harness cannot support -- see cloud-ask-card.tsx's module comment).
+  const suggestFocus = useSuggestFocus();
+  const focusRequestInFlightRef = useRef(false);
+  const requestFocusSuggestion = useCallback(() => {
+    if (focusRequestInFlightRef.current) return;
+    focusRequestInFlightRef.current = true;
+    suggestFocus.mutate(undefined, {
+      onSettled: () => {
+        focusRequestInFlightRef.current = false;
+      },
+    });
+  }, [suggestFocus]);
+  const focusState: SuggestedFocusState = suggestFocus.isPending
+    ? { kind: "loading" }
+    : isFocusNotEnoughCandidatesError(suggestFocus.error)
+      ? { kind: "not_enough_candidates" }
+      : suggestFocus.isError
+        ? { kind: "error", message: focusErrorMessage(suggestFocus.error) }
+        : suggestFocus.data
+          ? { kind: "ready", response: suggestFocus.data }
+          : { kind: "idle" };
+
   if (isLoading) {
     return (
       <View className="flex-1 items-center justify-center bg-white dark:bg-black">
@@ -584,6 +630,20 @@ export default function TodayScreen() {
           </Pressable>
         ) : null}
       </View>
+
+      {/* Checkpoint 9.8. Gated on the same switch as the Ask chip, right
+          after it. SuggestedFocusCard enforces FOCUS_MIN_CANDIDATES itself
+          too, so this is belt-and-braces, matching the existing
+          `askEnabled ? (...) : null` idiom rather than duplicating the
+          threshold check here. */}
+      {askEnabled ? (
+        <SuggestedFocusCard
+          candidateCount={focusCandidateCount(data.summary)}
+          state={focusState}
+          onSuggest={requestFocusSuggestion}
+          onSelectSource={(source) => router.push(askSourceHref(source))}
+        />
+      ) : null}
 
       <View className="mt-3 gap-2 px-4">
         <ReviewBanner

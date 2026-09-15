@@ -19,6 +19,7 @@ import {
   updateMonitorTarget,
 } from "./monitor.js";
 import { askCloud } from "./ask.js";
+import { suggestFocus } from "./focus.js";
 import {
   createTaskRoute,
   deleteTaskRoute,
@@ -354,6 +355,9 @@ export function createApiClient(baseUrl: string) {
     // Checkpoint 8.6B -- Cloud Ask and the task-route surface it needs to
     // enable/disable itself and disclose which model would receive content.
     askCloud: askCloud.bind(null, baseUrl),
+    // Checkpoint 9.8 -- Suggested Focus, a narrower sibling of Cloud Ask
+    // that reuses its "ask" task route as the same consent switch.
+    suggestFocus: suggestFocus.bind(null, baseUrl),
     listAiModels: listAiModels.bind(null, baseUrl),
     listAiProviders: listAiProviders.bind(null, baseUrl),
     getTaskRoutes: getTaskRoutes.bind(null, baseUrl),

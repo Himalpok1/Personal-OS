@@ -43,13 +43,20 @@ const CARD_CLASS = "mb-4 rounded border border-neutral-300 p-3 dark:border-neutr
 // longer described the request. A row consented under the old text is refused
 // by the server (`409 ask_consent_outdated`) until it is re-created under
 // this one -- see the re-enable path below.
+// Checkpoint 9.8 ("Suggested Focus") appends one sentence naming the new
+// ACTION this same switch also covers -- no new category of data leaves (a
+// suggestion only ever sees a subset of the schedule information already
+// named above), so the addition names what the tap does, not a new data
+// class. cloud-ask-card.test.tsx's byte-exact pin is updated in lockstep.
 export const ASK_DISCLOSURE_TEXT =
   "Sends your question to the model you choose, along with: matching notes and tasks (up to 4, " +
   "bodies included, secrets redacted by pattern only); the titles, times and project names of " +
   "your tasks, reminders and calendar events for today and the next 7 days (calendar titles and " +
   "locations were written by whoever created the invitation); tasks you completed in the last 7 " +
   "days; the text of up to 5 unfiled captures; project names and task counts; and whether your " +
-  "reviews are done. Nothing is stored. Personal OS cannot verify how the provider handles it.";
+  "reviews are done. Nothing is stored. Personal OS cannot verify how the provider handles it. " +
+  "Tapping Suggest focus on Today sends this same today's-schedule information so the model can " +
+  "pick one task to suggest you focus on next.";
 
 // Context that is true whether or not Cloud Ask is on, kept beside the
 // disclosure rather than folded into it so the list above stays exactly the

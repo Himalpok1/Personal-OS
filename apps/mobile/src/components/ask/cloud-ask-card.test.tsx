@@ -191,7 +191,7 @@ describe("the disclosure text itself", () => {
     expect(text).not.toContain("never leaves");
   });
 
-  it("is EXACTLY the Checkpoint 9.7 text -- every class of data that leaves, named", () => {
+  it("is EXACTLY the Checkpoint 9.8 text -- every class of data that leaves, and every action, named", () => {
     // Pinned byte-for-byte: this is the consent the server's vintage check
     // (`ask_consent_outdated`) exists to protect. A wording change here is a
     // change to what the owner agreed to and needs its own re-consent.
@@ -202,7 +202,9 @@ describe("the disclosure text itself", () => {
         "days (calendar titles and locations were written by whoever created the invitation); " +
         "tasks you completed in the last 7 days; the text of up to 5 unfiled captures; project " +
         "names and task counts; and whether your reviews are done. Nothing is stored. Personal " +
-        "OS cannot verify how the provider handles it.",
+        "OS cannot verify how the provider handles it. Tapping Suggest focus on Today sends " +
+        "this same today's-schedule information so the model can pick one task to suggest you " +
+        "focus on next.",
     );
   });
 

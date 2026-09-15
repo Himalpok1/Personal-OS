@@ -74,10 +74,19 @@ function importsModelInvocation(contents: string): boolean {
   return false;
 }
 
-/** The closed set. A sixth entry is a reviewed architectural decision, not a drive-by addition. */
+/**
+ * The closed set. A sixth entry is a reviewed architectural decision, not a
+ * drive-by addition: `apps/api/src/focus/generate.ts` (Checkpoint 9.8,
+ * Suggested Focus) is the deliberate sixth caller, added the same way this
+ * set grew from five to six -- it lives outside apps/api/src/intelligence/
+ * (Guard 4 forbids an `ai` import there) for the same reason
+ * apps/api/src/ask/generate.ts does, and it reuses the SAME "ask" task route
+ * Cloud Ask uses rather than adding a new `ai_task_routes` row.
+ */
 const EXPECTED_MODEL_CALLERS = new Set([
   "apps/api/src/ask/generate.ts",
   "apps/api/src/brief/generate.ts",
+  "apps/api/src/focus/generate.ts",
   "apps/api/src/routes/ai-config.ts",
   "apps/worker/src/jobs/capture-parse.ts",
   "apps/worker/src/mail/digest/generate.ts",
