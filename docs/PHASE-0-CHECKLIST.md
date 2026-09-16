@@ -1,3 +1,7 @@
+> **Closed artifact.** Phase 0 finished long ago — the project is in Phase 10.
+> This checklist is preserved verbatim as a historical record; per-phase records
+> live in `docs/history/`. Unchecked boxes do **not** represent current work.
+
 # Phase 0 Checklist — Foundation & Hardening
 
 Phase 0 is a gate. **Do not start Phase 1 until every blocking item is complete.**
