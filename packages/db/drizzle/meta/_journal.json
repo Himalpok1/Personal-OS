@@ -141,6 +141,13 @@
       "when": 1789375000000,
       "tag": "0019_event_authoring",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1789376000000,
+      "tag": "0020_canvas_lms_integration",
+      "breakpoints": true
     }
   ]
 }

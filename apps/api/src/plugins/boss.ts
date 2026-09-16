@@ -8,6 +8,7 @@ import {
   CALENDAR_REFRESH_TOKEN_QUEUE,
   CALENDAR_SYNC_CALENDAR_DEAD_QUEUE,
   CALENDAR_SYNC_CALENDAR_QUEUE,
+  CANVAS_SYNC_CONNECTION_QUEUE,
   CAPTURE_PARSE_DEAD_QUEUE,
   CAPTURE_PARSE_QUEUE,
   HEALTH_SYNC_CONNECTION_QUEUE,
@@ -184,6 +185,18 @@ export async function registerBoss(app: FastifyInstance): Promise<void> {
     // identically here for the same first-writer-wins reason as every other
     // shared queue: create_queue is INSERT ... ON CONFLICT DO NOTHING.
     await boss.createQueue(MONITOR_RUN_QUEUE, QUEUE_RETRY_OPTIONS[MONITOR_RUN_QUEUE]);
+    // Checkpoint 10.1 (Canvas LMS sync, ADR-068). apps/api sends to this
+    // queue from POST /canvas-connections/:id/sync; the worker owns the
+    // handler, which is a later checkpoint's work. Created identically here
+    // for the same first-writer-wins reason as every other shared queue:
+    // create_queue is INSERT ... ON CONFLICT DO NOTHING.
+    //
+    // Deliberately NO dead-letter queue: retryLimit is 0, so no job can ever
+    // exhaust retries. See the long comment in queue-names.ts.
+    await boss.createQueue(
+      CANVAS_SYNC_CONNECTION_QUEUE,
+      QUEUE_RETRY_OPTIONS[CANVAS_SYNC_CONNECTION_QUEUE],
+    );
   } else {
     app.log.error(
       "pg-boss did not start after retries; capture/occurrence/transcription/notification jobs will not be enqueued",

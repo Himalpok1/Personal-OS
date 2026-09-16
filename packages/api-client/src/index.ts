@@ -1,4 +1,13 @@
 import {
+  connectCanvas,
+  disconnectCanvasConnection,
+  getCanvasConnection,
+  listCanvasConnections,
+  listCanvasSyncRuns,
+  listUpcomingCanvasAssignments,
+  triggerCanvasSync,
+} from "./canvas.js";
+import {
   connectGmail,
   disconnectMailConnection,
   generateMailDigest,
@@ -182,6 +191,15 @@ export type {
   MailConnectionListResponse,
   MailDisconnectResponse,
 } from "./mail.js";
+export type {
+  CanvasConnectRequest,
+  CanvasConnection,
+  CanvasConnectionsListResponse,
+  CanvasSyncRun,
+  CanvasSyncRunsResponse,
+  CanvasSyncTriggerResponse,
+  CanvasUpcomingAssignmentsResponse,
+} from "./canvas.js";
 export type { InboxListParams } from "./inbox.js";
 export type { NoteListParams } from "./notes.js";
 export type {
@@ -317,6 +335,19 @@ export function createApiClient(baseUrl: string) {
     disconnectMailConnection: disconnectMailConnection.bind(null, baseUrl),
     getCurrentMailDigest: getCurrentMailDigest.bind(null, baseUrl),
     generateMailDigest: generateMailDigest.bind(null, baseUrl),
+
+    // Checkpoint 10.1 (ADR-068) -- Canvas LMS: connection lifecycle, manual
+    // sync trigger, and the sync-run audit trail. Read-only against Canvas
+    // by construction; no course/assignment/announcement method exists here
+    // because none is ever created or mutated by this app.
+    listCanvasConnections: listCanvasConnections.bind(null, baseUrl),
+    getCanvasConnection: getCanvasConnection.bind(null, baseUrl),
+    connectCanvas: connectCanvas.bind(null, baseUrl),
+    disconnectCanvasConnection: disconnectCanvasConnection.bind(null, baseUrl),
+    triggerCanvasSync: triggerCanvasSync.bind(null, baseUrl),
+    listCanvasSyncRuns: listCanvasSyncRuns.bind(null, baseUrl),
+    listUpcomingCanvasAssignments: listUpcomingCanvasAssignments.bind(null, baseUrl),
+
     getMonitorOverview: getMonitorOverview.bind(null, baseUrl),
     listMonitorIncidents: listMonitorIncidents.bind(null, baseUrl),
     acknowledgeMonitorIncident: acknowledgeMonitorIncident.bind(null, baseUrl),

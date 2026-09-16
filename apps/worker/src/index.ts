@@ -35,6 +35,11 @@ import {
   createGenerateLazyOccurrenceDeadLetterHandler,
 } from "./jobs/occurrences-dead-letter.js";
 import { createGoogleHealthClient } from "@personal-os/health-providers";
+import { createCanvasClient } from "@personal-os/canvas-providers";
+import {
+  createCanvasSyncConnectionHandler,
+  enqueueCanvasSyncForAllActiveConnections,
+} from "./jobs/canvas-sync-connection.js";
 import { createGmailClient } from "@personal-os/mail-providers";
 import {
   createMailSyncConnectionHandler,
@@ -64,6 +69,7 @@ import {
   CALENDAR_REFRESH_TOKEN_QUEUE,
   CALENDAR_SYNC_CALENDAR_DEAD_QUEUE,
   CALENDAR_SYNC_CALENDAR_QUEUE,
+  CANVAS_SYNC_CONNECTION_QUEUE,
   CAPTURE_PARSE_DEAD_QUEUE,
   CAPTURE_PARSE_QUEUE,
   HEALTH_SYNC_CONNECTION_QUEUE,
@@ -93,6 +99,8 @@ const HEALTH_SYNC_CRON_QUEUE = "health.google.sync-cron";
 const MAIL_SYNC_CRON_QUEUE = "mail.gmail.sync-cron";
 const MAIL_DIGEST_CRON_QUEUE = "mail.digest.cron";
 const MONITOR_CRON_QUEUE = "monitor.cron";
+
+const CANVAS_SYNC_CRON_QUEUE = "canvas.sync-cron";
 
 const SWEEP_ORPHAN_AUDIO_QUEUE = "audio.sweep-orphan";
 /** Checkpoint 8.6C: bounded retention cleanup, see jobs/retention-cleanup.ts. */
@@ -428,6 +436,35 @@ async function main(): Promise<void> {
   });
   await boss.schedule(MAIL_SYNC_CRON_QUEUE, "*/15 * * * *");
 
+  // Checkpoint 10.1 (Canvas LMS sync, ADR-068). ONE connection-level queue, no
+  // dead-letter -- the identical Health/Mail precedent and reasoning recorded
+  // in queue-names.ts. There is no OAuth refresh path (a Canvas Personal
+  // Access Token is long-lived and never rotated by this integration), so
+  // there is nothing analogous to mail's/health's token-refresh failure
+  // handling here: a dead/revoked token surfaces as an ordinary `auth_failed`
+  // classification on `listActiveCourses`'s first call, contained the same
+  // way any other course-list failure is (see canvas/orchestrate.ts).
+  const canvasClient = createCanvasClient();
+  await boss.createQueue(
+    CANVAS_SYNC_CONNECTION_QUEUE,
+    QUEUE_RETRY_OPTIONS[CANVAS_SYNC_CONNECTION_QUEUE],
+  );
+  await boss.work(
+    CANVAS_SYNC_CONNECTION_QUEUE,
+    createCanvasSyncConnectionHandler(db, canvasClient, boss),
+  );
+
+  // Hourly: Canvas course/assignment/announcement content changes far less
+  // often than mail, and the observed rate-limit headroom (ADR-068 §1) has no
+  // need for a tighter cadence. Each tick fans out one job per ACTIVE
+  // connection, deduped on the connection id by the queue's stately policy,
+  // so a tick landing while a pass is still running adds nothing.
+  await boss.createQueue(CANVAS_SYNC_CRON_QUEUE);
+  await boss.work(CANVAS_SYNC_CRON_QUEUE, async () => {
+    await enqueueCanvasSyncForAllActiveConnections(db, boss, CANVAS_SYNC_CONNECTION_QUEUE);
+  });
+  await boss.schedule(CANVAS_SYNC_CRON_QUEUE, "0 * * * *");
+
   // Phase 7 Checkpoint 7.4 (mail digest). One queue, no dead-letter, for the
   // reason recorded in queue-names.ts.
   await boss.createQueue(
@@ -499,6 +536,7 @@ async function main(): Promise<void> {
     digestTimezone,
     healthSyncCron: HEALTH_SYNC_CRON_QUEUE,
     calendarSyncCron: CALENDAR_SYNC_CRON_QUEUE,
+    canvasSyncCron: CANVAS_SYNC_CRON_QUEUE,
   });
 }
 

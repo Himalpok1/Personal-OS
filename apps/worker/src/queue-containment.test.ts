@@ -251,6 +251,13 @@ const EXPECTED_CONTAINMENT: Readonly<Record<string, boolean>> = {
   HEALTH_SYNC_CRON_QUEUE: false,
   MAIL_SYNC_CONNECTION_QUEUE: true,
   MAIL_SYNC_CRON_QUEUE: false,
+  // Checkpoint 10.1 (ADR-068): same shape as MAIL_SYNC_*. The connection
+  // queue calls the real Canvas client per course, so it is wrapped
+  // (withCanvasJobErrorContainment); the cron queue's handler is a thin
+  // fan-out (enqueueCanvasSyncForAllActiveConnections) with no provider
+  // call of its own, so it needs none.
+  CANVAS_SYNC_CONNECTION_QUEUE: true,
+  CANVAS_SYNC_CRON_QUEUE: false,
   MAIL_DIGEST_GENERATE_QUEUE: true,
   MAIL_DIGEST_CRON_QUEUE: false,
   MONITOR_RUN_QUEUE: true,

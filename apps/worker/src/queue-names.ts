@@ -114,6 +114,25 @@ export const HEALTH_SYNC_CONNECTION_QUEUE = "health.google.sync-connection";
 // pass would fail to acquire and skip forever.
 export const MAIL_SYNC_CONNECTION_QUEUE = "mail.gmail.sync-connection";
 
+// Checkpoint 10.1 (Canvas LMS sync, ADR-068). ONE connection-level queue, no
+// dead-letter -- the identical Health/Mail precedent, for the identical
+// documented reason: under `policy: "stately"` pg-boss can drop a retry
+// insert on conflict and re-insert the job as failed, straight past its
+// remaining retries (pg-boss/dist/manager.js:1293). `retryLimit: 0` removes
+// the interaction outright. Canvas sync is idempotent (hash-gated upsert,
+// see apps/worker/src/canvas/persist.ts) and cron-driven, so the hourly tick
+// IS the retry -- and a better one, because it re-derives every course from
+// current provider state rather than replaying a stale job. There is no
+// separate rate limiter package for Canvas (unlike mail/health): ADR-068's
+// live discovery probe observed `X-Rate-Limit-Remaining` hold steady at 700
+// across ~15 requests, and a full per-course sweep at 16 courses is well
+// inside that headroom run serially with no artificial pacing.
+//
+// `expireInSeconds` (900s, matching mail) is generous relative to a serial
+// sweep of a few dozen requests across a realistic course load, so pg-boss
+// can never un-`active` a job whose handler is still genuinely running.
+export const CANVAS_SYNC_CONNECTION_QUEUE = "canvas.sync-connection";
+
 // Phase 7 Checkpoint 7.4 (mail digest). ONE queue, no dead-letter.
 //
 // Same shape and same reasoning as the mail sync queue immediately above:
@@ -166,6 +185,15 @@ export const QUEUE_RETRY_OPTIONS = {
   // per connection. "stately", not "singleton": singleton allows 1 active but
   // UNLIMITED queued, which is serialization without duplicate suppression.
   [MAIL_SYNC_CONNECTION_QUEUE]: {
+    policy: "stately",
+    retryLimit: 0,
+    expireInSeconds: 900,
+  },
+  // Per-connection serialization AND duplicate suppression, exactly as the
+  // mail/health entries above. singletonKey is `${connectionId}`, so the
+  // hourly cron tick (and any future manual "sync now") collapses onto one
+  // slot per connection.
+  [CANVAS_SYNC_CONNECTION_QUEUE]: {
     policy: "stately",
     retryLimit: 0,
     expireInSeconds: 900,

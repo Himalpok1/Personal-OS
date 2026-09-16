@@ -27,6 +27,7 @@ const HAND_WRITTEN_WITHOUT_SNAPSHOT = new Set([
   "0017_inbox_item_archive",
   "0018_occurrence_snooze",
   "0019_event_authoring",
+  "0020_canvas_lms_integration",
 ]);
 
 interface JournalEntry {

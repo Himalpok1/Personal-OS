@@ -3,6 +3,14 @@ import { useBusyPress } from "@/components/use-busy-press";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { calendarSyncErrorCopy } from "@/components/calendar/sync-error-copy";
 import { CloudAskCard } from "@/components/ask/cloud-ask-card";
+import {
+  canConnectCanvas,
+  canDisconnectCanvas,
+  resolveCanvasConnectionState,
+  resolveOverallCanvasState,
+  type CanvasConnectionDisplayState,
+} from "@/components/canvas/connection-state";
+import { canvasSyncErrorCopy } from "@/components/canvas/sync-error-copy";
 import { confirmDestructive } from "@/components/confirm-destructive";
 import { mailCallbackRedirectUri } from "@/components/mail/callback-redirect";
 import {
@@ -22,7 +30,7 @@ import {
   type HealthConnectionDisplayState,
 } from "@/components/health/connection-state";
 import { ApiClientError } from "@personal-os/api-client";
-import type { CalendarConnection, Device, MailConnection } from "@personal-os/schema";
+import type { CalendarConnection, CanvasConnection, Device, MailConnection } from "@personal-os/schema";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, type Href } from "expo-router";
 import * as Linking from "expo-linking";
@@ -58,6 +66,13 @@ import {
   useSyncCalendarConnectionNow,
   useUpdateCalendarConnectionCalendars,
 } from "@/queries/calendar-connections";
+import {
+  useCanvasConnections,
+  useCanvasSyncRuns,
+  useConnectCanvas,
+  useDisconnectCanvasConnection,
+  useTriggerCanvasSync,
+} from "@/queries/canvas";
 import { api, API_BASE_URL } from "@/queries/client";
 import {
   useDevices,
@@ -113,6 +128,12 @@ function describeActionFailure(err: unknown): string {
         return "Google didn't complete the connection. Try again.";
       case "caldav_discovery_failed":
         return "Couldn't reach that CalDAV server. Check the address and try again.";
+      case "canvas_auth_failed":
+        return "Canvas didn't accept that URL or access token. Check both and try again.";
+      case "canvas_already_connected":
+        return "A Canvas connection for that address already exists.";
+      case "canvas_url_blocked":
+        return "That address isn't allowed. Enter your Canvas instance's real web address.";
       case "device_revoked":
         return "This device is no longer registered.";
       case "invalid_token":
@@ -1226,6 +1247,292 @@ function ConnectedMailCard() {
   );
 }
 
+// Canvas LMS (Checkpoint 10.1, ADR-068) lives beside Mail/Health/Calendar for
+// the same reason those do: it is an external source Personal OS reads FROM.
+//
+// UNLIKE every OAuth connect flow in this screen (Gmail, Google Calendar),
+// there is no authorize URL and no redirect: a Canvas Personal Access Token
+// is typed directly into a form and sent in one request (ADR-068 §2), so the
+// connect UI is CalDAV's inline-form shape, not Gmail's single-button shape.
+// UNLIKE CalDAV, though, the form is never shown automatically just because
+// zero accounts are connected -- it always starts behind a "Connect Canvas"
+// button, exactly mirroring CalDAV's own `showCaldavForm` gate, so a Settings
+// screen with nothing connected yet does not greet the owner with two open
+// text fields before they have asked for them.
+function canvasStatusToneClass(state: CanvasConnectionDisplayState): string {
+  switch (state) {
+    case "unavailable":
+      return "text-red-600 dark:text-red-400";
+    case "needs_reconnect":
+    case "error":
+      return "text-amber-700 dark:text-amber-300";
+    case "not_configured":
+    case "not_connected":
+    case "disconnected":
+    case "connected":
+      return "text-black dark:text-white";
+  }
+}
+
+const CANVAS_STATUS_TEXT: Record<CanvasConnectionDisplayState, string> = {
+  // We could not read it, so we assert nothing. Saying "not connected" here
+  // would invite the owner to paste a fresh token to fix a tunnel being down.
+  unavailable: "Can't reach Personal OS, so the Canvas status is unknown.",
+  not_configured: "Canvas isn't set up on this server.",
+  not_connected: "No Canvas account is connected yet.",
+  needs_reconnect: "Canvas rejected the saved access token. Reconnect with a fresh one.",
+  disconnected:
+    "Disconnected. Synced courses and assignments are kept, and reconnecting resumes syncing.",
+  error: "A recent sync didn't finish. Personal OS will try again on its own.",
+  connected: "Connected to Canvas.",
+};
+
+/**
+ * One connected Canvas account: status, sync-error banner, last-sync detail,
+ * a manual "Sync now" and Disconnect -- mirroring
+ * `GoogleCalendarConnectionCard`'s per-row shape (its own hooks, its own
+ * local notice), which is why `useTriggerCanvasSync`/
+ * `useDisconnectCanvasConnection`/`useCanvasSyncRuns` are called HERE rather
+ * than once in the parent card: each row's mutation `isPending` then scopes
+ * itself to that row for free, with no separate "which id is busy" state
+ * needed the way `ConnectedMailCard`'s single-card-level hooks require.
+ */
+function CanvasConnectionRow({ connection }: { connection: CanvasConnection }) {
+  const disconnect = useDisconnectCanvasConnection();
+  const triggerSync = useTriggerCanvasSync();
+  // limit: 1 -- only the most recent run's counts are shown here; the full
+  // history has no screen of its own in this checkpoint.
+  const syncRunsQuery = useCanvasSyncRuns(connection.id, 1);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const state = resolveCanvasConnectionState({ configured: true, connection });
+  const latestRun = syncRunsQuery.data?.items[0] ?? null;
+  const syncCounts = latestRun
+    ? [
+        latestRun.courses_synced !== null ? `${latestRun.courses_synced} courses` : null,
+        latestRun.assignments_synced !== null ? `${latestRun.assignments_synced} assignments` : null,
+        latestRun.announcements_synced !== null
+          ? `${latestRun.announcements_synced} announcements`
+          : null,
+        latestRun.events_synced !== null ? `${latestRun.events_synced} events` : null,
+      ].filter((part): part is string => part !== null)
+    : [];
+
+  const onSync = (): void => {
+    setNotice(null);
+    triggerSync.mutate(connection.id, {
+      onSuccess: (result) =>
+        setNotice(result.queued ? "Sync requested." : "A sync was already queued."),
+      onError: (err) => setNotice(`Couldn't start sync. ${describeActionFailure(err)}`),
+    });
+  };
+
+  const confirmDisconnect = (): void => {
+    confirmDestructive({
+      title: "Disconnect this Canvas account?",
+      message:
+        "Personal OS will stop syncing new courses, assignments, announcements and events from " +
+        "it. What's already synced is kept -- nothing is deleted -- and you can reconnect later.",
+      confirmLabel: "Disconnect",
+      onConfirm: () => {
+        setNotice(null);
+        disconnect.mutate(connection.id, {
+          onSuccess: () => setNotice("Canvas account disconnected."),
+          onError: (err) => setNotice(`Couldn't disconnect. ${describeActionFailure(err)}`),
+        });
+      },
+    });
+  };
+
+  return (
+    <View className="mt-3 border-t border-neutral-200 pt-3 dark:border-neutral-800">
+      <Text className="text-sm text-black dark:text-white">{connection.canvas_base_url}</Text>
+      {connection.canvas_user_name ? (
+        <Text className="text-xs text-neutral-500 dark:text-neutral-400">
+          {connection.canvas_user_name}
+        </Text>
+      ) : null}
+      <Text className={`mt-1 text-xs ${canvasStatusToneClass(state)}`}>
+        {CANVAS_STATUS_TEXT[state]}
+      </Text>
+
+      {/* A CODE from a closed vocabulary reaches this component, never
+          provider prose -- mapped to words here so a bare token like
+          `auth_failed` never faces the owner. */}
+      {canvasSyncErrorCopy(connection.last_sync_error) === null ? null : (
+        <Text className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+          {canvasSyncErrorCopy(connection.last_sync_error)}
+        </Text>
+      )}
+
+      <Text className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+        {connection.last_sync_at
+          ? `Last synced ${new Date(connection.last_sync_at).toLocaleString()}`
+          : "Never synced"}
+      </Text>
+      {syncCounts.length > 0 ? (
+        <Text className="text-xs text-neutral-500 dark:text-neutral-400">
+          {syncCounts.join(" · ")}
+        </Text>
+      ) : null}
+
+      <View className="mt-2 flex-row flex-wrap gap-2">
+        {state === "connected" || state === "error" ? (
+          <Pressable
+            onPress={onSync}
+            disabled={triggerSync.isPending}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: triggerSync.isPending }}
+            accessibilityLabel={`Sync ${connection.canvas_base_url} now`}
+            hitSlop={8}
+            className="min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
+          >
+            <Text className="text-sm font-medium text-blue-700 dark:text-blue-300">
+              {triggerSync.isPending ? "Requesting…" : "Sync now"}
+            </Text>
+          </Pressable>
+        ) : null}
+
+        {canDisconnectCanvas(state, connection) ? (
+          <Pressable
+            onPress={confirmDisconnect}
+            disabled={disconnect.isPending}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: disconnect.isPending }}
+            accessibilityLabel={`Disconnect ${connection.canvas_base_url}`}
+            hitSlop={8}
+            className="min-h-[44px] justify-center rounded bg-red-600 px-3 py-2 active:opacity-70"
+          >
+            <Text className="text-sm font-medium text-white">
+              {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
+            </Text>
+          </Pressable>
+        ) : null}
+      </View>
+
+      {notice === null ? null : (
+        <Text className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">{notice}</Text>
+      )}
+    </View>
+  );
+}
+
+function ConnectedCanvasCard() {
+  const connectionsQuery = useCanvasConnections();
+  const connectCanvas = useConnectCanvas();
+  const placeholderColor = usePlaceholderColor();
+
+  const [showForm, setShowForm] = useState(false);
+  const [canvasUrl, setCanvasUrl] = useState("");
+  const [canvasToken, setCanvasToken] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const connections = connectionsQuery.data?.items ?? [];
+  const configured = connectionsQuery.data?.configured ?? false;
+  const isLoadError = connectionsQuery.isError;
+  const overallState = resolveOverallCanvasState({ configured, connections, isLoadError });
+
+  const runConnect = async (): Promise<void> => {
+    setFormError(null);
+    try {
+      await connectCanvas.mutateAsync({
+        baseUrl: canvasUrl.trim(),
+        personalAccessToken: canvasToken,
+      });
+      setShowForm(false);
+      setCanvasUrl("");
+      setCanvasToken("");
+    } catch (err) {
+      setFormError(describeActionFailure(err));
+    }
+  };
+
+  return (
+    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
+      <Text className="mb-2 text-base font-bold text-black dark:text-white">Canvas</Text>
+
+      <Text
+        className={`min-h-[20px] text-sm ${
+          connectionsQuery.isLoading ? "text-neutral-500" : canvasStatusToneClass(overallState)
+        }`}
+      >
+        {connectionsQuery.isLoading ? "Loading…" : CANVAS_STATUS_TEXT[overallState]}
+      </Text>
+
+      {connections.map((connection) => (
+        <CanvasConnectionRow key={connection.id} connection={connection} />
+      ))}
+
+      {showForm ? (
+        <View className="mt-3 rounded border border-neutral-200 p-3 dark:border-neutral-800">
+          <Text className="mb-2 font-bold text-black dark:text-white">Connect Canvas</Text>
+
+          <Text className="mb-1 text-xs text-neutral-500">Canvas instance URL</Text>
+          <TextInput
+            value={canvasUrl}
+            onChangeText={setCanvasUrl}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            placeholder="https://yourschool.instructure.com"
+            placeholderTextColor={placeholderColor}
+            className="mb-2 rounded border border-neutral-300 px-2 py-1 text-sm text-black dark:border-neutral-700 dark:text-white"
+          />
+
+          {/* A live credential typed in, so it is masked like the one other
+              secret field in this screen (CalDAV's App Password / Token). */}
+          <Text className="mb-1 text-xs text-neutral-500">Personal access token</Text>
+          <TextInput
+            value={canvasToken}
+            onChangeText={setCanvasToken}
+            secureTextEntry
+            autoCapitalize="none"
+            placeholder="access token"
+            placeholderTextColor={placeholderColor}
+            className="mb-2 rounded border border-neutral-300 px-2 py-1 text-sm text-black dark:border-neutral-700 dark:text-white"
+          />
+
+          {formError ? <Text className="mb-2 text-xs text-red-600">{formError}</Text> : null}
+
+          <View className="flex-row gap-2">
+            <Pressable
+              onPress={() => void runConnect()}
+              disabled={connectCanvas.isPending}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: connectCanvas.isPending }}
+              className="min-h-[44px] flex-1 justify-center rounded bg-blue-600 px-3 py-2"
+            >
+              <Text className="text-center text-sm font-bold text-white">
+                {connectCanvas.isPending ? "Connecting…" : "Connect"}
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => {
+                setShowForm(false);
+                setFormError(null);
+              }}
+              accessibilityRole="button"
+              className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+            >
+              <Text className="text-center text-sm text-black dark:text-white">Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : canConnectCanvas(overallState) ? (
+        <Pressable
+          onPress={() => setShowForm(true)}
+          accessibilityRole="button"
+          hitSlop={8}
+          className="mt-3 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+        >
+          <Text className="text-center text-sm text-black dark:text-white">
+            {connections.length === 0 ? "Connect Canvas" : "Connect another Canvas account"}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
 
 // Monitoring gets a SUMMARY card in Settings and a full screen of its own, the
 // same shape Health uses. A target list belongs on a screen with room for it;
@@ -1466,6 +1773,7 @@ export default function SettingsScreen() {
         <ConnectedCalendarsCard />
         <ConnectedHealthCard />
         <ConnectedMailCard />
+        <ConnectedCanvasCard />
         <MonitoringCard />
         <CloudAskCard />
         <NotificationDiagnostics />

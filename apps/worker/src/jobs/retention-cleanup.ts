@@ -1,4 +1,5 @@
 import {
+  canvasSyncRuns,
   healthOauthStates,
   healthSyncRuns,
   mailDigests,
@@ -18,11 +19,13 @@ import { resolveDigestTimezone } from "../mail/digest/run.js";
 // explicit and every window is the owner-approved number, never invented).
 //
 // ===========================================================================
-// ONE CENTRAL EXECUTION PATH, SEVEN INDEPENDENT TABLES.
+// ONE CENTRAL EXECUTION PATH, EIGHT INDEPENDENT TABLES.
 // ===========================================================================
 //
-// Five age-windowed tables from Checkpoint 8.6C (D3-D6), plus the two OAuth
-// state tables added by Checkpoint 9.0 Part D (see the section below).
+// Five age-windowed tables from Checkpoint 8.6C (D3-D6), the two OAuth
+// state tables added by Checkpoint 9.0 Part D (see the section below), and
+// `canvas_sync_runs` added by Checkpoint 10.1 (ADR-068 §5) on the same
+// 30-day `finished_at` window as `mail_sync_runs`/`health_sync_runs`.
 //
 // Each table gets its own single bounded DELETE, tried independently of the
 // others: one table's failure must not stop the rest (a Postgres error on
@@ -54,10 +57,11 @@ import { resolveDigestTimezone } from "../mail/digest/run.js";
 // is measurably slow, that is a new, separately-justified change.
 //
 // ---------------------------------------------------------------------------
-// WHY finished_at IS NOT NULL GUARDS BOTH SYNC-RUN TABLES.
+// WHY finished_at IS NOT NULL GUARDS ALL THREE SYNC-RUN TABLES.
 //
-// Neither mail_sync_runs nor health_sync_runs has a "running"/"in-progress"
-// status value -- both `openMailSyncRun`/`openSyncRun` insert a placeholder
+// None of mail_sync_runs, health_sync_runs or canvas_sync_runs has a
+// "running"/"in-progress" status value -- `openMailSyncRun`/`openSyncRun`/
+// `openCanvasSyncRun` all insert a placeholder
 // row with a terminal-looking status and finished_at left NULL, then
 // finalize it at the end of the pass. A row that is still NULL is either
 // genuinely in-flight (seconds old) or a crashed/abandoned attempt (the
@@ -129,6 +133,15 @@ const MAIL_DIGESTS_RETENTION_DAYS = MAIL_MESSAGES_RETENTION_DAYS;
 /** Checkpoint 8.6C, D6: pure operational audit logs, cursors live elsewhere. */
 const MAIL_SYNC_RUNS_RETENTION_DAYS = 30;
 const HEALTH_SYNC_RUNS_RETENTION_DAYS = 30;
+/**
+ * Checkpoint 10.1 (Canvas LMS integration, ADR-068 §5): `canvas_sync_runs` is
+ * operational metadata, not Canvas content, exactly like `mail_sync_runs`/
+ * `health_sync_runs` above -- it joins their existing 30-day `finished_at`
+ * window rather than inventing a new one, per ADR-068's own instruction that
+ * this table "joins the existing daily retention.cleanup job on the SAME
+ * 30-day finished_at window ... no new cron, no new schedule."
+ */
+const CANVAS_SYNC_RUNS_RETENTION_DAYS = 30;
 
 function daysAgo(now: Date, days: number): Date {
   return new Date(now.getTime() - days * DAY_MS);
@@ -254,6 +267,30 @@ async function deleteHealthSyncRuns(db: Db, now: Date): Promise<RetentionTableRe
 }
 
 /**
+ * Checkpoint 10.1 (ADR-068 §5). Same `finished_at IS NOT NULL` guard as the
+ * two sync-run tables above, for the identical reason: `openCanvasSyncRun`
+ * inserts a placeholder row with a terminal-looking `failed` status and
+ * `finished_at` left NULL, then finalizes it at the end of the pass -- a row
+ * still NULL is either genuinely in-flight or a crashed/abandoned attempt,
+ * and excluding it from the age cutoff entirely means this pass can never
+ * race a run that is still writing to its own row.
+ */
+async function deleteCanvasSyncRuns(db: Db, now: Date): Promise<RetentionTableResult> {
+  const cutoff = daysAgo(now, CANVAS_SYNC_RUNS_RETENTION_DAYS);
+  const start = Date.now();
+  const result = await db
+    .delete(canvasSyncRuns)
+    .where(and(isNotNull(canvasSyncRuns.finishedAt), lt(canvasSyncRuns.finishedAt, cutoff)));
+  return {
+    table: "canvas_sync_runs",
+    cutoff: cutoff.toISOString(),
+    deleted: result.rowCount ?? 0,
+    durationMs: Date.now() - start,
+    ok: true,
+  };
+}
+
+/**
  * Checkpoint 9.0 Part D. The row's own `expires_at` is the whole predicate
  * -- see the module comment for why there is no window constant and why
  * `consumed_at` is not consulted. `cutoff` is reported as the pass's captured
@@ -298,6 +335,7 @@ export const TABLE_CLEANERS: readonly RetentionTableCleaner[] = [
   { table: "health_sync_runs", clean: deleteHealthSyncRuns },
   { table: "health_oauth_states", clean: deleteHealthOauthStates },
   { table: "mail_oauth_states", clean: deleteMailOauthStates },
+  { table: "canvas_sync_runs", clean: deleteCanvasSyncRuns },
 ];
 
 /**

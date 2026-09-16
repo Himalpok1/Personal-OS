@@ -122,6 +122,23 @@ export const MAIL_DIGEST_GENERATE_QUEUE = "mail.digest.generate";
 // 10s timeout each, probed sequentially.
 export const MONITOR_RUN_QUEUE = "monitor.run";
 
+// Checkpoint 10.1 (Canvas LMS sync, ADR-068). ONE shared queue, no dead-letter.
+//
+// Same shape and the same documented reason as HEALTH_SYNC_CONNECTION_QUEUE
+// and MAIL_SYNC_CONNECTION_QUEUE above: under `policy: "stately"` pg-boss can
+// drop a retry insert on conflict and re-insert the job as failed, straight
+// past its remaining retries (pg-boss dist/manager.js:1293). `retryLimit: 0`
+// removes the interaction outright -- Canvas sync is meant to be idempotent
+// and re-triggerable, so a manual "sync now" (this checkpoint's
+// POST /canvas-connections/:id/sync) or a future cron tick is its own retry.
+//
+// apps/api sends to this queue from that route; the worker owns the handler,
+// which is NOT part of this checkpoint's scope. It is still created
+// identically here, because create_queue is INSERT ... ON CONFLICT DO
+// NOTHING and whichever process starts first wins the options -- exactly the
+// first-writer-wins reasoning every other shared queue above documents.
+export const CANVAS_SYNC_CONNECTION_QUEUE = "canvas.sync-connection";
+
 export const QUEUE_RETRY_OPTIONS = {
   [MONITOR_RUN_QUEUE]: {
     policy: "stately",
@@ -175,4 +192,14 @@ export const QUEUE_RETRY_OPTIONS = {
     policy: "singleton",
   },
   [CALENDAR_PUSH_EVENT_QUEUE]: { retryLimit: 5, retryDelay: 15, retryBackoff: true },
+  // Per-connection serialization AND duplicate suppression, exactly as
+  // HEALTH_SYNC_CONNECTION_QUEUE/MAIL_SYNC_CONNECTION_QUEUE. singletonKey is
+  // `${connectionId}`, so every trigger collapses onto one slot per
+  // connection. "stately", not "singleton": singleton allows 1 active but
+  // UNLIMITED queued, which is serialization without duplicate suppression.
+  [CANVAS_SYNC_CONNECTION_QUEUE]: {
+    policy: "stately",
+    retryLimit: 0,
+    expireInSeconds: 900,
+  },
 } as const;

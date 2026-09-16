@@ -16,6 +16,7 @@
     "./recurrence/series-anchor": "./dist/recurrence/series-anchor.js",
     "./health/*": "./dist/health/*.js",
     "./mail/*": "./dist/mail/*.js",
+    "./canvas/*": "./dist/canvas/*.js",
     "./ai/*": "./dist/ai/*.js",
     "./search/*": "./dist/search/*.js",
     "./logging/*": "./dist/logging/*.js",

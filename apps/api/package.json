@@ -17,6 +17,7 @@
     "@fastify/multipart": "^10.1.1",
     "@personal-os/ai-providers": "workspace:*",
     "@personal-os/calendar-providers": "workspace:*",
+    "@personal-os/canvas-providers": "workspace:*",
     "@personal-os/core": "workspace:*",
     "@personal-os/db": "workspace:*",
     "@personal-os/health-providers": "workspace:*",

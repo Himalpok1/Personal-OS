@@ -10,6 +10,7 @@ import { Link, useRouter, type Href } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { BriefCard } from "@/components/brief/brief-card";
+import { CanvasUpcomingAssignmentsCard } from "@/components/canvas/upcoming-assignments-card";
 import { HealthTodayCard } from "@/components/health/health-today-card";
 import { MailDigestCard } from "@/components/mail/digest-today-card";
 import { ReminderNoticeCard } from "@/components/reminder-notice-card";
@@ -690,6 +691,13 @@ export default function TodayScreen() {
           digest has no length bound and Today is the busiest screen on a
           480x640 device. */}
       <MailDigestCard />
+
+      {/* Checkpoint 10.1 (ADR-068) -- like the two cards above, it owns its
+          own GET /canvas-assignments/upcoming query, so a Canvas outage or a
+          not-yet-connected institution can never make Today fail to load. It
+          renders nothing at all when there is no connection or nothing due
+          soon, the same posture HealthTodayCard documents. */}
+      <CanvasUpcomingAssignmentsCard />
 
       <View>
         <SectionHeader title={`Overdue · ${data.overdue.total}`} tone="red" />

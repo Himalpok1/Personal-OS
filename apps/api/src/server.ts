@@ -1,6 +1,7 @@
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import type { CalDavClient, GoogleCalendarClient } from "@personal-os/calendar-providers";
+import type { CanvasClient } from "@personal-os/canvas-providers";
 import type { GoogleHealthClient } from "@personal-os/health-providers";
 import type { MailClient } from "@personal-os/mail-providers";
 import { workerHeartbeat } from "@personal-os/db";
@@ -11,6 +12,7 @@ import { ZodError } from "zod";
 import { env } from "./env.js";
 import { registerBoss } from "./plugins/boss.js";
 import { registerCalDavClient } from "./plugins/caldav-client.js";
+import { registerCanvasClient } from "./plugins/canvas-client.js";
 import { registerDb } from "./plugins/db.js";
 import { registerGoogleCalendarClient } from "./plugins/google-calendar-client.js";
 import { registerGoogleHealthClient } from "./plugins/google-health-client.js";
@@ -28,6 +30,8 @@ import briefsRoutes from "./routes/briefs.js";
 import aiConfigRoutes from "./routes/ai-config.js";
 import calendarConnectionsRoutes from "./routes/calendar-connections.js";
 import calendarTargetsRoutes from "./routes/calendar-targets.js";
+import canvasAssignmentsRoutes from "./routes/canvas-assignments.js";
+import canvasConnectionsRoutes from "./routes/canvas-connections.js";
 import healthConnectionsRoutes from "./routes/health-connections.js";
 import healthDataRoutes from "./routes/health-data.js";
 import mailConnectionsRoutes from "./routes/mail-connections.js";
@@ -56,6 +60,7 @@ export interface BuildServerOptions {
   // used outside a test suite.
   googleCalendarClient?: GoogleCalendarClient;
   caldavClient?: CalDavClient;
+  canvasClient?: CanvasClient;
   googleHealthClient?: GoogleHealthClient;
   /**
    * The worker-heartbeat watchdog's interval (Checkpoint 7.5, ADR-055).
@@ -130,6 +135,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await registerBoss(app);
   registerGoogleCalendarClient(app, options.googleCalendarClient);
   registerCalDavClient(app, options.caldavClient);
+  registerCanvasClient(app, options.canvasClient);
   registerGoogleHealthClient(app, options.googleHealthClient);
   registerGmailClient(app, options.gmailClient);
   // AFTER registerDb and registerBoss: the watchdog reads app.db and app.boss.
@@ -253,6 +259,8 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await app.register(healthDataRoutes);
   await app.register(mailConnectionsRoutes);
   await app.register(mailDigestsRoutes);
+  await app.register(canvasConnectionsRoutes);
+  await app.register(canvasAssignmentsRoutes);
   await app.register(monitorRoutes);
   await app.register(aiConfigRoutes);
   await app.register(askRoutes);

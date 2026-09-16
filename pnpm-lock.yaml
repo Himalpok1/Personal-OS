@@ -53,6 +53,9 @@ importers:
       '@personal-os/calendar-providers':
         specifier: workspace:*
         version: link:../../packages/calendar-providers
+      '@personal-os/canvas-providers':
+        specifier: workspace:*
+        version: link:../../packages/canvas-providers
       '@personal-os/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -241,6 +244,9 @@ importers:
       '@personal-os/calendar-providers':
         specifier: workspace:*
         version: link:../../packages/calendar-providers
+      '@personal-os/canvas-providers':
+        specifier: workspace:*
+        version: link:../../packages/canvas-providers
       '@personal-os/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -343,6 +349,16 @@ importers:
       ical.js:
         specifier: ^2.2.1
         version: 2.2.1
+    devDependencies:
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.20.1)(vite@8.2.1(@types/node@22.20.1)(esbuild@0.28.2)(jiti@1.21.7)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
+
+  packages/canvas-providers:
+    dependencies:
+      '@personal-os/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       vitest:
         specifier: ^4.1.10

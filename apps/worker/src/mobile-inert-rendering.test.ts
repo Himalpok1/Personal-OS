@@ -70,15 +70,24 @@ const INTERPRETING_SURFACES: readonly { pattern: RegExp; why: string }[] = [
  * `Linking.openURL` opens whatever it is given, so every call site is listed
  * here by hand and must stay justified.
  *
- * ONE file is allowed: settings.tsx, which opens the Gmail OAuth authorize URL.
- * That URL comes from this project's own API (`getGmailAuthorizeUrl`), not from
- * mail, calendar or capture content.
+ * TWO files are allowed. `settings.tsx` opens the Gmail OAuth authorize URL,
+ * which comes from this project's own API (`getGmailAuthorizeUrl`), not from
+ * mail, calendar or capture content. `components/canvas/
+ * upcoming-assignments-card.tsx` (Checkpoint 10.1) opens a Canvas
+ * assignment's `html_url` -- Canvas-generated, not user-typed, but still
+ * provider-supplied content this project does not control -- ONLY after
+ * checking its origin is exactly the same connection's own
+ * `canvas_base_url` origin (`isOwnCanvasOrigin`), so the call can never
+ * navigate anywhere but the owner's own configured Canvas instance.
  *
  * Same shape as src/__tests__/confirmation-hygiene.test.ts's ALLOWED list, and
  * for the same reason: an explicit, short allowlist makes a new call site a
  * test failure rather than a review question nobody asks.
  */
-const OPEN_URL_ALLOWED = new Set(["app/settings.tsx"]);
+const OPEN_URL_ALLOWED = new Set([
+  "app/settings.tsx",
+  "components/canvas/upcoming-assignments-card.tsx",
+]);
 
 /**
  * Strips comments before scanning.
