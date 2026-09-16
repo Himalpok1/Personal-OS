@@ -737,6 +737,10 @@ migration:
   is **not** a push risk, but it defeats the deliberate 600 hardening on both `.env` files. Delete
   it; tooling regenerates it, so treat as recurring hygiene. `apps/mobile/.env.example` does not
   document `EXPO_TOKEN` at all.
+  *(2026-09-16: `export.log` (21 findings by then) and its sibling `start.log` (1) were deleted from
+  the primary checkout; a working-copy gitleaks scan now reports only the intended, ignored `.env`
+  and `google-services.json` files. The entry stays open because the logs regenerate on the next
+  `expo export`/`expo start`, and because rotating the token that sat on disk is an owner action.)*
 - **The tailnet suffix is embedded in immutable commit metadata.** 104 of 255 commits (recounted at
   the Phase 8 closeout; the earlier "117 of 249" was a miscount) carry an author email at the tailnet
   domain. Now that a remote exists this is replicated off-machine. Harmless in a private repository
@@ -893,8 +897,10 @@ fast-forwarded to the Phase 10 tip and made canonical again (PR #1 merged); the 
 into an index plus per-ADR files; Phase 9 closed (ADR-069) and its record partitioned to
 `docs/history/phase-9.md`; this file reduced to present state; stale rules in `AGENTS.md`,
 `ARCHITECTURE.md`, `CLAUDE.md`, `README.md` and `WORKFLOW.md` reconciled (the list is in the
-housekeeping commit messages); merged branches deleted and the two never-merged Phase 6 audit
-originals converted to `archive/*` tags.
+housekeeping commit messages); merged branches deleted locally and on the remote (which now holds only `main`), the two
+never-merged Phase 6 audit originals converted to local `archive/*` tags (not pushed, per
+`docs/SOURCE-DURABILITY.md`), and the two token-bearing Expo dev logs plus stray `.DS_Store` files
+removed from the primary checkout.
 
 ---
 
