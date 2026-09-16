@@ -9,17 +9,21 @@ agent-readiness audit — is IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-15)**: 
 four orphaned Expo dependencies removed across mobile/API, zero user-visible behavior change, zero
 migration (level stays **20**), worker untouched, new `docs/AGENT-READINESS.md` canonical-boundary
 inventory, and a `tags`/`item_tags` schema classification (safe-to-drop, not acted on — an owner
-decision). Rabbit R1 versionCode **21**. **Checkpoint 10.1 — Canvas LMS integration — is
-IMPLEMENTED and LOCALLY VERIFIED but NOT DEPLOYED (2026-09-16, ADR-068)**: a read-only,
-Personal-Access-Token-authenticated sync of the owner's real Canvas courses/assignments into six
-new tables (migration `0020`, level **21**, local dev database only), a Today "upcoming
-assignments" card, and a same-origin-checked "open in Canvas" link — with a confirmed SSRF gap
-(`canvas_base_url` had no protection) found by adversarial review and fixed by porting the
-project's own CalDAV SSRF guard. Nothing has been committed and no production deployment has been
-run — see *Phase 10 → Checkpoint 10.1* below for the full record, including what still requires the
-owner. Phase 9's own checkpoint history (9.0–9.8) is unchanged and remains below Phase 10 in this
-file. Phase 8 closed 2026-09-12 (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail
-`docs/history/phase-8.md`).
+decision). **Checkpoint 10.1 — Canvas LMS integration — is IMPLEMENTED, DEPLOYED and LIVE-VALIDATED
+(2026-09-16, ADR-068)**: a read-only, Personal-Access-Token-authenticated sync of the owner's real
+Canvas courses/assignments into six new tables (migration `0020`, **production level 21**), a Today
+"upcoming assignments" card, and a same-origin-checked "open in Canvas" link — with a confirmed SSRF
+gap (`canvas_base_url` had no protection) found by adversarial review and fixed by porting the
+project's own CalDAV SSRF guard before deployment. **Checkpoint 10.1B — production deployment and
+live validation against the owner's real UTA Canvas account — is COMPLETE (2026-09-16)**: production
+migrated 20→21, api/worker/web redeployed, a real connect→sync→idempotent-resync→disconnect
+(credential columns verified nulled)→invalid-token-rejected→reconnect cycle run against the owner's
+actual account (16 courses, 355 assignments, 19 announcements synced, zero token/secret leakage in
+any log across the whole test window), and the Rabbit R1 (versionCode **22**) installed in place and
+verified live rendering real assignment data with a working same-origin Canvas deep link — see
+*Phase 10 → Checkpoint 10.1B* below for the full record. Phase 9's own checkpoint history (9.0–9.8)
+is unchanged and remains below Phase 10 in this file. Phase 8 closed 2026-09-12 (ADR-061; record
+`docs/PHASE-8-CLOSEOUT.md`, checkpoint detail `docs/history/phase-8.md`).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
 
 ---
@@ -57,10 +61,11 @@ own acceptance evidence is preserved in their own entries below).
 
 | | |
 |---|---|
-| Migration level | **20** (`0000`–`0019`, unchanged since 9.5); local and production agree |
-| Serving commit | api **and web** at **`7dee309`** (Checkpoint 10.0, api recreated 2026-09-15T18:48Z, web 2026-09-15T18:49Z); **worker untouched, still `8f6ffe1`** (Checkpoint 9.6 — no worker file has changed across 9.7, 9.8, or 10.0). Provenance is by compose `working_dir` (`personal-os-10.0-release` for api/web); the images carry no commit label. Rollback images `personal-os-{api,web}:rollback-pre-10.0`, tagged by resolved digest (every earlier `rollback-pre-*` tag preserved underneath; no `personal-os-worker:rollback-pre-10.0` was needed or created). |
+| Migration level | **21** (`0000`–`0020`); local and production agree |
+| Serving commit | api, worker **and web** at **`1e406f7`** (Checkpoint 10.1B, all three recreated 2026-09-16). Provenance is by compose `working_dir` (`personal-os-10.1-release`); the images carry no commit label. Rollback images `personal-os-{api,worker,web}:rollback-pre-10.1`, tagged by resolved digest (every earlier `rollback-pre-*` tag preserved underneath). |
 | Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30; `GET /health` → `ok` / `connected` / `stale:false` |
-| Rabbit R1 | `com.himal.personalos` **versionCode 21**, built from `7dee309` (EAS build `24cf8e1c…`), installed in place with SecureStore credential, primary-device row, exact-alarm appop, `POST_NOTIFICATIONS` and `firstInstallTime` (2026-08-19) all preserved — no re-pair, signature unchanged. Carries the same 9.7 "Ask about today" flow and 9.8 "Suggested Focus" card as before; Checkpoint 10.0 changed only dead code and unused dependencies, verified by a live regression walk with zero visible change. |
+| Rabbit R1 | `com.himal.personalos` **versionCode 22**, built from `1e406f7` (EAS build `23f032f5…`), installed in place with SecureStore credential, primary-device row, exact-alarm appop, `POST_NOTIFICATIONS` and `firstInstallTime` (2026-08-19) all preserved — no re-pair, signature unchanged. Carries the new Canvas "upcoming assignments" Today card verified live with real data; the 9.7 "Ask about today" flow and 9.8 "Suggested Focus" card are unchanged. |
+| Canvas (10.1/10.1B) | `packages/canvas-providers` + six new tables, PAT-authenticated, read-only. **Live-validated against the owner's real UTA account 2026-09-16**: connect → sync (16 courses, 355 assignments, 19 announcements, 0 events — the account has none) → idempotent resync (unchanged row counts) → disconnect (credential triple verified NULLed) → invalid-token rejected (`400 canvas_auth_failed`, no provider prose) → reconnect → resync, left **active** and synced. `GET /canvas-assignments/upcoming` verified correct on both api and the physical Rabbit R1; the same-origin "open in Canvas" link verified live (tapped, opened the real `uta.instructure.com` SSO redirect). Zero occurrences of the PAT or any warn/error line in api/worker logs across the whole test window. `canvas.sync-cron` confirmed registered in the worker's startup log (31 queues, up from 29; 11 schedules, up from 10). |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · **notification-shade capture (9.1)** — a persistent local "Capture" notification on its own channel, tap opens the same composer; verified live on the Rabbit R1 across two sequential taps (the rearm-with-a-fresh-identifier fix), producing a real `inbox_items` row (`source: "web"`, parsed as a task, archived after verification). |
 | Reminders (9.4) | Scheduled by the primary device from **`GET /reminders`** — one item per one-off task with a reminder and one per open occurrence of a recurring task (derived from the parent's `remind_at` wall clock and its day-offset from `due_at`, in `recurrence_timezone`; `snoozed_until` overrides). Deterministic identifiers `reminder:<key>:<instant>`, exact alarms (`window=0 exactAllowReason=permission`, verified in `dumpsys alarm`), category `reminder` with **Done / Snooze 1h / Tomorrow 9am** — all `opensAppToForeground: true` (a non-foregrounding action is lost when the process is dead; verified in the installed expo-notifications source). Verified live on the Rabbit R1 with the app process killed (`am kill`, not force-stop — force-stop puts the package in Android's stopped state, which cancels every alarm): both a Snooze 1h and a Done from the shade opened the app to the task with the outcome banner, mutated the right occurrence, dismissed the notification and re-armed the next alarm. |
 | Notification channels (9.1) | `reminders` (MAX, unchanged, local reminders only) · `alerts` (HIGH, new — integration/monitor alerts) · `updates` (DEFAULT, new — confirmations + mail digest) · `capture` (LOW, new — the local shortcut only, never through `notifications.dispatch`). All four verified independently listed and toggleable in Android's per-app notification settings on the Rabbit R1; a live test alert (via the existing `notifications.dispatch` job, `category: "alert"`) delivered on the `alerts` channel at `importance=4`. |
@@ -1506,7 +1511,7 @@ falls outside every lane's owned-file scope this checkpoint).
 
 ---
 
-### Checkpoint 10.1 — Canvas LMS integration: IMPLEMENTED, LOCALLY VERIFIED, **NOT DEPLOYED** (2026-09-16)
+### Checkpoint 10.1 — Canvas LMS integration: IMPLEMENTED, DEPLOYED, LIVE-VALIDATED (2026-09-16)
 
 **One migration, `0020_canvas_lms_integration`** (six new tables — `canvas_connections`,
 `canvas_courses`, `canvas_assignments`, `canvas_announcements`, `canvas_events`,
@@ -1616,13 +1621,9 @@ accessibility tree) and negatively (mismatched origin → inert `generic` text) 
 row's `html_url` and reloading. All seeded rows, the test device-pairing row, and both preview
 servers were cleaned up afterward — the dev database was left exactly as found.
 
-**DEPLOYMENT WAS NOT PERFORMED, AND THIS IS DELIBERATE, OWNER-CONFIRMED SCOPE.** This checkpoint
-implements and locally verifies; it does not run the frozen production deployment order in
-`docs/ARCHITECTURE.md` (SSH to the `personal-os` host, image rebuild, migration from the new api
-image, container recreation, an EAS cloud build, a physical Rabbit R1 install) — none of which
-this session has the owner's credentials or hardware access to perform. Nothing has been committed
-to git either; every change described above is uncommitted in the working tree, pending the
-owner's own review.
+**This checkpoint was implemented and locally verified in one session, committed
+(`d3bfeb2`/`1e406f7`), then deployed to production and live-validated in a follow-up session — see
+*Checkpoint 10.1B* immediately below for the full deployment and live-validation record.**
 
 **Unchanged and reaffirmed:** ADR-018 (Tailscale-only; no Canvas webhook, no public ingress),
 ADR-024 (no backup system — Canvas data is a locally cached reflection of the institution's own
@@ -1634,7 +1635,124 @@ outside both of `ai-egress-guard.test.ts`'s pinned surfaces by construction).
 `expireInSeconds`/`retryLimit: 0` fail-closed bound; the Canvas connect form's in-memory token
 state is not cleared on a failed attempt (cosmetic — the field is `secureTextEntry`-masked either
 way); the IPv6-link-local bracket-stripping bug in CalDAV's own `validateCalDavUrl` (spawned as a
-separate task, not fixed here — out of this checkpoint's scope to touch live calendar-sync code).
+separate task, not fixed here — out of this checkpoint's scope to touch live calendar-sync code);
+**no route exists to reconnect a Canvas connection after disconnect** — found live during 10.1B's
+own validation: `canvas_connections_base_url_unique` has no status filter, so `POST
+/canvas-connections` after a disconnect always returns `409 canvas_already_connected` for that
+base URL, and the only way to reconnect today is deleting the disconnected row directly (which
+cascades away its synced courses/assignments, all re-fetchable on the next sync). A dedicated
+"reactivate" path, or relaxing the unique index to `WHERE status != 'disconnected'`, is Phase 10
+candidate follow-up work, not fixed here.
+
+---
+
+### Checkpoint 10.1B — Production deployment & live validation: COMPLETE (2026-09-16)
+
+**Scope: deploy Checkpoint 10.1 to production and validate it against the owner's real UTA Canvas
+account.** No Canvas implementation code was changed — the mission was explicitly deployment and
+validation only, with any discovered fix to be scoped and reviewed separately rather than made
+inline. None was needed; the one real gap found (no reconnect-after-disconnect path, above) was
+worked around operationally (delete + reconnect) rather than patched, per that scope boundary.
+
+**Pre-deployment decisions, resolved with the owner before touching production:**
+
+- **Rollback readiness:** the mission brief's Step 2 asked for a database backup, which conflicts
+  with the locked ADR-024 (no backup system). Flagged explicitly; the owner chose **image-digest
+  rollback only** — the same pattern every deployment since Phase 7 (ADR-051a) has used, justified
+  identically here because migration `0020` is pure `CREATE TABLE`, so the pre-migration images
+  keep working against the post-migration schema.
+- **Live PAT validation:** the owner initially believed a token from a prior session was still
+  available. A targeted search (this session's scratchpad tree, the prior implementation session's
+  leftover scratchpad, the local dev `canvas_connections` table) found nothing — confirming
+  ADR-068's own non-persistence discipline had held, not a gap. The owner then pasted a fresh PAT
+  directly in chat; it was used immediately over SSH via stdin (never a shell argument, never
+  written to any file) and never appears in any log.
+
+**Deployment (frozen order, all verified at each step):**
+
+1. Pushed `1e406f7` to `origin` (was 2 commits ahead).
+2. Tagged the then-running api/worker/web images `rollback-pre-10.1` by resolved digest.
+3. Shipped the release via `git archive` of `1e406f7` to
+   `/home/himallinux/personal-os-10.1-release` (1,066 tracked files; no `.env`, no
+   `google-services.json`; migration `0020` present).
+4. Built api/worker/web images from that release dir; verified the new api image before deploying
+   anything — 21 migrations present (highest `0020`), Canvas routes and the worker's
+   `canvas-sync-connection` job present in `dist/`, no baked secrets (spot-checked).
+5. Ran `drizzle-kit migrate` from the new api image, `--no-deps`, `MIGRATIONS_DATABASE_URL`
+   passthrough: **20 → 21**. Verified structurally against the live schema rather than via
+   `db:reconcile` (not runnable in a production image — no `tsx`, matching the documented
+   image-contents pattern): all six tables present with the exact column counts, foreign keys and
+   CHECK constraints ADR-068 specifies, including the `access_token_ciphertext`-triple CHECK from
+   Checkpoint 10.1's own integration fix.
+6. Recreated `api`, `worker` and `web` (`--no-deps --no-build --force-recreate`, named explicitly;
+   `postgres` never touched). All four containers healthy within seconds; `GET /health` →
+   `ok`/`connected`/`stale:false`; worker startup log shows **31 queues** (was 29) and **11
+   schedules** (was 10) with `canvasSyncCron: "canvas.sync-cron"` present; zero warn/error log
+   lines in either process since redeploy; `GET /canvas-assignments/upcoming` and
+   `GET /canvas-connections` both respond correctly (empty, as expected pre-connection).
+
+**Live validation against the owner's real UTA Canvas account (all through real production
+routes, no synthetic data):**
+
+- **Connect:** `POST /canvas-connections {base_url: "https://uta.instructure.com",
+  personal_access_token}` → `201`, `canvas_user_name: "Himal Pokhrel"`, `status: "active"`.
+- **Sync:** `POST /canvas-connections/:id/sync` → `202` queued → worker `canvas.sync.finished`:
+  **16 courses, 355 assignments, 19 announcements, 0 events** (the account genuinely has none, per
+  ADR-068's own discovery notes) — real course names (e.g. `2262-INSY-4315-001-ADVANCED WEB
+  DEVELOPMENT`) landed correctly in `canvas_courses`.
+- **Idempotency:** triggered a second sync on the same connection; table counts unchanged
+  (16/355/19), confirming the `onConflictDoUpdate` content-comparison gate writes nothing on
+  unchanged rows.
+- **Disconnect:** `POST /canvas-connections/:id/disconnect` → `200`, `status: "disconnected"`; the
+  credential triple was queried before (`ciphertext/iv/auth_tag` all present) and after (all
+  **NULL**) — confirming Checkpoint 10.1's own integration fix (disconnect retains no usable
+  credential) holds in production, not just in tests.
+- **Invalid token:** a synthetic, clearly-fake token (never the owner's real one) against
+  `POST /canvas-connections` → `400 canvas_auth_failed`, no Canvas error prose forwarded.
+- **Reconnect:** the same base URL refused a fresh connect (`409 canvas_already_connected` — see
+  the reconnect-path gap recorded under Checkpoint 10.1 above); worked around by deleting the
+  disconnected row (cascades only its own synced rows, all re-fetchable) and reconnecting fresh.
+  Final resync reproduced the identical real counts (16/355/19/0), left **active**.
+- **`GET /canvas-assignments/upcoming?within_days=14`** returned 15 real, correctly ordered,
+  correctly denormalized upcoming assignments.
+- **Log audit:** grepped api and worker logs across the entire ~10-minute test window for the raw
+  PAT string — **zero occurrences**. Zero warn/error lines. The three `canvas.sync.*` log lines
+  emitted are counts-only (`coursesSeen`, `assignmentsSynced`, etc.), no titles or content — one is
+  `canvas.sync.skipped reason:"connection_not_active"` from a job that was queued before disconnect
+  and correctly no-op'd rather than erroring when it ran after.
+
+**Rabbit R1 (versionCode 21 → 22):**
+
+- EAS build `23f032f5-0228-4ec6-b0c9-f42f694998a1` from `1e406f7`, `production-internal` profile,
+  ~13 min.
+- Pre-install state recorded: versionCode 21, `firstInstallTime` 2026-08-19, exact-alarm appop
+  `allow`, `POST_NOTIFICATIONS` granted.
+- `adb install -r` → `Success` (an in-place replace only succeeds on a matching signature, so this
+  is the signing-continuity proof). Post-install: versionCode **22**, `firstInstallTime`
+  2026-08-19 preserved, exact-alarm appop still `allow`, `POST_NOTIFICATIONS` still granted — no
+  re-pair.
+- Cold launch initially showed "Couldn't load today" — root-caused to the device's Tailscale VPN
+  not being actively connected at that moment (`UnknownHostException` resolving
+  `personal-os.tail62a68f.ts.net`, `ConnectivityService` reporting `BLOCKED`), **a device network
+  condition, not a deployment or code defect** — ordinary WAN connectivity worked throughout
+  (`ping 8.8.8.8` succeeded). Opening the Tailscale app showed it already `Connected`; a retry
+  loaded Today successfully with zero crash lines in logcat throughout.
+- **The Canvas card renders correctly on-device with real data**: labeled "Canvas", five real
+  upcoming assignments with correct course names, titles and due dates/times, in the identical
+  order the API returned. Tapped a real assignment row: correctly opened the device browser to
+  `https://uta.instructure.com/...`, redirecting through the institution's real SSO gateway
+  (`oit.uta.edu`) — proving the same-origin link guard passes for real Canvas URLs on the physical
+  device, not just in a unit test.
+
+**Post-validation production health:** `/health` `ok`/`connected`/`stale:false`; all four
+containers `RestartCount=0`; migration 21; Canvas connection left `active` with real synced data;
+zero crash lines on the Rabbit R1 across the session.
+
+**Rollback, if ever needed:** `docker tag personal-os-{api,worker,web}:rollback-pre-10.1
+personal-os-{api,worker,web}:latest` then `docker compose ... up -d --no-deps --no-build
+--force-recreate api worker web` — no schema rollback (migration `0020` is additive-only, so the
+pre-10.1 images run correctly against the post-migration schema, per the frozen deployment order's
+own reasoning).
 
 ---
 
@@ -2047,24 +2165,19 @@ an intentionally-logged field — are recorded in the ledger below.
 **Phase 10 opened for codebase consolidation and agent readiness (owner direction, 2026-09-15).**
 Checkpoint 10.0 — a behavior-preserving cleanup pass ahead of Canvas integration and future
 Hermes/OpenClaw agent work — is complete (see *Phase 10 → Checkpoint 10.0* above). Checkpoint 10.1
-— the Canvas integration that 10.0 was preparing for — is **implemented and locally verified but
-deliberately not deployed** (see *Phase 10 → Checkpoint 10.1* above): the owner approved the design
-(auth method, storage scope, implementation-only session boundary) before implementation began, and
-approved that boundary explicitly — production deployment, and the decision of whether/when to run
-it, is the owner's own next action, not something this session performed unasked. Nothing from this
-checkpoint has been committed to git. The Phase 9 accelerated operating model (parallel audit →
-parallel implementation → integration → adversarial review → fixes → full tests) carried over into
-how 10.1 was executed, stopping short of the deployment/production-acceptance stages by explicit
-agreement rather than by omission.
+— the Canvas integration that 10.0 was preparing for — was implemented and locally verified in one
+session, then **deployed to production and live-validated against the owner's real UTA Canvas
+account in Checkpoint 10.1B**, same day (see *Phase 10 → Checkpoint 10.1B* above for the full
+deployment/validation record). Production is now at migration level 21, serving api/worker/web from
+`1e406f7`, Rabbit R1 versionCode 22.
 
 Personal OS still has a first read-only intelligence surface (9.7) and a second, narrower one (9.8)
 built on the 9.6 retrieval layer, exactly as ADR-056 sequenced; that product track is unchanged by
-10.0/10.1. Whether the next checkpoint resumes Phase 9's product track (widening the intelligence
-lane, e.g. the `get_calendar_context`/`get_task_context` tool implementations, or a real agent loop
-under its own ADR), a health trend view (E2), a new adoption soak, or further Canvas work (course/
-announcement/event UI beyond the Today card, the deferred D1e-style scoping question, etc.) is a
-product-direction choice for the owner — separate from, and not blocked on, the Canvas deployment
-decision above.
+10.0/10.1/10.1B. Whether the next checkpoint resumes Phase 9's product track (widening the
+intelligence lane, e.g. the `get_calendar_context`/`get_task_context` tool implementations, or a real
+agent loop under its own ADR), a health trend view (E2), a new adoption soak, or further Canvas work
+(course/announcement/event UI beyond the Today card, a reconnect-after-disconnect path, the deferred
+D1e-style scoping question, etc.) is a product-direction choice for the owner.
 
 ---
 
@@ -2094,27 +2207,42 @@ the one-line summary is:
 | **9.7** | Personal intelligence, read-only: Cloud Ask widened with a bounded, id-free, wall-clock-only `TodayContext` and three preset questions ("Ask about today"); validated citations (`502 ask_uncited` on an unresolvable ref); nothing stored; no migration; worker untouched; the read-only future-agent tool contract defined (not integrated). **Deployed (api/web, level 20, no migration) and accepted on the Rabbit R1 (versionCode 19) 2026-09-15** (ADR-066). |
 | **9.8** | Suggested Focus: a narrow, cited AI suggestion over today's overdue/due-today tasks, reusing Ask's `TodayContext`/"focus" preset and its `ask` consent switch entirely — zero new intelligence lineage, zero new consent surface. No model call below two candidates (server-enforced); exactly one citation required, validated against the narrower candidate ref set. Deterministic summary renders for free; the AI line is always an explicit tap. Nothing stored; no migration; worker untouched. **Deployed (api/web, level 20, no migration) and accepted on the Rabbit R1 (versionCode 20) 2026-09-15** (ADR-067). |
 | **10.0** | Codebase consolidation & agent readiness: proven-dead mobile/API code removed (Expo starter scaffold, 6 dead query/outbox exports, 3 dormant API error classes, 1 unused health-connection helper, 1 unused test fixture), 4 orphaned Expo dependencies removed (`expo-image`/`expo-status-bar`/`expo-web-browser`/`@babel/plugin-transform-react-jsx`), a duplicate date-parsing implementation consolidated, new `docs/AGENT-READINESS.md` canonical-boundary inventory, `tags`/`item_tags` classified safe-to-drop (not acted on). Zero behavior change, zero migration, worker untouched. **Deployed (api/web, level 20, no migration) and accepted on the Rabbit R1 (versionCode 21) 2026-09-15.** |
+| **10.1** | Canvas LMS integration: read-only, Personal-Access-Token-authenticated sync of courses/assignments/announcements/calendar events into six new tables (migration `0020`), a Today "upcoming assignments" card, a same-origin-checked "open in Canvas" link, CalDAV-derived SSRF protection on `canvas_base_url`. **Deployed (api/worker/web, level 21) and live-validated against the owner's real UTA account and the physical Rabbit R1 (versionCode 22) 2026-09-16** (ADR-068). |
 
-**Production is at migration level 20** and serves api and web images built from `7dee309`, worker still at `8f6ffe1` (untouched since 9.6). All three Google integrations are active. Monitoring runs against five
+**Production is at migration level 21** and serves api, worker and web images built from `1e406f7`. All three Google integrations plus the new Canvas integration are active. Monitoring runs against five
 active targets including both Tailscale Serve routes, with full CRUD. A daily retention cron bounds
 `monitor_checks`/`mail_messages`/`mail_digests`/`mail_sync_runs`/`health_sync_runs` and sweeps
 expired `health_oauth_states`/`mail_oauth_states`. Every retrying pg-boss queue has a dead-letter queue.
 Calendar events authored in Personal OS sync outward to the owner's chosen writable calendar; imported
-events are read-only. Search covers tasks, notes, events, projects, captures and mail with an explainable score, and every text field is bounded at write. Cloud Ask, when the owner enables it, can answer questions about today's schedule with cited sources, and can now also suggest one task to focus on. The Rabbit R1 runs `com.himal.personalos` versionCode 21, built from `7dee309`.
+events are read-only. Search covers tasks, notes, events, projects, captures and mail with an explainable score, and every text field is bounded at write. Cloud Ask, when the owner enables it, can answer questions about today's schedule with cited sources, and can now also suggest one task to focus on. Canvas assignments sync hourly and surface on Today. The Rabbit R1 runs `com.himal.personalos` versionCode 22, built from `1e406f7`.
 
 ## Current work
 
 **None in progress.** Checkpoint 10.0 closed 2026-09-15. Checkpoint 10.1 (Canvas LMS integration)
-implemented and locally verified 2026-09-16, deliberately stopped short of deployment — nothing is
-"in progress" on it, it is waiting on an owner decision to deploy, not on further engineering work.
+implemented, locally verified, deployed to production and live-validated against the owner's real
+UTA account 2026-09-16 (Checkpoint 10.1B) — closed.
 
 ---
 
 ## Last verification
 
-**Checkpoint 10.1 (2026-09-16).** Branch `phase-9-reliability`, working tree uncommitted (HEAD still
-`9927752`, the 10.0 record — nothing from this checkpoint has been committed, per the owner-agreed
-implementation-only scope). Seven parallel agent lanes in two dependency rounds (Foundation: db
+**Checkpoint 10.1B (2026-09-16).** Branch `phase-9-reliability`, HEAD `1e406f7` (the 10.1 record),
+pushed to `origin` at the start of deployment. Production migrated 20→21 (`0020_canvas_lms_integration.sql`)
+and verified structurally against the live schema (six tables, all FKs and CHECK constraints match
+spec); api/worker/web recreated with zero warn/error log lines since redeploy. Live validation ran
+entirely through real production routes against the owner's actual UTA Canvas account: connect,
+sync (16 courses/355 assignments/19 announcements), idempotent resync (unchanged row counts),
+disconnect (credential triple verified NULLed), invalid-token rejection, and reconnect+resync
+(identical real counts reproduced) — with a full log audit confirming the PAT never appeared in any
+api/worker log line. EAS build `23f032f5…` installed in place on the Rabbit R1 (versionCode 21→22,
+signing continuity proven by the in-place install succeeding, `firstInstallTime`/exact-alarm/
+notification permissions all preserved); the Canvas Today card verified rendering real data with a
+working same-origin "open in Canvas" link, tapped live to a real `uta.instructure.com` SSO redirect.
+Full record: *Phase 10 → Checkpoint 10.1B* above.
+
+**Checkpoint 10.1 (2026-09-16).** Branch `phase-9-reliability`, working tree uncommitted at
+implementation time (HEAD `9927752`, the 10.0 record — later committed as `d3bfeb2`/`1e406f7` and
+deployed in Checkpoint 10.1B above). Seven parallel agent lanes in two dependency rounds (Foundation: db
 schema/migration, `packages/canvas-providers`, `packages/schema` wire types; Services: API routes,
 worker sync job, `packages/api-client`) plus a sequential Mobile round, each testing only its own
 package against an isolated database clone. Integration (this session, as integrator) found and
@@ -2308,17 +2436,17 @@ clean; full evidence in `docs/PHASE-8-CLOSEOUT.md`.
 
 ## Next action
 
-**Checkpoint 10.1 (Canvas LMS integration) needs an owner decision before anything else: deploy it,
-or hold it.** Everything engineering-side is done — implemented, locally verified (6,044 tests, a
-clean `db:reconcile`, a live browser walkthrough), reviewed adversarially with a confirmed finding
-found and fixed (the SSRF gap). What is NOT done, on purpose, is production deployment: no commit
-has been made, the frozen deployment order in `docs/ARCHITECTURE.md` has not been run, and no EAS
-build/Rabbit R1 install has happened. If the owner wants to proceed, the path is: review the diff
-(`git status`/`git diff` — 38 changed/new files, none committed), commit, then the frozen order
-(release directory → build images → verify migrations in the built image → `drizzle-kit migrate`
-against production → recreate `api`/`worker` → EAS build → physical install). If the owner wants
-changes first (e.g. widening what's synced, adding course/announcement/event UI beyond the Today
-card), that's a follow-up to this same checkpoint, not a new one.
+**Checkpoint 10.1 (Canvas LMS integration) is deployed, live-validated, and closed (2026-09-16,
+Checkpoint 10.1B).** Production is at migration 21, api/worker/web serve `1e406f7`, Rabbit R1 is at
+versionCode 22, and the owner's real Canvas account is connected and syncing hourly. One real,
+non-blocking gap was found live during validation and is recorded as Phase 10 candidate follow-up
+rather than fixed inline (per the deployment session's own scope boundary): **there is no route to
+reconnect a Canvas connection once disconnected** — `POST /canvas-connections` always
+`409 canvas_already_connected`s for a base URL that has any row, even a disconnected one, because
+the unique index carries no status filter. A dedicated reactivate endpoint, or relaxing the index to
+`WHERE status != 'disconnected'`, is the fix. If the owner wants further Canvas work (widening what's
+synced, course/announcement/event UI beyond the Today card, the reconnect path above), that's a
+follow-up checkpoint, not urgent.
 
 **Checkpoint 10.0 (codebase consolidation & agent readiness) is complete.** It was explicitly not a
 product checkpoint — no candidate below was advanced or foreclosed by it. `docs/AGENT-READINESS.md`
@@ -2329,7 +2457,7 @@ schema classification (a table drop is irreversible under ADR-024 and is the own
 deferred dead-code-tooling (`knip`) decision (revisit only if the codebase's Zod-schema-companion/
 forward-design-export ratio shifts).
 
-Once Canvas deployment is settled, select the next Phase 9 (or later) checkpoint. 9.7 shipped the
+Select the next Phase 9 (or later) checkpoint. 9.7 shipped the
 first read-only intelligence lane and
 9.8 added a second, narrower one on the same substrate; ADR-056's read-only-before-write-capable
 sequencing is now exercised twice. The 9.3 ranked tiers are exhausted except E2 (health trend
