@@ -12,7 +12,11 @@ same connection row, history preserved, hourly cron succeeding since. **Checkpoi
 Academic Intelligence Layer — is DEPLOYED (api, worker, web; migration `0021`, level 22),
 PRODUCTION-VALIDATED against the owner's real UTA account (2026-09-16 ~17:30Z), and ACCEPTED ON THE
 RABBIT R1 (versionCode 25, built LOCALLY on the owner's Mac at ~18:05Z after the EAS quota refused
-the cloud build).** One item stays open for the owner: the live Canvas disconnect → reconnect step.
+the cloud build).** The owner's live disconnect → reconnect (22:32Z) closed the last validation step
+— and surfaced a **credential-in-log defect**, contained within minutes and fixed the same evening
+(hotfix `4c614db`); the owner also decided the academic surfaces show **the current term only**
+(ADR-070a, `1edb61b`). Both are **DEPLOYED** (api/worker/web at `1edb61b`, ~22:53Z). Open owner
+action: **rotate the Canvas PAT** that reached the log (and this chat).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -61,11 +65,11 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | | |
 |---|---|
 | Migration level | **22** (`0000`–`0021`); local and production agree. 10.2 added `0021_canvas_assignment_grades` (ADR-068a), applied to production 2026-09-16 from the 10.2 api image — row 22, `created_at 1789377000000`, hash `f8c3ed88…` identical to the tracked file. |
-| Serving commit | **api, worker and web at `b2c273b`** (Checkpoint 10.2, all three recreated 2026-09-16T17:30:32–59Z from `personal-os-10.2-release`; images api `e4e115ebe2b0`, worker `9c23c00beea2`, web `163f4ac03e0a`). Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,worker,web}:rollback-pre-10.2` = the 10.1C api (`60cfdb04…`) and 10.1B worker (`c53a0475…`) / web (`c8209f9f…`) images, plus every earlier `rollback-pre-*` tag, all by resolved digest. |
-| Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated by 10.1/10.1B/10.1C/10.2); `GET /health` → `ok` / `connected` / `stale:false` (17:49Z) |
+| Serving commit | **api, worker and web at `1edb61b`** (10.2 hotfix + ADR-070a, all three recreated 2026-09-16 ~22:53Z from `personal-os-10.2b-release`; images api `39da3c20c5f4`, worker `fcc97debae22`, web `3360ef674ca6`). Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,worker,web}:rollback-pre-10.2b` = the 10.2 images (`e4e115eb…` / `9c23c00b…` / `163f4ac0…`), `:rollback-pre-10.2` = the 10.1C api / 10.1B worker+web, plus every earlier tag, all by resolved digest. |
+| Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated by 10.1/10.1B/10.1C/10.2/10.2b); `GET /health` → `ok` / `connected` / `stale:false` (22:54Z) |
 | Rabbit R1 | `com.himal.personalos` **versionCode 25**, built from `8ae7bff` **locally** (`eas build --local`, profile `production-internal`, the EAS-managed keystore fetched at build time — signer SHA-256 `4601e3a2…` identical to the installed app's, compared with `apksigner` before installing), APK SHA-256 `4c02028e…`, `adb install -r` → `Success` with `firstInstallTime` 2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS`, the SecureStore credential and the primary-device row all preserved — no re-pair. **Academic surfaces walked on the device**: Today "Academics" card (Overdue · 11), Courses (16 across 3 terms), a course detail down to Submitted & graded with real grade labels; 0 crash lines. versionCodes 23 and 24 were consumed by a refused cloud attempt and a failed first local build (below). |
-| Academic layer (10.2) | `GET /academic/today?tz=` · `GET /academic/courses` · `GET /academic/courses/:id` — a provider-agnostic read model computed over the Canvas tables (ADR-070), a deterministic Today card and `/academic` course screens, `score`/`grade` synced (ADR-068a; **165 of 355 real assignments carry a grade** after the first post-deploy sync), `invalid_token` wired into the worker's auth-failure path. **Live in production and validated against the real account** (11 overdue · 1 due today · 8 due this week · 12 unread announcements at 17:3xZ; 16 courses across 3 terms); web client verified in a real browser over Tailscale; device client pending the versionCode-23 build. |
-| Canvas (10.1/10.1B/10.1C) | `packages/canvas-providers` + six tables, PAT-authenticated, read-only, hourly `canvas.sync-cron`. Connection `8b8e2cb6…` stayed **active** with its credential intact across the 10.2 deployment; manual sync 17:31:19Z `succeeded` (16/355/21/0). **Live-validated against the owner's real UTA account 2026-09-16**: connect → sync (16 courses, 355 assignments, 19 announcements, 0 events) → idempotent resync → disconnect (credential triple NULLed) → invalid token rejected (`400 canvas_auth_failed`) → reconnect → resync, left **active**. **Reconnect path (10.1C) verified live 2026-09-16**: disconnect → `200` · reconnect → **`200` on the same row `8b8e2cb6…`** (`created_at` unchanged at 10:50:30Z, all 16 courses still linked) · second connect on the active row → `409` · manual resync `202` → `succeeded` · hourly cron `succeeded` at 12:00:17Z. Zero PAT-shaped strings and zero warn/error lines in the api and worker logs since the api was recreated. |
+| Academic layer (10.2 + ADR-070a) | `GET /academic/today?tz=` · `GET /academic/courses[?include_past_terms=]` · `GET /academic/courses/:id` — a provider-agnostic read model computed over the Canvas tables (ADR-070), **current term only by default** (ADR-070a: the most recently started term, by date — `current_term: 2026 Fall` echoed on the wire), a deterministic Today card and `/academic` course screens, `score`/`grade` synced (ADR-068a; 165 of 355 real assignments carry a grade). **Live and validated**: Today `overdue 2 · due today 1 · due this week 8 · 8 unread` from the 6 Fall 2026 courses (was 11 overdue across 16 courses in 3 terms before the rule); `include_past_terms=true` still lists all 16. |
+| Canvas (10.1/10.1B/10.1C + 10.2 hotfix) | `packages/canvas-providers` + six tables, PAT-authenticated, read-only, hourly `canvas.sync-cron`. Connection `8b8e2cb6…` **reactivated in place by the owner's live disconnect → reconnect** (22:32–22:33Z: same row, `created_at` unchanged, 16/355/22 still linked, manual sync `succeeded`). A pasted token is now trimmed and refused if it carries whitespace/control characters, the client refuses to build a header from one, and the api's error serializer scrubs bearer/PAT shapes (hotfix `4c614db`). **Live-validated against the owner's real UTA account 2026-09-16**: connect → sync (16 courses, 355 assignments, 19 announcements, 0 events) → idempotent resync → disconnect (credential triple NULLed) → invalid token rejected (`400 canvas_auth_failed`) → reconnect → resync, left **active**. **Reconnect path (10.1C) verified live 2026-09-16**: disconnect → `200` · reconnect → **`200` on the same row `8b8e2cb6…`** (`created_at` unchanged at 10:50:30Z, all 16 courses still linked) · second connect on the active row → `409` · manual resync `202` → `succeeded` · hourly cron `succeeded` at 12:00:17Z. Zero PAT-shaped strings and zero warn/error lines in the api and worker logs since the api was recreated. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · notification-shade capture (9.1) — a persistent local "Capture" notification on its own channel; verified live on the Rabbit R1 (9.1). |
 | Reminders (9.4) | Scheduled by the primary device from **`GET /reminders`** — one item per one-off task with a reminder and one per open occurrence of a recurring task (derived from the parent's `remind_at` wall clock and its day-offset from `due_at`, in `recurrence_timezone`; `snoozed_until` overrides). Deterministic identifiers `reminder:<key>:<instant>`, exact alarms (`window=0 exactAllowReason=permission`), category `reminder` with **Done / Snooze 1h / Tomorrow 9am**, all `opensAppToForeground: true`. Verified live with the app process killed (`am kill`, not force-stop — force-stop puts the package in Android's stopped state, which cancels every alarm). |
 | Notification channels (9.1) | `reminders` (MAX, local reminders only) · `alerts` (HIGH — integration/monitor alerts) · `updates` (DEFAULT — confirmations + mail digest) · `capture` (LOW — the local shortcut only, never through `notifications.dispatch`). All four verified listed and toggleable in Android's per-app settings on the Rabbit R1. |
@@ -76,7 +80,7 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress. |
 | Backups | **None, by design** (ADR-024). |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE** (re-verified 2026-09-16). No CI, no Actions workflow, no repository secret. **`main` is the canonical branch again as of 2026-09-16** (fast-forwarded to the Phase 10 tip; PR #1 merged). |
-| Test baseline | **6,265 tests across 13 packages** at 10.2 (`b2c273b`, re-run on the merged `main` checkout): api 1,478 · mobile 1,467 · core 955 · worker 728 · schema 540 · health-providers 332 · api-client 200 · canvas-providers 75 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25 (was 6,054 at 10.1C, 6,044 at 10.1, 5,815 at 9.8). |
+| Test baseline | **6,292 tests across 13 packages** at `1edb61b` (10.2 + hotfix + ADR-070a): api 1,486 · mobile 1,467 · core 964 · worker 728 · schema 546 · health-providers 332 · api-client 200 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25 (was 6,265 at 10.2, 6,054 at 10.1C). |
 | pg-boss | **31 queues, 11 schedules** (worker startup log at 10.1B; `pgboss.queue` reads one more with the internal `__pgboss__send-it`). Every retrying queue has a dead-letter queue (9.0): `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues, `occurrences.generate-lazy`, `occurrences.expand-window`. `occurrences.expand-window` has a phase-2 idempotent lazy repair since 9.4. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C) · `health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now` (9.0). First scheduled run 2026-09-13T04:00Z; the job's daily runs have not been individually re-verified since the 9.0 acceptance. |
 | Alert keys | Occurrence-scoped (ADR-058). Producers: health-sync breaker (first live emission 2026-09-12T03:00:14Z), `occurrences.generate-lazy.dead:<occurrenceId>`, `occurrences.expand-window.dead:<UTC date>` (9.0; also covers a failed 9.4 phase-2 repair), `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (9.5). The three 9.x producers are unexercised in production by design. |
@@ -967,8 +971,74 @@ cache-cleared `expo export --platform web` and the second local build: `BUILD SU
 `expo-asset` peer) are non-fatal in both cloud and local builds and are recorded as debt below.
 
 **Phase 10.2 production closure status: api / worker / web DEPLOYED and PRODUCTION-VALIDATED; the
-Rabbit R1 ACCEPTED on versionCode 25.** The one step not exercised is the live disconnect →
-reconnect on the real Canvas connection, which needs the owner's PAT from Settings. Rollback, if ever needed: `docker tag
+Rabbit R1 ACCEPTED on versionCode 25; the live disconnect → reconnect done by the owner (below).**
+#### The owner's live reconnect, the credential-in-log incident, and its hotfix (2026-09-16, 22:32–22:55Z)
+
+**The last validation step, done by the owner.** From Settings on the device: Disconnect → Connect
+with the PAT → Sync now. Read back from production: the same row `8b8e2cb6…` reactivated
+(`created_at` still 10:50:30Z, `updated_at` 22:33:09Z, credential present, `last_sync_error`
+null), all 16 courses / 355 assignments / 165 grades / 22 announcements still linked, the manual
+sync `succeeded` (16/355/22). 10.1C's reconnect path holds live on the deployed 10.2 api.
+
+**The incident.** The api log for the same window carried the raw PAT **twice**. Two of the owner's
+connect attempts had pasted the token with a line break; `personal_access_token` was only
+length-checked, `packages/canvas-providers`'s `request()` interpolated it straight into
+`Authorization: Bearer <token>`, undici's `Headers.append` refused the header value with a
+`TypeError` whose message embeds the ENTIRE value, and the api's generic 500 path logged that
+message (`serialize-error.ts` withholds provider-authored messages, and a Node `TypeError` is not
+one). The third attempt, with the newline gone, succeeded. **Containment within minutes**: the api
+container was recreated from the same image, which deletes the container's json log file with it
+(no `sudo` needed); the new container's log has 0 token-shaped strings; the worker log never had
+one; nothing ships container logs off the host. **The token also passed through the chat that
+delivered it, so rotation is mandatory and is the open owner action** (Canvas → Account → Settings
+→ Approved Integrations → revoke; mint a fresh one; reconnect from Settings — the app now trims a
+pasted newline).
+
+**The fix (`4c614db`, three layers, mutation-checked).** (1) `CanvasConnectRequestSchema.personal_access_token`
+is `.trim()`med, then rejected with `400 validation_failed` if any whitespace or control character
+remains (Zod 4 issues carry the pattern and a static message, never the input). (2) `request()`
+refuses a header-unsafe token BEFORE any header exists, throwing `CanvasTokenFormatError` — a
+static message, nothing from the token — classified `auth_failed`/never retryable, mapped by the
+connect service to `canvas_auth_failed`; it runs on every client call, so the worker's hourly sync
+with a stored token is covered too. (3) `serializeErrorForLog` withholds any "invalid header
+value" message outright (any header value may be a secret) and scrubs `Bearer <token>` and the
+Canvas PAT shape from every other message. Tests: schema/client/classifier units, a route test
+that a token with an embedded newline is refused before any Canvas call with nothing echoed, and
+**a replay of the exact production `TypeError` against the real log stream** (the fake client now
+scripts any `Error`) — shown to FAIL with the serializer backstop disabled and pass with it.
+
+#### ADR-070a — the academic surfaces show the current term only (owner decision, 2026-09-16)
+
+After a day on the deployed layer the owner's card read `OVERDUE · 11`, mostly Spring 2026 work and
+undated "Default Term" compliance trainings due in March. Decision: **Canvas information in the app
+comes from the current term (Fall 2026), not older courses.** Implemented as a pure, date-driven
+rule (`packages/core/src/academic/current-term.ts`, `1edb61b`): the current term is the most
+recently started term (latest `term_start_at` at or before the build's `effectiveNow`), identified
+by its start instant; undated courses are never current; an ended term stays current until the
+next starts; with no started term anywhere nothing is filtered. `GET /academic/today` applies it to
+every course-scoped section (personal events are never term-filtered); `GET /academic/courses`
+defaults to the current term with `include_past_terms=true` to browse older ones; the detail route
+still opens any course by id; both responses echo `current_term` (optional on the wire, so the
+versionCode-25 client's compiled schema keeps parsing). The sync is unchanged — the filter is a
+read-model rule, reversible without a migration.
+
+**Deployment (`1edb61b`, no migration, ~22:50–22:54Z).** Rollback tags `rollback-pre-10.2b` by
+image id (api `e4e115eb…`, worker `9c23c00b…`, web `3360ef67…`'s predecessor `163f4ac0…`); `git
+archive` to `/home/himallinux/personal-os-10.2b-release` (1,178 files, 0 `.env`/`google-services.json`,
+ADR-070a hash matches `main`); all three images built (`build_exit=0`); verified before rollout —
+api carries `CanvasTokenFormatError`, the serializer's withheld-message marker, `selectCurrentTerm`
+and `CANVAS_TOKEN_SAFE_PATTERN`, worker carries the client guard; api → worker → web recreated in
+that order, `postgres` never named, all `RestartCount=0`, 31 queues / 11 schedules, `/health` ok.
+**Validated on real data**: `current_term` = `2026 Fall`; Today `overdue 2 · due today 1 · due
+this week 8 · unread 8`, every course code on the card `2268-`; courses default 6 (Fall only),
+`include_past_terms=true` 16 across 3 terms; a synthetic token with an embedded newline → `400
+validation_failed`, one with surrounding newlines → trimmed → `400 canvas_auth_failed` (Canvas
+rejected the synthetic value), neither response echoes the token; api log 0 token-shaped strings, 0
+warn/error; the live connection untouched. The Rabbit (versionCode 25) needs no rebuild — both
+changes are server-side — but it had left the USB bus by then, so its card was not re-read after
+the rule; the web client and the API confirm it. Full gate at `1edb61b`: build 12/12, typecheck
+23/23, eslint exit 0, prettier clean, **6,292 tests / 23 tasks, zero failing**.
+ Rollback, if ever needed: `docker tag
 personal-os-{api,worker,web}:rollback-pre-10.2 personal-os-{api,worker,web}:latest` then the
 frozen `up -d --no-deps --no-build --force-recreate api worker web`; `0021` is additive, so the
 pre-10.2 images run against the post-migration schema.
@@ -1197,10 +1267,11 @@ blocker/major findings) was **deployed to production on 2026-09-16 and its recon
 live** — see the deployment record at the end of the 10.1C entry above. Production serves the
 10.1C api (`f85779a`) alongside the 10.1B worker and web (`1e406f7`).
 
-**Checkpoint 10.2 — the Academic Intelligence Layer — is deployed (api/worker/web, level 22),
-production-validated and accepted on the Rabbit R1 (versionCode 25, built locally).** The record is
-above; its one open item (the live disconnect/reconnect, owner) is in *Next action*. Nothing after
-10.2 is selected.
+**Checkpoint 10.2 — the Academic Intelligence Layer — is deployed (api/worker/web at `1edb61b`,
+level 22), production-validated, accepted on the Rabbit R1 (versionCode 25, built locally), and
+amended the same day by the current-term rule (ADR-070a) and the credential-in-log hotfix.** The
+record is above; the one open owner action (rotate the PAT) is in *Next action*. Nothing after 10.2
+is selected.
 
 ---
 
@@ -1248,10 +1319,11 @@ The Rabbit R1 runs `com.himal.personalos` versionCode 25, built locally from `8a
 
 ## Current work
 
-**Checkpoint 10.2 deployed and accepted on the Rabbit; one owner item open** — the live Canvas
-disconnect → reconnect step, which needs the owner's PAT from Settings. `main` is `8ae7bff` and
-canonical; the feature branch is fully contained in it. Android APKs are now built locally (see the
-10.2 entry's *Device build* paragraph); the EAS build service is no longer on the release path.
+**Checkpoint 10.2 complete in production (`1edb61b`: 10.2 + hotfix + ADR-070a); one owner action
+open** — rotate the Canvas PAT that reached the api log and this chat, then reconnect from Settings.
+`main` is `1edb61b` and canonical; the feature branch is fully contained in it. Android APKs are built
+locally (see the 10.2 entry's *Device build* paragraph); the EAS build service is no longer on the
+release path.
 
 **Repository housekeeping done 2026-09-16 (this reconciliation, no product change):** `main`
 fast-forwarded to the Phase 10 tip and made canonical again (PR #1 merged); the decision log split
@@ -1266,6 +1338,12 @@ removed from the primary checkout.
 ---
 
 ## Last verification
+
+**10.2 hotfix + ADR-070a deployment (2026-09-16, ~22:50–22:55Z), read directly from production.**
+api/worker/web recreated from `personal-os-10.2b-release` (`1edb61b`), `RestartCount=0`, postgres
+untouched · `current_term` `2026 Fall`, Today `2 · 1 · 8 · 8` from the 6 Fall courses · synthetic
+malformed tokens refused with nothing echoed · 0 token-shaped strings and 0 warn/error in the api log
+· gate at `1edb61b`: 6,292 tests / 23 tasks. Record in the 10.2 entry.
 
 **Checkpoint 10.2 deployment (2026-09-16, 17:26–17:49Z), read directly from production.** Migration
 21 → 22 with the tracked file's hash · api/worker/web recreated from `personal-os-10.2-release`
@@ -1314,9 +1392,11 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. **Close the one open 10.2 item:** the live disconnect → reconnect on the real Canvas connection
-   from Settings with the owner's PAT (the integrator does not handle it). Expected: `200` on the
-   same row `8b8e2cb6…`, courses still linked, next sync `succeeded`.
+1. **Rotate the Canvas PAT** (owner): revoke the token that reached the api log and this chat in
+   Canvas → Account → Settings → Approved Integrations, mint a fresh one, and reconnect from Settings
+   (the app now trims a pasted line break and refuses any other whitespace before touching Canvas).
+   Then, optionally, re-read the Rabbit's Today card — it should show Fall 2026 only (`OVERDUE · 2`
+   at the time of writing) without a rebuild.
 
 2. **Then choose the next checkpoint — a product-direction decision for the owner.** Candidates
    carried from the 9.8 and 10.0/10.1 closeouts: widen the Canvas integration further (device-token

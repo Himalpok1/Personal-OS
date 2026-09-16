@@ -163,7 +163,7 @@ As of 2026-09-16: **Phases 0–9 are complete and production-deployed; productio
 closed under ADR-061 (`docs/PHASE-8-CLOSEOUT.md`, `docs/history/phase-8.md`); Phase 9 closed under
 ADR-069 (`docs/history/phase-9.md`). **Phase 10 — Codebase Consolidation & Agent Readiness — is open:
 Checkpoints 10.0, 10.1/10.1B, 10.1C and 10.2 are deployed** (production api, worker and web at
-`b2c273b`, migration level 22; the Rabbit R1 on versionCode 25, built locally), and no checkpoint
+`1edb61b`, migration level 22; the Rabbit R1 on versionCode 25, built locally), and no checkpoint
 after 10.2 is selected — the next product direction is an owner decision. Android APKs are built
 locally with `eas build --local` (JDK 17 + Android SDK on the owner's Mac); the EAS build service is
 no longer on the release path. Standing rules carry forward regardless of phase: read-only
