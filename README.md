@@ -6,11 +6,12 @@ The canonical design is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Current state
 
-Phases 0–3 are complete and production-verified. The Phase 3 MVP runs on the
-physical Rabbit R1 with stable EAS-managed Android signing, production device
-pairing, exact local reminders, Groq voice transcription, the protected OpenAI
-capture parser, and real Expo/FCM notification delivery. Production remains
-Tailscale-only.
+Phase 10 (Codebase Consolidation & Agent Readiness) is open. Checkpoint 10.0 —
+behavior-preserving cleanup and agent-readiness audit — is deployed and accepted,
+and Checkpoint 10.1 adds a read-only Canvas LMS integration (courses/assignments
+sync, live-validated in production). Phases 0–9 are complete; per-phase records
+are archived in `docs/history/`. Production runs on a Tailscale-only home server,
+with the mobile client on a physical Rabbit R1.
 
 See [`docs/STATUS.md`](docs/STATUS.md).
 
@@ -37,10 +38,15 @@ apps/
   worker/
 
 packages/
-  schema/
-  db/
-  api-client/
-  core/
+  schema/              # shared Zod schemas
+  db/                  # Drizzle schema, migrations
+  api-client/          # typed API client
+  core/                # shared domain logic
+  ai-providers/        # AI SDK adapters + credential crypto
+  calendar-providers/  # Google Calendar + CalDAV clients
+  health-providers/    # Google Health catalog, OAuth, sync
+  mail-providers/      # Gmail catalog, OAuth, metadata-only client
+  canvas-providers/    # Canvas LMS read-only client
 
 docs/
   ARCHITECTURE.md
