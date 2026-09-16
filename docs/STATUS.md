@@ -9,9 +9,17 @@ agent-readiness audit — is IMPLEMENTED, DEPLOYED and ACCEPTED (2026-09-15)**: 
 four orphaned Expo dependencies removed across mobile/API, zero user-visible behavior change, zero
 migration (level stays **20**), worker untouched, new `docs/AGENT-READINESS.md` canonical-boundary
 inventory, and a `tags`/`item_tags` schema classification (safe-to-drop, not acted on — an owner
-decision). Rabbit R1 versionCode **21**. See *Phase 10 → Checkpoint 10.0* below. Phase 9's own
-checkpoint history (9.0–9.8) is unchanged and remains below Phase 10 in this file. Phase 8 closed
-2026-09-12 (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail `docs/history/phase-8.md`).
+decision). Rabbit R1 versionCode **21**. **Checkpoint 10.1 — Canvas LMS integration — is
+IMPLEMENTED and LOCALLY VERIFIED but NOT DEPLOYED (2026-09-16, ADR-068)**: a read-only,
+Personal-Access-Token-authenticated sync of the owner's real Canvas courses/assignments into six
+new tables (migration `0020`, level **21**, local dev database only), a Today "upcoming
+assignments" card, and a same-origin-checked "open in Canvas" link — with a confirmed SSRF gap
+(`canvas_base_url` had no protection) found by adversarial review and fixed by porting the
+project's own CalDAV SSRF guard. Nothing has been committed and no production deployment has been
+run — see *Phase 10 → Checkpoint 10.1* below for the full record, including what still requires the
+owner. Phase 9's own checkpoint history (9.0–9.8) is unchanged and remains below Phase 10 in this
+file. Phase 8 closed 2026-09-12 (ADR-061; record `docs/PHASE-8-CLOSEOUT.md`, checkpoint detail
+`docs/history/phase-8.md`).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` · **Historical record:** `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
 
 ---
@@ -1498,6 +1506,138 @@ falls outside every lane's owned-file scope this checkpoint).
 
 ---
 
+### Checkpoint 10.1 — Canvas LMS integration: IMPLEMENTED, LOCALLY VERIFIED, **NOT DEPLOYED** (2026-09-16)
+
+**One migration, `0020_canvas_lms_integration`** (six new tables — `canvas_connections`,
+`canvas_courses`, `canvas_assignments`, `canvas_announcements`, `canvas_events`,
+`canvas_sync_runs` — level **20 → 21**). Decision record: **ADR-068**. Full design reasoning,
+discovery record and field-by-field storage decisions are there; this entry is the execution
+record.
+
+**Discovery was re-verified live before any code was written.** A prior "Canvas feasibility"
+session existed but left no recoverable artifact anywhere in this repository — every branch, the
+full reflog, stash, a content pickaxe across all history, and every dangling git object were
+checked and none referenced Canvas. Rather than design against memory, a bounded, read-only,
+three-round probe was re-run against the owner's real UTA Canvas account (`uta.instructure.com`)
+with a fresh Personal Access Token, confirming real field shapes for `/users/self`, `/courses`
+(16 active, with term info), `/courses/:id/assignments?include[]=submission` (confirming
+`score`/`grade`/`entered_score`/`entered_grade`/`attachments` are real, populated fields —
+deliberately excluded from storage), `/announcements` (real HTML `message`), and
+`/calendar_events?type=event` (reachable, zero live examples — recorded honestly). No credential
+was persisted: each round's token lived only in a scratchpad file outside the repo, deleted
+immediately after that round.
+
+**Implementation — seven parallel agent lanes in dependency rounds** (Foundation: db schema +
+`packages/canvas-providers` client + `packages/schema` wire types → Services: API routes + worker
+sync job + `packages/api-client` bindings → Mobile UI), each testing only its own package against
+an isolated database clone, never the shared `personalos_test`/`personalos` databases directly.
+All seven succeeded with passing self-tests.
+
+**Integration found and fixed four real gaps before this could be considered done:**
+
+1. **The DB lane made the three credential columns `NOT NULL` with no way to clear them on
+   disconnect.** Fixed: made them nullable, added `canvas_connections_access_token_triple` (the
+   `mail_connections` triple-null-or-all CHECK, verbatim), and `disconnectCanvasConnection` now
+   actually nulls the ciphertext/iv/auth-tag — a disconnected connection retains no usable
+   credential at all, not merely an unread one gated by `status`.
+2. **The API lane accidentally ran `drizzle-kit migrate` against the shared `personalos_test`
+   database** while debugging a hung clone-DB attempt (self-reported). Verified benign — purely
+   additive `CREATE TABLE` statements, zero rows written — and left in place rather than reverted,
+   since it matches what `db:reconcile` needed applied to the real dev database anyway. The
+   journal's own `when` timestamp had a separate arithmetic bug (1,000,000,000 added instead of
+   the documented 1,000,000, pushing it ~9.7 days into the future and failing the journal guard's
+   own future-dating test) — corrected to `1789376000000`.
+3. **Mobile correctly stopped rather than invent a workaround**: `apps/api` exposed connection
+   lifecycle only, no route to read back a synced course or assignment, so the Today "upcoming
+   assignments" card the brief asked for had nothing to query. Closed with a new
+   `GET /canvas-assignments/upcoming?within_days=` route (denormalized with course name, active-
+   connection/unarchived-course/unarchived-assignment filtering, ordered by `due_at`), its
+   `packages/api-client` binding, and the mobile card itself.
+4. **Two mechanical ratchet-test acknowledgments**: the new `Linking.openURL` call site in the
+   Today card (`mobile-inert-rendering.test.ts`'s `OPEN_URL_ALLOWED`) and the two new pg-boss
+   queues' containment status (`queue-containment.test.ts`'s frozen map) both needed explicit,
+   justified entries — exactly the review-not-skipped friction those guards exist to create.
+
+**A same-origin check defends the one new `Linking.openURL` call site.** `html_url` on a synced
+assignment is Canvas-generated, not user-typed, but is still provider-supplied content this
+project does not control. `isOwnCanvasOrigin` (`upcoming-assignments-card.tsx`) requires
+`html_url`'s origin to exactly equal the connection's own `canvas_base_url` origin before a row
+becomes pressable; a mismatch fails closed to inert text. Verified live in the browser (below),
+not just in a unit test: a row was made to point at `evil.example.com` and correctly rendered with
+no `link` accessibility role and no tap handler.
+
+**An independent adversarial security review (separate agent, no context from the implementation)
+found one CONFIRMED gap the fixes above hadn't touched: `canvas_base_url` had zero SSRF
+protection.** `connectCanvasConnection` made a live, credential-bearing outbound request to
+whatever URL was submitted, validated by nothing beyond `z.string().url()`, and the hourly worker
+cron repeated that same unguarded request for the connection's lifetime — a spoofed `base_url`
+could exfiltrate a real PAT, and `canvas_sync_runs.failure_class` (`network_error` vs
+`provider_error`/`auth_failed`) is a coarse internal-network reconnaissance oracle. This project
+already solved the identical shape of problem for CalDAV
+(`packages/calendar-providers/src/caldav/ssrf.ts`'s `validateCalDavUrl`); Canvas simply hadn't
+gotten the same guard. Fixed by porting it as `packages/canvas-providers/src/ssrf.ts`
+(`validateCanvasUrl`/`isSameOrigin`) — HTTPS-only (except test/dev loopback), blocks
+`169.254.0.0/16`, `fe80::/10`, `0.0.0.0` and broadcast — wired into `canvas-client.ts`'s single
+`request()` chokepoint so it runs on the initial URL **and** on every redirect hop, with manual
+redirect following (`redirect: "manual"`) that re-validates each target and drops `Authorization`
+the instant a redirect leaves the original origin. A new `blocked_url` member was added to the
+closed `CanvasFailureClass` enum (never retryable), and the connect route gained
+`400 canvas_url_blocked`. Building this test suite caught a further latent bug in my own port —
+and, it turns out, in the seven-months-running CalDAV original it was copied from: `net.isIP()`
+does not recognize a bracketed IPv6 hostname (`URL#hostname` keeps the brackets on an IPv6
+literal), so the whole IPv6-link-local check silently never ran. Fixed in the Canvas copy;
+**flagged as a separate task for the CalDAV original**, since that file is live production sync
+code and out of this checkpoint's scope to touch. The review's remaining findings were one
+PLAUSIBLE (redirect `Authorization`-stripping behavior was previously unverified — now closed by
+the same fix) and two low-severity notes (no explicit per-connection course cap, beyond the
+fail-closed `expireInSeconds: 900`/`retryLimit: 0` queue bound; in-memory form state not cleared
+on a failed connect attempt) recorded as non-blocking.
+
+**Verification (integrator, serial):** `pnpm build --force` 13/13 · `pnpm typecheck` 23/23 ·
+`eslint .` clean · `prettier --check .` clean · `gitleaks detect` — the same class of pre-existing
+findings in ignored, untracked files (`.env`, `google-services.json` ×2, Expo dev logs), zero new,
+zero Canvas-related, and the live PAT used for discovery was independently confirmed absent from
+every tracked file and from the session scratchpad · `pnpm test --force` **23/23 tasks, 6,044
+tests across 13 packages (a new `@personal-os/canvas-providers`), zero failing** — canvas-providers
+70 (new) · api 1,423 (+41) · mobile 1,390 (+23) · schema 519 (+42) · core 915 (+17) · worker 710
+(+12) · api-client 195 (+24) · db 79 (unchanged) · health-providers/monitoring/calendar-providers/
+mail-providers/ai-providers unchanged. **Migration invariant:** `db:reconcile` clean (0
+discrepancies) against the real local dev database after a genuine `drizzle-kit migrate` run
+(20 → 21), proving the hand-written SQL matches the Drizzle schema exactly, not merely that it
+parses.
+
+**Live browser verification, not just tests.** A real Canvas connection, course, and two
+assignments (one `submission_missing: true`) were seeded directly into the local dev database; the
+built api server answered `GET /canvas-assignments/upcoming` with the correct shape, ordering and
+denormalized course name; the mobile web client (paired via a real pairing code, not a bypass)
+rendered the Canvas card on Today exactly as designed, including the "Missing" badge; the
+same-origin guard was proven both positively (matching origin → `link` role, confirmed via the
+accessibility tree) and negatively (mismatched origin → inert `generic` text) by mutating a seeded
+row's `html_url` and reloading. All seeded rows, the test device-pairing row, and both preview
+servers were cleaned up afterward — the dev database was left exactly as found.
+
+**DEPLOYMENT WAS NOT PERFORMED, AND THIS IS DELIBERATE, OWNER-CONFIRMED SCOPE.** This checkpoint
+implements and locally verifies; it does not run the frozen production deployment order in
+`docs/ARCHITECTURE.md` (SSH to the `personal-os` host, image rebuild, migration from the new api
+image, container recreation, an EAS cloud build, a physical Rabbit R1 install) — none of which
+this session has the owner's credentials or hardware access to perform. Nothing has been committed
+to git either; every change described above is uncommitted in the working tree, pending the
+owner's own review.
+
+**Unchanged and reaffirmed:** ADR-018 (Tailscale-only; no Canvas webhook, no public ingress),
+ADR-024 (no backup system — Canvas data is a locally cached reflection of the institution's own
+record, recoverable by re-sync), ADR-056 (no embeddings, no pgvector, no AI/write-capable lane
+touched — Canvas content is never summarized or sent to any model, confirmed to sit entirely
+outside both of `ai-egress-guard.test.ts`'s pinned surfaces by construction).
+
+**Recorded, not fixed:** no explicit cap on courses-per-connection beyond the queue's own
+`expireInSeconds`/`retryLimit: 0` fail-closed bound; the Canvas connect form's in-memory token
+state is not cleared on a failed attempt (cosmetic — the field is `secureTextEntry`-masked either
+way); the IPv6-link-local bracket-stripping bug in CalDAV's own `validateCalDavUrl` (spawned as a
+separate task, not fixed here — out of this checkpoint's scope to touch live calendar-sync code).
+
+---
+
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
 **Phase 7 is closed.** Checkpoints 7.0–7.8B and the full Checkpoint 7.9 record — the open
@@ -1906,16 +2046,25 @@ an intentionally-logged field — are recorded in the ledger below.
 
 **Phase 10 opened for codebase consolidation and agent readiness (owner direction, 2026-09-15).**
 Checkpoint 10.0 — a behavior-preserving cleanup pass ahead of Canvas integration and future
-Hermes/OpenClaw agent work — is complete (see *Phase 10 → Checkpoint 10.0* above). The Phase 9
-accelerated operating model (parallel audit → parallel implementation → integration → adversarial
-review → fixes → full tests → deployment → production acceptance, no soak waits, reversible
-decisions are not owner gates) carried over unchanged into how 10.0 itself was executed. Personal
-OS still has a first read-only intelligence surface (9.7) and a second, narrower one (9.8) built on
-the 9.6 retrieval layer, exactly as ADR-056 sequenced; that product track is unchanged by 10.0.
-Whether the next checkpoint resumes Phase 9's product track (widening the intelligence lane, e.g.
-the `get_calendar_context`/`get_task_context` tool implementations, or a real agent loop under its
-own ADR), a health trend view (E2), a new adoption soak, or the Canvas/Hermes-OpenClaw work this
-checkpoint was preparing for is a product-direction choice for the owner.
+Hermes/OpenClaw agent work — is complete (see *Phase 10 → Checkpoint 10.0* above). Checkpoint 10.1
+— the Canvas integration that 10.0 was preparing for — is **implemented and locally verified but
+deliberately not deployed** (see *Phase 10 → Checkpoint 10.1* above): the owner approved the design
+(auth method, storage scope, implementation-only session boundary) before implementation began, and
+approved that boundary explicitly — production deployment, and the decision of whether/when to run
+it, is the owner's own next action, not something this session performed unasked. Nothing from this
+checkpoint has been committed to git. The Phase 9 accelerated operating model (parallel audit →
+parallel implementation → integration → adversarial review → fixes → full tests) carried over into
+how 10.1 was executed, stopping short of the deployment/production-acceptance stages by explicit
+agreement rather than by omission.
+
+Personal OS still has a first read-only intelligence surface (9.7) and a second, narrower one (9.8)
+built on the 9.6 retrieval layer, exactly as ADR-056 sequenced; that product track is unchanged by
+10.0/10.1. Whether the next checkpoint resumes Phase 9's product track (widening the intelligence
+lane, e.g. the `get_calendar_context`/`get_task_context` tool implementations, or a real agent loop
+under its own ADR), a health trend view (E2), a new adoption soak, or further Canvas work (course/
+announcement/event UI beyond the Today card, the deferred D1e-style scoping question, etc.) is a
+product-direction choice for the owner — separate from, and not blocked on, the Canvas deployment
+decision above.
 
 ---
 
@@ -1955,11 +2104,38 @@ events are read-only. Search covers tasks, notes, events, projects, captures and
 
 ## Current work
 
-**None in progress.** Checkpoint 10.0 closed 2026-09-15.
+**None in progress.** Checkpoint 10.0 closed 2026-09-15. Checkpoint 10.1 (Canvas LMS integration)
+implemented and locally verified 2026-09-16, deliberately stopped short of deployment — nothing is
+"in progress" on it, it is waiting on an owner decision to deploy, not on further engineering work.
 
 ---
 
 ## Last verification
+
+**Checkpoint 10.1 (2026-09-16).** Branch `phase-9-reliability`, working tree uncommitted (HEAD still
+`9927752`, the 10.0 record — nothing from this checkpoint has been committed, per the owner-agreed
+implementation-only scope). Seven parallel agent lanes in two dependency rounds (Foundation: db
+schema/migration, `packages/canvas-providers`, `packages/schema` wire types; Services: API routes,
+worker sync job, `packages/api-client`) plus a sequential Mobile round, each testing only its own
+package against an isolated database clone. Integration (this session, as integrator) found and
+fixed four gaps (credential columns wrongly `NOT NULL`, an accidental migrate against the shared
+test database, a genuinely missing read endpoint the mobile lane correctly refused to route around,
+two mechanical ratchet-test acknowledgments), then a fully independent adversarial security-review
+agent (no context from the implementation) found one CONFIRMED gap — `canvas_base_url` had no SSRF
+protection — fixed by porting the project's own CalDAV SSRF guard, which in turn surfaced and fixed
+a latent IPv6-bracket bug in both the new Canvas copy and (flagged as a separate task, not fixed
+here) the CalDAV original it was copied from. Verification, serially: `pnpm build --force` 13/13 ·
+`pnpm typecheck` 23/23 · `eslint .` clean · `prettier --check .` clean · `gitleaks detect` — the
+same class of pre-existing findings in ignored, untracked files, zero new, zero Canvas-related ·
+`pnpm test --force` **23/23 tasks, 6,044 tests across 13 packages, zero failing** (canvas-providers
+70 new · api 1,423 · mobile 1,390 · schema 519 · core 915 · worker 710 · api-client 195 · db 79
+unchanged · health-providers/monitoring/calendar-providers/mail-providers/ai-providers unchanged).
+**Migration invariant:** `db:reconcile` clean (0 discrepancies) after a genuine `drizzle-kit
+migrate` run against the real local dev database (20 → 21), proving the hand-written SQL matches
+the Drizzle schema exactly. **Live browser verification** (seeded data, real API + mobile-web
+servers, real device pairing, cleaned up afterward): the Today card renders correctly with the
+right ordering/formatting/badges, and the same-origin link guard was proven both positively and
+negatively by mutating a seeded row and reloading. Full record: *Phase 10 → Checkpoint 10.1* above.
 
 **Checkpoint 10.0 (2026-09-15).** Branch `phase-9-reliability`, HEAD `7dee309` (from `82fef97`, the
 9.8 acceptance record, verified clean and equal to origin). Eight parallel lanes (evidence-gathering
@@ -2132,19 +2308,34 @@ clean; full evidence in `docs/PHASE-8-CLOSEOUT.md`.
 
 ## Next action
 
+**Checkpoint 10.1 (Canvas LMS integration) needs an owner decision before anything else: deploy it,
+or hold it.** Everything engineering-side is done — implemented, locally verified (6,044 tests, a
+clean `db:reconcile`, a live browser walkthrough), reviewed adversarially with a confirmed finding
+found and fixed (the SSRF gap). What is NOT done, on purpose, is production deployment: no commit
+has been made, the frozen deployment order in `docs/ARCHITECTURE.md` has not been run, and no EAS
+build/Rabbit R1 install has happened. If the owner wants to proceed, the path is: review the diff
+(`git status`/`git diff` — 38 changed/new files, none committed), commit, then the frozen order
+(release directory → build images → verify migrations in the built image → `drizzle-kit migrate`
+against production → recreate `api`/`worker` → EAS build → physical install). If the owner wants
+changes first (e.g. widening what's synced, adding course/announcement/event UI beyond the Today
+card), that's a follow-up to this same checkpoint, not a new one.
+
 **Checkpoint 10.0 (codebase consolidation & agent readiness) is complete.** It was explicitly not a
 product checkpoint — no candidate below was advanced or foreclosed by it. `docs/AGENT-READINESS.md`
-now gives whatever comes next (a real agent loop, or the Canvas/Hermes-OpenClaw work 10.0 was
-preparing for) a canonical-boundary map to build from rather than a fresh audit. Two items from
-10.0 are recorded for an explicit future owner decision, not carried as blocking debt: the
-`tags`/`item_tags` safe-to-drop schema classification (a table drop is irreversible under ADR-024
-and is the owner's call), and the deferred dead-code-tooling (`knip`) decision (revisit only if the
-codebase's Zod-schema-companion/forward-design-export ratio shifts).
+now gives whatever comes next (a real agent loop, or further Canvas/Hermes-OpenClaw work) a
+canonical-boundary map to build from rather than a fresh audit. Two items from 10.0 are recorded for
+an explicit future owner decision, not carried as blocking debt: the `tags`/`item_tags` safe-to-drop
+schema classification (a table drop is irreversible under ADR-024 and is the owner's call), and the
+deferred dead-code-tooling (`knip`) decision (revisit only if the codebase's Zod-schema-companion/
+forward-design-export ratio shifts).
 
-Select the next Phase 9 (or later) checkpoint. 9.7 shipped the first read-only intelligence lane and
+Once Canvas deployment is settled, select the next Phase 9 (or later) checkpoint. 9.7 shipped the
+first read-only intelligence lane and
 9.8 added a second, narrower one on the same substrate; ADR-056's read-only-before-write-capable
 sequencing is now exercised twice. The 9.3 ranked tiers are exhausted except E2 (health trend
-context). Candidates now: **widen the intelligence lane further** (implement
+context). Candidates now: **widen the Canvas integration** (course/announcement/event UI beyond the
+Today card, a full course-browsing screen, device-token auth on the new routes), **widen the
+intelligence lane further** (implement
 `get_calendar_context`/`get_task_context`, build Option B "what changed" — needs a last-seen
 watermark — or Option C weekly review intelligence — needs week-bucketed carry-forward diffing —
 both deferred by the 9.8 design gate as genuinely new backend work, not a context-reuse win like

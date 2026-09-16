@@ -566,6 +566,64 @@ buildTodayContext(preset: "focus")  →  ONE model call, ≤1 citation  →  {su
   `apps/api/src/ask/generate.ts` does, so Guard 4's per-directory import/write denylist needed no
   change to accommodate a second lane.
 
+## Canvas LMS integration — read-only, PAT-authenticated (Checkpoint 10.1, ADR-068)
+
+Personal OS reads the owner's Canvas LMS account (courses, assignments, announcements, calendar
+events) into `packages/db`, synchronised by `apps/worker` and surfaced by the existing Expo client.
+It is the first new external integration since Phase 7 (Gmail) and follows the same shape: a
+provider package with a real client and a fake, a connection-lifecycle route set, a cron-driven
+worker sync job, and an audit trail — not a new architectural pattern.
+
+**Authentication is a Personal Access Token, not OAuth2.** A Canvas PAT already carries the full
+grant of the account, so there is no narrower OAuth scope to request; a Developer Key would also
+require either self-service developer keys enabled on the institution's Canvas instance or an IT
+registration this single-user self-hosted app has no path to obtain. The owner pastes a PAT once in
+Settings; it is encrypted at rest with the same AES-256-GCM ciphertext/iv/auth-tag triple used for
+every other provider credential (`packages/ai-providers`), and used for `GET` requests only —
+`packages/canvas-providers`'s client implements no write method, so a mutation is structurally
+absent from the interface rather than merely policy-forbidden. There is no refresh flow: Canvas PATs
+are long-lived by default, so `canvas_connections` stores one credential triple, never a
+token-plus-refresh pair.
+
+**Storage is deliberately narrower than what Canvas's API returns.** Every field was checked against
+"does this need to exist locally for Personal OS functionality?" before the schema was written, not
+after. Explicitly excluded: assignment `description` and the raw HTML of announcement `message`
+(this project has no HTML sanitizer or renderer, and instructor-authored HTML is unbounded upstream
+size — `html_url` is a one-tap link back to Canvas for the full text; an announcement's plain-text,
+tag-stripped, truncated preview *is* stored, because unlike an assignment prompt its whole value is
+the content); grade and score (`score`/`grade`/`entered_score`/`entered_grade` — confirmed real,
+populated fields on the submission resource, but more FERPA-sensitive than "did I turn it in," which
+is all `submission_state`/`submission_missing`/`submission_late`/`submitted_at` need to answer);
+submission attachments (the student's own uploaded work, a higher sensitivity tier than description
+text); and every Canvas housekeeping field with no Personal-OS use (`uuid`, `license`,
+`calendar.ics`, `storage_quota_mb`, blueprint/template flags, account/root-account ids). Assignment
+due dates are never duplicated into `canvas_events` — the assignment row is the one source of a due
+instant, the same no-second-source-of-truth rule the rest of this document applies to calendar data.
+
+**Sync is per-course polling** (courses → assignments with `include[]=submission` → announcements →
+calendar events), not Canvas's aggregate `/planner/items` or `/users/self/upcoming_events` feeds —
+both were evaluated live and rejected because their `plannable` projection is materially thinner
+than the full resources this integration needs (no `points_possible`, no `submission_types`, no full
+submission state), and adopting them would still require a full per-item re-fetch. At a normal
+course load and Canvas's evidently generous per-instance rate limit, a full per-course sweep on a
+cron schedule is well within budget, mirroring this project's own per-course/per-metric polling
+precedent (Google Health's per-stream chunks, Gmail's per-mailbox history walk) rather than reaching
+for an aggregate endpoint that buys nothing here. Idempotency, failure containment and retention
+follow the Gmail/Health template exactly: `onConflictDoUpdate` keyed on
+`(connection_id, canvas_*_id)` with a content-comparison `setWhere` gate so an unchanged row writes
+nothing; a `canvas_sync_runs` row is opened `failed` before any request goes out and flipped to its
+true terminal status on completion, so a killed sync leaves evidence; `failure_class`/`error_message`
+are restricted to a token-shaped regex so provider prose never reaches a log line or a database
+column; one course's failure is contained and the sweep continues to the next course; and
+`canvas_sync_runs` joins the existing daily `retention.cleanup` job on the same 30-day window as
+`mail_sync_runs`/`health_sync_runs`.
+
+**No AI, no mutations, no new egress surface.** Canvas content is never summarized or sent to a
+model — the integration writes only to its own six tables and imports nothing from `ai`, sitting
+entirely outside both of `ai-egress-guard.test.ts`'s pinned surfaces by construction. See ADR-068 for
+the full discovery record (verified live against the owner's real account, not assumed from
+documentation) and the complete field-by-field storage decision.
+
 ## The parse pipeline
 
 1. `POST /capture` → insert `inbox_items` row, status `pending`, return 202.
