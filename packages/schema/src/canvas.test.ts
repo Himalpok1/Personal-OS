@@ -321,7 +321,9 @@ describe("CanvasUpcomingAssignmentSchema (frozen 10.1 wire shape)", () => {
   // through the 10.1 form of this schema, which is strict. ADR-068a's new
   // score/grade keys must therefore stay OUT of it until that client is
   // replaced -- an added key would blank the deployed Canvas card.
-  const { score: _score, grade: _grade, ...ASSIGNMENT_10_1 } = ASSIGNMENT;
+  const ASSIGNMENT_10_1 = Object.fromEntries(
+    Object.entries(ASSIGNMENT).filter(([key]) => key !== "score" && key !== "grade"),
+  );
   const UPCOMING = {
     ...ASSIGNMENT_10_1,
     course_name: "Advanced Web Development",
