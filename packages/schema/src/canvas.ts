@@ -96,11 +96,34 @@ export type CanvasSyncToken = z.infer<typeof CanvasSyncTokenSchema>;
  * in the field, and a bound on a person-typed field is rejected rather than
  * truncated (`text-bounds.ts`'s user-typed-text rule) -- 2000 characters is
  * simply never a legitimate PAT, so the bound cannot cut real input.
+ *
+ * THE TOKEN IS TRIMMED, THEN MUST CONTAIN NO WHITESPACE OR CONTROL CHARACTER
+ * (Checkpoint 10.2 hotfix). A pasted PAT routinely arrives with a trailing
+ * newline; surrounding whitespace is forgiven because it is never part of a
+ * token. Anything left inside the token that is a space, tab, CR, LF or other
+ * control character is REJECTED here, before any request is built, because an
+ * HTTP header value cannot carry one: on 2026-09-16 a PAT pasted with a line
+ * break reached `Authorization: Bearer <token>`, undici refused the header
+ * value with a `TypeError` whose message EMBEDS THE WHOLE VALUE, and that
+ * message -- raw token included -- was written to the production api log by
+ * the generic 500 handler. Rejecting the shape at the boundary is the first of
+ * three layers (canvas-client.ts's `assertHeaderSafeToken` and
+ * apps/api's `serialize-error.ts` scrub are the other two). The Zod issue for
+ * this rule carries the pattern and a static message, never the input.
  */
+export const CANVAS_TOKEN_SAFE_PATTERN = /^[^\s\p{Cc}]+$/u;
 export const CanvasConnectRequestSchema = z
   .object({
     base_url: z.string().url(),
-    personal_access_token: z.string().min(1).max(2000),
+    personal_access_token: z
+      .string()
+      .trim()
+      .min(1)
+      .max(2000)
+      .regex(
+        CANVAS_TOKEN_SAFE_PATTERN,
+        "personal_access_token must not contain whitespace or control characters",
+      ),
   })
   .strict();
 export type CanvasConnectRequest = z.infer<typeof CanvasConnectRequestSchema>;

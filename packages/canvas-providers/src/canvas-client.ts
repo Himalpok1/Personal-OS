@@ -221,6 +221,31 @@ export type CanvasFailureClass =
   // blocked request again.
   | "blocked_url";
 
+/**
+ * Thrown by `request()` BEFORE any header is built when the token cannot be a
+ * valid HTTP header value -- it contains whitespace or a control character.
+ *
+ * WHY THIS CLASS EXISTS (Checkpoint 10.2 hotfix, 2026-09-16). Interpolating
+ * such a token into `Authorization: Bearer <token>` makes undici's
+ * `Headers.append` throw a `TypeError` whose message embeds the ENTIRE header
+ * value -- the raw credential -- and a generic error handler upstream will
+ * log that message. A PAT pasted with a line break did exactly that in
+ * production. This error's message is static and carries nothing from the
+ * token, so it is safe to log anywhere; `classifyCanvasFault` treats it as
+ * `auth_failed` (never retryable: the same token will fail the same way).
+ */
+export class CanvasTokenFormatError extends Error {
+  constructor() {
+    super("Canvas token contains whitespace or a control character");
+    this.name = "CanvasTokenFormatError";
+  }
+}
+
+/** True iff `token` can be placed in an HTTP header value verbatim. */
+export function isHeaderSafeToken(token: string): boolean {
+  return token.length > 0 && !/[\s\p{Cc}]/u.test(token);
+}
+
 export class CanvasApiError extends Error {
   readonly httpStatus: number;
   readonly code: CanvasFailureClass;
@@ -303,6 +328,11 @@ async function request<T>(
   fetchFn: FetchLike,
   signal: AbortSignal | undefined,
 ): Promise<T> {
+  // Refuse a header-unsafe token before ANY header exists: see
+  // CanvasTokenFormatError. This runs on every call, including the worker's
+  // hourly sync with a stored token, so a bad value can never reach undici.
+  if (!isHeaderSafeToken(token)) throw new CanvasTokenFormatError();
+
   let currentUrl = validateCanvasUrl(url);
   const initialOrigin = currentUrl;
   let redirectCount = 0;

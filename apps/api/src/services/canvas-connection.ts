@@ -1,6 +1,7 @@
 import { encryptSecret } from "@personal-os/ai-providers";
 import {
   CanvasApiError,
+  CanvasTokenFormatError,
   CanvasUrlBlockedError,
   type CanvasClient,
   type CanvasSelfResponse,
@@ -216,6 +217,10 @@ export async function connectCanvasConnection(
     self = await params.client.getSelf(baseUrl, params.token);
   } catch (err) {
     if (err instanceof CanvasApiError) throw new CanvasAuthFailedError();
+    // A header-unsafe token is refused by the client before any request
+    // (Checkpoint 10.2 hotfix); the route schema already rejects it with
+    // 400 validation_failed, this is the same answer for a direct caller.
+    if (err instanceof CanvasTokenFormatError) throw new CanvasAuthFailedError();
     if (err instanceof CanvasUrlBlockedError) throw new CanvasUrlBlockedForConnectError();
     throw err;
   }

@@ -80,6 +80,41 @@ function isProviderAuthoredError(err: Error): boolean {
 }
 
 /**
+ * CHECKPOINT 10.2 HOTFIX -- A RUNTIME ERROR CAN QUOTE A CREDENTIAL TOO.
+ *
+ * On 2026-09-16 a Canvas Personal Access Token pasted with a line break was
+ * interpolated into `Authorization: Bearer <token>`; undici's `Headers.append`
+ * refused it with a `TypeError` whose message is
+ * `Headers.append: "Bearer \n<token>" is an invalid header value.` -- the whole
+ * value, raw credential included. `TypeError` is not provider-authored, so the
+ * message survived this serializer into the production api log, twice.
+ *
+ * The primary fixes are upstream (the schema rejects such a token, the client
+ * refuses to build a header from one). This is the backstop that must hold
+ * when a future call site forgets both: (1) any message that is a header-value
+ * complaint is withheld entirely, because ANY header value may be a secret;
+ * (2) every message that is emitted is scrubbed of `Bearer <token>` and of the
+ * Canvas PAT shape (`<digits>~<alphanumerics>`), whatever error carried it.
+ * Neither rule touches the type or the stack frames, so the line stays
+ * diagnosable.
+ */
+const HEADER_VALUE_COMPLAINT = /invalid header (value|name)/i;
+const SECRET_SHAPES: ReadonlyArray<[RegExp, string]> = [
+  [/Bearer\s+\S+/g, "Bearer [redacted]"],
+  [/\b\d+~[A-Za-z0-9]{16,}/g, "[redacted-token]"],
+];
+
+/** Static replacement for a message that describes a header value. */
+const HEADER_VALUE_MESSAGE_WITHHELD = "[header value message withheld]";
+
+export function scrubSecretShapes(message: string): string {
+  if (HEADER_VALUE_COMPLAINT.test(message)) return HEADER_VALUE_MESSAGE_WITHHELD;
+  let out = message;
+  for (const [pattern, replacement] of SECRET_SHAPES) out = out.replace(pattern, replacement);
+  return out;
+}
+
+/**
  * `stack` is a required `string` because Fastify's own
  * `FastifyLoggerOptions["serializers"]["err"]` demands that exact shape --
  * making it optional makes the whole logger-options object fail to match
@@ -114,7 +149,7 @@ export function serializeErrorForLog(err: unknown): SerializedError {
 
   return {
     type,
-    message: isProviderAuthored ? `[${type} message withheld]` : err.message,
+    message: isProviderAuthored ? `[${type} message withheld]` : scrubSecretShapes(err.message),
     // Withheld entirely for provider-authored errors. A stack's own frames are
     // near-worthless for these (they land inside undici), and `framesOnly`
     // alone was NOT sufficient -- see its comment.

@@ -150,6 +150,55 @@ describe("CanvasConnectRequestSchema", () => {
   });
 });
 
+describe("CanvasConnectRequestSchema: token shape (Checkpoint 10.2 hotfix)", () => {
+  const BASE = { base_url: "https://uta.instructure.com" };
+  // The Canvas PAT shape, with a sentinel that is obviously not real.
+  const PAT = "1234~SENTINELnotARealTokenAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+  it("trims surrounding whitespace and newlines from a pasted token", () => {
+    for (const pasted of [`${PAT}\n`, `\n${PAT}`, `  ${PAT}  `, `\t${PAT}\r\n`]) {
+      expect(
+        CanvasConnectRequestSchema.parse({ ...BASE, personal_access_token: pasted })
+          .personal_access_token,
+      ).toBe(PAT);
+    }
+  });
+
+  it("REJECTS a token with an embedded newline, CR, tab, space or control character", () => {
+    for (const bad of [
+      `123~abc\ndef`,
+      `123~abc\rdef`,
+      `123~abc\tdef`,
+      `123~abc def`,
+      `123~abc\u0000def`,
+      `123~abc\u001fdef`,
+    ]) {
+      expect(() =>
+        CanvasConnectRequestSchema.parse({ ...BASE, personal_access_token: bad }),
+      ).toThrow();
+    }
+  });
+
+  it("rejects a token that is only whitespace (empty after trim)", () => {
+    expect(() =>
+      CanvasConnectRequestSchema.parse({ ...BASE, personal_access_token: "  \n  " }),
+    ).toThrow();
+  });
+
+  it("the rejection issue never carries the token itself", () => {
+    const bad = `1234~SENTINEL\nLEAKCHECKxxxxxxxxxxxxxxxxxxxxxxxxxxxx`;
+    let issues = "";
+    try {
+      CanvasConnectRequestSchema.parse({ ...BASE, personal_access_token: bad });
+    } catch (err) {
+      issues = JSON.stringify((err as { issues?: unknown }).issues ?? err);
+    }
+    expect(issues).not.toBe("");
+    expect(issues).not.toContain("LEAKCHECK");
+    expect(issues).not.toContain("SENTINEL");
+  });
+});
+
 describe("CanvasConnectionStatusSchema", () => {
   it("accepts each of the three lifecycle states", () => {
     for (const s of ["active", "disconnected", "invalid_token"]) {

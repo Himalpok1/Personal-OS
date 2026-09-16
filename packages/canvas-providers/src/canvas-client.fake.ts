@@ -1,4 +1,3 @@
-import { CanvasApiError } from "./canvas-client.js";
 import type {
   CanvasAnnouncementApiShape,
   CanvasAssignmentApiShape,
@@ -20,7 +19,10 @@ import type {
 // call nobody intended -- the difference between "we tested the sync loop"
 // and "the loop silently ran an extra time and we never knew".
 
-type Scripted<T> = T | CanvasApiError;
+// Any Error, not only CanvasApiError: the 10.2 hotfix test scripts the exact
+// TypeError undici raised in production to prove the api's 500 path logs no
+// credential, which a CanvasApiError-only fake could never express.
+type Scripted<T> = T | Error;
 
 export interface FakeCall {
   method:
@@ -70,7 +72,7 @@ function drain<T>(queue: Scripted<T>[], method: string): T {
   // A queued error is thrown rather than returned, so a test can script a
   // 401 (revoked token), a 404 (deleted course) or a rate-limited 403 exactly
   // where it wants one.
-  if (next instanceof CanvasApiError) throw next;
+  if (next instanceof Error) throw next;
   return next;
 }
 

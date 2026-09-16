@@ -8,6 +8,7 @@ import { canvasConnections, canvasCourses, canvasSyncRuns } from "@personal-os/d
 import { CanvasConnectionSchema } from "@personal-os/schema";
 import { eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { env } from "../env.js";
 import {
@@ -181,6 +182,30 @@ describe("POST /canvas-connections", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json<{ error: string }>().error).toBe("validation_failed");
+    expect(fake.callsFor("getSelf")).toHaveLength(0);
+  });
+
+  // Checkpoint 10.2 hotfix (2026-09-16): a PAT pasted with a line break
+  // reached the Authorization header, undici refused it with a TypeError
+  // that quoted the whole value, and the generic 500 handler logged it.
+  it("trims a token pasted with surrounding newlines and connects with the trimmed value", async () => {
+    const res = await connectOnce({ token: `\n${TOKEN}\n` });
+    expect(res.statusCode).toBe(201);
+    const [call] = fake.callsFor("getSelf");
+    expect(call?.token).toBe(TOKEN);
+  });
+
+  it("rejects a token with an embedded newline as validation_failed before any Canvas call, echoing nothing", async () => {
+    const leaky = "1234~SENTINEL\nLEAKCHECKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+    const res = await app.inject({
+      method: "POST",
+      url: "/canvas-connections",
+      payload: { base_url: BASE_URL, personal_access_token: leaky },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: string }>().error).toBe("validation_failed");
+    expect(res.body).not.toContain("LEAKCHECK");
+    expect(res.body).not.toContain("SENTINEL");
     expect(fake.callsFor("getSelf")).toHaveLength(0);
   });
 
@@ -770,5 +795,43 @@ describe("API wire safety", () => {
         access_token_ciphertext: "leaked-bytes",
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("Checkpoint 10.2 hotfix: the production incident, replayed against the real log stream", () => {
+  // Bypasses BOTH upstream layers (the schema's shape check and the client's
+  // own refusal) by injecting a client that rejects with the exact TypeError
+  // undici produced in production -- the case where a future call site
+  // forgets both. The generic 500 path must still write no token.
+  const PAT = "13430~SENTINELnotTheRealTokenAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  const undiciError = new TypeError(
+    `Headers.append: "Bearer \n${PAT}" is an invalid header value.`,
+  );
+
+  it("logs the 500 without the token anywhere in the stream", async () => {
+    const chunks: string[] = [];
+    const stream = new PassThrough();
+    stream.on("data", (chunk: Buffer) => chunks.push(chunk.toString("utf8")));
+    const leakingClient = createFakeCanvasClient();
+    leakingClient.queueSelf(undiciError);
+    const leakApp = await buildTestApp({ canvasClient: leakingClient, logDestination: stream });
+    await leakApp.ready();
+    try {
+      const res = await leakApp.inject({
+        method: "POST",
+        url: "/canvas-connections",
+        payload: { base_url: BASE_URL, personal_access_token: TOKEN },
+      });
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toContain("SENTINEL");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const log = chunks.join("");
+      expect(log).toContain("TypeError");
+      expect(log).not.toContain("SENTINEL");
+      expect(log).not.toContain("13430~");
+      expect(log).not.toContain("Bearer");
+    } finally {
+      await leakApp.close();
+    }
   });
 });

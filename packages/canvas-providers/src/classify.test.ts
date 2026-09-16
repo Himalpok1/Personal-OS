@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { CanvasApiError, type CanvasFailureClass } from "./canvas-client.js";
+import {
+  CanvasApiError,
+  CanvasTokenFormatError,
+  type CanvasFailureClass,
+} from "./canvas-client.js";
 import { classifyCanvasFault } from "./classify.js";
 
 function apiError(status: number, code: CanvasFailureClass): CanvasApiError {
@@ -83,6 +87,16 @@ describe("classifyCanvasFault: non-CanvasApiError inputs", () => {
       failureClass: "network_error",
       httpStatus: null,
       retryable: true,
+    });
+  });
+});
+
+describe("classifyCanvasFault: CanvasTokenFormatError (10.2 hotfix)", () => {
+  it("is auth_failed, no http status, never retryable", () => {
+    expect(classifyCanvasFault(new CanvasTokenFormatError())).toEqual({
+      failureClass: "auth_failed",
+      httpStatus: null,
+      retryable: false,
     });
   });
 });

@@ -1,4 +1,8 @@
-import { CanvasApiError, type CanvasFailureClass } from "./canvas-client.js";
+import {
+  CanvasApiError,
+  CanvasTokenFormatError,
+  type CanvasFailureClass,
+} from "./canvas-client.js";
 import { CanvasUrlBlockedError } from "./ssrf.js";
 
 // Canvas failure classification (ADR-068).
@@ -53,6 +57,15 @@ export function classifyCanvasFault(err: unknown): CanvasFault {
       httpStatus: err.httpStatus,
       retryable: err.code === "rate_limited" || err.httpStatus >= 500,
     };
+  }
+
+  if (err instanceof CanvasTokenFormatError) {
+    // Refused before any header was built (Checkpoint 10.2 hotfix): the
+    // stored or supplied token cannot be a header value. Never retryable --
+    // the same token fails the same way -- and classified as `auth_failed`
+    // so a connection-level occurrence flips the row to `invalid_token`
+    // exactly like a dead PAT would.
+    return { failureClass: "auth_failed", httpStatus: null, retryable: false };
   }
 
   if (err instanceof CanvasUrlBlockedError) {

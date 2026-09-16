@@ -1,6 +1,6 @@
 import { APICallError, TypeValidationError } from "ai";
 import { describe, expect, it } from "vitest";
-import { serializeErrorForLog } from "./serialize-error.js";
+import { scrubSecretShapes, serializeErrorForLog } from "./serialize-error.js";
 
 // Sentinels chosen to look like the real things that were reachable here: a
 // Google access token, a Google error_description, and a Postgres `detail`
@@ -201,5 +201,37 @@ describe("serializeErrorForLog", () => {
       });
       expect(Object.keys(serializeErrorForLog(err)).sort()).toEqual(["message", "stack", "type"]);
     });
+  });
+});
+
+describe("Checkpoint 10.2 hotfix: a runtime error that quotes a credential", () => {
+  // The exact shape undici produced in production on 2026-09-16 when a PAT
+  // pasted with a line break reached `Authorization: Bearer <token>`.
+  const PAT = "13430~SENTINELnotTheRealTokenAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  const UNDICI_MESSAGE = `Headers.append: "Bearer \n${PAT}" is an invalid header value.`;
+
+  it("withholds a header-value complaint entirely (message and stack carry no token)", () => {
+    const err = new TypeError(UNDICI_MESSAGE);
+    const out = serializeErrorForLog(err);
+    expect(out.type).toBe("TypeError");
+    expect(out.message).toBe("[header value message withheld]");
+    expect(flatten(out)).not.toContain("SENTINEL");
+    expect(flatten(out)).not.toContain("Bearer");
+  });
+
+  it("scrubs a bearer token and a PAT-shaped token from any other message", () => {
+    expect(scrubSecretShapes(`request failed with Authorization: Bearer ${PAT} at 12:00`)).toBe(
+      "request failed with Authorization: Bearer [redacted] at 12:00",
+    );
+    expect(scrubSecretShapes(`token ${PAT} rejected`)).toBe("token [redacted-token] rejected");
+    const out = serializeErrorForLog(new Error(`unexpected ${PAT}`));
+    expect(flatten(out)).not.toContain("SENTINEL");
+  });
+
+  it("leaves an ordinary message alone", () => {
+    expect(scrubSecretShapes('relation "tasks" does not exist')).toBe(
+      'relation "tasks" does not exist',
+    );
+    expect(scrubSecretShapes("value 12~ab is short")).toBe("value 12~ab is short");
   });
 });

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { FetchLike } from "./canvas-client.js";
-import { CanvasApiError, createCanvasClient } from "./canvas-client.js";
+import {
+  CanvasApiError,
+  CanvasTokenFormatError,
+  createCanvasClient,
+  isHeaderSafeToken,
+} from "./canvas-client.js";
 import { CanvasUrlBlockedError } from "./ssrf.js";
 
 /** Records every request and replies with a scripted body. */
@@ -273,5 +278,42 @@ describe("createCanvasClient: SSRF protection", () => {
     await expect(client.getSelf("https://uta.instructure.com", "tok")).rejects.toBeInstanceOf(
       CanvasUrlBlockedError,
     );
+  });
+});
+
+describe("createCanvasClient: header-unsafe tokens are refused before any request (10.2 hotfix)", () => {
+  const LEAK = "1234~SENTINELleakcheckAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+  it("isHeaderSafeToken accepts a PAT and rejects whitespace/control characters", () => {
+    expect(isHeaderSafeToken("1234~abcDEF0123")).toBe(true);
+    for (const bad of ["", "a b", "a\nb", "a\rb", "a\tb", "a\u0000b", "\n1234~abc"]) {
+      expect(isHeaderSafeToken(bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("throws CanvasTokenFormatError without calling fetch, and the error carries no part of the token", async () => {
+    const { fetchFn, urls } = stubFetch([{ status: 200, body: { id: 1 } }]);
+    const client = createCanvasClient(fetchFn);
+    const token = `\n${LEAK}`;
+    let caught: unknown;
+    try {
+      await client.getSelf("https://uta.instructure.com", token);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(CanvasTokenFormatError);
+    expect(urls).toHaveLength(0);
+    const text = `${(caught as Error).message}\n${(caught as Error).stack ?? ""}`;
+    expect(text).not.toContain("SENTINEL");
+    expect(text).not.toContain("leakcheck");
+  });
+
+  it("applies to every method, including the ones the worker's sync calls", async () => {
+    const { fetchFn, urls } = stubFetch([{ status: 200, body: [] }]);
+    const client = createCanvasClient(fetchFn);
+    await expect(
+      client.listActiveCourses("https://uta.instructure.com", "12~ab cd"),
+    ).rejects.toBeInstanceOf(CanvasTokenFormatError);
+    expect(urls).toHaveLength(0);
   });
 });
