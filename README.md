@@ -7,11 +7,13 @@ The canonical design is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 ## Current state
 
 Phase 10 (Codebase Consolidation & Agent Readiness) is open. Checkpoint 10.0 —
-behavior-preserving cleanup and agent-readiness audit — is deployed and accepted,
-and Checkpoint 10.1 adds a read-only Canvas LMS integration (courses/assignments
-sync, live-validated in production). Phases 0–9 are complete; per-phase records
-are archived in `docs/history/`. Production runs on a Tailscale-only home server,
-with the mobile client on a physical Rabbit R1.
+behavior-preserving cleanup and agent-readiness audit — and Checkpoint 10.1 — a
+read-only Canvas LMS integration (courses/assignments sync, live-validated in
+production) — are deployed and accepted; Checkpoint 10.1C (the Canvas reconnect
+fix) is implemented and reviewed but not yet deployed. Phases 0–9 are complete;
+per-phase records are archived in `docs/history/`. Production runs on a
+Tailscale-only home server, with the mobile client on a physical Rabbit R1.
+`main` is the canonical branch.
 
 See [`docs/STATUS.md`](docs/STATUS.md).
 
@@ -29,7 +31,7 @@ See [`docs/STATUS.md`](docs/STATUS.md).
 - Docker Compose
 - Tailscale
 
-## Intended monorepo layout
+## Monorepo layout
 
 ```text
 apps/
@@ -46,15 +48,16 @@ packages/
   calendar-providers/  # Google Calendar + CalDAV clients
   health-providers/    # Google Health catalog, OAuth, sync
   mail-providers/      # Gmail catalog, OAuth, metadata-only client
+  monitoring/          # probes, thresholds, incident state machine
   canvas-providers/    # Canvas LMS read-only client
 
 docs/
   ARCHITECTURE.md
-  DECISIONS.md
+  DECISIONS.md         # ADR index; full text in docs/decisions/
   STATUS.md            # present state only
-  history/             # closed-phase records, verbatim
-  PHASE-0-CHECKLIST.md
+  AGENT-READINESS.md   # service-boundary inventory
   WORKFLOW.md
+  history/             # closed-phase records, verbatim
 ```
 
 ## Important

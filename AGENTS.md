@@ -13,11 +13,14 @@ Read these files in this order:
 
 Do not begin implementation until you understand the locked decisions and current phase.
 
-**`docs/STATUS.md` is present state only.** As of Checkpoint 8.0 it no longer contains the
-checkpoint history — that lives in `docs/history/phase-0.md` … `phase-8.md`, verbatim and
-unaltered. Read a phase file only when you need the detail behind a completed checkpoint; do not
-load them by default. `docs/PHASE-0-CHECKLIST.md` is a closed Phase 0 artifact and is no longer
-required reading.
+**`docs/STATUS.md` is present state only.** It carries the open phase's checkpoint record, the open
+debt ledger and the next action — nothing closed. Closed-phase records live in
+`docs/history/phase-0.md` … `phase-9.md`, verbatim and unaltered; read a phase file only when you
+need the detail behind a completed checkpoint, never by default.
+
+**`docs/DECISIONS.md` is an index** — one line per ADR. The full, verbatim text of each decision is in
+`docs/decisions/ADR-NNN.md`; open one only when the index line is not enough. `docs/PHASE-0-CHECKLIST.md`
+is a closed Phase 0 artifact and is not required reading.
 
 ## Locked architecture
 
@@ -36,14 +39,14 @@ Key constraints:
 - The app is the system of record.
 - Offline support is an outbox for writes, not full bidirectional offline sync.
 - The first functional module is capture: notes, reminders, tasks, events, and voice.
-- Phase 0 must pass before Phase 1 begins.
+- The project is phase-gated: a checkpoint is not started until the previous one is complete,
+  verified and explicitly approved. `docs/STATUS.md` states the current phase and what is approved.
 
 Do not silently replace or reinterpret these decisions.
 
 ## Repository layout
 
-This is the layout as it exists today, not a plan. Five packages were added after this section was
-first written and are listed here as of Checkpoint 8.0; the layout is unchanged at the Phase 8 closeout.
+This is the layout as it exists today, not a plan (verified against the tree 2026-09-16).
 
 ```text
 apps/
@@ -61,20 +64,34 @@ packages/
   health-providers/    # Google Health catalog, OAuth, client, sync (Phase 6)
   mail-providers/      # Gmail catalog, OAuth, metadata-only client (Phase 7)
   monitoring/          # probes, thresholds, incident state machine (Phase 7)
+  canvas-providers/    # Canvas LMS read-only client + SSRF guard (Phase 10)
 
 docs/
   ARCHITECTURE.md          # canonical architecture
-  DECISIONS.md             # ADR log
+  DECISIONS.md             # ADR INDEX — one line per decision
+  decisions/ADR-NNN.md     # full verbatim text of each ADR, on demand
   STATUS.md                # PRESENT STATE ONLY (see history/)
+  AGENT-READINESS.md       # canonical service-boundary inventory (10.0)
   WORKFLOW.md
+  SOURCE-DURABILITY.md     # source-durability design; Option 2 still open
+  SOAK-9.2.md              # owner-terminated adoption soak record
+  PHASE-8-CLOSEOUT.md, CHECKPOINT-8.6*.md, SOAK-8.5.md   # closed Phase 8 companion records
   PHASE-0-CHECKLIST.md     # closed Phase 0 artifact
-  history/                 # closed-phase records, verbatim, not auto-loaded
-    phase-0.md … phase-8.md
+  history/                 # closed-phase records, verbatim, not auto-loaded, never edited
+    phase-0.md … phase-9.md
     superseded-present-state.md
+    superseded-present-state-2026-09-16.md
+
+scripts/
+  grant-pgboss-runtime.sql # runtime grants for the least-privilege app role
+  soak/                    # read-only observer tooling from Checkpoint 9.2 (reusable)
 ```
 
-`packages/db`, `packages/ai-providers`, `packages/calendar-providers` and `packages/health-providers`
-are **server-only** — they import `pg` or `node:crypto` and must never reach the Expo bundle.
+`packages/db`, `packages/ai-providers`, `packages/calendar-providers`, `packages/health-providers`,
+`packages/mail-providers`, `packages/canvas-providers` and `packages/monitoring` are **server-only** —
+they import `pg`, `node:crypto` or another Node built-in and must never reach the Expo bundle. Only
+`packages/schema`, `packages/api-client` and the client-safe subpaths of `packages/core` are
+client-reachable.
 `packages/core` is mixed: its barrel re-exports Node-only recurrence and device-auth modules, so
 client-reachable code imports the deep subpaths its `exports` map exposes (`./timezone`,
 `./recurrence/editor`, `./health/*`), never the barrel.
@@ -142,15 +159,17 @@ The project is phase-gated.
 
 **`docs/STATUS.md` is the canonical statement of the current phase and of what is approved next. Read it before assuming scope.** This section states the rule; it does not track the phase number.
 
-As of Checkpoint 9.6 (2026-09-15): **Phases 0–8 are complete and production-deployed at migration
-level 20.** Phase 8 (ADR-056) closed under ADR-061; its record is `docs/history/phase-8.md` and its
-closure evidence plus the Phase 9 starting brief are in `docs/PHASE-8-CLOSEOUT.md`. **Phase 9 is
-open under the accelerated operating model; Checkpoints 9.0, 9.1, 9.3, 9.4, 9.5 and 9.6
-(ADR-062 … ADR-065) are deployed and accepted, 9.2 was owner-terminated, and no further Phase 9
-checkpoint is selected** — the next product direction is an owner decision. ADR-056's standing
-rules carry forward regardless of phase: read-only intelligence before write-capable intelligence, no
-unrestricted full-content cloud egress, no pgvector or Postgres image change without its own
-infrastructure ADR, and every new alert producer carries an occurrence-scoped dedupe key (ADR-058).
+As of 2026-09-16: **Phases 0–9 are complete and production-deployed at migration level 21.** Phase 8
+closed under ADR-061 (`docs/PHASE-8-CLOSEOUT.md`, `docs/history/phase-8.md`); Phase 9 closed under
+ADR-069 (`docs/history/phase-9.md`). **Phase 10 — Codebase Consolidation & Agent Readiness — is open:
+Checkpoints 10.0 and 10.1/10.1B are deployed and accepted; 10.1C is implemented and reviewed but NOT
+deployed pending explicit owner authorization**, and no checkpoint after it is selected — the next
+product direction is an owner decision. Standing rules carry forward regardless of phase: read-only
+intelligence before write-capable intelligence, no unrestricted full-content cloud egress, no pgvector
+or Postgres image change without its own infrastructure ADR (ADR-056), every new alert producer
+carries an occurrence-scoped dedupe key (ADR-058), and the API performs no background work inline —
+the only synchronous model calls are the three ADR-approved, request-scoped reads (Brief, Ask,
+Suggested Focus; see `docs/ARCHITECTURE.md` → *Background execution*).
 
 Do not start the next checkpoint until the current one is complete, verified, and explicitly approved. Checkpoints marked with a stop are hard gates; for closed phases those markers are in the relevant
 `docs/history/phase-N.md`.

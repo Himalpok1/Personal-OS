@@ -1,3 +1,7 @@
+> **Closed artifact.** Phase 9 closed on 2026-09-15 (ADR-069); its checkpoint record is in
+> `docs/history/phase-9.md`. This file is kept at this path because `scripts/soak/` and the phase
+> record reference it. Nothing below the banner has been changed since the checkpoint closed.
+
 # Checkpoint 9.2 — 21-day adoption soak
 
 **Status: OWNER-TERMINATED BEFORE MINIMUM DURATION (2026-09-14T01:53:37.600Z). NO ADOPTION

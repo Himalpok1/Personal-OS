@@ -1,6 +1,8 @@
 # Agent Readiness Inventory
 
-**Produced:** Phase 10, Checkpoint 10.0 (2026-09-15). **Purpose:** inventory the Personal OS
+**Produced:** Phase 10, Checkpoint 10.0 (2026-09-15). **Amended 2026-09-16** with §1a (the Canvas
+boundary added by Checkpoint 10.1, which post-dates this inventory); §1–§5 are otherwise as
+produced at 10.0 and their file:line references were not re-derived. **Purpose:** inventory the Personal OS
 service boundaries that a future read-only or write-capable agent (Hermes/OpenClaw or otherwise)
 would call, and name which of today's exports are canonical versus incidental. This is not a tool
 design document and does not authorize building an agent — no agent runtime, tool loop, or
@@ -37,6 +39,23 @@ canonical-boundary audit; file:line references point at the current tree.
 | **AI — context building / output filtering** | `buildTodayContext` (read-side, see above); `selectAskContext(...)` — `apps/api/src/ask/select-context.ts:153` (body-reading lexical selection, gated to `scope !== "today"`); `sanitizeModelText`/`containsLinkShapedContent` — `packages/core/src/ai/output-safety.ts:334/398` (shared by the Brief lane and the mail digest) | Read (context) / output transform | Same as the lane calling it | Pure | lane-specific | lane-specific | `selectAskContext` is the one path that reads note/task bodies — gated behind explicit non-preset questions only | **`buildTodayContext` safe; `selectAskContext` needs a wrapper** — any future exposure of body-reading context must reuse the SAME redaction/budget contract, not re-derive it |
 
 ---
+
+### 1a. Canvas LMS (added by Checkpoint 10.1 / 10.1C, after this inventory was produced)
+
+Read-only, Personal-Access-Token-authenticated (ADR-068). **Canvas data reaches no AI surface today**:
+nothing under `apps/api/src/intelligence`, `brief`, `search`, `focus` or `read-models` references it,
+so assignment descriptions and announcements — third-party-authored text in exactly the ADR-054 sense —
+are never in a prompt. A future tool that exposes them must treat them as attacker-authored input and
+go through the shared output filter (ADR-058), like mail.
+
+| Capability | Canonical boundary | Read/write | Auth/consent boundary | Idempotency | Input schema | Output schema | Privacy sensitivity | Future-agent exposure |
+|---|---|---|---|---|---|---|---|---|
+| **Canvas — connect** | `connectCanvasConnection(db, input)` — `apps/api/src/services/canvas-connection.ts` (`POST /canvas-connections`, `apps/api/src/routes/canvas-connections.ts`) | Write (credential) | Tailscale perimeter only; the PAT is pasted by the owner | Since 10.1C: SELECT-then-write keyed on `canvas_base_url` — 201 creates, 200 reactivates the same row in place, `409 canvas_already_connected` if active, `409 canvas_account_mismatch` if the prior row belongs to another `canvas_user_id` | `CanvasConnectRequestSchema` (`packages/schema/src/canvas.ts`) | `CanvasConnectionSchema` — never the token, ciphertext, IV or tag | **Highest** — a live PAT; encrypted triple at rest, structurally all-or-nothing, never logged | **Never.** A credential write is an owner action, not a tool |
+| **Canvas — disconnect** | `disconnectCanvasConnection(db, id)` — same file (`POST /canvas-connections/:id/disconnect`) | Write | Tailscale perimeter | Idempotent — NULLs the credential triple and sets `disconnected`; history rows retained | id | `CanvasConnectionSchema` | As above | Never |
+| **Canvas — connections list / detail** | `GET /canvas-connections`, `GET /canvas-connections/:id` | Read | Tailscale perimeter | Pure | — | `CanvasConnectionsListResponseSchema` / `CanvasConnectionSchema`; `last_sync_error` is a machine-shaped class, never provider prose | Low (base URL, display name, status) | Read-only status is safe to expose |
+| **Canvas — sync trigger / runs** | `POST /canvas-connections/:id/sync` (enqueues `canvas.sync-connection`, `apps/api/src/queue-names.ts`), `GET /canvas-connections/:id/sync-runs` | Write (enqueue) / Read | Tailscale perimeter | Trigger is `singletonKey`-deduped; the hourly `canvas.sync-cron` in `apps/worker/src/index.ts` is the normal path | — | `CanvasSyncTriggerResponseSchema` / `CanvasSyncRunsResponseSchema` | Low | A tool should never trigger sync; read `sync-runs` if freshness matters |
+| **Canvas — upcoming assignments** | `listUpcomingCanvasAssignments(db, withinDays, now)` — `apps/api/src/routes/canvas-assignments.ts` (`GET /canvas-assignments/upcoming?within_days=`) | Read | Tailscale perimeter | Pure/deterministic for a fixed `now` | `CanvasUpcomingAssignmentsQuerySchema` | `CanvasUpcomingAssignmentsResponseSchema` (denormalized with course name) | Medium — coursework titles, due instants and a same-origin-checked `html_url` | The natural read boundary for a future `get_canvas_context`; **descriptions are third-party text** and must be filtered before any prompt |
+| **Canvas — sync engine** | `apps/worker/src/canvas/orchestrate.ts` + `persist.ts`, client in `packages/canvas-providers` (SSRF guard `ssrf.ts`, ported from CalDAV) | Worker-owned | n/a | Content-hash upserts; six tables (migration `0020`) | — | — | Sync errors are recorded as a class in `last_sync_error`; `invalid_token` is a CHECK-vocabulary status that no worker path writes yet (10.1C, recorded debt) | Never called directly |
 
 ## 2. Future-agent tool contract as currently shipped (ADR-066 §4)
 
@@ -101,4 +120,5 @@ place at zero cost.
 | Events | `POST /events` / `PATCH /events/:id`, checking `origin` first |
 | Calendar reads | `GET /events/range` or `GET /agenda` |
 | Notifications | Enqueue via the existing dispatch job with an occurrence-scoped `dedupeKey` — never a new push path |
+| Canvas | `GET /canvas-assignments/upcoming` (read-only); never the connection or sync routes, never the tables |
 | AI | `POST /ask` (already composes context building + provider resolution + citation validation) — no write-capable AI path exists, and building one needs its own ADR plus a `posops_readonly` role |

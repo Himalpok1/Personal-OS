@@ -1,3 +1,8 @@
+> **Closed artifact.** Phase 8 closed on 2026-09-12 (ADR-061). This file said it would be "deleted
+> into `docs/history/`" at that point; it was instead **kept at this path**, because
+> `docs/history/phase-8.md`, `docs/PHASE-8-CLOSEOUT.md` and code comments reference it here. Nothing
+> below the banner has been changed since the checkpoint closed.
+
 # Checkpoint 8.5 — Instrumented daily-driver soak
 
 **Status: TERMINATED BY OWNER 2026-09-04. Adoption soak DEFERRED.** This file is the checkpoint's working record: the window, the

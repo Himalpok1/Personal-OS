@@ -9,32 +9,33 @@ Both agents must follow:
 - `AGENTS.md`
 - `docs/ARCHITECTURE.md`
 - `docs/DECISIONS.md`
+- `docs/DECISIONS.md` — the ADR **index**; each decision's full text is in `docs/decisions/ADR-NNN.md`.
 - `docs/STATUS.md` — **present state only.** Closed-phase history is in `docs/history/phase-N.md`,
   verbatim and not auto-loaded; open a phase file only when you need its detail.
 
 Claude additionally reads `CLAUDE.md`.
 
-## Recommended local layout
+## Branches and worktrees
 
-```text
-~/Developer/
-  personal-os/           # clean/main checkout
-  personal-os-claude/    # Claude worktree
-  personal-os-codex/     # Codex worktree
-```
-
-This is optional at the very beginning, but strongly recommended once both agents are active.
-
-## Worktree example
-
-From the main checkout:
+**`main` is the canonical branch** and tracks `origin/main` on the private GitHub remote. Work
+happens on a focused branch cut from `main`, in its own worktree, and lands back on `main` by
+fast-forward (a pull request on the remote is the review surface). Long-lived `phase-N-*` branches
+are no longer used: the Phase 7–10 lineage was fast-forwarded into `main` on 2026-09-16 and the
+branches deleted.
 
 ```bash
+# from the main checkout
 git worktree add ../personal-os-claude -b claude/current-task main
 git worktree add ../personal-os-codex -b codex/current-task main
 ```
 
-Do not have both agents edit the same working tree concurrently.
+Claude Code's own worktrees live under `.claude/worktrees/` (git-ignored) and follow the same rule.
+Do not have both agents edit the same working tree concurrently, and never reset or check out over
+a worktree that has another agent's uncommitted changes.
+
+**Branch hygiene.** Once a branch is fully contained in `main`, delete it locally and on the remote.
+A branch that must be preserved unmerged (the two pre-linearization Phase 6 audit originals) is kept
+as an `archive/*` tag, not a branch, and is not pushed — see `docs/SOURCE-DURABILITY.md`.
 
 ## Standard task cycle
 

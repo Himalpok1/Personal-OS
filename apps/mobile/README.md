@@ -14,9 +14,10 @@ pnpm install
 
 ## Running
 
-The app uses custom native modules (exact-alarm status, Google Calendar auth,
-hardware input bridge), so it requires a **development build** — Expo Go is not
-supported.
+The app uses custom native modules (`modules/capture-intent`,
+`modules/exact-alarm-status`, `modules/google-calendar-auth`) and config plugins
+(`plugins/withCaptureShortcut.ts`, `plugins/withHardwareInputBridge.ts`), so it
+requires a **development build** — Expo Go is not supported.
 
 From `apps/mobile`:
 
@@ -25,6 +26,7 @@ pnpm start      # dev server
 pnpm android    # run on Android
 pnpm ios        # run on iOS
 pnpm web        # run web
+pnpm android:ui-test   # side-by-side com.himal.personalos.dev UI-test build (never targets production)
 ```
 
 ## Notes

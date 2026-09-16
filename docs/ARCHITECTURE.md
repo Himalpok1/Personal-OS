@@ -2,7 +2,7 @@
 
 Single-user, self-hosted life dashboard. Notes, reminders, tasks, calendar, projects, finance, health, email summaries, service monitoring, idea dump — with voice capture and an AI layer on top.
 
-*Revision 3 — separate worker process, completion-anchored recurrence generated lazily, primary reminder device explicitly selected.*
+*Revision 3 — separate worker process, completion-anchored recurrence generated lazily, primary reminder device explicitly selected. Reconciled 2026-09-16 (Phase 10): the phase plan now covers Phases 9–10, the notification section records the shipped channels and reminder model, and the worker-ownership rule records its one ADR-approved exception.*
 
 ---
 
@@ -28,6 +28,12 @@ Single-user, self-hosted life dashboard. Notes, reminders, tasks, calendar, proj
 | Offline | App outbox queues writes — no full offline read sync |
 | Network | Tailscale only, VPN On Demand on iOS |
 | First module | Capture: notes / reminders / tasks + voice |
+| Backups | **None** — persistent Docker storage is not a backup (ADR-024) |
+| AI providers | Provider-agnostic Vercel AI SDK layer over user-supplied, DB-stored, encrypted keys; no silent fallback (ADR-026) |
+| Health | Read-only, server-side Google Health cloud sync; passive, never fed to the AI layer (ADR-046) |
+| Mail | Gmail only, `gmail.metadata` only, read-only, polled; the app never acts on mail (ADR-052/053/054) |
+| Intelligence | Read-only before write-capable; request-scoped, cited, nothing stored; no pgvector or Postgres image change without its own ADR (ADR-056/066/067) |
+| Canvas | Read-only, PAT-authenticated Canvas LMS sync (ADR-068) |
 
 ---
 
@@ -90,7 +96,8 @@ The API handles HTTP and nothing else. Anything slow, scheduled, retried, or ext
 
 **Rules for the split:**
 
-- The API **never** performs the work inline, only enqueues. `/capture` writes the inbox row and enqueues, then returns 202 — that's already the design, this makes ownership explicit.
+- The API **never** performs background work inline, only enqueues. `/capture` writes the inbox row and enqueues, then returns 202 — that's already the design, this makes ownership explicit.
+  **One recorded exception (ADR-041/043, ADR-066, ADR-067):** owner-initiated, request-scoped AI *reads* — the Daily Brief (`POST /briefs`), Ask (`POST /ask`) and Suggested Focus (`POST /focus/suggestion`) — call the model synchronously inside the API request, under explicit per-attempt timeouts, output-token caps and a test-pinned allowlist of `generateText` call sites. They are synchronous precisely because they must never become queued, scheduled or autonomous: nothing about them is retried by pg-boss or run by the worker, and nothing they produce is stored except the Brief's own row. Every slow, scheduled, retryable or externally rate-limited operation still belongs to the worker.
 - **Every job must be idempotent.** pg-boss retries on failure and can deliver twice under crash conditions. Key on `client_uuid`, `inbox_id`, or `(parent_id, occurs_at)` and make a second run a no-op.
 - Both processes import `packages/db` and connect to the same Postgres. No API-to-worker HTTP calls; the database and queue are the entire interface.
 - Separate containers in the same compose file, separate health endpoints, `restart: unless-stopped` on both.
@@ -682,12 +689,25 @@ Since your app owns reminders, notification reliability *is* the product.
 
 **Routing rules:**
 
-| Category | Delivery | Targets |
-|---|---|---|
-| Scheduled reminders | Local notification, scheduled on-device | Primary reminder device only |
-| Capture confirmations | Expo Push | Devices with `notify_confirmations` |
-| Service-down alerts | Expo Push | Devices with `notify_alerts` |
-| Daily digests | Expo Push | Devices with `notify_digests` |
+| Category | Delivery | Targets | Android channel (9.1) |
+|---|---|---|---|
+| Scheduled reminders | Local notification, scheduled on-device | Primary reminder device only | `reminders` (MAX) |
+| Capture confirmations | Expo Push | Devices with `notify_confirmations` | `updates` (DEFAULT) |
+| Integration / service alerts | Expo Push | Devices with `notify_alerts` | `alerts` (HIGH) |
+| Mail digests | Expo Push | Devices with `notify_digests` | `updates` (DEFAULT) |
+| Notification-shade capture shortcut | Local, persistent, re-armed on tap | The device itself; never through `notifications.dispatch` | `capture` (LOW) |
+
+**As shipped (Checkpoints 9.1 and 9.4).** The four Android channels above are the complete set
+(`apps/mobile/src/notifications/channel.ts`); `notifications.dispatch` maps `category: "alert"` to
+`alerts` and every other remote category to `updates`. Reminders are no longer derived on-device
+from task rows: the primary device schedules from **`GET /reminders`** — one item per one-off task
+with a reminder and one per open occurrence of a recurring task, the latter derived from the
+parent's `remind_at` wall clock and its day-offset from `due_at` in `recurrence_timezone`, with
+`snoozed_until` overriding — under deterministic identifiers `reminder:<key>:<instant>` so a
+reconciliation pass can diff against the OS schedule. Each reminder carries the actions
+**Done / Snooze 1h / Tomorrow 9am**, all `opensAppToForeground: true`, because a non-foregrounding
+action is lost when the app process is dead. Snooze is an occurrence property, never a rule edit
+(`occurrences.snoozed_until`, ADR-063).
 
 **Only the primary device schedules reminder notifications locally.** Every device syncs task data, but non-primary devices skip the `expo-notifications` scheduling step entirely. That's what prevents a reminder firing simultaneously on your phone, tablet, and an open browser tab.
 
@@ -847,7 +867,11 @@ Checkpoints 7.0–7.8; see `docs/history/` for the checkpoint record and ADRs 05
 
 **Phase 8 — Consolidation & adoption (redefined 2026-09-02, ADR-056).** The original Phase 8 entry — *"AI layer. Semantic search over everything (pgvector), chat with tool access to all modules, proactive surfacing"* — is **superseded**. It assumed that by Phase 8 everything would be "uniformly structured and queryable". Everything is indeed uniformly structured; almost nothing is in it. Measured at Checkpoint 8.0: production holds 2 tasks, 3 notes, 6 inbox items, 0 projects and 0 events, while health, mail, calendar and monitoring all sync daily — and the repository is eighteen days old, having skipped this document's own instruction to live on Phases 0–3 for a month by zero days.
 
-Phase 8 as approved: **make Personal OS a daily driver.** Make failures visible, reduce capture friction, make stored content findable, make project and source state durable, reduce agent context overhead, then run an instrumented adoption soak whose deliverable is evidence rather than a feature. **No semantic search, no embeddings, no retrieval layer and no write-capable agent** — read-only intelligence precedes write-capable intelligence, and at the observed corpus size the whole first-party corpus fits in a single model call. **pgvector is excluded from Phase 8 and the Postgres image stays frozen**; it is not permanently forbidden, but reconsidering it requires its own infrastructure ADR and explicit owner approval. Checkpoints 8.0–8.6; see `docs/history/` for the checkpoint record and ADR-056 for the locked decision.
+Phase 8 as approved: **make Personal OS a daily driver.** Make failures visible, reduce capture friction, make stored content findable, make project and source state durable, reduce agent context overhead, then run an instrumented adoption soak whose deliverable is evidence rather than a feature. **No semantic search, no embeddings, no retrieval layer and no write-capable agent** — read-only intelligence precedes write-capable intelligence, and at the observed corpus size the whole first-party corpus fits in a single model call. **pgvector is excluded from Phase 8 and the Postgres image stays frozen**; it is not permanently forbidden, but reconsidering it requires its own infrastructure ADR and explicit owner approval. Checkpoints 8.0–8.6; see `docs/history/` for the checkpoint record and ADR-056 for the locked decision. **Closed 2026-09-12 (ADR-061).**
+
+**Phase 9 — Reliability, daily-use and read-only intelligence (2026-09-12 → 2026-09-15; ADR-062 … ADR-067; closed under ADR-069).** Ran under an accelerated operating model — audit → implementation lanes → adversarial review → deploy, with no soak wait between checkpoints. 9.0 reliability and privacy housekeeping (every retrying queue has a dead-letter queue, unknown routes drop their query string, OAuth state swept by retention); 9.1 daily-use (notification-shade capture, the `alerts`/`updates`/`capture` channels); 9.2 a 21-day adoption soak, **owner-terminated after 25 minutes with no adoption conclusion permitted** (`docs/SOAK-9.2.md`); 9.3 close the capture→task loop (`/inbox/[id]`, inbox archive, migration `0017`); 9.4 dependable recurring tasks and reminders (one successor rule for every writer, occurrence snooze, per-occurrence reminders; migration `0018`); 9.5 calendar as an authoring surface (explicit `events.origin`, durable outbound push; migration `0019`); 9.6 content bounds at every write plus six-entity, date-aware, explainably ranked lexical search; 9.7 read-only "Ask about today" over a bounded, cited `TodayContext`; 9.8 Suggested Focus. No phase-level product claim was made — the soak that would have supported one was terminated. Record: `docs/history/phase-9.md`.
+
+**Phase 10 — Codebase Consolidation & Agent Readiness (opened 2026-09-15; OPEN).** 10.0 a behavior-preserving cleanup pass plus `docs/AGENT-READINESS.md`, the canonical-boundary inventory a future read-only or write-capable agent would build from (no agent runtime, tool loop or `posops_readonly` role exists yet); 10.1 the read-only, PAT-authenticated Canvas LMS integration (ADR-068, migration `0020`, the section above); 10.1B its production deployment and live validation; 10.1C the reconnect-after-disconnect fix, implemented and reviewed but not yet deployed. Current state and next action: `docs/STATUS.md`.
 
 ---
 
