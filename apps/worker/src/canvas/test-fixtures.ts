@@ -1,4 +1,5 @@
 import { encryptSecret } from "@personal-os/ai-providers";
+import type { CanvasAssignmentApiShape } from "@personal-os/canvas-providers";
 import {
   canvasAnnouncements,
   canvasAssignments,
@@ -48,6 +49,45 @@ export async function seedCanvasConnection(
     })
     .returning();
   return row!;
+}
+
+/**
+ * A GRADED assignment payload in the real shape the ADR-068 live probe
+ * confirmed (`include[]=submission`), carrying every submission field Canvas
+ * genuinely returns -- so a test that syncs it exercises both halves of
+ * ADR-068a at once: `score`/`grade` DO land (Checkpoint 10.2), and
+ * `entered_score`/`entered_grade`/`attachments` still do NOT. Overrides let
+ * a test re-grade the same assignment id on a second pass.
+ */
+export function gradedAssignmentPayload(
+  overrides: Partial<CanvasAssignmentApiShape> & {
+    submission?: Partial<NonNullable<CanvasAssignmentApiShape["submission"]>>;
+  } = {},
+): CanvasAssignmentApiShape {
+  const { submission, ...rest } = overrides;
+  return {
+    id: 9001,
+    name: "Homework 3",
+    due_at: "2026-09-20T05:59:00Z",
+    points_possible: 100,
+    submission_types: ["online_upload"],
+    html_url: "https://fixture.instructure.com/courses/1/assignments/9001",
+    published: true,
+    workflow_state: "published",
+    ...rest,
+    submission: {
+      workflow_state: "graded",
+      missing: false,
+      late: false,
+      submitted_at: "2026-09-19T22:00:00Z",
+      score: 95,
+      grade: "A",
+      entered_score: 95,
+      entered_grade: "A",
+      attachments: [{ id: 1, filename: "hw3.pdf" }],
+      ...submission,
+    },
+  };
 }
 
 /**

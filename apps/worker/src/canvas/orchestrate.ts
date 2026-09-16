@@ -11,7 +11,7 @@ import {
   type CanvasCalendarEventRow,
   type CanvasClient,
 } from "@personal-os/canvas-providers";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 import { env } from "../env.js";
 import { errorToken, log } from "../logger.js";
@@ -53,7 +53,11 @@ import { closeCanvasSyncRun, openCanvasSyncRun, type CanvasSyncRunKind } from ".
 //      must never abort the whole institution's sync.
 //   4. NO EGRESS BEYOND THIS PACKAGE'S OWN SIX TABLES. No AI, no
 //      notification, no alert. ADR-068 §6 is explicit that this checkpoint
-//      adds none.
+//      adds none. Checkpoint 10.2 keeps that: a dead PAT flips the row to
+//      `invalid_token` (see `markConnectionInvalidToken`) but, unlike mail's
+//      `needs_reauth`, enqueues no alert -- the Settings screen's own
+//      status rendering is the surface, and an alert producer would need
+//      its own occurrence-scoped dedupe key under ADR-058 first.
 
 export interface CanvasSyncJobData {
   connectionId: string;
@@ -127,6 +131,8 @@ function encryptedFromConnection(
   };
 }
 
+/** Records a non-fatal sync failure without changing the connection's status.
+ *  Mirrors `recordMailConnectionError` (apps/worker/src/mail/token.ts). */
 async function recordConnectionError(
   db: Db,
   connectionId: string,
@@ -137,6 +143,47 @@ async function recordConnectionError(
     .update(canvasConnections)
     .set({ lastSyncError: failureClass, lastSyncErrorAt: now, updatedAt: now })
     .where(eq(canvasConnections.id, connectionId));
+}
+
+/**
+ * Marks a connection `invalid_token` because Canvas rejected the PAT itself
+ * (Checkpoint 10.2, closing the 10.1C "recorded, not fixed" debt).
+ *
+ * Mirrors `markMailConnectionNeedsReauth` (apps/worker/src/mail/token.ts)
+ * in shape and in its one load-bearing predicate: CONDITIONAL ON
+ * `status = 'active'`, never on "not already invalid_token". The latter
+ * would also match a row a concurrent disconnect just set to `disconnected`
+ * and flip it back, resurrecting a connection the owner removed -- and a
+ * disconnected row has no credential to invalidate anyway
+ * (`canvas_connections_access_token_triple`). A retry of a job that already
+ * transitioned matches zero rows, so `last_sync_error_at` is not re-stamped.
+ *
+ * THE CREDENTIAL COLUMNS ARE NOT TOUCHED. Nulling them is `disconnect`'s job
+ * (apps/api/src/services/canvas-connection.ts), and it is deliberately not
+ * done here: `invalid_token` is a status the owner recovers from by pasting a
+ * fresh PAT through the 10.1C reconnect path, which reactivates any
+ * NON-active row in place -- `id`, `created_at` and every FK-linked course/
+ * assignment row preserved -- without requiring a manual disconnect first.
+ * The stale ciphertext sits unused until then: the cron enqueuer selects
+ * `status = 'active'` only, the API's manual-sync route refuses a non-active
+ * row with `409 connection_not_active`, and `runCanvasConnectionSync`'s own
+ * re-read skips one with the same reason.
+ */
+async function markConnectionInvalidToken(
+  db: Db,
+  connectionId: string,
+  failureClass: string,
+  now: Date,
+): Promise<void> {
+  await db
+    .update(canvasConnections)
+    .set({
+      status: "invalid_token",
+      lastSyncError: failureClass,
+      lastSyncErrorAt: now,
+      updatedAt: now,
+    })
+    .where(and(eq(canvasConnections.id, connectionId), eq(canvasConnections.status, "active")));
 }
 
 async function clearConnectionError(db: Db, connectionId: string, now: Date): Promise<void> {
@@ -229,7 +276,25 @@ export async function runCanvasConnectionSync(
       errorMessage: fault.failureClass,
       finishedAt: now,
     });
-    await recordConnectionError(deps.db, connection.id, fault.failureClass, now);
+    // CONNECTION-LEVEL `auth_failed` -- Canvas rejected the PAT on the one
+    // request that carries no course id -- is the token itself being dead
+    // (a 401, or a non-rate-limit 403 on the account's own course list), and
+    // no cron tick will change that. It flips the row to `invalid_token` so
+    // the owner sees it and can reconnect. Every OTHER class (rate limit,
+    // 5xx, network) is transient and only records `last_sync_error`, exactly
+    // as before. A PER-COURSE `auth_failed` (a 403 on one course the token
+    // lacks access to) is contained by the course loop below and never
+    // reaches this branch, so one unenrolled course cannot invalidate the
+    // whole connection.
+    if (fault.failureClass === "auth_failed") {
+      await markConnectionInvalidToken(deps.db, connection.id, fault.failureClass, now);
+      log.warn("canvas.sync.connection_invalidated", {
+        connectionId: connection.id,
+        failureClass: fault.failureClass,
+      });
+    } else {
+      await recordConnectionError(deps.db, connection.id, fault.failureClass, now);
+    }
     log.warn("canvas.sync.failed", {
       connectionId: connection.id,
       failureClass: fault.failureClass,

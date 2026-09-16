@@ -148,6 +148,13 @@
       "when": 1789376000000,
       "tag": "0020_canvas_lms_integration",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1789377000000,
+      "tag": "0021_canvas_assignment_grades",
+      "breakpoints": true
     }
   ]
 }

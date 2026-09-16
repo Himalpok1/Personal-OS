@@ -180,12 +180,18 @@ export type CanvasCourse = z.infer<typeof CanvasCourseSchema>;
 /**
  * One synced Canvas assignment.
  *
- * DELIBERATELY NO `description`, `score` or `grade` field anywhere in this
- * schema (ADR-068 §3): `description` is instructor-authored HTML of unbounded
- * upstream size with no in-app renderer, and `score`/`grade` are more
- * FERPA-sensitive than the three coarse submission signals below actually
- * asked for. `canvas.test.ts` pins this as a structural regression test, not
+ * DELIBERATELY NO `description` field anywhere in this schema (ADR-068 §3):
+ * it is instructor-authored HTML of unbounded upstream size with no in-app
+ * renderer. `entered_score`/`entered_grade`/`attachments` are likewise absent.
+ * `canvas.test.ts` pins each exclusion as a structural regression test, not
  * merely a fact about the current field list.
+ *
+ * `score` and `grade` ARE present since Checkpoint 10.2 (ADR-068a, migration
+ * 0021): the owner made the explicit decision ADR-068 §3 reserved. Both are
+ * nullable (Canvas leaves them null until graded); `grade` is Canvas's own
+ * display string ("A", "95", "95%", "complete"), a provider string bounded at
+ * write. No percentage field: it is derived at read time in
+ * `academic.ts`'s read model so it can never disagree with the two columns.
  */
 export const CanvasAssignmentSchema = z
   .object({
@@ -204,6 +210,9 @@ export const CanvasAssignmentSchema = z
     submission_missing: z.boolean().nullable(),
     submission_late: z.boolean().nullable(),
     submitted_at: z.string().datetime({ offset: true }).nullable(),
+    // Checkpoint 10.2 (ADR-068a). See the doc comment above.
+    score: z.number().nullable(),
+    grade: z.string().nullable(),
     archived_at: z.string().datetime({ offset: true }).nullable(),
   })
   .strict();
@@ -277,10 +286,26 @@ export type CanvasEvent = z.infer<typeof CanvasEventSchema>;
  * Canvas's own link" into a structural, checkable invariant instead of an
  * assumption — the same posture ADR-059 §5 already takes for search results.
  */
-export const CanvasUpcomingAssignmentSchema = CanvasAssignmentSchema.extend({
-  course_name: z.string(),
-  canvas_base_url: z.string(),
-}).strict();
+//
+// FROZEN AT THE 10.1 WIRE SHAPE (Checkpoint 10.2, ADR-070). The Rabbit R1's
+// versionCode-22 build parses this route's response through THIS schema's
+// 10.1 form, which is `.strict()` -- so ADR-068a's new `score`/`grade` keys
+// must NOT be added here: the deployed client would reject the payload with
+// `unrecognized_keys` and its Canvas card would silently vanish the moment a
+// wider api deployed. `.omit()` makes the exclusion structural rather than a
+// matter of the route remembering not to select two columns; `canvas.test.ts`
+// pins it. New clients read `GET /academic/today` (academic.ts) instead, which
+// carries the grade projection. Remove this route and schema once versionCode
+// 23 is installed on the device.
+export const CanvasUpcomingAssignmentSchema = CanvasAssignmentSchema.omit({
+  score: true,
+  grade: true,
+})
+  .extend({
+    course_name: z.string(),
+    canvas_base_url: z.string(),
+  })
+  .strict();
 export type CanvasUpcomingAssignment = z.infer<typeof CanvasUpcomingAssignmentSchema>;
 
 export const CanvasUpcomingAssignmentsResponseSchema = z.object({

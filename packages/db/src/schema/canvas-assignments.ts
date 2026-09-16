@@ -20,15 +20,23 @@ import { canvasCourses } from "./canvas-courses.js";
 // constraint (ADR-050): it is Canvas's own vocabulary
 // (unsubmitted|submitted|graded|pending_review), Zod-enforced only.
 //
-// GRADE AND SCORE ARE DELIBERATELY EXCLUDED, not merely unrequested. The live
-// probe confirmed score/grade/entered_score/entered_grade are real, populated
-// fields on this account, and this checkpoint does not sync them: a grade is
-// more FERPA-sensitive than "did I turn it in", the brief never asked for a
-// gradebook, and adding grade columns later is a strictly additive migration,
-// never a redesign. Submission `attachments` (the student's own uploaded
-// work) are excluded at a higher sensitivity than description text for the
-// same reason. Do not add score/grade/entered_score/entered_grade/attachments
-// columns without a fresh, explicit owner decision -- see ADR-068 §3.
+// score AND grade ARE STORED SINCE CHECKPOINT 10.2 (ADR-068a, migration 0021)
+// -- the "fresh, explicit owner decision" ADR-068 §3 required before any grade
+// column could be added was made on 2026-09-16 for the Academic Intelligence
+// Layer. Both are nullable: Canvas leaves them null until an assignment is
+// graded. `score` is the raw points awarded (Canvas `submission.score`, a
+// real, matching `points_possible`); `grade` is Canvas's display grade
+// (`submission.grade`, e.g. "A", "95", "95%", "complete"), a PROVIDER STRING
+// bounded at write, never rejected. Percentage is NOT a column: it is derived
+// at read time from score / points_possible so the two can never disagree.
+//
+// STILL EXCLUDED, on purpose: `entered_score`/`entered_grade` (the pre-late-
+// policy values -- a second, near-duplicate grade with no Personal OS
+// consumer) and submission `attachments` (the student's own uploaded work, a
+// higher sensitivity tier than a number). Do not add them without another
+// explicit owner decision. A grade is never logged, never searched, and never
+// reaches any model call (Checkpoint 10.2's "no AI processing of academic
+// data" rule, enforced by ai-egress-guard.test.ts's import denylist).
 //
 // description IS NOT STORED AT ALL. Canvas returns it as instructor-authored
 // rich HTML of unbounded upstream size, this project has no HTML sanitizer or
@@ -65,6 +73,9 @@ export const canvasAssignments = pgTable(
     submissionMissing: boolean("submission_missing"),
     submissionLate: boolean("submission_late"),
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    // Checkpoint 10.2 (ADR-068a, migration 0021). See the header comment.
+    score: real("score"),
+    grade: text("grade"),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

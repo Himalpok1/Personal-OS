@@ -1259,6 +1259,11 @@ function ConnectedMailCard() {
 // button, exactly mirroring CalDAV's own `showCaldavForm` gate, so a Settings
 // screen with nothing connected yet does not greet the owner with two open
 // text fields before they have asked for them.
+//
+// Typed through `Href` for the reason health-today-card.tsx records: the
+// route union is a generated artifact that may predate this route.
+const ACADEMIC_ROUTE = "/academic" as Href;
+
 function canvasStatusToneClass(state: CanvasConnectionDisplayState): string {
   switch (state) {
     case "unavailable":
@@ -1462,6 +1467,24 @@ function ConnectedCanvasCard() {
       {connections.map((connection) => (
         <CanvasConnectionRow key={connection.id} connection={connection} />
       ))}
+
+      {/* Checkpoint 10.2: the way through to the synced courses, offered only
+          while something is actually syncing -- the same gate the Health card
+          applies to "View health data" below. */}
+      {connections.some((connection) => connection.status === "active") ? (
+        <Link href={ACADEMIC_ROUTE} asChild>
+          <Pressable
+            hitSlop={8}
+            accessibilityRole="link"
+            accessibilityLabel="View courses"
+            className="mt-3 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
+          >
+            <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
+              View courses
+            </Text>
+          </Pressable>
+        </Link>
+      ) : null}
 
       {showForm ? (
         <View className="mt-3 rounded border border-neutral-200 p-3 dark:border-neutral-800">

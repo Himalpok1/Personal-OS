@@ -390,3 +390,159 @@ describe("the intelligence lane is read-only and provider-free (Checkpoint 9.7, 
       expect(name, `${name} is not a read-shaped tool name`).toMatch(/^(search|get)_/);
   });
 });
+
+// ===========================================================================
+// GUARD 5 -- academic data never reaches an AI lane.
+// ===========================================================================
+//
+// Checkpoint 10.2 (ADR-068a, ADR-070). The Academic Intelligence Layer is a
+// read model over the canvas_* tables -- courses, assignments with a stored
+// score and grade, announcements, calendar events -- and its rule is "no AI
+// processing of academic data": displayed, never fed to a model, the ADR-046
+// posture Health already holds. `AcademicTodayResponseSchema` is deliberately
+// NOT a section of `TodayResponseSchema`, so the two AI collectors
+// (intelligence/today-context.ts, brief/collect-input.ts), which build from
+// `buildTodayResponse` alone, cannot see it by construction. This guard pins
+// the import boundary on top of that structural fact, in both directions:
+//
+//   (a) no non-test file under apps/api/src/{intelligence,ask,focus,brief}
+//       may import read-models/academic, any `@personal-os/core/academic/*`
+//       subpath, or a canvas_* table binding from `@personal-os/db` -- nor
+//       even NAME one of those bindings, so a re-export or a namespace import
+//       (`import * as db`) cannot smuggle one past the specifier check;
+//   (b) read-models/academic.ts and routes/academic.ts import neither the AI
+//       SDK nor the provider package, reach into no AI lane, and (the read
+//       model) carry no write verb -- the same denylist Guard 4 applies to the
+//       intelligence lane, because a read model that can write is not a read
+//       model.
+const AI_LANE_DIRS = ["intelligence", "ask", "focus", "brief"].map((dir) =>
+  path.join(API_SRC, dir),
+);
+const ACADEMIC_READ_MODEL = path.join(API_SRC, "read-models/academic.ts");
+const ACADEMIC_ROUTE = path.join(API_SRC, "routes/academic.ts");
+
+// Both the Drizzle bindings AND the snake_case table names: a raw
+// sql`select grade from canvas_assignments` template names no binding and no
+// write verb, so without the second set it would pass Guards 4 and 5 unseen
+// (10.2 review finding).
+const CANVAS_TABLE_BINDINGS = [
+  "canvasAssignments",
+  "canvasCourses",
+  "canvasAnnouncements",
+  "canvasEvents",
+] as const;
+const CANVAS_TABLE_NAMES = [
+  "canvas_assignments",
+  "canvas_courses",
+  "canvas_announcements",
+  "canvas_events",
+] as const;
+const CANVAS_TABLE_IDENTIFIER = new RegExp(
+  `\\b(?:${[...CANVAS_TABLE_BINDINGS, ...CANVAS_TABLE_NAMES].join("|")})\\b`,
+);
+// A lane may import any `../read-models/<x>.js` under Guard 4's allowlist, so
+// a non-lane module re-exporting the academic read model under another name
+// would be a one-hop evasion. Close it at the source: nothing under
+// read-models/ except academic.ts itself may import the academic module.
+const READ_MODELS_DIR = path.join(API_SRC, "read-models");
+const ACADEMIC_RELATIVE_SPECIFIER = /(?:^|\/)academic(?:\.js)?$/;
+
+const FORBIDDEN_AI_LANE_SPECIFIERS: readonly [string, RegExp][] = [
+  ["read-models/academic", /(?:^|\/)read-models\/academic(?:\.js)?$/],
+  ["@personal-os/core/academic/*", /^@personal-os\/core\/academic(?:\/|$)/],
+];
+const NAMESPACE_IMPORT_FROM_DB = /import\s+\*\s+as\s+\w+\s+from\s*["']@personal-os\/db["']/;
+
+const FORBIDDEN_ACADEMIC_LANE_IMPORTS: readonly [string, RegExp][] = [
+  ['from "ai"', /from\s*["']ai["']/],
+  ['import("ai")', /\bimport\s*\(\s*["'`]ai["'`]\s*\)/],
+  ["@personal-os/ai-providers", /["']@personal-os\/ai-providers(?:\/[^"']*)?["']/],
+  ["an AI lane", /from\s*["'](?:\.{1,2}\/)*(?:intelligence|ask|focus|brief)\/[^"']+["']/],
+];
+
+describe("academic data never reaches an AI lane (Checkpoint 10.2, Guard 5)", () => {
+  const laneFiles = AI_LANE_DIRS.flatMap((dir) => walk(dir));
+
+  it("walks every AI lane, so an empty directory cannot pass by finding nothing", () => {
+    const rels = laneFiles.map(relToRepo);
+    expect(rels).toContain("apps/api/src/intelligence/today-context.ts");
+    expect(rels).toContain("apps/api/src/ask/generate.ts");
+    expect(rels).toContain("apps/api/src/focus/generate.ts");
+    expect(rels).toContain("apps/api/src/brief/collect-input.ts");
+  });
+
+  it("no AI-lane file imports the academic read model, core's academic helpers, or a canvas table", () => {
+    const offenders: string[] = [];
+    for (const file of laneFiles) {
+      // Specifiers are read from the ORIGINAL source, as the module loader
+      // sees them (Guard 4's reasoning for its allowlist).
+      const original = readFileSync(file, "utf8");
+      for (const specifier of importSpecifiers(original)) {
+        for (const [label, pattern] of FORBIDDEN_AI_LANE_SPECIFIERS) {
+          if (pattern.test(specifier)) offenders.push(`${relToRepo(file)}: ${label}`);
+        }
+      }
+      if (NAMESPACE_IMPORT_FROM_DB.test(original)) {
+        offenders.push(`${relToRepo(file)}: import * as … from "@personal-os/db"`);
+      }
+      // Any mention of a canvas table binding in code -- an import, a
+      // re-export, or a `.from(canvasAssignments` reached through a
+      // namespace -- fails, whatever specifier it arrived under.
+      const code = stripLineComments(original);
+      const identifier = CANVAS_TABLE_IDENTIFIER.exec(code);
+      if (identifier) offenders.push(`${relToRepo(file)}: ${identifier[0]}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("no other read model re-exports or imports the academic read model (one-hop evasion)", () => {
+    const offenders: string[] = [];
+    const siblings = walk(READ_MODELS_DIR).filter((f) => f !== ACADEMIC_READ_MODEL);
+    expect(siblings.map(relToRepo)).toContain("apps/api/src/read-models/today.ts");
+    for (const file of siblings) {
+      const original = readFileSync(file, "utf8");
+      for (const specifier of importSpecifiers(original)) {
+        if (ACADEMIC_RELATIVE_SPECIFIER.test(specifier) || /academic/.test(specifier)) {
+          offenders.push(`${relToRepo(file)}: ${specifier}`);
+        }
+      }
+      // `export * from "./academic.js"` / `export { x } from …` are imports
+      // to the loader but not to `importSpecifiers` if it only reads
+      // `import` statements -- scan for the re-export form explicitly.
+      const reexport = /export\s+(?:\*|\{[^}]*\})\s+from\s*["'][^"']*academic[^"']*["']/.exec(
+        stripLineComments(original),
+      );
+      if (reexport) offenders.push(`${relToRepo(file)}: ${reexport[0]}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("the academic read model and route import neither the AI SDK, the provider package, nor an AI lane", () => {
+    const offenders: string[] = [];
+    for (const file of [ACADEMIC_READ_MODEL, ACADEMIC_ROUTE]) {
+      const code = stripLineComments(readFileSync(file, "utf8"));
+      for (const [label, pattern] of FORBIDDEN_ACADEMIC_LANE_IMPORTS) {
+        if (pattern.test(code)) offenders.push(`${relToRepo(file)}: ${label}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("the academic read model contains no write verb -- it is a projection, never a store", () => {
+    const code = stripLineComments(readFileSync(ACADEMIC_READ_MODEL, "utf8"));
+    const offenders: string[] = [];
+    for (const [label, pattern] of FORBIDDEN_INTELLIGENCE_WRITE_VERBS) {
+      if (pattern.test(code)) offenders.push(label);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("actually reads the academic read model, so a moved file cannot pass vacuously", () => {
+    const all = importSpecifiers(readFileSync(ACADEMIC_READ_MODEL, "utf8"));
+    expect(all).toContain("@personal-os/db");
+    expect(all).toContain("@personal-os/core/academic/buckets");
+    expect(all).toContain("@personal-os/core/academic/derive");
+    const code = stripLineComments(readFileSync(ACADEMIC_READ_MODEL, "utf8"));
+    for (const binding of CANVAS_TABLE_BINDINGS) expect(code).toContain(binding);
+  });
+});

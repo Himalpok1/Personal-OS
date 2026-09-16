@@ -156,16 +156,39 @@ describe("GET /canvas-assignments/upcoming", () => {
     expect(res.json<{ items: unknown[] }>().items).toHaveLength(0);
   });
 
-  it("never includes description, score, or grade in the response shape", async () => {
+  it("never includes description, entered_score, entered_grade or attachments in the response shape", async () => {
     const connection = await seedConnection(app.db);
     const course = await seedCourse(app.db, connection.id);
     await seedAssignment(app.db, connection.id, course.id);
 
     const res = await app.inject({ method: "GET", url: "/canvas-assignments/upcoming" });
     const raw = JSON.stringify(res.json());
-    for (const forbidden of ["description", '"score"', '"grade"']) {
+    for (const forbidden of ["description", "entered_score", "entered_grade", "attachments"]) {
       expect(raw).not.toContain(forbidden);
     }
+  });
+
+  // Checkpoint 10.2 (ADR-068a, migration 0021): score/grade are now STORED,
+  // but this route's wire shape is frozen at 10.1 for the deployed
+  // versionCode-22 client, whose strict schema would reject either key. A
+  // graded row must therefore read back WITHOUT them here; `GET /academic/*`
+  // is where the grade projection lives.
+  it("never emits score or grade, even for a graded row (frozen 10.1 wire shape)", async () => {
+    const connection = await seedConnection(app.db);
+    const course = await seedCourse(app.db, connection.id);
+    await seedAssignment(app.db, connection.id, course.id, {
+      title: "Graded",
+      score: 47.5,
+      grade: "B",
+      submissionState: "graded",
+    });
+
+    const res = await app.inject({ method: "GET", url: "/canvas-assignments/upcoming" });
+    expect(res.statusCode).toBe(200);
+    const [item] = res.json<{ items: Array<Record<string, unknown>> }>().items;
+    expect(item).toBeDefined();
+    expect(Object.keys(item!)).not.toContain("score");
+    expect(Object.keys(item!)).not.toContain("grade");
   });
 
   it("orders results by due_at ascending across multiple courses", async () => {

@@ -7,6 +7,7 @@ import type {
   CanvasCourseApiShape,
 } from "./canvas-client.js";
 import {
+  CANVAS_GRADE_MAX_CHARS,
   translateCanvasAnnouncement,
   translateCanvasAssignment,
   translateCanvasCalendarEvent,
@@ -122,7 +123,7 @@ describe("translateCanvasCourse", () => {
 });
 
 describe("translateCanvasAssignment", () => {
-  it("keeps title/due_at/points_possible/submission_types/published/html_url and three coarse submission facts", () => {
+  it("keeps title/due_at/points_possible/submission_types/published/html_url, the coarse submission facts, and score/grade", () => {
     const row = okAssignment(
       {
         id: 98765,
@@ -138,10 +139,11 @@ describe("translateCanvasAssignment", () => {
           missing: false,
           late: true,
           submitted_at: "2026-09-19T22:00:00Z",
-          // Real, populated fields Canvas genuinely returns -- must never
-          // reach the row.
+          // Checkpoint 10.2 (ADR-068a): score and grade DO reach the row.
           score: 95,
           grade: "A",
+          // Real, populated fields Canvas genuinely returns -- must never
+          // reach the row.
           entered_score: 95,
           entered_grade: "A",
           attachments: [{ id: 1, filename: "hw3.pdf" }],
@@ -164,32 +166,62 @@ describe("translateCanvasAssignment", () => {
     expect(row.submissionMissing).toBe(false);
     expect(row.submissionLate).toBe(true);
     expect(row.submittedAt?.toISOString()).toBe("2026-09-19T22:00:00.000Z");
+    expect(row.score).toBe(95);
+    expect(row.grade).toBe("A");
   });
 
-  it("never stores grade, score, entered_score, entered_grade, attachments, or description", () => {
+  // Checkpoint 10.2 (ADR-068a). The row's key set is pinned EXACTLY, not
+  // merely "does not have X": a future field added to the row without a
+  // deliberate decision fails here, which is the point -- ADR-068 §3's
+  // exclusions were enforced by omission, and omission is only a guarantee
+  // if something notices when it stops being one.
+  it("carries exactly the approved key set -- score and grade in, entered_* / attachments / description out", () => {
     const row = okAssignment({
       id: 1,
       name: "Quiz 1",
       submission: {
         score: 42,
         grade: "B+",
-        entered_score: 42,
-        entered_grade: "B+",
+        entered_score: 40,
+        entered_grade: "B",
         attachments: [{ id: 9 }],
       },
       description: "<p>secret rubric</p>",
     });
 
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        "courseExternalId",
+        "dueAt",
+        "externalId",
+        "grade",
+        "htmlUrl",
+        "pointsPossible",
+        "published",
+        "score",
+        "submissionLate",
+        "submissionMissing",
+        "submissionState",
+        "submissionTypes",
+        "submittedAt",
+        "title",
+        "workflowState",
+      ].sort(),
+    );
     for (const forbidden of [
-      "score",
-      "grade",
       "enteredScore",
       "enteredGrade",
+      "entered_score",
+      "entered_grade",
       "attachments",
       "description",
     ]) {
       expect(row).not.toHaveProperty(forbidden);
     }
+    // And the two that ARE present carry the submission's own values, not
+    // the entered_* near-duplicates.
+    expect(row.score).toBe(42);
+    expect(row.grade).toBe("B+");
   });
 
   it("is null-safe for an assignment with no submission and no due date", () => {
@@ -202,6 +234,58 @@ describe("translateCanvasAssignment", () => {
     expect(row.submissionLate).toBe(false);
     expect(row.submittedAt).toBeNull();
     expect(row.published).toBe(false);
+    expect(row.score).toBeNull();
+    expect(row.grade).toBeNull();
+  });
+
+  it("yields null score and grade for a submission Canvas has not graded (null fields)", () => {
+    const row = okAssignment({
+      id: 1,
+      name: "Essay",
+      submission: { workflow_state: "submitted", score: null, grade: null },
+    });
+    expect(row.submissionState).toBe("submitted");
+    expect(row.score).toBeNull();
+    expect(row.grade).toBeNull();
+  });
+
+  it("yields null score for a non-finite or non-numeric score rather than rejecting the assignment", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const row = okAssignment({ id: 1, name: "X", submission: { score: bad, grade: "A" } });
+      expect(row.score).toBeNull();
+      // The grade is independent of the score's validity.
+      expect(row.grade).toBe("A");
+    }
+    const stringScore = okAssignment({
+      id: 1,
+      name: "X",
+      submission: { score: "95" as unknown as number },
+    });
+    expect(stringScore.score).toBeNull();
+  });
+
+  it("yields null grade for a non-string grade rather than rejecting the assignment", () => {
+    const row = okAssignment({
+      id: 1,
+      name: "X",
+      submission: { score: 7.5, grade: 95 as unknown as string },
+    });
+    expect(row.grade).toBeNull();
+    expect(row.score).toBe(7.5);
+  });
+
+  it("truncates an over-long grade string at CANVAS_GRADE_MAX_CHARS rather than rejecting it", () => {
+    const overLong = "A".repeat(CANVAS_GRADE_MAX_CHARS + 20);
+    const row = okAssignment({ id: 1, name: "X", submission: { grade: overLong } });
+    expect(row.grade).toHaveLength(CANVAS_GRADE_MAX_CHARS);
+    expect(row.grade).toBe("A".repeat(CANVAS_GRADE_MAX_CHARS));
+  });
+
+  it("keeps the real display-grade vocabulary verbatim: letter, percent, numeric and pass/fail forms", () => {
+    for (const grade of ["A", "A-", "95", "95%", "complete", "incomplete", "pass", "fail"]) {
+      const row = okAssignment({ id: 1, name: "X", submission: { score: 1, grade } });
+      expect(row.grade).toBe(grade);
+    }
   });
 
   it("rejects an unparseable submission.submitted_at rather than storing a wrong date", () => {

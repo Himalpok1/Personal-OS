@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CanvasAnnouncementSchema,
   CanvasAssignmentSchema,
+  CanvasUpcomingAssignmentSchema,
   CanvasConnectionSchema,
   CanvasConnectionsListResponseSchema,
   CanvasConnectionStatusSchema,
@@ -57,6 +58,8 @@ const ASSIGNMENT = {
   submission_missing: false,
   submission_late: false,
   submitted_at: "2026-09-21T20:00:00Z",
+  score: 97,
+  grade: "A",
   archived_at: null,
 };
 
@@ -267,6 +270,8 @@ describe("CanvasAssignmentSchema", () => {
       submission_missing: null,
       submission_late: null,
       submitted_at: null,
+      score: null,
+      grade: null,
       archived_at: null,
     };
     expect(CanvasAssignmentSchema.parse(minimal).due_at).toBeNull();
@@ -276,28 +281,62 @@ describe("CanvasAssignmentSchema", () => {
     expect(() => CanvasAssignmentSchema.parse({ ...ASSIGNMENT, connection_id: "x" })).toThrow();
   });
 
-  // Structural regression test (ADR-068 §3): a grade is more FERPA-sensitive
-  // than "did I turn it in", and description is unbounded instructor-authored
-  // HTML with no in-app renderer. Neither may silently reappear on this
-  // schema, whatever value it carries -- including a legitimate-looking one.
+  // Structural regression test (ADR-068 §3): description is unbounded
+  // instructor-authored HTML with no in-app renderer and may not silently
+  // reappear on this schema, whatever value it carries -- including a
+  // legitimate-looking one.
   it("REJECTS an object carrying a description field, however innocuous its value", () => {
     expect(() =>
       CanvasAssignmentSchema.parse({ ...ASSIGNMENT, description: "<p>Read chapters 1-5.</p>" }),
     ).toThrow();
   });
 
-  it("REJECTS an object carrying a score field, however innocuous its value", () => {
-    expect(() => CanvasAssignmentSchema.parse({ ...ASSIGNMENT, score: 97 })).toThrow();
+  // Checkpoint 10.2 (ADR-068a, migration 0021): score and grade are now
+  // stored, by explicit owner decision. Both must be nullable -- Canvas
+  // leaves them null until an assignment is graded.
+  it("ACCEPTS score and grade, nullable (ADR-068a)", () => {
+    expect(CanvasAssignmentSchema.parse(ASSIGNMENT).score).toBe(97);
+    expect(CanvasAssignmentSchema.parse(ASSIGNMENT).grade).toBe("A");
+    expect(
+      CanvasAssignmentSchema.parse({ ...ASSIGNMENT, score: null, grade: null }).score,
+    ).toBeNull();
+    expect(() => CanvasAssignmentSchema.parse({ ...ASSIGNMENT, score: "97" })).toThrow();
   });
 
-  it("REJECTS an object carrying grade/entered_score/entered_grade fields", () => {
-    for (const key of ["grade", "entered_score", "entered_grade"]) {
+  // Still excluded after ADR-068a: the pre-late-policy duplicates and the
+  // student's own uploaded work. A fresh owner decision is required for each.
+  it("REJECTS an object carrying entered_score/entered_grade fields", () => {
+    for (const key of ["entered_score", "entered_grade"]) {
       expect(() => CanvasAssignmentSchema.parse({ ...ASSIGNMENT, [key]: "A" })).toThrow();
     }
   });
 
   it("REJECTS an object carrying a submission attachments field", () => {
     expect(() => CanvasAssignmentSchema.parse({ ...ASSIGNMENT, attachments: [] })).toThrow();
+  });
+});
+
+describe("CanvasUpcomingAssignmentSchema (frozen 10.1 wire shape)", () => {
+  // The Rabbit R1's versionCode-22 build parses GET /canvas-assignments/upcoming
+  // through the 10.1 form of this schema, which is strict. ADR-068a's new
+  // score/grade keys must therefore stay OUT of it until that client is
+  // replaced -- an added key would blank the deployed Canvas card.
+  const { score: _score, grade: _grade, ...ASSIGNMENT_10_1 } = ASSIGNMENT;
+  const UPCOMING = {
+    ...ASSIGNMENT_10_1,
+    course_name: "Advanced Web Development",
+    canvas_base_url: "https://uta.instructure.com",
+  };
+
+  it("parses exactly the 10.1 shape (no score, no grade)", () => {
+    expect(CanvasUpcomingAssignmentSchema.parse(UPCOMING).course_name).toBe(
+      "Advanced Web Development",
+    );
+  });
+
+  it("REJECTS score and grade keys, the way the deployed client would", () => {
+    expect(() => CanvasUpcomingAssignmentSchema.parse({ ...UPCOMING, score: null })).toThrow();
+    expect(() => CanvasUpcomingAssignmentSchema.parse({ ...UPCOMING, grade: null })).toThrow();
   });
 });
 

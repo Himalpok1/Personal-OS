@@ -90,6 +90,8 @@ Ordering below is the original log order: amendments (`ADR-046a`, `ADR-047a`, `A
 | [ADR-067](decisions/ADR-067.md) | Checkpoint 9.8: Suggested Focus — a narrow, cited, bounded-candidate AI suggestion reusing 9.7's TodayContext and consent switch | Locked |
 | [ADR-068](decisions/ADR-068.md) | Checkpoint 10.1: Canvas LMS integration — read-only, PAT-authenticated, storage narrower than Canvas's shapes (migration 0020) | Locked |
 | [ADR-069](decisions/ADR-069.md) | Phase 9 is CLOSED (2026-09-15); Phase 10 — Codebase Consolidation & Agent Readiness — is open | Locked |
+| [ADR-068a](decisions/ADR-068a.md) | Amendment to ADR-068: assignment `score` and `grade` are stored (migration 0021); `description`, `entered_*` and attachments stay excluded | Locked |
+| [ADR-070](decisions/ADR-070.md) | Checkpoint 10.2: the Academic Intelligence Layer is a computed read model over the Canvas tables, structurally outside the AI lanes | Locked |
 
 ## Open later-phase decisions
 

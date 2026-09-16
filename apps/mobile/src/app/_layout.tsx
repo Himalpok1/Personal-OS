@@ -123,6 +123,11 @@ function AppStack() {
       <Stack.Screen name="health/trends/[metric]" options={{ title: "Trend" }} />
       <Stack.Screen name="health/sleep" options={{ title: "Sleep" }} />
       <Stack.Screen name="health/workouts" options={{ title: "Workouts" }} />
+      {/* Checkpoint 10.2 (ADR-070). Reached from the Today card's "Courses ›"
+          and from the Canvas section of Settings, not a sixth tab -- the same
+          480px reasoning as Health. */}
+      <Stack.Screen name="academic/index" options={{ title: "Academics" }} />
+      <Stack.Screen name="academic/[id]" options={{ title: "Course" }} />
       {/* Phase 7 Checkpoint 7.6. Reached from a Settings card, not a sixth tab
           -- the Rabbit R1's 480px bar already carries five labels, and the same
           reasoning that kept Health off it applies here. */}

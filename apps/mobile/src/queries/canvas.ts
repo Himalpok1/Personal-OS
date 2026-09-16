@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { academicKeys } from "./academic";
 import { api } from "./client";
 
 // Canvas LMS connection + content queries (Checkpoint 10.1, ADR-068).
@@ -9,11 +10,12 @@ import { api } from "./client";
 // requirement that does not exist and would break these screens in the
 // UI-test shell, which mounts no device identity at all.
 //
-// `useCanvasUpcomingAssignments` is the read side this file originally
-// stopped short of: `GET /canvas-assignments/upcoming` (apps/api/src/routes/
-// canvas-assignments.ts) was added specifically to unblock it -- read-only,
-// scoped to assignments (the only content the Today card asks for), never a
-// general course/announcement/event browsing surface.
+// This file is the CONNECTION side only. Reading synced content (courses,
+// assignments, announcements, events) goes through queries/academic.ts
+// (Checkpoint 10.2, ADR-070), which projects the Canvas tables into the
+// provider-agnostic academic model; the 10.1-era
+// `useCanvasUpcomingAssignments` hook over `GET /canvas-assignments/upcoming`
+// was removed with the Today card that was its only consumer.
 
 const connectionsKey = ["canvas-connections"] as const;
 
@@ -45,6 +47,10 @@ export function useConnectCanvas() {
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: connectionsKey });
+      // Checkpoint 10.2: the academic read model is a projection of this
+      // connection's rows, so a connect/disconnect/sync must also drop it --
+      // otherwise Today keeps showing the old card for the whole staleTime.
+      void queryClient.invalidateQueries({ queryKey: academicKeys.all });
     },
   });
 }
@@ -55,6 +61,10 @@ export function useDisconnectCanvasConnection() {
     mutationFn: (id: string) => api.disconnectCanvasConnection(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: connectionsKey });
+      // Checkpoint 10.2: the academic read model is a projection of this
+      // connection's rows, so a connect/disconnect/sync must also drop it --
+      // otherwise Today keeps showing the old card for the whole staleTime.
+      void queryClient.invalidateQueries({ queryKey: academicKeys.all });
     },
   });
 }
@@ -76,6 +86,10 @@ export function useTriggerCanvasSync() {
     mutationFn: (id: string) => api.triggerCanvasSync(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: connectionsKey });
+      // Checkpoint 10.2: the academic read model is a projection of this
+      // connection's rows, so a connect/disconnect/sync must also drop it --
+      // otherwise Today keeps showing the old card for the whole staleTime.
+      void queryClient.invalidateQueries({ queryKey: academicKeys.all });
       // Broad, prefix-matching invalidation (no specific connection id in the
       // key) -- the same "nudge, not a guarantee" reasoning applies to sync
       // run history as it does to the connection row itself.
@@ -97,22 +111,5 @@ export function useCanvasSyncRuns(connectionId: string | null, limit?: number) {
     queryKey: ["canvas-sync-runs", connectionId, limit ?? null] as const,
     queryFn: () => api.listCanvasSyncRuns(connectionId as string, limit),
     enabled: connectionId !== null,
-  });
-}
-
-/**
- * Assignments due within `withinDays` (server default 7), across every
- * active connection's unarchived courses, sorted by `due_at` ascending and
- * denormalized with each assignment's course name -- the one query the
- * Today "upcoming assignments" card needs. Not gated on
- * `useCanvasConnections` being loaded first: an unconfigured/no-connection
- * server simply answers with an empty `items` array, so the card can render
- * off this query alone exactly like `useHealthSummary`'s
- * `!data.configured` case.
- */
-export function useCanvasUpcomingAssignments(withinDays?: number) {
-  return useQuery({
-    queryKey: ["canvas-upcoming-assignments", withinDays ?? null] as const,
-    queryFn: () => api.listUpcomingCanvasAssignments(withinDays),
   });
 }

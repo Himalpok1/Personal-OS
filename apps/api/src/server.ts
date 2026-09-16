@@ -23,6 +23,7 @@ import {
 } from "./plugins/heartbeat-watchdog.js";
 import { buildLoggerOptions } from "./logging/logger-options.js";
 import { scrubQueryForUnknownRoute } from "./logging/scrub-url.js";
+import academicRoutes from "./routes/academic.js";
 import agendaRoutes from "./routes/agenda.js";
 import askRoutes from "./routes/ask.js";
 import focusRoutes from "./routes/focus.js";
@@ -261,6 +262,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await app.register(mailDigestsRoutes);
   await app.register(canvasConnectionsRoutes);
   await app.register(canvasAssignmentsRoutes);
+  await app.register(academicRoutes);
   await app.register(monitorRoutes);
   await app.register(aiConfigRoutes);
   await app.register(askRoutes);

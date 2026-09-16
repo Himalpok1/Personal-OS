@@ -28,6 +28,7 @@ const HAND_WRITTEN_WITHOUT_SNAPSHOT = new Set([
   "0018_occurrence_snooze",
   "0019_event_authoring",
   "0020_canvas_lms_integration",
+  "0021_canvas_assignment_grades",
 ]);
 
 interface JournalEntry {

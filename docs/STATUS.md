@@ -8,8 +8,10 @@ the `docs/AGENT-READINESS.md` inventory) and **Checkpoint 10.1 / 10.1B** (read-o
 integration, migration `0020`, deployed and live-validated against the owner's real account) are
 **deployed and accepted**. **Checkpoint 10.1C — the Canvas reconnect-after-disconnect fix — is
 DEPLOYED and LIVE-VALIDATED (2026-09-16, api only, no migration)**: reconnect returned 200 on the
-same connection row, history preserved, hourly cron succeeding since. No checkpoint after 10.1C is
-selected; the next product direction is an owner decision.
+same connection row, history preserved, hourly cron succeeding since. **Checkpoint 10.2 — the
+Academic Intelligence Layer — is IMPLEMENTED, LOCALLY VERIFIED and INDEPENDENTLY REVIEWED
+(2026-09-16), NOT deployed**: production stays at migration level 21 until the owner authorizes the
+frozen deployment order for migration `0021` (see the 10.2 entry's *Deployment plan*).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -57,10 +59,11 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 
 | | |
 |---|---|
-| Migration level | **21** (`0000`–`0020`); local and production agree. 10.1C added none. |
+| Migration level | **Production 21** (`0000`–`0020`). **Local 22**: Checkpoint 10.2 adds `0021_canvas_assignment_grades` (ADR-068a), applied to the local dev/test databases and reconciled, **not yet deployed**. |
 | Serving commit | **api at `f85779a`** (Checkpoint 10.1C, recreated 2026-09-16T11:47:57Z from `personal-os-10.1c-release`, image `60cfdb04…`); **worker and web at `1e406f7`** (10.1B, untouched since 09:46Z). Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-api:rollback-pre-10.1c` = the 10.1B api image (`a889dfd2…`), plus `personal-os-{api,worker,web}:rollback-pre-10.1` and every earlier `rollback-pre-*` tag, all by resolved digest. |
 | Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated by 10.1/10.1B/10.1C); `GET /health` → `ok` / `connected` / `stale:false` (12:34Z) |
 | Rabbit R1 | `com.himal.personalos` **versionCode 22**, built from `1e406f7` (EAS build `23f032f5…`), installed in place with SecureStore credential, primary-device row, exact-alarm appop, `POST_NOTIFICATIONS` and `firstInstallTime` (2026-08-19) all preserved — no re-pair, signature unchanged. Carries the Canvas "upcoming assignments" Today card verified live with real data; the 9.7 "Ask about today" flow and 9.8 "Suggested Focus" card unchanged. |
+| Academic layer (10.2, local only) | `GET /academic/today?tz=` · `GET /academic/courses` · `GET /academic/courses/:id` — a provider-agnostic read model computed over the Canvas tables (ADR-070), a deterministic Today card and `/academic` course screens, `score`/`grade` synced (ADR-068a), `invalid_token` wired into the worker's auth-failure path. Verified locally in the browser with seeded data; **not in production**. |
 | Canvas (10.1/10.1B/10.1C) | `packages/canvas-providers` + six tables, PAT-authenticated, read-only, hourly `canvas.sync-cron`. **Live-validated against the owner's real UTA account 2026-09-16**: connect → sync (16 courses, 355 assignments, 19 announcements, 0 events) → idempotent resync → disconnect (credential triple NULLed) → invalid token rejected (`400 canvas_auth_failed`) → reconnect → resync, left **active**. **Reconnect path (10.1C) verified live 2026-09-16**: disconnect → `200` · reconnect → **`200` on the same row `8b8e2cb6…`** (`created_at` unchanged at 10:50:30Z, all 16 courses still linked) · second connect on the active row → `409` · manual resync `202` → `succeeded` · hourly cron `succeeded` at 12:00:17Z. Zero PAT-shaped strings and zero warn/error lines in the api and worker logs since the api was recreated. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · notification-shade capture (9.1) — a persistent local "Capture" notification on its own channel; verified live on the Rabbit R1 (9.1). |
 | Reminders (9.4) | Scheduled by the primary device from **`GET /reminders`** — one item per one-off task with a reminder and one per open occurrence of a recurring task (derived from the parent's `remind_at` wall clock and its day-offset from `due_at`, in `recurrence_timezone`; `snoozed_until` overrides). Deterministic identifiers `reminder:<key>:<instant>`, exact alarms (`window=0 exactAllowReason=permission`), category `reminder` with **Done / Snooze 1h / Tomorrow 9am**, all `opensAppToForeground: true`. Verified live with the app process killed (`am kill`, not force-stop — force-stop puts the package in Android's stopped state, which cancels every alarm). |
@@ -72,7 +75,7 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress. |
 | Backups | **None, by design** (ADR-024). |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE** (re-verified 2026-09-16). No CI, no Actions workflow, no repository secret. **`main` is the canonical branch again as of 2026-09-16** (fast-forwarded to the Phase 10 tip; PR #1 merged). |
-| Test baseline | **6,054 tests across 13 packages** at 10.1C (`f85779a`): api 1,433 · mobile 1,390 · core 915 · worker 710 · schema 519 · health-providers 332 · api-client 195 · canvas-providers 70 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25 (was 6,044 at 10.1, 5,815 at 9.8, 3,668 at the Phase 8 closeout). |
+| Test baseline | **6,265 tests across 13 packages** at 10.2 (this checkpoint's commit): api 1,478 · mobile 1,467 · core 955 · worker 728 · schema 540 · health-providers 332 · api-client 200 · canvas-providers 75 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25 (was 6,054 at 10.1C, 6,044 at 10.1, 5,815 at 9.8). |
 | pg-boss | **31 queues, 11 schedules** (worker startup log at 10.1B; `pgboss.queue` reads one more with the internal `__pgboss__send-it`). Every retrying queue has a dead-letter queue (9.0): `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues, `occurrences.generate-lazy`, `occurrences.expand-window`. `occurrences.expand-window` has a phase-2 idempotent lazy repair since 9.4. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C) · `health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now` (9.0). First scheduled run 2026-09-13T04:00Z; the job's daily runs have not been individually re-verified since the 9.0 acceptance. |
 | Alert keys | Occurrence-scoped (ADR-058). Producers: health-sync breaker (first live emission 2026-09-12T03:00:14Z), `occurrences.generate-lazy.dead:<occurrenceId>`, `occurrences.expand-window.dead:<UTC date>` (9.0; also covers a failed 9.4 phase-2 repair), `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (9.5). The three 9.x producers are unexercised in production by design. |
@@ -646,6 +649,197 @@ then the frozen `up -d --no-deps --no-build --force-recreate api`. No schema inv
 
 ---
 
+### Checkpoint 10.2 — Academic Intelligence Layer: IMPLEMENTED, LOCALLY VERIFIED, INDEPENDENTLY REVIEWED (2026-09-16) — NOT DEPLOYED
+
+**Objective (owner-directed, 2026-09-16).** Convert the Canvas data Checkpoint 10.1 already syncs
+into user-facing academic intelligence — Canvas data → normalized academic model → Today
+integration → user interface — without redesigning or replacing the Canvas connection layer.
+Decision records: **ADR-070** (the design) and **ADR-068a** (the one amendment to ADR-068). One
+migration, **`0021_canvas_assignment_grades`** (two nullable columns, level 21 → 22).
+
+**Three decisions were put to the owner before any code was written**, because the brief as
+received collided with the tree in three places. (1) The four "normalized academic entities" it
+asked for already existed as `canvas_courses`/`canvas_assignments`/`canvas_events`/
+`canvas_announcements` with every named field; the owner chose a **read model computed over those
+tables** (no `academic_*` tables, no normalization job, no second source of truth) over the literal
+reading. (2) Two requested fields — grades and an assignment-description preview — were excluded by
+the Locked ADR-068 §3 with a code comment requiring "a fresh, explicit owner decision"; the owner
+chose **grades only** (ADR-068a). Grading status needed no storage at all (it is the existing
+`submission_state`) and percentage is derived, so only `score`/`grade` are new columns. (3) The
+brief was truncated after "10.2B … Create deterministic cards: Examples:"; the owner approved the
+proposed default card set. One further shape decision was made by the integrator, not asked:
+the Today integration is a **separate `GET /academic/today` read model, not a section of
+`GET /today`**, so academic data is structurally outside the object both AI collectors consume
+(the ADR-046 Health posture) — "no AI processing of academic data" by construction, with an egress
+guard on top.
+
+**Execution model.** One integrator wrote the frozen contract first (migration, Drizzle columns,
+`packages/schema/src/academic.ts`, the api-client bindings, both ADRs), then three implementation
+lanes ran in parallel in the same working tree with disjoint file ownership and their own
+test-database clones (`personalos_test_api102`, `personalos_test_worker102`), followed by an
+independent adversarial review lane. The brief's separate "Frontend (web)" and "Mobile" lanes were
+collapsed into one — Personal OS has one universal Expo client (ADR-002/003); there is no separate
+web app.
+
+**What shipped, by lane:**
+
+- **Contract (integrator).** `packages/schema/src/academic.ts`: `AcademicCourse`/`Summary`,
+  `AcademicAssignment` (closed `submission.status` and `grade.status` enums with an honest
+  `unknown`, derived `open`, derived `grade.percentage`), `AcademicAnnouncement`, `AcademicEvent`
+  (kinds `assignment_due`/`calendar_event`/`announcement` — the brief's future-extensibility shape,
+  a projection never stored), `AcademicTodayResponse` (sections `overdue`/`due_today`/
+  `due_this_week`/`announcements`/`events`, each `{items,total}`, plus `summary` and `configured`),
+  the courses list/detail responses, and the horizon/cap constants. Every item carries
+  `source_base_url` for the client's same-origin check. `CanvasAssignmentSchema` gained nullable
+  `score`/`grade`; its structural guards were flipped so `description`/`entered_*`/`attachments`
+  remain rejected and every `Academic*` schema is key-walked for the same names.
+- **API lane.** `packages/core/src/academic/{derive,buckets}.ts` — pure, client-safe derivations
+  (`normalizeSubmissionStatus`, `isOpenAssignment`, `deriveGradingStatus`, `derivePercentage`,
+  `deriveCourseStatus`, `normalizeReadState`) and the bucketing built on the same
+  `localDayWindow`/`addCalendarDays` primitives `read-models/today.ts` uses, DST-tested in
+  `America/Chicago`. `apps/api/src/read-models/academic.ts` (one `effectiveNow`, one batched query
+  per entity kind, active connections and unarchived rows only, every ordering ending in `id`) and
+  `apps/api/src/routes/academic.ts` (three GETs). `GET /canvas-assignments/upcoming` is retained
+  for the versionCode-22 client with its wire shape **frozen at 10.1** — `CanvasUpcomingAssignmentSchema`
+  now `.omit()`s `score`/`grade` structurally (see the review record below for why) — and marked
+  superseded for new clients. **Guard 5** in `apps/api/src/ask/ai-egress-guard.test.ts`: nothing
+  under `intelligence/`, `ask/`, `focus/`, `brief/` may import the academic read model, core
+  `academic/*`, or even name a Canvas table — proven to bite with a temporary probe, then removed.
+- **Worker lane.** `translate.ts` carries `score` (finite or null) and `grade` (bounded to 64 chars,
+  never rejected) and pins the row's exact 15-key set; `persist.ts` upserts both behind the
+  `is distinct from` gate (two identical syncs still write zero rows — count-based `persist.test.ts`
+  added). **`invalid_token` is finally written**: a CONNECTION-level `auth_failed` (401, or a
+  non-rate-limit 403 on the account's own course list) flips `canvas_connections.status` in one
+  UPDATE guarded by `status = 'active'` (mirroring `markMailConnectionNeedsReauth`, so a concurrent
+  disconnect is never resurrected); the credential triple is not touched; a per-course 403 is
+  contained by the course loop and never reaches the flip; the cron enqueuer already selects
+  `active` only; 10.1C's reconnect reactivates any non-active row, so a revoked PAT now surfaces in
+  Settings as `needs_reconnect` and recovers without a manual disconnect — closing the 10.1C
+  "recorded, not fixed" entry. No alert is enqueued (an alert producer needs its own ADR-058 key).
+- **Mobile/web lane.** `queries/academic.ts`; `components/academic/` — `academic-today-card.tsx`
+  (owns its query; renders nothing while loading, on error, unconfigured, or empty; header
+  "Academics" + "Courses ›"; Overdue/Due today/Due this week with honest totals, ≤ 3 rows each and
+  a "+N more" line; Missing/Late badges; a "N unread announcement(s)" footer), `source-link.tsx`
+  (**the single `Linking.openURL` call site** — `role="link"` and a handler only when
+  `isSameOrigin(html_url, source_base_url)`, otherwise inert), `format.ts`, `partition-assignments.ts`,
+  `group-courses.ts` (all pure, all tested); `app/academic/index.tsx` (courses grouped by term with
+  open/overdue/next-due) and `app/academic/[id].tsx` (Overdue / Upcoming / No due date /
+  Submitted & graded with the grade label, then announcements and events); two `Stack.Screen`
+  entries; a Settings "View courses" link. `upcoming-assignments-card.tsx` and its hook deleted; the
+  worker's `mobile-inert-rendering.test.ts` allowlist re-pointed. `__tests__/academic-open-url.test.ts`
+  is a source-regex guard that no academic file other than `source-link.tsx` imports `Linking`.
+
+**One environment finding worth every future migration's attention.** The local `personalos` and
+`personalos_test` databases carried a **poisoned migration watermark**: `0020` had been recorded
+with `created_at = 1790375000000` — the +1,000,000,000 journal bug 10.1 later corrected to
+`1789376000000` — roughly ten days in the future, so `drizzle-kit migrate` printed "migrations
+applied successfully" for `0021` while applying nothing (the Checkpoint 5.7 trap, from the other
+direction). Repaired locally (`update … set created_at = 1789376000000 where created_at =
+1790375000000`, one row per database). **Production was checked read-only and is clean** —
+`0020` at `1789376000000` — so `0021` (`when` `1789377000000`) will apply there normally; the
+deployment plan below still verifies the count actually increases. A second local-only gotcha:
+a database cloned with `TEMPLATE personalos_test` does not inherit the database-level `CREATE`
+grant, so the migrator fails on `CREATE SCHEMA IF NOT EXISTS "drizzle"` without printing an error;
+`grant create on database <clone> to posops_migrator` fixes it.
+
+**Verification (integrator, serial, on the shared `personalos_test`):** `pnpm build --force` 12/12 ·
+`pnpm typecheck` 23/23 · `npx eslint .` clean (one type-only import in the integrator's own test
+fixed) · `npx prettier --check .` clean · `git diff --check` clean · `gitleaks detect` no leaks ·
+`pnpm test --force` **23/23 tasks, 6,265 tests across 13 packages, zero failing** (api 1,478 [+45]
+· mobile 1,467 [+77] · core 955 [+40] · worker 728 [+18] · schema 540 [+21] · canvas-providers 75
+[+5] · api-client 200 [+5]; the other six packages unchanged). One Round-0 miss surfaced by the
+full run and fixed: the api-client's `canvas.test.ts` fixture predated `score`/`grade`. **Migration
+invariant:** `0021` applied to the local dev database (21 → 22 by row count, columns present) and
+`db:reconcile` clean; the `drizzle` journal guard's allowlist extended. `apps/mobile`'s
+`expo lint` output is byte-identical to the untouched main checkout (one pre-existing purity error
+in `monitor/index.tsx` and nine unused-directive warnings, none in new files).
+
+**Live browser verification (local dev API + Expo web, seeded data, all rows removed after).** A
+connection, three courses (two Fall 2026, one completed Summer 2026), eleven assignments spanning
+every bucket, three announcements and one event were seeded directly into the local dev database.
+`GET /academic/today?tz=America/Chicago` bucketed exactly per the frozen semantics: an assignment
+due one hour earlier landed in **Overdue, not Due today**; one due in three hours in Due today; two
+in Due this week; a 20-day-out midterm and a 20-day-old announcement outside their windows;
+graded/pending-review rows never bucketed; the unread announcement first. Course list ordered by
+term with correct open/overdue/next-due counts and the `completed` status; course detail carried
+`22 / 20 · 110% · A+` (extra credit, unclamped) and `—` for a pending-review submission; unknown
+id → 404, malformed id / missing or invalid `tz` → 400. In the client, the Today card rendered its
+three sections, the `Missing` badge and the "1 unread announcement" footer; `/academic` and
+`/academic/[id]` rendered as designed at desktop and at the Rabbit's 480 px width; the same-origin
+guard was proven **both ways in the accessibility tree** — a row whose `html_url` pointed at
+`evil.example.com` was the only assignment row without the `link` role, every `uta.instructure.com`
+row and the header "Open this course in Canvas" had it. Setting the seeded connection
+`disconnected` made `GET /academic/today` answer `configured:false` with zero totals, the course
+detail 404, and the Today card disappear while its neighbours still rendered. Console errors were
+the unpaired web session's `/devices` 401s and `/briefs/current` 404 — pre-existing, unrelated.
+
+**Independent adversarial review (a separate agent, no implementation context, read-only,
+instructed to verify every claim itself).** Lenses: AI boundary, read-model correctness,
+worker/migration safety, mobile safety, contract consistency, hygiene. **One MAJOR, CONFIRMED,
+closed in-checkpoint — and it was the integrator's own Round-0 brief that caused it:** the API lane
+had been told to add `score`/`grade` to `GET /canvas-assignments/upcoming` because the new
+`CanvasUpcomingAssignmentSchema` required them, but the deployed versionCode-22 client parses that
+route through the **10.1** form of the same schema, which is `.strict()` — the reviewer reproduced
+the rejection (`unrecognized_keys: ["score","grade"]`) with the workspace's zod, and the 10.1
+card's own `return null` on a failed query would have made the live Canvas card on the Rabbit
+**silently vanish the moment the new api deployed**, for the whole EAS-build/install gap. Fixed by
+making the exclusion structural: `CanvasUpcomingAssignmentSchema = CanvasAssignmentSchema.omit({
+score, grade }).extend(...).strict()`, the route no longer selects the columns, its test flips to
+asserting absence for a graded row, a schema test pins that the 10.1 shape parses and either key is
+rejected, and the api-client's `canvas.test.ts` fixture — which the integrator had "fixed" by adding
+the two keys, i.e. in exactly the wrong direction — was restored to HEAD and passes unchanged, which
+is the proof the deployed contract is intact. **Five MINOR/NOTE findings, all CONFIRMED, all closed:**
+Guard 5 was direct-import-only (now also matches the snake_case table names a raw `sql\`` template
+would use, and asserts no other `read-models/*` file imports or re-exports the academic module —
+the one-hop evasion); `events` used 7×24h arithmetic while `due_this_week` used local days (now the
+same local-day horizon end, and an event still in progress is kept rather than dropped — the 8.2
+Today debt not repeated here); `include_archived=true` listed courses the detail route then 404'd
+(detail now opens an archived course as `status: "archived"`; 404 only for unknown or paused);
+`points_possible` rendered as a raw float on the course screen (now `formatPoints`); the academic
+query cache was not invalidated by Canvas connect/disconnect/sync (now it is); plus two doc fixes
+(the window scope of `unread_announcements_total` documented on the schema; a stale reference to the
+deleted card). **One PLAUSIBLE note accepted as debt:** a non-rate-limit 403 on the account's own
+course list classifies as `auth_failed` and flips `invalid_token`; a Canvas permission blip would
+force a re-paste (recoverable, reversible, no data loss) — a two-consecutive-runs hysteresis is
+recorded below, not built. Per-lens verdicts after fixes: A clean, B clean, C clean, D clean, E
+clean, F clean. The reviewer's overall verdict before the fix was "not safe to commit as-is" on the
+MAJOR alone; every fix was re-verified by the full gate below.
+
+**Unchanged and reaffirmed:** ADR-018 (no new ingress), ADR-024 (Canvas data remains a re-syncable
+cache), ADR-056 (no embeddings, no write-capable lane; Cloud Ask and Suggested Focus cannot see
+academic data), ADR-058 (no new alert producer), ADR-065 (Canvas rows stay outside `GET /search`
+and `GET /export`), ADR-066/067 unchanged.
+
+**Recorded, not fixed:** `GET /canvas-assignments/upcoming`, its frozen `CanvasUpcomingAssignmentSchema`
+and the api-client's `listUpcomingCanvasAssignments` have no consumer in the new client; all three
+are retained for the versionCode-22 APK and should be removed once versionCode 23 is installed.
+A connection-level non-rate-limit 403 flips `invalid_token` on a single run (no hysteresis). The core logger's
+`FORBIDDEN_FIELD_FRAGMENTS` was not extended with `score`/`grade` (the substrings also match
+`upgrade`/`underscore`; the guarantee is instead a worker-side log-capture test on every Canvas
+line). `unread_announcements_total` is window-scoped (unread within the seven-day section), a
+deliberate reading of the schema comment; flip to windowless if the owner prefers. The root
+`.prettierignore` excludes `apps/mobile/**`, so a root `prettier --check` is vacuous for the
+client (the lane checked from `apps/mobile`); `settings.tsx` was already non-prettier-formatted
+at HEAD and only the new hunk is formatted. Relative day labels ("Tomorrow") were not added to
+the card. The `personalos_test_api102`/`_worker102` clones were dropped at closeout.
+
+**Deployment plan — NOT executed (owner authorization required).** All three images change (api,
+worker, web) and there is a migration, so the full frozen order applies: commit and push; tag the
+serving api/worker/web images `rollback-pre-10.2` by digest; `git archive` to
+`/home/himallinux/personal-os-10.2-release`; build all three; **verify the new api image carries
+`0021_canvas_assignment_grades.sql` and that production's `select max(created_at) from
+drizzle.__drizzle_migrations` is `1789376000000` (below `0021`'s `1789377000000`)**; migrate with
+`--no-deps` from the new image and confirm the row count goes **21 → 22** and the two columns
+exist; recreate `api worker web` (never `postgres`); confirm 31 queues / 11 schedules, `/health`
+ok; the next hourly `canvas.sync-cron` populates `score`/`grade` for the owner's 355 real
+assignments (an idempotent content-gated write, one pass); `GET /academic/today?tz=America/Chicago`
+against the real account; EAS `production-internal` build → versionCode 23 → `adb install -r` on
+the Rabbit R1 with the usual preserved-state checks; walk Today → Academics → a real course on the
+device. Rollback: retag `rollback-pre-10.2` and recreate; `0021` is additive, so the 10.1B/10.1C
+images run against the post-migration schema.
+
+---
+
 ## Remaining warnings / technical debt
 
 > **Open entries only.** Every entry below is verbatim from the pre-2026-09-16 ledger, in its original
@@ -868,10 +1062,10 @@ blocker/major findings) was **deployed to production on 2026-09-16 and its recon
 live** — see the deployment record at the end of the 10.1C entry above. Production serves the
 10.1C api (`f85779a`) alongside the 10.1B worker and web (`1e406f7`).
 
-The product track is otherwise unchanged by Phase 10 so far: Personal OS has a first read-only
-intelligence surface (9.7) and a second, narrower one (9.8) on the 9.6 retrieval layer, exactly as
-ADR-056 sequenced. What comes after 10.1C is a product-direction choice for the owner (see *Next
-action*).
+**Checkpoint 10.2 — the Academic Intelligence Layer — is implemented, locally verified (6,265/6,265)
+and independently reviewed, and is waiting on the owner to authorize its deployment** (migration
+`0021`, all three images, versionCode 23). Its record is above; its deployment plan is at the end of
+that record. Nothing after 10.2 is selected.
 
 ---
 
@@ -903,6 +1097,7 @@ phase is in `docs/history/`; the one-line summary is:
 | **10.0** | Codebase consolidation & agent readiness: proven-dead mobile/API code removed (Expo starter scaffold, 6 dead query/outbox exports, 3 dormant API error classes, 1 unused health-connection helper, 1 unused test fixture), 4 orphaned Expo dependencies removed (`expo-image`/`expo-status-bar`/`expo-web-browser`/`@babel/plugin-transform-react-jsx`), a duplicate date-parsing implementation consolidated, new `docs/AGENT-READINESS.md` canonical-boundary inventory, `tags`/`item_tags` classified safe-to-drop (not acted on). Zero behavior change, zero migration, worker untouched. **Deployed (api/web, level 20, no migration) and accepted on the Rabbit R1 (versionCode 21) 2026-09-15.** |
 | **10.1** | Canvas LMS integration: read-only, Personal-Access-Token-authenticated sync of courses/assignments/announcements/calendar events into six new tables (migration `0020`), a Today "upcoming assignments" card, a same-origin-checked "open in Canvas" link, CalDAV-derived SSRF protection on `canvas_base_url`. **Deployed (api/worker/web, level 21) and live-validated against the owner's real UTA account and the physical Rabbit R1 (versionCode 22) 2026-09-16** (ADR-068). |
 | **10.1C** | Canvas reconnect lifecycle fix: `connectCanvasConnection` SELECTs any prior row by `canvas_base_url` first and reactivates a non-active row in place (same `id`/`created_at`, FK-linked history preserved), refuses an active row (`409 canvas_already_connected`) and a different `canvas_user_id` (`409 canvas_account_mismatch`); route returns 200 on reactivation, 201 on creation. **Deployed (api only, no migration) and live-validated against the owner's real UTA account 2026-09-16** — reconnect `200` on the same row with history preserved, cron succeeding since. |
+| **10.2** | Academic Intelligence Layer: a provider-agnostic academic read model computed over the Canvas tables (`GET /academic/today`, `/academic/courses`, `/academic/courses/:id`; ADR-070), `score`/`grade` synced under ADR-068a (migration `0021`), a deterministic Today card (Overdue / Due today / Due this week / unread announcements) and `/academic` course screens, the single same-origin-gated "open in Canvas" call site, `invalid_token` wired into the worker's auth-failure path, an egress guard keeping academic data out of every AI lane. **Implemented and verified locally 2026-09-16 (6,265 tests, browser-verified with seeded data); NOT deployed.** |
 
 **Production is at migration level 21** and serves the api image built from `f85779a` (10.1C) with worker and web from `1e406f7` (10.1B).
 All three Google integrations plus Canvas are active. Monitoring runs against five active targets
@@ -918,8 +1113,9 @@ versionCode 22, built from `1e406f7`.
 
 ## Current work
 
-**None in progress.** Checkpoint 10.1C deployed and validated 2026-09-16 (record above). No next
-checkpoint has been selected.
+**Checkpoint 10.2 awaits deployment authorization.** Code, migration `0021`, ADR-068a/ADR-070 and
+this record are committed on `claude/academic-intelligence-foundation-8931dd`; production is
+untouched (level 21, 10.1C api, 10.1B worker/web, Rabbit versionCode 22).
 
 **Repository housekeeping done 2026-09-16 (this reconciliation, no product change):** `main`
 fast-forwarded to the Phase 10 tip and made canonical again (PR #1 merged); the decision log split
@@ -934,6 +1130,16 @@ removed from the primary checkout.
 ---
 
 ## Last verification
+
+**Checkpoint 10.2 gate (2026-09-16), local worktree.** `pnpm build --force` 12/12 · `pnpm typecheck`
+23/23 · `npx eslint .` clean · `npx prettier --check .` clean · `git diff --check` clean · `gitleaks
+detect` no leaks · `pnpm test --force` **23/23 tasks, 6,265 tests across 13 packages, zero failing**
+· migration `0021` applied locally 21 → 22 and `db:reconcile` clean · live local browser verification
+(API buckets, courses, detail, same-origin gating both ways, not-configured collapse) with seeded
+data, cleaned up after · independent adversarial review: one MAJOR (the retained route would have
+broken the deployed client's strict schema) and five MINORs, all closed and re-gated (record in the
+10.2 entry). Production
+unchanged and not re-verified this checkpoint.
 
 **Checkpoint 10.1C deployment check (2026-09-16, ~12:32–12:35Z), read directly from production.**
 Release dir = `f85779a` by file hashes · running api image `60cfdb04…` carries the fix (grep in
@@ -964,11 +1170,14 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. **Choose the next checkpoint — a product-direction decision for the owner.** Candidates
-   carried from the 9.8 and 10.0/10.1 closeouts, none advanced or foreclosed since: widen the Canvas
-   integration (course/announcement/event UI beyond the Today card, device-token auth on the new
-   routes, wiring `invalid_token` into the worker's failure path so a revoked PAT surfaces itself
-   for reconnect); widen the intelligence lane (`get_calendar_context`/`get_task_context`, Option B
+1. **Authorize (or decline) the Checkpoint 10.2 deployment** — the frozen order with migration
+   `0021`, all three images and a versionCode-23 Rabbit build, as planned at the end of the 10.2
+   entry. Until then production serves 10.1C/10.1B unchanged.
+
+2. **Then choose the next checkpoint — a product-direction decision for the owner.** Candidates
+   carried from the 9.8 and 10.0/10.1 closeouts: widen the Canvas integration further (device-token
+   auth on the academic routes; announcement/event surfaces beyond the course screen; the
+   `invalid_token` wiring is now done by 10.2); widen the intelligence lane (`get_calendar_context`/`get_task_context`, Option B
    "what changed", Option C weekly-review intelligence); a real tool-calling agent loop over
    `READ_TOOL_NAMES` (needs its own ADR, a `posops_readonly` role and a budgeted grant —
    `docs/AGENT-READINESS.md` §1–2 is the map); E2 health trends; a new 21-day adoption soak (new
@@ -976,7 +1185,7 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
    owner decision rather than being debt: the `tags`/`item_tags` safe-to-drop classification (a table
    drop is irreversible under ADR-024) and the deferred `knip` dead-code-tooling question.
 
-2. **Open owner actions outside any checkpoint:** `docs/SOURCE-DURABILITY.md` Option 2 — the encrypted
+3. **Open owner actions outside any checkpoint:** `docs/SOURCE-DURABILITY.md` Option 2 — the encrypted
    configuration copy — is still not done and remains the sharpest source-durability risk; and the
    `EXPO_TOKEN` that sat in a mode-644 Expo dev log (deleted 2026-09-16) should be rotated.
 

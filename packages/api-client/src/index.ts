@@ -132,6 +132,7 @@ import {
 import { getAgenda } from "./agenda.js";
 import { getSearchItemContext, search } from "./search.js";
 import { getExport } from "./export.js";
+import { getAcademicCourse, getAcademicToday, listAcademicCourses } from "./academic.js";
 import { getToday } from "./today.js";
 import { transcribe } from "./transcribe.js";
 
@@ -219,6 +220,11 @@ export type {
 export type { BriefContent, DailyBriefRecord } from "./brief.js";
 export type { Task, TaskCreate, TaskListParams, TaskStatus, TaskUpdate } from "./tasks.js";
 export type { TodayResponse } from "./today.js";
+export type {
+  AcademicCourseDetailResponse,
+  AcademicCoursesResponse,
+  AcademicTodayResponse,
+} from "./academic.js";
 export type { AgendaParams, AgendaResponse } from "./agenda.js";
 export type {
   MonitorIncidentListParams,
@@ -347,6 +353,13 @@ export function createApiClient(baseUrl: string) {
     triggerCanvasSync: triggerCanvasSync.bind(null, baseUrl),
     listCanvasSyncRuns: listCanvasSyncRuns.bind(null, baseUrl),
     listUpcomingCanvasAssignments: listUpcomingCanvasAssignments.bind(null, baseUrl),
+
+    // Checkpoint 10.2 (ADR-070) -- Academic Intelligence Layer: three read
+    // routes projecting the Canvas tables into a provider-agnostic academic
+    // model. Read-only, like everything Canvas-derived.
+    getAcademicToday: getAcademicToday.bind(null, baseUrl),
+    listAcademicCourses: listAcademicCourses.bind(null, baseUrl),
+    getAcademicCourse: getAcademicCourse.bind(null, baseUrl),
 
     getMonitorOverview: getMonitorOverview.bind(null, baseUrl),
     listMonitorIncidents: listMonitorIncidents.bind(null, baseUrl),

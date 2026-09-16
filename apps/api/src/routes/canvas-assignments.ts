@@ -13,6 +13,19 @@ import type { FastifyInstance } from "fastify";
 // their own tables. Read-only, Tailscale-perimeter-only, like every other
 // route in this integration.
 //
+// RETAINED FOR THE versionCode-22 CLIENT; SUPERSEDED FOR NEW CLIENTS
+// (Checkpoint 10.2, ADR-070). The Rabbit R1 build shipped at 10.1B reads this
+// route for its Today "upcoming assignments" card, so it stays registered
+// with its wire shape BYTE-IDENTICAL to 10.1: that build parses the response
+// through the 10.1 `CanvasUpcomingAssignmentSchema`, which is `.strict()`, so
+// the `score`/`grade` columns migration 0021 added (ADR-068a) are deliberately
+// NOT selected or emitted here -- an added key would make the deployed client
+// reject the payload and its Canvas card vanish. The schema `.omit()`s them
+// for the same reason. New clients read `GET /academic/today`
+// (routes/academic.ts, read-models/academic.ts), which carries the normalized
+// submission/grade projection and the frozen overdue/due-today/due-this-week
+// buckets. Remove this route once versionCode 23 is installed on the device.
+//
 // Scoped to ASSIGNMENTS ONLY for this checkpoint, matching the mobile Today
 // card's actual ask ("up to 5 upcoming assignments due within 7 days") rather
 // than opening a full course/announcement/event browsing surface with no

@@ -217,6 +217,11 @@ export async function upsertCanvasAssignments(
     submissionMissing: row.submissionMissing,
     submissionLate: row.submissionLate,
     submittedAt: row.submittedAt,
+    // Checkpoint 10.2 (ADR-068a, migration 0021). Both nullable until graded;
+    // both participate in the setWhere gate below so a re-grade bumps
+    // `updated_at` and an unchanged grade writes nothing.
+    score: row.score,
+    grade: row.grade,
   }));
 
   const returned = await db
@@ -236,6 +241,8 @@ export async function upsertCanvasAssignments(
         submissionMissing: sql`excluded.submission_missing`,
         submissionLate: sql`excluded.submission_late`,
         submittedAt: sql`excluded.submitted_at`,
+        score: sql`excluded.score`,
+        grade: sql`excluded.grade`,
         archivedAt: sql`null`,
         updatedAt: sql`now()`,
       },
@@ -250,6 +257,8 @@ export async function upsertCanvasAssignments(
         or ${canvasAssignments.submissionMissing} is distinct from excluded.submission_missing
         or ${canvasAssignments.submissionLate} is distinct from excluded.submission_late
         or ${canvasAssignments.submittedAt} is distinct from excluded.submitted_at
+        or ${canvasAssignments.score} is distinct from excluded.score
+        or ${canvasAssignments.grade} is distinct from excluded.grade
         or ${canvasAssignments.archivedAt} is not null`,
     })
     .returning({ inserted: WAS_INSERT });

@@ -72,22 +72,24 @@ const INTERPRETING_SURFACES: readonly { pattern: RegExp; why: string }[] = [
  *
  * TWO files are allowed. `settings.tsx` opens the Gmail OAuth authorize URL,
  * which comes from this project's own API (`getGmailAuthorizeUrl`), not from
- * mail, calendar or capture content. `components/canvas/
- * upcoming-assignments-card.tsx` (Checkpoint 10.1) opens a Canvas
- * assignment's `html_url` -- Canvas-generated, not user-typed, but still
- * provider-supplied content this project does not control -- ONLY after
- * checking its origin is exactly the same connection's own
- * `canvas_base_url` origin (`isOwnCanvasOrigin`), so the call can never
- * navigate anywhere but the owner's own configured Canvas instance.
+ * mail, calendar or capture content. `components/academic/source-link.tsx`
+ * (Checkpoint 10.2, succeeding 10.1's `components/canvas/
+ * upcoming-assignments-card.tsx`) is the ONE component every academic
+ * surface -- the Today card, the course list, the course screen -- renders an
+ * "open in Canvas" row through. It opens a synced row's `html_url` --
+ * Canvas-generated, not user-typed, but still provider-supplied content this
+ * project does not control -- ONLY after checking its origin is exactly the
+ * same connection's own `source_base_url` origin
+ * (`components/academic/same-origin.ts`), so the call can never navigate
+ * anywhere but the owner's own configured Canvas instance.
+ * apps/mobile/src/__tests__/academic-open-url.test.ts pins that no other
+ * academic file imports `Linking` at all.
  *
  * Same shape as src/__tests__/confirmation-hygiene.test.ts's ALLOWED list, and
  * for the same reason: an explicit, short allowlist makes a new call site a
  * test failure rather than a review question nobody asks.
  */
-const OPEN_URL_ALLOWED = new Set([
-  "app/settings.tsx",
-  "components/canvas/upcoming-assignments-card.tsx",
-]);
+const OPEN_URL_ALLOWED = new Set(["app/settings.tsx", "components/academic/source-link.tsx"]);
 
 /**
  * Strips comments before scanning.

@@ -28,13 +28,21 @@ import type {
 //     provider authored, never reject it, because the owner did not type
 //     it and cannot be asked to shorten it).
 //
-// WHAT ADR-068 EXCLUDES, ENFORCED BY OMISSION RATHER THAN BY A FILTER:
-// `CanvasSubmissionApiShape` genuinely declares `score`/`grade`/
-// `entered_score`/`entered_grade`/`attachments` -- Canvas really returns
-// them -- but no field on `CanvasAssignmentRow` exists to hold any of them,
-// and `CanvasAssignmentApiShape.description` is never read at all. A row
-// shape that CANNOT express a grade is a stronger guarantee than a policy
-// saying not to store one.
+// WHAT IS EXCLUDED, ENFORCED BY OMISSION RATHER THAN BY A FILTER:
+// `CanvasSubmissionApiShape` genuinely declares `entered_score`/
+// `entered_grade`/`attachments` -- Canvas really returns them -- but no
+// field on `CanvasAssignmentRow` exists to hold any of them, and
+// `CanvasAssignmentApiShape.description` is never read at all. A row shape
+// that CANNOT express a student's uploaded work is a stronger guarantee than
+// a policy saying not to store it.
+//
+// `score` and `grade` ARE read since Checkpoint 10.2 (ADR-068a, migration
+// 0021) -- the explicit owner decision ADR-068 §3 reserved. They are the
+// ONLY two submission fields added: `entered_score`/`entered_grade` are the
+// pre-late-policy near-duplicates with no Personal OS consumer, and
+// `attachments` is a higher sensitivity tier than a number. See
+// packages/db/src/schema/canvas-assignments.ts's header for the full
+// storage decision.
 
 /** Bounds this package owns locally: structural/id/enum-shaped fields that
  * `@personal-os/core/canvas/provider-strings` has no opinion on (that module
@@ -47,6 +55,15 @@ const CANVAS_READ_STATE_MAX_CHARS = 32;
 const CANVAS_HTML_URL_MAX_CHARS = 1024;
 const CANVAS_SUBMISSION_TYPE_MAX_CHARS = 64;
 const CANVAS_SUBMISSION_TYPES_MAX_COUNT = 20;
+/**
+ * Canvas's display grade (`submission.grade`): "A", "95", "95%", "complete",
+ * "incomplete", "pass" -- a grading-scheme token, not prose, and never longer
+ * than a few characters in practice. Bounded here rather than in core because
+ * it is Canvas's own vocabulary (a letter-grade scheme is institution-
+ * configured but closed), the same reasoning as `CANVAS_WORKFLOW_STATE_MAX_CHARS`.
+ * Truncated at the boundary, never rejected: the owner did not type it.
+ */
+export const CANVAS_GRADE_MAX_CHARS = 64;
 
 /** Why one record could not be translated. Carries no provider value. */
 export interface CanvasTranslationRejection {
@@ -168,11 +185,17 @@ export function translateCanvasCourse(
 /**
  * An assignment row, ready for `canvas_assignments`.
  *
- * NOTE WHAT IS ABSENT: no `score`, `grade`, `entered_score`, `entered_grade`
- * or `attachments` field exists here, although `CanvasSubmissionApiShape`
- * declares all five and Canvas genuinely returns them (ADR-068). Only three
- * coarse submission facts survive: `submissionState`, `submissionMissing`,
- * `submissionLate`, plus `submittedAt`.
+ * NOTE WHAT IS ABSENT: no `entered_score`, `entered_grade` or `attachments`
+ * field exists here, although `CanvasSubmissionApiShape` declares all three
+ * and Canvas genuinely returns them (ADR-068 §3, reaffirmed by ADR-068a).
+ * What survives from the submission sub-object: the three coarse facts
+ * (`submissionState`, `submissionMissing`, `submissionLate`), `submittedAt`,
+ * and -- since Checkpoint 10.2 -- `score` and `grade`.
+ *
+ * `score` is the raw points awarded (matching `pointsPossible`'s unit) and
+ * `grade` is Canvas's display grade; both are `null` until Canvas has graded
+ * the submission. No percentage field: it is derived at read time from
+ * `score / pointsPossible` so the two can never disagree.
  */
 export interface CanvasAssignmentRow {
   externalId: string;
@@ -188,6 +211,10 @@ export interface CanvasAssignmentRow {
   submissionMissing: boolean;
   submissionLate: boolean;
   submittedAt: Date | null;
+  /** `submission.score` when it is a finite number; otherwise null (ADR-068a). */
+  score: number | null;
+  /** `submission.grade` when it is a string, bounded to CANVAS_GRADE_MAX_CHARS; otherwise null (ADR-068a). */
+  grade: string | null;
 }
 
 export type CanvasAssignmentTranslationResult =
@@ -223,8 +250,8 @@ export function translateCanvasAssignment(
     .filter((t) => t !== "")
     .slice(0, CANVAS_SUBMISSION_TYPES_MAX_COUNT);
 
-  // ONLY three coarse submission facts survive translation (ADR-068):
-  // workflow_state, missing, late, plus submitted_at below. `score`, `grade`,
+  // Six submission facts survive translation: workflow_state, missing, late,
+  // submitted_at, and (since Checkpoint 10.2, ADR-068a) score and grade.
   // `entered_score`, `entered_grade` and `attachments` are never read here,
   // even though `CanvasSubmissionApiShape` declares them -- the omission IS
   // the enforcement.
@@ -239,6 +266,21 @@ export function translateCanvasAssignment(
       },
     };
   }
+
+  // A grade is a FACT ABOUT THE WORLD when present and "not yet graded" when
+  // absent, so a malformed value (a string score, a NaN, an object grade) is
+  // treated as absent rather than rejecting the whole assignment: the due
+  // date and submission state are still worth having even if Canvas's
+  // grading payload is odd. Mirrors `pointsPossible`'s own finite-number
+  // guard above.
+  const score =
+    typeof submission?.score === "number" && Number.isFinite(submission.score)
+      ? submission.score
+      : null;
+  const grade = truncateProviderString(
+    typeof submission?.grade === "string" ? submission.grade : null,
+    CANVAS_GRADE_MAX_CHARS,
+  );
 
   const row: CanvasAssignmentRow = {
     externalId: id,
@@ -260,6 +302,8 @@ export function translateCanvasAssignment(
     submissionMissing: submission?.missing === true,
     submissionLate: submission?.late === true,
     submittedAt,
+    score,
+    grade,
   };
 
   return { ok: true, row };
