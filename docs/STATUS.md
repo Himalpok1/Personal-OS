@@ -1756,6 +1756,109 @@ own reasoning).
 
 ---
 
+### Checkpoint 10.1C — Canvas reconnect lifecycle fix: IMPLEMENTED, LOCALLY VERIFIED, **NOT DEPLOYED** (2026-09-16)
+
+**Scope: fix the reconnect-after-disconnect bug found live in Checkpoint 10.1B, nothing else.** No
+migration, no sync-behavior change, no other provider touched. Owner-directed constraint: implement,
+test and review only — do not deploy until explicitly authorized.
+
+**Root cause.** `canvas_connections_base_url_unique` is a plain (non-partial) unique index with no
+status filter — deliberately, mirroring `mail_connections_provider_account_unique` and
+`health_connections_health_user_id_unique`, which carry the identical property. The bug was never
+the index; it was that `connectCanvasConnection` enforced that identity with a blind INSERT caught
+against a unique-violation ("let the constraint be the truth," the `routes/events.ts` `client_uuid`
+pattern), which cannot distinguish "a row already exists and is active" from "a row already exists
+but was disconnected." `completeGmailConnection`/`completeHealthConnection`
+(`apps/api/src/services/{mail,health}-connection.ts`) never had this bug because both already SELECT
+any prior row by identity first and UPDATE it in place — the established Personal OS reconnect
+pattern this checkpoint's own investigation confirmed by reading both functions in full, not
+assumed from memory.
+
+**Fix.** `connectCanvasConnection` now SELECTs any prior row by `canvas_base_url` before writing.
+A prior row with `status: 'active'` still refuses with `CanvasAlreadyConnectedError` (`409
+canvas_already_connected`) — unlike Gmail/Health's unconditional update, because a PAT paste is one
+deliberate manual action, not an OAuth popup that can legitimately re-fire mid-session; silently
+swapping a live connection's credentials without an explicit disconnect first would be surprising.
+A prior row belonging to a DIFFERENT `canvas_user_id` refuses with a new `CanvasAccountMismatchError`
+(`409 canvas_account_mismatch`, no identifiers in the message), mirroring
+`completeHealthConnection`'s existing `AccountMismatchError` for the identical structural risk — an
+identity key (`canvas_base_url`, `health_user_id`) that is not the account id itself, unlike
+`mail_connections`' `(provider, external_account_id)` compound key where a mismatch is structurally
+impossible. Otherwise — no prior row, or a prior row that is not active and belongs to the same
+user — the connection is INSERTed (new) or UPDATEd in place (reactivated): credential replaced,
+`status` back to `active`, `last_sync_error`/`last_sync_error_at` cleared, `canvas_user_name`
+refreshed, but `id` and `created_at` preserved, so every FK-linked `canvas_courses`/
+`canvas_assignments`/`canvas_announcements`/`canvas_events`/`canvas_sync_runs` row survives
+(`ON DELETE CASCADE` triggers only on a row DELETE, never an UPDATE) — a real improvement over
+10.1B's own operational workaround, which had to delete the disconnected row and lose that history
+to reconnect at all. The route (`POST /canvas-connections`) now returns **200** on a reactivation and
+**201** only on a genuine creation (`result.created`), mirroring `routes/mail-connections.ts`'s
+identical `result.created ? 201 : 200` for `completeGmailConnection` — the api-client's `fetchJson`
+only ever checks `response.ok`, so this is an honest wire signal, not a compatibility requirement.
+
+**Verification.** `pnpm build --force` 12/12 · `pnpm typecheck` 23/23 · `npx eslint .` clean ·
+`npx prettier --check` clean on every changed file · `git diff --check` clean · `gitleaks detect`
+— the same 21 pre-existing findings in one ignored, untracked file
+(`apps/mobile/.expo/dev/logs/export.log`), confirmed via `git check-ignore`, zero new · `pnpm test
+--force` **23/23 tasks, 6,054 tests across 13 packages, zero failing** (api 1,433 [+10 net: 9 new
+reconnect/mismatch tests plus 1 added after review] · mobile 1,390 · core 915 · worker 710 · schema
+519 · health-providers 332 · api-client 195 · canvas-providers 70 · monitoring 151 ·
+calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25; was 6,044 at 10.1). **No
+migration** — `canvas_connections_status`'s existing CHECK vocabulary (`active`, `disconnected`,
+`invalid_token`) already covers every state the fix needs; nothing about the schema was wrong.
+
+**Independent adversarial review** (a separate agent with no context from the implementation,
+instructed to verify the "mirrors Gmail/Health" claim by reading the precedent functions itself
+rather than trusting the description, and to run the tests itself rather than trusting a prior
+claim): **zero BLOCKER, zero MAJOR findings.** Explicitly checked and cleared: no
+ownership/authorization bypass (route remains Tailscale-perimeter-only, unchanged); old credentials
+cannot be retained or reused (disconnect nulls all three columns, the triple CHECK makes a partial
+state impossible, reactivation always encrypts the freshly-verified token, never conditionally
+skips it); no secret, ciphertext or PAT appears in any log line or error message in the diff; the
+account-mismatch check cannot false-positive for the same legitimate user (`toNumericId` normalizes
+`self.id` identically on every call); the race window between the SELECT and the write is accepted
+on the same terms Gmail/Health's identical pattern already accepts, and Canvas's INSERT path is
+**more** defensive than Gmail's own precedent (Gmail's insert has no unique-violation catch at all;
+Canvas kept one as a backstop); scope stayed to exactly the three expected files, no sync-job,
+other-provider or schema change. **One MINOR finding, closed in-checkpoint**: no test reactivated
+specifically from `status: 'invalid_token'` (only `disconnected` was exercised) — low severity
+because no production code path writes that status today (confirmed by repo-wide grep: it exists
+only in the CHECK constraint, the Zod enum and mobile display logic), but closed anyway with a
+dedicated test proving the reactivate branch is genuinely status-agnostic (keyed on "not active"),
+not coincidentally correct only for one vocabulary member.
+
+**Recorded, not fixed (pre-existing, unrelated to this checkpoint):** `invalid_token` is a real,
+CHECK-enforced member of `canvas_connections.status` that no production code path ever writes —
+`apps/worker/src/canvas/orchestrate.ts`'s `recordConnectionError` only ever sets
+`last_sync_error`/`last_sync_error_at` on a sync failure, never `status`, so a connection with a
+revoked PAT stays `active` locally while sync keeps failing quietly into `last_sync_error`. This
+means an owner whose live PAT was revoked cannot reconnect with a fresh one without first explicitly
+disconnecting (the `status: 'active'` block in this fix's own reconnect guard would otherwise
+refuse it) — not a regression from this checkpoint, but wiring `invalid_token` into the worker's
+failure path is recorded as Phase 10 candidate follow-up, since it would let a broken connection
+surface itself for reconnect without a manual disconnect step first.
+
+**Deployment plan (NOT executed — awaiting explicit authorization, per this checkpoint's own
+scope).** Nothing here requires the full frozen order's migration step, since there is no
+migration:
+
+1. Commit (`apps/api/src/services/canvas-connection.ts`,
+   `apps/api/src/routes/canvas-connections.ts`,
+   `apps/api/src/routes/canvas-connections.test.ts` only) and push to `origin`.
+2. Tag the then-running `personal-os-api` image `rollback-pre-10.1c` by resolved digest (worker and
+   web are untouched by this diff, so neither needs a new rollback tag or rebuild).
+3. Ship the release via `git archive`, build the `api` image only, verify the built image carries
+   the new `canvas_account_mismatch`/`created ? 201 : 200` logic before deploying.
+4. Recreate `api` alone (`--no-deps --no-build --force-recreate api`) — `worker`, `web` and
+   `postgres` untouched.
+5. Validate against the real production Canvas connection already live from 10.1B: disconnect it,
+   confirm the reconnect now returns 200 (not 409) and the SAME connection id, confirm a resync
+   still succeeds, confirm the account-mismatch guard 409s a deliberately-wrong synthetic token
+   (never the owner's real second account) before leaving the connection reconnected with the
+   owner's real PAT.
+
+---
+
 ## Phase 7 — Email summaries + service monitoring (CLOSED 2026-09-02)
 
 **Phase 7 is closed.** Checkpoints 7.0–7.8B and the full Checkpoint 7.9 record — the open

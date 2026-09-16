@@ -196,6 +196,213 @@ describe("POST /canvas-connections", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Reconnect after disconnect (Checkpoint 10.1C). Found live in production
+// 10.1B: `canvas_connections_base_url_unique` carries no status filter, so
+// the original blind-insert connect flow returned 409 for EVERY reconnect
+// attempt once any row existed for that base_url, active or not -- the only
+// recovery was deleting the row by hand. Fixed by having
+// `connectCanvasConnection` look up a prior row by `canvas_base_url` first,
+// exactly like `completeGmailConnection`/`completeHealthConnection` already
+// do for their own identities, and REACTIVATE it when it is not active.
+// ---------------------------------------------------------------------------
+
+describe("reconnect after disconnect (Checkpoint 10.1C)", () => {
+  it("reactivates the SAME row (not a new one) and returns 200, not 201", async () => {
+    const first = await connectOnce();
+    expect(first.statusCode).toBe(201);
+    const firstId = first.json<{ id: string }>().id;
+
+    await app.inject({ method: "POST", url: `/canvas-connections/${firstId}/disconnect` });
+
+    const reconnect = await connectOnce({ token: "a-brand-new-token" });
+    expect(reconnect.statusCode).toBe(200);
+    const body = reconnect.json<{ id: string; status: string }>();
+    expect(body.id).toBe(firstId);
+    expect(body.status).toBe("active");
+
+    const rows = await app.db.select().from(canvasConnections);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(firstId);
+  });
+
+  it("replaces the credential with the NEW token, not the old one", async () => {
+    const first = await connectOnce({ token: "old-token-value" });
+    const firstId = first.json<{ id: string }>().id;
+    await app.inject({ method: "POST", url: `/canvas-connections/${firstId}/disconnect` });
+
+    await connectOnce({ token: "new-token-value" });
+
+    const [row] = await app.db
+      .select()
+      .from(canvasConnections)
+      .where(eq(canvasConnections.id, firstId));
+    expect(row!.accessTokenCiphertext).not.toBeNull();
+    expect(
+      decryptSecret(
+        {
+          ciphertext: row!.accessTokenCiphertext!,
+          iv: row!.accessTokenIv!,
+          authTag: row!.accessTokenAuthTag!,
+        },
+        env.CREDENTIALS_ENCRYPTION_KEY,
+      ),
+    ).toBe("new-token-value");
+  });
+
+  it("preserves created_at and prior synced course rows across the cycle", async () => {
+    const first = await connectOnce();
+    const firstId = first.json<{ id: string }>().id;
+    const [beforeRow] = await app.db
+      .select()
+      .from(canvasConnections)
+      .where(eq(canvasConnections.id, firstId));
+
+    await app.db.insert(canvasCourses).values({
+      connectionId: firstId,
+      canvasCourseId: 4242,
+      name: "Preserved Across Reconnect",
+    });
+
+    await app.inject({ method: "POST", url: `/canvas-connections/${firstId}/disconnect` });
+    await connectOnce({ token: "reconnect-token" });
+
+    const [afterRow] = await app.db
+      .select()
+      .from(canvasConnections)
+      .where(eq(canvasConnections.id, firstId));
+    expect(afterRow!.createdAt).toEqual(beforeRow!.createdAt);
+
+    const courses = await app.db
+      .select()
+      .from(canvasCourses)
+      .where(eq(canvasCourses.connectionId, firstId));
+    expect(courses).toHaveLength(1);
+    expect(courses[0]!.name).toBe("Preserved Across Reconnect");
+  });
+
+  it("clears any prior last_sync_error on reactivation", async () => {
+    const first = await connectOnce();
+    const firstId = first.json<{ id: string }>().id;
+    await app.db
+      .update(canvasConnections)
+      .set({ lastSyncError: "auth_failed", lastSyncErrorAt: new Date() })
+      .where(eq(canvasConnections.id, firstId));
+    await app.inject({ method: "POST", url: `/canvas-connections/${firstId}/disconnect` });
+
+    await connectOnce({ token: "fresh-token" });
+
+    const [row] = await app.db
+      .select()
+      .from(canvasConnections)
+      .where(eq(canvasConnections.id, firstId));
+    expect(row!.lastSyncError).toBeNull();
+    expect(row!.lastSyncErrorAt).toBeNull();
+  });
+
+  it("allows sync to be re-triggered after reconnect, with exactly one connection row throughout", async () => {
+    const first = await connectOnce();
+    const firstId = first.json<{ id: string }>().id;
+    await app.inject({ method: "POST", url: `/canvas-connections/${firstId}/disconnect` });
+    await connectOnce({ token: "post-reconnect-token" });
+
+    const res = await app.inject({ method: "POST", url: `/canvas-connections/${firstId}/sync` });
+    expect(res.statusCode).toBe(202);
+    expect(await app.db.select().from(canvasConnections)).toHaveLength(1);
+  });
+
+  it("also reactivates from status 'invalid_token', not just 'disconnected'", async () => {
+    // invalid_token is a real member of canvas_connections_status (the CHECK
+    // constraint in packages/db/src/schema/canvas-connections.ts) even though
+    // no production code path writes it today -- the reactivate branch keys
+    // on "not active" rather than enumerating specific non-active statuses,
+    // so this pins that it is genuinely status-agnostic rather than
+    // coincidentally correct only for 'disconnected'.
+    const first = await connectOnce();
+    const firstId = first.json<{ id: string }>().id;
+    await app.db
+      .update(canvasConnections)
+      .set({ status: "invalid_token" })
+      .where(eq(canvasConnections.id, firstId));
+
+    const reconnect = await connectOnce({ token: "recovered-token" });
+    expect(reconnect.statusCode).toBe(200);
+    expect(reconnect.json<{ id: string; status: string }>()).toMatchObject({
+      id: firstId,
+      status: "active",
+    });
+    expect(await app.db.select().from(canvasConnections)).toHaveLength(1);
+  });
+
+  it("still REFUSES a connect attempt while the connection is active (unchanged behavior)", async () => {
+    const first = await connectOnce();
+    expect(first.statusCode).toBe(201);
+    // No disconnect in between.
+    const second = await connectOnce({ token: "different-token" });
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toEqual({ error: "canvas_already_connected" });
+  });
+
+  describe("account mismatch", () => {
+    it("REFUSES reactivation by a DIFFERENT Canvas user at the same institution", async () => {
+      const first = await connectOnce({ self: { id: 111, name: "First User" } });
+      const firstId = first.json<{ id: string }>().id;
+      await app.inject({ method: "POST", url: `/canvas-connections/${firstId}/disconnect` });
+
+      const mismatched = await connectOnce({
+        self: { id: 222, name: "Different User" },
+        token: "different-users-token",
+      });
+      expect(mismatched.statusCode).toBe(409);
+      expect(mismatched.json()).toEqual({ error: "canvas_account_mismatch" });
+
+      // The row is left exactly as disconnected -- no partial write.
+      const [row] = await app.db
+        .select()
+        .from(canvasConnections)
+        .where(eq(canvasConnections.id, firstId));
+      expect(row!.status).toBe("disconnected");
+      expect(row!.canvasUserId).toBe(111);
+      expect(row!.accessTokenCiphertext).toBeNull();
+    });
+
+    it("allows reactivation by the SAME Canvas user (canvas_user_id unchanged)", async () => {
+      const first = await connectOnce({ self: { id: 333, name: "Same User" } });
+      const firstId = first.json<{ id: string }>().id;
+      await app.inject({ method: "POST", url: `/canvas-connections/${firstId}/disconnect` });
+
+      const reconnect = await connectOnce({
+        self: { id: 333, name: "Same User" },
+        token: "same-user-new-token",
+      });
+      expect(reconnect.statusCode).toBe(200);
+    });
+  });
+
+  it("end-to-end: connect -> sync -> disconnect -> reconnect -> sync, exactly one connection throughout", async () => {
+    const first = await connectOnce();
+    const firstId = first.json<{ id: string }>().id;
+
+    let syncRes = await app.inject({
+      method: "POST",
+      url: `/canvas-connections/${firstId}/sync`,
+    });
+    expect(syncRes.statusCode).toBe(202);
+
+    await app.inject({ method: "POST", url: `/canvas-connections/${firstId}/disconnect` });
+    const reconnect = await connectOnce({ token: "second-lifecycle-token" });
+    expect(reconnect.statusCode).toBe(200);
+    expect(reconnect.json<{ id: string }>().id).toBe(firstId);
+
+    syncRes = await app.inject({ method: "POST", url: `/canvas-connections/${firstId}/sync` });
+    expect(syncRes.statusCode).toBe(202);
+
+    const rows = await app.db.select().from(canvasConnections);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("active");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // SSRF protection at connect time (Checkpoint 10.1's own adversarial review
 // finding). `FakeCanvasClient` is a scripted stub that never inspects its
 // `baseUrl` argument, so it cannot exercise real URL validation -- these

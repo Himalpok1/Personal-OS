@@ -37,8 +37,29 @@ export class CanvasAuthFailedError extends Error {
 
 export class CanvasAlreadyConnectedError extends Error {
   constructor() {
-    super("a connection for this Canvas base URL already exists");
+    super("an active connection for this Canvas base URL already exists");
     this.name = "CanvasAlreadyConnectedError";
+  }
+}
+
+/**
+ * A prior (non-active) row exists for this `base_url`, but the freshly
+ * authenticated token belongs to a DIFFERENT Canvas user than the one that
+ * row was last connected as.
+ *
+ * Mirrors `services/health-connection.ts`'s `AccountMismatchError` exactly,
+ * for the identical structural reason: `canvas_base_url`, like
+ * `health_connections`' singleton row, is NOT keyed on the account itself
+ * (unlike `mail_connections`, whose `(provider, external_account_id)` key
+ * makes a mismatch structurally impossible), so nothing else stops a second
+ * person's PAT from silently rebinding this institution's course/assignment
+ * history onto a different identity.
+ */
+export class CanvasAccountMismatchError extends Error {
+  constructor() {
+    // No identifiers in the message: it reaches a client response.
+    super("this Canvas account does not match the existing connection");
+    this.name = "CanvasAccountMismatchError";
   }
 }
 
@@ -134,6 +155,12 @@ export interface ConnectCanvasConnectionParams {
   now?: Date;
 }
 
+export interface ConnectCanvasConnectionResult {
+  connection: CanvasConnectionRow;
+  /** False when this call REACTIVATED a prior disconnected/invalid_token row. */
+  created: boolean;
+}
+
 /**
  * Verifies the token against the real Canvas instance, then persists the
  * connection. Both the route's direct entry point and (if one is ever added)
@@ -146,15 +173,41 @@ export interface ConnectCanvasConnectionParams {
  * verified" applies here exactly as it does to an OAuth grant, even though
  * there is no code/state exchange to guard first.
  *
- * The base-URL uniqueness check is enforced by attempting the insert and
- * catching the database's own unique-violation, rather than a separate
- * SELECT-then-insert -- the same "let the constraint be the truth" approach
- * `routes/events.ts` takes for `client_uuid`, and it closes the
- * check-then-insert race a pre-check could not.
+ * RECONNECT-AFTER-DISCONNECT (Checkpoint 10.1C, found live in production
+ * 10.1B): `canvas_base_url` is the identity -- one Canvas installation per
+ * connection row, ever, the same as `mail_connections`'
+ * `(provider, external_account_id)` and `health_connections`'
+ * `health_user_id`. The original implementation enforced that identity by
+ * attempting a blind INSERT and catching the database's own unique
+ * violation ("let the constraint be the truth", `routes/events.ts`'s
+ * `client_uuid` approach) -- correct for preventing two SIMULTANEOUS rows,
+ * but it could not distinguish "a row already exists and is active" from "a
+ * row already exists but was disconnected", so disconnecting Canvas made
+ * reconnecting to the SAME institution permanently 409 until someone deleted
+ * the row by hand. `completeGmailConnection`/`completeHealthConnection` never
+ * had this bug because they SELECT the prior row by identity first and
+ * UPDATE it in place -- that is the established Personal OS reconnect
+ * pattern, and this function now follows it: a prior ACTIVE row still
+ * refuses (`CanvasAlreadyConnectedError` -- unlike Gmail/Health, a PAT paste
+ * is one deliberate manual action, not an OAuth popup that can legitimately
+ * re-fire mid-session, so silently swapping a live connection's credentials
+ * without an explicit disconnect first would be surprising); a prior
+ * disconnected/invalid_token row is REACTIVATED in place, preserving its id,
+ * `created_at`, and every synced course/assignment/announcement/event row
+ * (`ON DELETE CASCADE` is on the FK, never triggered by an UPDATE) rather
+ * than losing that history to a delete-and-recreate. A genuine identity
+ * conflict -- a different Canvas user reconnecting at the same base URL --
+ * is refused by `CanvasAccountMismatchError` rather than silently rebound,
+ * mirroring `completeHealthConnection`'s identical guard. The INSERT path
+ * (no prior row at all) keeps its unique-violation catch as a defense-in-
+ * depth backstop for the SELECT-then-write race window this introduces --
+ * the same race Gmail/Health's identical pattern already accepts, since two
+ * concurrent connects to the same institution is not a realistic scenario
+ * for a single-user app behind Tailscale.
  */
 export async function connectCanvasConnection(
   params: ConnectCanvasConnectionParams,
-): Promise<CanvasConnectionRow> {
+): Promise<ConnectCanvasConnectionResult> {
   const now = params.now ?? new Date();
   const baseUrl = normalizeBaseUrl(params.baseUrl);
 
@@ -174,24 +227,49 @@ export async function connectCanvasConnection(
     throw new CanvasAuthFailedError();
   }
 
+  const [prior] = await params.db
+    .select()
+    .from(canvasConnections)
+    .where(eq(canvasConnections.canvasBaseUrl, baseUrl))
+    .limit(1);
+
+  if (prior && prior.status === "active") {
+    throw new CanvasAlreadyConnectedError();
+  }
+  if (prior && prior.canvasUserId !== canvasUserId) {
+    throw new CanvasAccountMismatchError();
+  }
+
   const secret = encryptSecret(params.token, env.CREDENTIALS_ENCRYPTION_KEY);
+  const values = {
+    canvasBaseUrl: baseUrl,
+    canvasUserId,
+    canvasUserName: displayName(self),
+    accessTokenCiphertext: secret.ciphertext,
+    accessTokenIv: secret.iv,
+    accessTokenAuthTag: secret.authTag,
+    status: "active" as const,
+    // A successful (re)connect clears whatever failure sent the owner here.
+    lastSyncError: null,
+    lastSyncErrorAt: null,
+    updatedAt: now,
+  };
+
+  if (prior) {
+    const [row] = await params.db
+      .update(canvasConnections)
+      .set(values)
+      .where(eq(canvasConnections.id, prior.id))
+      .returning();
+    return { connection: row!, created: false };
+  }
 
   try {
     const [row] = await params.db
       .insert(canvasConnections)
-      .values({
-        canvasBaseUrl: baseUrl,
-        canvasUserId,
-        canvasUserName: displayName(self),
-        accessTokenCiphertext: secret.ciphertext,
-        accessTokenIv: secret.iv,
-        accessTokenAuthTag: secret.authTag,
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-      })
+      .values({ ...values, createdAt: now })
       .returning();
-    return row!;
+    return { connection: row!, created: true };
   } catch (err) {
     if (isBaseUrlConflict(err)) throw new CanvasAlreadyConnectedError();
     throw err;

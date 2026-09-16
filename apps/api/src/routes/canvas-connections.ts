@@ -11,6 +11,7 @@ import { asc, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { CANVAS_SYNC_CONNECTION_QUEUE } from "../queue-names.js";
 import {
+  CanvasAccountMismatchError,
   CanvasAlreadyConnectedError,
   CanvasAuthFailedError,
   CanvasUrlBlockedForConnectError,
@@ -104,6 +105,9 @@ function replyForError(err: unknown): { status: number; body: { error: string } 
   if (err instanceof CanvasAlreadyConnectedError) {
     return { status: 409, body: { error: "canvas_already_connected" } };
   }
+  if (err instanceof CanvasAccountMismatchError) {
+    return { status: 409, body: { error: "canvas_account_mismatch" } };
+  }
   if (err instanceof CanvasUrlBlockedForConnectError) {
     return { status: 400, body: { error: "canvas_url_blocked" } };
   }
@@ -115,13 +119,20 @@ export default function canvasConnectionsRoutes(app: FastifyInstance): void {
   app.post("/canvas-connections", async (request, reply) => {
     try {
       const body = CanvasConnectRequestSchema.parse(request.body);
-      const connection = await connectCanvasConnection({
+      const result = await connectCanvasConnection({
         db: app.db,
         client: app.canvasClient,
         baseUrl: body.base_url,
         token: body.personal_access_token,
       });
-      return reply.code(201).send(toConnectionResponse(connection));
+      // 201 for a genuinely new connection, 200 when this call REACTIVATED a
+      // prior disconnected/invalid_token row -- mirrors
+      // routes/mail-connections.ts's identical `result.created ? 201 : 200`
+      // for completeGmailConnection. The client only ever checks `response.ok`
+      // (packages/api-client/src/client.ts's fetchJson), so this is purely an
+      // honest wire signal, not a compatibility requirement.
+      const status = result.created ? 201 : 200;
+      return reply.code(status).send(toConnectionResponse(result.connection));
     } catch (err) {
       const mapped = replyForError(err);
       if (mapped) return reply.code(mapped.status).send(mapped.body);
