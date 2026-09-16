@@ -75,7 +75,7 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress. |
 | Backups | **None, by design** (ADR-024). |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE** (re-verified 2026-09-16). No CI, no Actions workflow, no repository secret. **`main` is the canonical branch again as of 2026-09-16** (fast-forwarded to the Phase 10 tip; PR #1 merged). |
-| Test baseline | **6,265 tests across 13 packages** at 10.2 (this checkpoint's commit): api 1,478 · mobile 1,467 · core 955 · worker 728 · schema 540 · health-providers 332 · api-client 200 · canvas-providers 75 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25 (was 6,054 at 10.1C, 6,044 at 10.1, 5,815 at 9.8). |
+| Test baseline | **6,265 tests across 13 packages** at 10.2 (`bd0c68d`): api 1,478 · mobile 1,467 · core 955 · worker 728 · schema 540 · health-providers 332 · api-client 200 · canvas-providers 75 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25 (was 6,054 at 10.1C, 6,044 at 10.1, 5,815 at 9.8). |
 | pg-boss | **31 queues, 11 schedules** (worker startup log at 10.1B; `pgboss.queue` reads one more with the internal `__pgboss__send-it`). Every retrying queue has a dead-letter queue (9.0): `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues, `occurrences.generate-lazy`, `occurrences.expand-window`. `occurrences.expand-window` has a phase-2 idempotent lazy repair since 9.4. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C) · `health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now` (9.0). First scheduled run 2026-09-13T04:00Z; the job's daily runs have not been individually re-verified since the 9.0 acceptance. |
 | Alert keys | Occurrence-scoped (ADR-058). Producers: health-sync breaker (first live emission 2026-09-12T03:00:14Z), `occurrences.generate-lazy.dead:<occurrenceId>`, `occurrences.expand-window.dead:<UTC date>` (9.0; also covers a failed 9.4 phase-2 repair), `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (9.5). The three 9.x producers are unexercised in production by design. |
@@ -1114,7 +1114,7 @@ versionCode 22, built from `1e406f7`.
 ## Current work
 
 **Checkpoint 10.2 awaits deployment authorization.** Code, migration `0021`, ADR-068a/ADR-070 and
-this record are committed on `claude/academic-intelligence-foundation-8931dd`; production is
+this record are committed as `bd0c68d` on `claude/academic-intelligence-foundation-8931dd`; production is
 untouched (level 21, 10.1C api, 10.1B worker/web, Rabbit versionCode 22).
 
 **Repository housekeeping done 2026-09-16 (this reconciliation, no product change):** `main`
@@ -1131,7 +1131,7 @@ removed from the primary checkout.
 
 ## Last verification
 
-**Checkpoint 10.2 gate (2026-09-16), local worktree.** `pnpm build --force` 12/12 · `pnpm typecheck`
+**Checkpoint 10.2 gate (2026-09-16), `bd0c68d` on `claude/academic-intelligence-foundation-8931dd`.** `pnpm build --force` 12/12 · `pnpm typecheck`
 23/23 · `npx eslint .` clean · `npx prettier --check .` clean · `git diff --check` clean · `gitleaks
 detect` no leaks · `pnpm test --force` **23/23 tasks, 6,265 tests across 13 packages, zero failing**
 · migration `0021` applied locally 21 → 22 and `db:reconcile` clean · live local browser verification
