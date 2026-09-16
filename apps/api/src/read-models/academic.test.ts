@@ -164,6 +164,58 @@ const today = () => buildAcademicTodayResponse(app.db, { tz: TZ }, { now: NOW })
 const ids = (items: ReadonlyArray<{ id: string }>): string[] => items.map((i) => i.id);
 
 describe("buildAcademicTodayResponse -- configuration and scope", () => {
+  it("ADR-070a: only the current term's courses feed Today; a personal event is never term-filtered", async () => {
+    const connection = await seedConnection(app.db);
+    const fall = await seedCourse(app.db, connection.id, {
+      name: "Fall course",
+      termName: "2026 Fall",
+      termStartAt: at("2026-08-03T05:00:00Z"),
+    });
+    const spring = await seedCourse(app.db, connection.id, {
+      name: "Spring course",
+      termName: "2026 Spring",
+      termStartAt: at("2025-12-15T06:00:00Z"),
+    });
+    const undated = await seedCourse(app.db, connection.id, {
+      name: "Compliance",
+      termName: "Default Term",
+      termStartAt: null,
+    });
+    const fallOverdue = await seedAssignment(app.db, connection.id, fall.id, {
+      title: "Fall overdue",
+      dueAt: plus(-DAY),
+    });
+    await seedAssignment(app.db, connection.id, spring.id, {
+      title: "Spring overdue",
+      dueAt: plus(-30 * DAY),
+    });
+    await seedAssignment(app.db, connection.id, undated.id, {
+      title: "Compliance overdue",
+      dueAt: plus(-60 * DAY),
+      submissionMissing: true,
+    });
+    const fallNews = await seedAnnouncement(app.db, connection.id, fall.id, {
+      postedAt: plus(-HOUR),
+      readState: "unread",
+    });
+    await seedAnnouncement(app.db, connection.id, spring.id, {
+      postedAt: plus(-HOUR),
+      readState: "unread",
+    });
+    const personal = await seedEvent(app.db, connection.id, null, { startsAt: plus(HOUR) });
+    await seedEvent(app.db, connection.id, spring.id, { startsAt: plus(2 * HOUR) });
+
+    const res = await today();
+    expect(res.current_term).toEqual({ name: "2026 Fall", starts_at: "2026-08-03T05:00:00.000Z" });
+    expect(ids(res.overdue.items)).toEqual([fallOverdue.id]);
+    expect(res.summary.overdue_total).toBe(1);
+    // Canvas's own missing flag is counted over the SAME scope, not the whole cache.
+    expect(res.summary.missing_total).toBe(0);
+    expect(ids(res.announcements.items)).toEqual([fallNews.id]);
+    expect(res.summary.unread_announcements_total).toBe(1);
+    expect(ids(res.events.items)).toEqual([personal.id]);
+  });
+
   it("answers configured:false with empty sections and zero totals when no connection exists", async () => {
     const res = await today();
     expect(res.configured).toBe(false);
@@ -639,13 +691,17 @@ describe("buildAcademicTodayResponse -- events", () => {
 });
 
 describe("listAcademicCourses", () => {
-  const list = (includeArchived = false) =>
-    listAcademicCourses(app.db, { include_archived: includeArchived }, { now: NOW });
+  const list = (includeArchived = false, includePastTerms = false) =>
+    listAcademicCourses(
+      app.db,
+      { include_archived: includeArchived, include_past_terms: includePastTerms },
+      { now: NOW },
+    );
 
   it("answers configured:false with no items when no active connection exists", async () => {
     await seedConnection(app.db, { status: "disconnected" });
     const res = await list();
-    expect(res).toEqual({ configured: false, items: [] });
+    expect(res).toEqual({ configured: false, current_term: null, items: [] });
     expect(AcademicCoursesResponseSchema.parse(res)).toEqual(res);
   });
 
@@ -655,11 +711,13 @@ describe("listAcademicCourses", () => {
     const fallB = await seedCourse(app.db, connection.id, {
       name: "Fall B",
       courseCode: "B-100",
+      termName: "2026 Fall",
       termStartAt: at("2026-08-24T00:00:00Z"),
     });
     const fallA = await seedCourse(app.db, connection.id, {
       name: "Fall A",
       courseCode: "A-100",
+      termName: "2026 Fall",
       termStartAt: at("2026-08-24T00:00:00Z"),
     });
     const spring = await seedCourse(app.db, connection.id, {
@@ -670,12 +728,34 @@ describe("listAcademicCourses", () => {
     const fallNoCode = await seedCourse(app.db, connection.id, {
       name: "Fall no code",
       courseCode: null,
+      termName: "2026 Fall",
       termStartAt: at("2026-08-24T00:00:00Z"),
     });
 
-    const res = await list();
+    const res = await list(false, true);
     expect(res.configured).toBe(true);
     expect(ids(res.items)).toEqual([fallA.id, fallB.id, fallNoCode.id, spring.id, noTerm.id]);
+    expect(res.current_term).toEqual({ name: "2026 Fall", starts_at: "2026-08-24T00:00:00.000Z" });
+
+    // ADR-070a: the DEFAULT view is the current term only -- the most recently
+    // started term (Fall), never Spring and never an undated course.
+    const current = await list();
+    expect(ids(current.items)).toEqual([fallA.id, fallB.id, fallNoCode.id]);
+    expect(current.current_term).toEqual({
+      name: "2026 Fall",
+      starts_at: "2026-08-24T00:00:00.000Z",
+    });
+  });
+
+  it("ADR-070a: with no started term anywhere, nothing is filtered and current_term is null", async () => {
+    const connection = await seedConnection(app.db);
+    const undated = await seedCourse(app.db, connection.id, { termStartAt: null });
+    const future = await seedCourse(app.db, connection.id, {
+      termStartAt: at("2027-01-11T00:00:00Z"),
+    });
+    const res = await list();
+    expect(ids(res.items).sort()).toEqual([undated.id, future.id].sort());
+    expect(res.current_term).toBeNull();
   });
 
   it("computes open/overdue counts and next_due_at from the course's open assignments", async () => {
@@ -762,7 +842,7 @@ describe("listAcademicCourses", () => {
       workflowState: "available",
     });
 
-    const res = await list();
+    const res = await list(false, true);
     const byId = new Map(res.items.map((i) => [i.id, i]));
     expect(byId.get(byEnrollment.id)?.status).toBe("completed");
     expect(byId.get(byEnrollment.id)?.term).toEqual({

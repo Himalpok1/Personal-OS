@@ -4,6 +4,11 @@ import {
   bucketAcademicAssignments,
 } from "@personal-os/core/academic/buckets";
 import {
+  isInCurrentTerm,
+  selectCurrentTerm,
+  type CurrentTerm,
+} from "@personal-os/core/academic/current-term";
+import {
   deriveCourseStatus,
   deriveGradingStatus,
   derivePercentage,
@@ -459,6 +464,47 @@ async function fetchAssignments(db: Db, courseId?: string): Promise<DerivedAssig
 }
 
 // ---------------------------------------------------------------------------
+// The current term (ADR-070a)
+// ---------------------------------------------------------------------------
+
+interface CurrentTermScope {
+  term: CurrentTerm | null;
+  /** Ids of the unarchived, active-connection courses in the current term (every such course when `term` is null). */
+  courseIds: Set<string>;
+}
+
+/**
+ * Resolves the current term from every ACTIVE connection's unarchived
+ * courses and returns the ids of the courses in it. Owner decision
+ * 2026-09-16 (ADR-070a): Today and the course list show the current term
+ * only -- the most recently STARTED term, by `term_start_at`, never a
+ * hard-coded name (`packages/core/src/academic/current-term.ts`). With no
+ * started term anywhere, nothing is filtered (`term` is null and every course
+ * id is included), which is the honest answer for an institution that sets
+ * no term dates.
+ */
+async function resolveCurrentTermScope(db: Db, effectiveNow: Date): Promise<CurrentTermScope> {
+  const rows = await db
+    .select({
+      id: canvasCourses.id,
+      termName: canvasCourses.termName,
+      termStartAt: canvasCourses.termStartAt,
+    })
+    .from(canvasCourses)
+    .innerJoin(canvasConnections, eq(canvasCourses.connectionId, canvasConnections.id))
+    .where(and(ACTIVE_CONNECTION, UNARCHIVED_COURSE));
+  const term = selectCurrentTerm(rows, effectiveNow);
+  const courseIds = new Set(rows.filter((row) => isInCurrentTerm(row, term)).map((row) => row.id));
+  return { term, courseIds };
+}
+
+function toCurrentTermWire(
+  term: CurrentTerm | null,
+): { name: string | null; starts_at: string } | null {
+  return term === null ? null : { name: term.name, starts_at: term.startsAt.toISOString() };
+}
+
+// ---------------------------------------------------------------------------
 // GET /academic/today
 // ---------------------------------------------------------------------------
 
@@ -484,6 +530,7 @@ export async function buildAcademicTodayResponse(
       tz: query.tz,
       local_date: today.localDate,
       configured: false,
+      current_term: null,
       summary: {
         overdue_total: 0,
         due_today_total: 0,
@@ -499,7 +546,11 @@ export async function buildAcademicTodayResponse(
     });
   }
 
-  const assignments = await fetchAssignments(db);
+  // ADR-070a: only the current term's courses feed Today. Filtering after
+  // the fetch keeps the `open`/bucket rules stated once (in core) and the
+  // assignment query identical to the course detail's.
+  const scope = await resolveCurrentTermScope(db, effectiveNow);
+  const assignments = (await fetchAssignments(db)).filter((a) => scope.courseIds.has(a.courseId));
   const buckets = bucketAcademicAssignments({
     assignments,
     effectiveNow,
@@ -532,11 +583,13 @@ export async function buildAcademicTodayResponse(
         lte(canvasAnnouncements.postedAt, effectiveNow),
       ),
     );
-  announcementRows.sort(compareAnnouncementsUnreadFirst);
+  // ADR-070a: current-term courses only.
+  const scopedAnnouncements = announcementRows.filter((row) => scope.courseIds.has(row.courseId));
+  scopedAnnouncements.sort(compareAnnouncementsUnreadFirst);
   // Unread within the SAME window the section shows, so the count and the
   // list can never disagree (missing_total is the one windowless count, and
   // the schema says so explicitly).
-  const unreadTotal = announcementRows.filter(
+  const unreadTotal = scopedAnnouncements.filter(
     (r) => normalizeReadState(r.readState) === false,
   ).length;
 
@@ -566,7 +619,12 @@ export async function buildAcademicTodayResponse(
         ),
       ),
     );
-  eventRows.sort(compareEventsByStart);
+  // ADR-070a: a course-scoped event must belong to a current-term course; a
+  // personal (course-less) event is never term-filtered.
+  const scopedEvents = eventRows.filter(
+    (row) => row.courseId === null || scope.courseIds.has(row.courseId),
+  );
+  scopedEvents.sort(compareEventsByStart);
 
   return AcademicTodayResponseSchema.parse({
     generated_at: generatedAt,
@@ -574,6 +632,7 @@ export async function buildAcademicTodayResponse(
     tz: query.tz,
     local_date: today.localDate,
     configured: true,
+    current_term: toCurrentTermWire(scope.term),
     summary: {
       overdue_total: buckets.overdue.length,
       due_today_total: buckets.dueToday.length,
@@ -596,12 +655,14 @@ export async function buildAcademicTodayResponse(
       total: buckets.dueThisWeek.length,
     },
     announcements: {
-      items: announcementRows.slice(0, ACADEMIC_ANNOUNCEMENTS_ITEM_CAP).map(toAcademicAnnouncement),
-      total: announcementRows.length,
+      items: scopedAnnouncements
+        .slice(0, ACADEMIC_ANNOUNCEMENTS_ITEM_CAP)
+        .map(toAcademicAnnouncement),
+      total: scopedAnnouncements.length,
     },
     events: {
-      items: eventRows.slice(0, ACADEMIC_EVENTS_ITEM_CAP).map(toCalendarEvent),
-      total: eventRows.length,
+      items: scopedEvents.slice(0, ACADEMIC_EVENTS_ITEM_CAP).map(toCalendarEvent),
+      total: scopedEvents.length,
     },
   });
 }
@@ -619,14 +680,25 @@ export async function listAcademicCourses(
 
   const configured = (await countActiveConnections(db)) > 0;
   if (!configured) {
-    return AcademicCoursesResponseSchema.parse({ configured: false, items: [] });
+    return AcademicCoursesResponseSchema.parse({
+      configured: false,
+      current_term: null,
+      items: [],
+    });
   }
 
-  const courseRows: CourseRow[] = await db
+  // ADR-070a: the current term is resolved from UNARCHIVED courses (an
+  // archived course cannot define "now"), then applied to whatever set the
+  // query asked for unless `include_past_terms` opts out.
+  const scope = await resolveCurrentTermScope(db, effectiveNow);
+  const allRows: CourseRow[] = await db
     .select(COURSE_SELECT)
     .from(canvasCourses)
     .innerJoin(canvasConnections, eq(canvasCourses.connectionId, canvasConnections.id))
     .where(and(ACTIVE_CONNECTION, query.include_archived ? undefined : UNARCHIVED_COURSE));
+  const courseRows = query.include_past_terms
+    ? allRows
+    : allRows.filter((row) => isInCurrentTerm(row, scope.term));
   courseRows.sort(compareCoursesForList);
 
   // One batched fetch of every listed course's unarchived assignments -- an
@@ -653,6 +725,7 @@ export async function listAcademicCourses(
 
   return AcademicCoursesResponseSchema.parse({
     configured: true,
+    current_term: toCurrentTermWire(scope.term),
     items: courseRows.map((row) =>
       toAcademicCourseSummary(row, assignmentsByCourse.get(row.id) ?? [], effectiveNow),
     ),

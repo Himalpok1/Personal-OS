@@ -277,6 +277,30 @@ export const AcademicEventSchema = z
 export type AcademicEvent = z.infer<typeof AcademicEventSchema>;
 
 // ---------------------------------------------------------------------------
+// The current term (owner decision 2026-09-16, ADR-070a)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every academic surface shows ONLY the current term's courses -- the owner's
+ * account carries Spring 2026 courses and undated "Default Term" compliance
+ * trainings whose long-overdue assignments were burying the Fall 2026 work.
+ * The rule is date-driven, never a hard-coded name: the current term is the
+ * most recently STARTED term (`packages/core/src/academic/current-term.ts`),
+ * identified by its start instant; a course with no `term_start_at` is never
+ * current; an ended term stays current until the next one starts; and when no
+ * course carries a started term at all there is no basis to filter and every
+ * course counts. Echoed on the responses so a client can label what it shows.
+ * Null means "no current term could be determined -- nothing was filtered".
+ */
+export const AcademicCurrentTermSchema = z
+  .object({
+    name: z.string().nullable(),
+    starts_at: z.string().datetime({ offset: true }),
+  })
+  .strict();
+export type AcademicCurrentTerm = z.infer<typeof AcademicCurrentTermSchema>;
+
+// ---------------------------------------------------------------------------
 // GET /academic/today
 // ---------------------------------------------------------------------------
 
@@ -324,7 +348,9 @@ export const ACADEMIC_EVENTS_ITEM_CAP = 10;
  *                        anchor); rules 4 and 6 are local-day based.
  *
  * Every section carries an honest `total` alongside its capped `items`.
- * Only ACTIVE connections' unarchived courses and unarchived rows count. A
+ * Only ACTIVE connections' unarchived courses IN THE CURRENT TERM
+ * (`current_term`, ADR-070a) and their unarchived rows count; a personal
+ * (course-less) calendar event is never term-filtered. A
  * server with no active connection answers `configured: false` with empty
  * sections and zero totals -- never an error -- so a Today card can render
  * (or not) off this one query.
@@ -344,6 +370,10 @@ export const AcademicTodayResponseSchema = z.object({
   tz: z.string(),
   local_date: z.string().date(),
   configured: z.boolean(),
+  // Optional so the versionCode-25 client, whose compiled copy of this
+  // schema predates it, keeps parsing (a non-strict object drops unknown
+  // keys); a server never omits it.
+  current_term: AcademicCurrentTermSchema.nullable().optional(),
   summary: z.object({
     overdue_total: z.number().int().min(0),
     due_today_total: z.number().int().min(0),
@@ -365,17 +395,22 @@ export type AcademicTodayResponse = z.infer<typeof AcademicTodayResponseSchema>;
 
 export const AcademicCoursesQuerySchema = z.object({
   include_archived: booleanQueryParam(false),
+  /** Include courses from terms before the current one (ADR-070a). Default: current term only. */
+  include_past_terms: booleanQueryParam(false),
 });
 export type AcademicCoursesQuery = z.infer<typeof AcademicCoursesQuerySchema>;
 
 /**
- * Every course across every ACTIVE connection, ordered for a list: by term
- * start descending (nulls last), then course code, then name, then `id` so
- * identical requests are byte-identical. `configured` is false when no
- * active connection exists, in which case `items` is empty.
+ * Every CURRENT-TERM course across every ACTIVE connection (all terms with
+ * `include_past_terms=true`), ordered for a list: by term start descending
+ * (nulls last), then course code, then name, then `id` so identical requests
+ * are byte-identical. `configured` is false when no active connection
+ * exists, in which case `items` is empty. `current_term` echoes the term the
+ * default view was filtered to (null when nothing could be filtered).
  */
 export const AcademicCoursesResponseSchema = z.object({
   configured: z.boolean(),
+  current_term: AcademicCurrentTermSchema.nullable().optional(),
   items: z.array(AcademicCourseSummarySchema),
 });
 export type AcademicCoursesResponse = z.infer<typeof AcademicCoursesResponseSchema>;

@@ -8,6 +8,7 @@ import {
   AcademicCourseSchema,
   AcademicCourseSummarySchema,
   AcademicCoursesQuerySchema,
+  AcademicCoursesResponseSchema,
   AcademicEventSchema,
   AcademicTodayQuerySchema,
   AcademicTodayResponseSchema,
@@ -257,6 +258,39 @@ describe("AcademicTodayResponseSchema", () => {
 });
 
 describe("courses routes", () => {
+  it("parses include_past_terms as a boolean query param, default false (ADR-070a)", () => {
+    expect(AcademicCoursesQuerySchema.parse({}).include_past_terms).toBe(false);
+    expect(
+      AcademicCoursesQuerySchema.parse({ include_past_terms: "true" }).include_past_terms,
+    ).toBe(true);
+  });
+
+  it("accepts and echoes current_term on the courses and today responses, nullable and optional", () => {
+    const term = { name: "2026 Fall", starts_at: "2026-08-03T05:00:00Z" };
+    expect(
+      AcademicCoursesResponseSchema.parse({ configured: true, current_term: term, items: [] })
+        .current_term,
+    ).toEqual(term);
+    expect(
+      AcademicCoursesResponseSchema.parse({ configured: true, current_term: null, items: [] })
+        .current_term,
+    ).toBeNull();
+    // The versionCode-25 client's compiled schema predates the key: absent must still parse.
+    expect(
+      AcademicCoursesResponseSchema.parse({ configured: true, items: [] }).current_term,
+    ).toBeUndefined();
+    expect(
+      AcademicTodayResponseSchema.parse({ ...TODAY, current_term: term }).current_term,
+    ).toEqual(term);
+    expect(() =>
+      AcademicCoursesResponseSchema.parse({
+        configured: true,
+        current_term: { name: "x" },
+        items: [],
+      }),
+    ).toThrow();
+  });
+
   it("parses include_archived as a boolean query param, default false", () => {
     expect(AcademicCoursesQuerySchema.parse({}).include_archived).toBe(false);
     expect(AcademicCoursesQuerySchema.parse({ include_archived: "true" }).include_archived).toBe(

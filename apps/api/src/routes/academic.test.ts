@@ -120,6 +120,7 @@ describe("GET /academic/courses", () => {
     expect(res.statusCode).toBe(200);
     expect(AcademicCoursesResponseSchema.parse(res.json())).toEqual({
       configured: false,
+      current_term: null,
       items: [],
     });
   });
