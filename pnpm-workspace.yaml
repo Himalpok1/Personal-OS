@@ -23,3 +23,9 @@ minimumReleaseAgeExclude:
   - expo@57.0.13
   - "@ai-sdk/xai@4.0.40"
   - expo-notifications@57.0.12
+# react-native-css-interop (nativewind/babel) references this Babel plugin by bare name without
+# declaring it (Checkpoint 10.0 recorded debt). It reaches the tree only transitively, so hoist one
+# real copy to the root node_modules: the name then resolves from anywhere -- the preset dir, the
+# app dir, gradle's bundling step -- in every install layout, local and EAS alike (Checkpoint 10.2).
+publicHoistPattern:
+  - "@babel/plugin-transform-react-jsx"
