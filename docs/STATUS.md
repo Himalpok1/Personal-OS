@@ -7,8 +7,9 @@ no further checkpoint selected. Within Phase 10: **Checkpoint 10.0** (behavior-p
 the `docs/AGENT-READINESS.md` inventory) and **Checkpoint 10.1 / 10.1B** (read-only Canvas LMS
 integration, migration `0020`, deployed and live-validated against the owner's real account) are
 **deployed and accepted**. **Checkpoint 10.1C — the Canvas reconnect-after-disconnect fix — is
-IMPLEMENTED, TESTED and INDEPENDENTLY REVIEWED but NOT DEPLOYED**, by the owner's own instruction;
-its deployment plan is written in the 10.1C entry below and waits for explicit authorization.
+DEPLOYED and LIVE-VALIDATED (2026-09-16, api only, no migration)**: reconnect returned 200 on the
+same connection row, history preserved, hourly cron succeeding since. No checkpoint after 10.1C is
+selected; the next product direction is an owner decision.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -49,17 +50,18 @@ lines / 243 KB. Nothing has ever been deleted from the record — only relocated
 
 ## Production state at a glance
 
-Rows are as last verified first-hand at the checkpoint named in the row (10.1B on 2026-09-16 for the
-deployment, Canvas and Rabbit rows; 9.8 on 2026-09-15 for the others unless stated). The
+Rows are as last verified first-hand at the checkpoint named in the row (10.1C's deployment check on
+2026-09-16 ~12:35Z for the deployment, Canvas and container rows; 10.1B for the Rabbit; 9.8 on
+2026-09-15 for the others unless stated). The
 per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs/history/phase-9.md`.
 
 | | |
 |---|---|
-| Migration level | **21** (`0000`–`0020`); local and production agree. 10.1C adds none. |
-| Serving commit | api, worker and web at **`1e406f7`** (Checkpoint 10.1B, all three recreated 2026-09-16). **10.1C (`f85779a`, api only) is committed but NOT deployed.** Provenance is by compose `working_dir` (`personal-os-10.1-release`); the images carry no commit label. Rollback images `personal-os-{api,worker,web}:rollback-pre-10.1`, tagged by resolved digest (every earlier `rollback-pre-*` tag preserved underneath). |
-| Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30; `GET /health` → `ok` / `connected` / `stale:false` (10.1B) |
+| Migration level | **21** (`0000`–`0020`); local and production agree. 10.1C added none. |
+| Serving commit | **api at `f85779a`** (Checkpoint 10.1C, recreated 2026-09-16T11:47:57Z from `personal-os-10.1c-release`, image `60cfdb04…`); **worker and web at `1e406f7`** (10.1B, untouched since 09:46Z). Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-api:rollback-pre-10.1c` = the 10.1B api image (`a889dfd2…`), plus `personal-os-{api,worker,web}:rollback-pre-10.1` and every earlier `rollback-pre-*` tag, all by resolved digest. |
+| Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated by 10.1/10.1B/10.1C); `GET /health` → `ok` / `connected` / `stale:false` (12:34Z) |
 | Rabbit R1 | `com.himal.personalos` **versionCode 22**, built from `1e406f7` (EAS build `23f032f5…`), installed in place with SecureStore credential, primary-device row, exact-alarm appop, `POST_NOTIFICATIONS` and `firstInstallTime` (2026-08-19) all preserved — no re-pair, signature unchanged. Carries the Canvas "upcoming assignments" Today card verified live with real data; the 9.7 "Ask about today" flow and 9.8 "Suggested Focus" card unchanged. |
-| Canvas (10.1/10.1B/10.1C) | `packages/canvas-providers` + six tables, PAT-authenticated, read-only, hourly `canvas.sync-cron`. **Live-validated against the owner's real UTA account 2026-09-16**: connect → sync (16 courses, 355 assignments, 19 announcements, 0 events) → idempotent resync → disconnect (credential triple NULLed) → invalid token rejected (`400 canvas_auth_failed`) → reconnect → resync, left **active**. Zero PAT occurrences in any log line across the window. **Known gap in production until 10.1C deploys:** reconnecting after a disconnect `409 canvas_already_connected`s (10.1B worked around it by deleting the disconnected row, losing that row's history); 10.1C reactivates the same row in place instead. |
+| Canvas (10.1/10.1B/10.1C) | `packages/canvas-providers` + six tables, PAT-authenticated, read-only, hourly `canvas.sync-cron`. **Live-validated against the owner's real UTA account 2026-09-16**: connect → sync (16 courses, 355 assignments, 19 announcements, 0 events) → idempotent resync → disconnect (credential triple NULLed) → invalid token rejected (`400 canvas_auth_failed`) → reconnect → resync, left **active**. **Reconnect path (10.1C) verified live 2026-09-16**: disconnect → `200` · reconnect → **`200` on the same row `8b8e2cb6…`** (`created_at` unchanged at 10:50:30Z, all 16 courses still linked) · second connect on the active row → `409` · manual resync `202` → `succeeded` · hourly cron `succeeded` at 12:00:17Z. Zero PAT-shaped strings and zero warn/error lines in the api and worker logs since the api was recreated. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · notification-shade capture (9.1) — a persistent local "Capture" notification on its own channel; verified live on the Rabbit R1 (9.1). |
 | Reminders (9.4) | Scheduled by the primary device from **`GET /reminders`** — one item per one-off task with a reminder and one per open occurrence of a recurring task (derived from the parent's `remind_at` wall clock and its day-offset from `due_at`, in `recurrence_timezone`; `snoozed_until` overrides). Deterministic identifiers `reminder:<key>:<instant>`, exact alarms (`window=0 exactAllowReason=permission`), category `reminder` with **Done / Snooze 1h / Tomorrow 9am**, all `opensAppToForeground: true`. Verified live with the app process killed (`am kill`, not force-stop — force-stop puts the package in Android's stopped state, which cancels every alarm). |
 | Notification channels (9.1) | `reminders` (MAX, local reminders only) · `alerts` (HIGH — integration/monitor alerts) · `updates` (DEFAULT — confirmations + mail digest) · `capture` (LOW — the local shortcut only, never through `notifications.dispatch`). All four verified listed and toggleable in Android's per-app settings on the Rabbit R1. |
@@ -510,7 +512,7 @@ own reasoning).
 
 ---
 
-### Checkpoint 10.1C — Canvas reconnect lifecycle fix: IMPLEMENTED, LOCALLY VERIFIED, **NOT DEPLOYED** (2026-09-16)
+### Checkpoint 10.1C — Canvas reconnect lifecycle fix: IMPLEMENTED, LOCALLY VERIFIED, **DEPLOYED AND LIVE-VALIDATED** (2026-09-16)
 
 **Scope: fix the reconnect-after-disconnect bug found live in Checkpoint 10.1B, nothing else.** No
 migration, no sync-behavior change, no other provider touched. Owner-directed constraint: implement,
@@ -592,8 +594,8 @@ refuse it) — not a regression from this checkpoint, but wiring `invalid_token`
 failure path is recorded as Phase 10 candidate follow-up, since it would let a broken connection
 surface itself for reconnect without a manual disconnect step first.
 
-**Deployment plan (NOT executed — awaiting explicit authorization, per this checkpoint's own
-scope).** Nothing here requires the full frozen order's migration step, since there is no
+**Deployment plan (NOT executed when this plan was written — executed later the same day; see
+*Deployment — COMPLETE* below).** Nothing here requires the full frozen order's migration step, since there is no
 migration:
 
 1. Commit (`apps/api/src/services/canvas-connection.ts`,
@@ -611,7 +613,36 @@ migration:
    (never the owner's real second account) before leaving the connection reconnected with the
    owner's real PAT.
 
----
+#### Deployment — COMPLETE (2026-09-16, api only, no migration)
+
+**How this record came to be written.** The deployment was executed at 11:44–11:53Z by a session
+other than the one recording it; the recording session was asked to "deploy 10.1C" at ~12:30Z,
+found on its read-only preflight that the api container had already been recreated from a
+`personal-os-10.1c-release` working directory 45 minutes earlier, and **verified the outcome
+first-hand against production instead of redeploying**. Everything below was read directly from the
+host, the containers, the database and the logs at ~12:32–12:35Z; nothing is inferred from the plan.
+
+| Step | Evidence |
+|---|---|
+| 1. Release source | `/home/himallinux/personal-os-10.1c-release`, created 11:44Z: 1,066 files, and the README / `docs/STATUS.md` / Phase 0 checklist / mobile README hashes match **`f85779a` exactly** (the fix commit; no `.env`, no `docs/decisions/`). |
+| 2. Rollback tag | `personal-os-api:rollback-pre-10.1c` → image `a889dfd2…`, created 09:42Z — the 10.1B api image that was serving. |
+| 3. Build + verify | New api image `60cfdb04…` built 11:45:27Z. Inside the **running** container: `dist/services/canvas-connection.js` carries `CanvasAccountMismatchError` (4 hits) and `dist/routes/canvas-connections.js` carries `canvas_account_mismatch` and the `result.created ? 201 : 200` branch. |
+| 4. Rollout | api recreated 11:47:57Z, `RestartCount=0`, `(healthy)`. **worker (09:46:10Z, image 09:42Z) and web (09:46:10Z, image 09:42Z) untouched; postgres untouched since 2026-08-30** — nothing else recreated. Migration journal still 21. |
+| 5. Validation (real production routes, owner's real UTA account) | 11:48:32Z `POST /canvas-connections/8b8e2cb6…/disconnect` → **200**. 11:52:20Z `POST /canvas-connections` → **200** (reactivation, not 201): row `8b8e2cb6…` **reused** — `created_at` still 10:50:30Z, `status: active`, `canvas_user_name` refreshed, `last_sync_error` null, all 16 `canvas_courses` still linked to the same `connection_id` (10.1B had to delete the row to reconnect; 10.1C keeps its history). 11:52:35Z `POST /canvas-connections` → **409** (the active-row refusal). 11:52:45Z `POST …/sync` → **202**, run `3f6d0c33…` manual **succeeded** 11:52:46Z. 12:00:17Z cron run `ec02a04f…` **succeeded** — the hourly cron works on the reactivated row. |
+| Log audit | api log since recreation: **0** PAT-shaped strings (`<digits>~<30+ chars>`), **0** warn/error lines. Worker log since 11:45Z: 2× `canvas.sync.started` / 2× `canvas.sync.finished`, 0 token-shaped strings. 31 queues / 11 schedules unchanged. |
+| Perimeter | Both Tailscale Serve routes `tailnet only`; Postgres publishes no host port. |
+
+**One plan step is unprovable in production and is recorded as such, not as done.** Step 5 asked
+to "confirm the account-mismatch guard 409s a deliberately-wrong synthetic token". It cannot:
+`connectCanvasConnection` calls `getSelf` (token verification) **before** the mismatch check, so a
+synthetic token can only ever produce `400 canvas_auth_failed`. The mismatch guard fires only for a
+valid PAT belonging to a *different* Canvas account, which the plan itself forbids using. The guard
+therefore rests on its unit tests (`canvas-connections.test.ts`: the reconnect/mismatch tests plus
+the review-added `invalid_token` reactivation test), and the 409 observed at 11:52:35Z is the
+active-row refusal, not the mismatch branch.
+
+**Rollback, if ever needed:** `docker tag personal-os-api:rollback-pre-10.1c personal-os-api:latest`
+then the frozen `up -d --no-deps --no-build --force-recreate api`. No schema involved.
 
 ---
 
@@ -831,12 +862,11 @@ migration:
 
 ## Current objective
 
-**Phase 10 — Codebase Consolidation & Agent Readiness — is open.** Checkpoints 10.0 and 10.1/10.1B
-are closed. **Checkpoint 10.1C is implemented, tested (6,054/6,054) and independently reviewed
-(zero blocker, zero major) but not deployed**, by the owner's own instruction — its five-step,
-api-only deployment plan is written at the end of the 10.1C entry above and waits for explicit
-authorization. Until it deploys, production keeps the 10.1B reconnect gap described in the
-at-a-glance Canvas row.
+**Phase 10 — Codebase Consolidation & Agent Readiness — is open.** Checkpoints 10.0, 10.1/10.1B and
+10.1C are closed: 10.1C (implemented, tested 6,054/6,054, independently reviewed with zero
+blocker/major findings) was **deployed to production on 2026-09-16 and its reconnect path validated
+live** — see the deployment record at the end of the 10.1C entry above. Production serves the
+10.1C api (`f85779a`) alongside the 10.1B worker and web (`1e406f7`).
 
 The product track is otherwise unchanged by Phase 10 so far: Personal OS has a first read-only
 intelligence surface (9.7) and a second, narrower one (9.8) on the 9.6 retrieval layer, exactly as
@@ -872,9 +902,9 @@ phase is in `docs/history/`; the one-line summary is:
 | **9.8** | Suggested Focus: a narrow, cited AI suggestion over today's overdue/due-today tasks, reusing Ask's `TodayContext`/"focus" preset and its `ask` consent switch entirely — zero new intelligence lineage, zero new consent surface. No model call below two candidates (server-enforced); exactly one citation required, validated against the narrower candidate ref set. Deterministic summary renders for free; the AI line is always an explicit tap. Nothing stored; no migration; worker untouched. **Deployed (api/web, level 20, no migration) and accepted on the Rabbit R1 (versionCode 20) 2026-09-15** (ADR-067). |
 | **10.0** | Codebase consolidation & agent readiness: proven-dead mobile/API code removed (Expo starter scaffold, 6 dead query/outbox exports, 3 dormant API error classes, 1 unused health-connection helper, 1 unused test fixture), 4 orphaned Expo dependencies removed (`expo-image`/`expo-status-bar`/`expo-web-browser`/`@babel/plugin-transform-react-jsx`), a duplicate date-parsing implementation consolidated, new `docs/AGENT-READINESS.md` canonical-boundary inventory, `tags`/`item_tags` classified safe-to-drop (not acted on). Zero behavior change, zero migration, worker untouched. **Deployed (api/web, level 20, no migration) and accepted on the Rabbit R1 (versionCode 21) 2026-09-15.** |
 | **10.1** | Canvas LMS integration: read-only, Personal-Access-Token-authenticated sync of courses/assignments/announcements/calendar events into six new tables (migration `0020`), a Today "upcoming assignments" card, a same-origin-checked "open in Canvas" link, CalDAV-derived SSRF protection on `canvas_base_url`. **Deployed (api/worker/web, level 21) and live-validated against the owner's real UTA account and the physical Rabbit R1 (versionCode 22) 2026-09-16** (ADR-068). |
-| **10.1C** | Canvas reconnect lifecycle fix: `connectCanvasConnection` SELECTs any prior row by `canvas_base_url` first and reactivates a non-active row in place (same `id`/`created_at`, FK-linked history preserved), refuses an active row (`409 canvas_already_connected`) and a different `canvas_user_id` (`409 canvas_account_mismatch`); route returns 200 on reactivation, 201 on creation. **Implemented, tested and independently reviewed 2026-09-16 (`f85779a`); NOT DEPLOYED — awaiting explicit authorization.** |
+| **10.1C** | Canvas reconnect lifecycle fix: `connectCanvasConnection` SELECTs any prior row by `canvas_base_url` first and reactivates a non-active row in place (same `id`/`created_at`, FK-linked history preserved), refuses an active row (`409 canvas_already_connected`) and a different `canvas_user_id` (`409 canvas_account_mismatch`); route returns 200 on reactivation, 201 on creation. **Deployed (api only, no migration) and live-validated against the owner's real UTA account 2026-09-16** — reconnect `200` on the same row with history preserved, cron succeeding since. |
 
-**Production is at migration level 21** and serves api, worker and web images built from `1e406f7`.
+**Production is at migration level 21** and serves the api image built from `f85779a` (10.1C) with worker and web from `1e406f7` (10.1B).
 All three Google integrations plus Canvas are active. Monitoring runs against five active targets
 including both Tailscale Serve routes, with full CRUD. A daily retention cron bounds
 `monitor_checks`/`mail_messages`/`mail_digests`/`mail_sync_runs`/`health_sync_runs` and sweeps
@@ -888,9 +918,8 @@ versionCode 22, built from `1e406f7`.
 
 ## Current work
 
-**Checkpoint 10.1C — awaiting deployment authorization.** The fix is committed at `f85779a`
-(api only: `apps/api/src/services/canvas-connection.ts`, `apps/api/src/routes/canvas-connections.ts`
-and its test file), pushed to `origin`, and on `main`. No other work is in progress.
+**None in progress.** Checkpoint 10.1C deployed and validated 2026-09-16 (record above). No next
+checkpoint has been selected.
 
 **Repository housekeeping done 2026-09-16 (this reconciliation, no product change):** `main`
 fast-forwarded to the Phase 10 tip and made canonical again (PR #1 merged); the decision log split
@@ -906,7 +935,15 @@ removed from the primary checkout.
 
 ## Last verification
 
-**Checkpoint 10.1C (2026-09-16), `f85779a`.** `pnpm build --force` 12/12 · `pnpm typecheck` 23/23 ·
+**Checkpoint 10.1C deployment check (2026-09-16, ~12:32–12:35Z), read directly from production.**
+Release dir = `f85779a` by file hashes · running api image `60cfdb04…` carries the fix (grep in
+`dist/`) · api `RestartCount=0` `(healthy)`, worker/web/postgres untouched · `/health` ok · Canvas
+row `8b8e2cb6…` `active`, reused across disconnect/reconnect (`created_at` 10:50:30Z), 16 courses
+linked · request log 200 / 200 / 409 / 202 as recorded above · manual + cron sync runs `succeeded` ·
+0 token-shaped strings and 0 warn/error lines in api and worker logs · 31 queues / 11 schedules ·
+Serve tailnet-only · Postgres unpublished. Full table in the 10.1C entry.
+
+**Checkpoint 10.1C gate (2026-09-16), `f85779a`.** `pnpm build --force` 12/12 · `pnpm typecheck` 23/23 ·
 `npx eslint .` clean · `npx prettier --check` clean on every changed file · `git diff --check` clean
 · `gitleaks detect` — the same 21 pre-existing findings in one ignored, untracked file
 (`apps/mobile/.expo/dev/logs/export.log`), zero new · `pnpm test --force` **23/23 tasks, 6,054 tests
@@ -927,15 +964,7 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. **Deploy Checkpoint 10.1C when the owner authorizes it**, following the plan in the 10.1C entry:
-   push is done; tag the running api image `rollback-pre-10.1c` by digest; ship `f85779a` via
-   `git archive`; build and verify the api image alone; recreate `api` with
-   `--no-deps --no-build --force-recreate`; validate against the real production Canvas connection
-   (disconnect → reconnect returns **200 and the same connection id** → resync → the account-mismatch
-   guard 409s a synthetic wrong-account token → leave reconnected with the owner's real PAT).
-   Worker, web and postgres are untouched; there is no migration.
-
-2. **Then choose the next checkpoint — a product-direction decision for the owner.** Candidates
+1. **Choose the next checkpoint — a product-direction decision for the owner.** Candidates
    carried from the 9.8 and 10.0/10.1 closeouts, none advanced or foreclosed since: widen the Canvas
    integration (course/announcement/event UI beyond the Today card, device-token auth on the new
    routes, wiring `invalid_token` into the worker's failure path so a revoked PAT surfaces itself
@@ -947,8 +976,9 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
    owner decision rather than being debt: the `tags`/`item_tags` safe-to-drop classification (a table
    drop is irreversible under ADR-024) and the deferred `knip` dead-code-tooling question.
 
-3. **Open owner action outside any checkpoint:** `docs/SOURCE-DURABILITY.md` Option 2 — the encrypted
-   configuration copy — is still not done and remains the sharpest source-durability risk.
+2. **Open owner actions outside any checkpoint:** `docs/SOURCE-DURABILITY.md` Option 2 — the encrypted
+   configuration copy — is still not done and remains the sharpest source-durability risk; and the
+   `EXPO_TOKEN` that sat in a mode-644 Expo dev log (deleted 2026-09-16) should be rotated.
 
 The per-checkpoint "open, non-blocking, carried forward" observations that 9.4–10.0 appended to this
 section (spring-forward early resolution, the 90/91-row fall-back window, `isAbortLikeError`

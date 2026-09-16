@@ -162,8 +162,8 @@ The project is phase-gated.
 As of 2026-09-16: **Phases 0–9 are complete and production-deployed at migration level 21.** Phase 8
 closed under ADR-061 (`docs/PHASE-8-CLOSEOUT.md`, `docs/history/phase-8.md`); Phase 9 closed under
 ADR-069 (`docs/history/phase-9.md`). **Phase 10 — Codebase Consolidation & Agent Readiness — is open:
-Checkpoints 10.0 and 10.1/10.1B are deployed and accepted; 10.1C is implemented and reviewed but NOT
-deployed pending explicit owner authorization**, and no checkpoint after it is selected — the next
+Checkpoints 10.0, 10.1/10.1B and 10.1C are deployed and accepted** (production api at `f85779a`,
+worker/web at `1e406f7`, migration level 21), and no checkpoint after 10.1C is selected — the next
 product direction is an owner decision. Standing rules carry forward regardless of phase: read-only
 intelligence before write-capable intelligence, no unrestricted full-content cloud egress, no pgvector
 or Postgres image change without its own infrastructure ADR (ADR-056), every new alert producer

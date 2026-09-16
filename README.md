@@ -9,8 +9,8 @@ The canonical design is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 Phase 10 (Codebase Consolidation & Agent Readiness) is open. Checkpoint 10.0 —
 behavior-preserving cleanup and agent-readiness audit — and Checkpoint 10.1 — a
 read-only Canvas LMS integration (courses/assignments sync, live-validated in
-production) — are deployed and accepted; Checkpoint 10.1C (the Canvas reconnect
-fix) is implemented and reviewed but not yet deployed. Phases 0–9 are complete;
+production) — and Checkpoint 10.1C (the Canvas reconnect fix) are deployed and
+accepted. Phases 0–9 are complete;
 per-phase records are archived in `docs/history/`. Production runs on a
 Tailscale-only home server, with the mobile client on a physical Rabbit R1.
 `main` is the canonical branch.
