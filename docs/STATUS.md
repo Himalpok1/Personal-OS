@@ -9,9 +9,10 @@ integration, migration `0020`, deployed and live-validated against the owner's r
 **deployed and accepted**. **Checkpoint 10.1C — the Canvas reconnect-after-disconnect fix — is
 DEPLOYED and LIVE-VALIDATED (2026-09-16, api only, no migration)**: reconnect returned 200 on the
 same connection row, history preserved, hourly cron succeeding since. **Checkpoint 10.2 — the
-Academic Intelligence Layer — is IMPLEMENTED, LOCALLY VERIFIED and INDEPENDENTLY REVIEWED
-(2026-09-16), NOT deployed**: production stays at migration level 21 until the owner authorizes the
-frozen deployment order for migration `0021` (see the 10.2 entry's *Deployment plan*).
+Academic Intelligence Layer — is DEPLOYED (api, worker, web; migration `0021`, level 22) and
+PRODUCTION-VALIDATED against the owner's real UTA account (2026-09-16 ~17:30Z)**; the Rabbit R1
+versionCode-23 build is **PENDING** on the EAS Free-plan quota (resets 2026-10-01), and the
+versionCode-22 client verified working against the new api on the physical device.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -59,12 +60,12 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 
 | | |
 |---|---|
-| Migration level | **Production 21** (`0000`–`0020`). **Local 22**: Checkpoint 10.2 adds `0021_canvas_assignment_grades` (ADR-068a), applied to the local dev/test databases and reconciled, **not yet deployed**. |
-| Serving commit | **api at `f85779a`** (Checkpoint 10.1C, recreated 2026-09-16T11:47:57Z from `personal-os-10.1c-release`, image `60cfdb04…`); **worker and web at `1e406f7`** (10.1B, untouched since 09:46Z). Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-api:rollback-pre-10.1c` = the 10.1B api image (`a889dfd2…`), plus `personal-os-{api,worker,web}:rollback-pre-10.1` and every earlier `rollback-pre-*` tag, all by resolved digest. |
-| Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated by 10.1/10.1B/10.1C); `GET /health` → `ok` / `connected` / `stale:false` (12:34Z) |
-| Rabbit R1 | `com.himal.personalos` **versionCode 22**, built from `1e406f7` (EAS build `23f032f5…`), installed in place with SecureStore credential, primary-device row, exact-alarm appop, `POST_NOTIFICATIONS` and `firstInstallTime` (2026-08-19) all preserved — no re-pair, signature unchanged. Carries the Canvas "upcoming assignments" Today card verified live with real data; the 9.7 "Ask about today" flow and 9.8 "Suggested Focus" card unchanged. |
-| Academic layer (10.2, local only) | `GET /academic/today?tz=` · `GET /academic/courses` · `GET /academic/courses/:id` — a provider-agnostic read model computed over the Canvas tables (ADR-070), a deterministic Today card and `/academic` course screens, `score`/`grade` synced (ADR-068a), `invalid_token` wired into the worker's auth-failure path. Verified locally in the browser with seeded data; **not in production**. |
-| Canvas (10.1/10.1B/10.1C) | `packages/canvas-providers` + six tables, PAT-authenticated, read-only, hourly `canvas.sync-cron`. **Live-validated against the owner's real UTA account 2026-09-16**: connect → sync (16 courses, 355 assignments, 19 announcements, 0 events) → idempotent resync → disconnect (credential triple NULLed) → invalid token rejected (`400 canvas_auth_failed`) → reconnect → resync, left **active**. **Reconnect path (10.1C) verified live 2026-09-16**: disconnect → `200` · reconnect → **`200` on the same row `8b8e2cb6…`** (`created_at` unchanged at 10:50:30Z, all 16 courses still linked) · second connect on the active row → `409` · manual resync `202` → `succeeded` · hourly cron `succeeded` at 12:00:17Z. Zero PAT-shaped strings and zero warn/error lines in the api and worker logs since the api was recreated. |
+| Migration level | **22** (`0000`–`0021`); local and production agree. 10.2 added `0021_canvas_assignment_grades` (ADR-068a), applied to production 2026-09-16 from the 10.2 api image — row 22, `created_at 1789377000000`, hash `f8c3ed88…` identical to the tracked file. |
+| Serving commit | **api, worker and web at `b2c273b`** (Checkpoint 10.2, all three recreated 2026-09-16T17:30:32–59Z from `personal-os-10.2-release`; images api `e4e115ebe2b0`, worker `9c23c00beea2`, web `163f4ac03e0a`). Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,worker,web}:rollback-pre-10.2` = the 10.1C api (`60cfdb04…`) and 10.1B worker (`c53a0475…`) / web (`c8209f9f…`) images, plus every earlier `rollback-pre-*` tag, all by resolved digest. |
+| Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated by 10.1/10.1B/10.1C/10.2); `GET /health` → `ok` / `connected` / `stale:false` (17:49Z) |
+| Rabbit R1 | `com.himal.personalos` **versionCode 22**, built from `1e406f7` (EAS build `23f032f5…`) — **still the 10.1 client**: the 10.2 EAS build was refused (Free-plan Android quota exhausted until 2026-10-01; the remote versionCode counter ticked to 23 on the attempt). Its 10.1 "Canvas" Today card was **verified rendering live against the 10.2 api on the device** (17:4xZ) — the frozen 10.1 wire shape of `GET /canvas-assignments/upcoming` is what keeps it working. The academic screens reach the Rabbit with the next build. |
+| Academic layer (10.2) | `GET /academic/today?tz=` · `GET /academic/courses` · `GET /academic/courses/:id` — a provider-agnostic read model computed over the Canvas tables (ADR-070), a deterministic Today card and `/academic` course screens, `score`/`grade` synced (ADR-068a; **165 of 355 real assignments carry a grade** after the first post-deploy sync), `invalid_token` wired into the worker's auth-failure path. **Live in production and validated against the real account** (11 overdue · 1 due today · 8 due this week · 12 unread announcements at 17:3xZ; 16 courses across 3 terms); web client verified in a real browser over Tailscale; device client pending the versionCode-23 build. |
+| Canvas (10.1/10.1B/10.1C) | `packages/canvas-providers` + six tables, PAT-authenticated, read-only, hourly `canvas.sync-cron`. Connection `8b8e2cb6…` stayed **active** with its credential intact across the 10.2 deployment; manual sync 17:31:19Z `succeeded` (16/355/21/0). **Live-validated against the owner's real UTA account 2026-09-16**: connect → sync (16 courses, 355 assignments, 19 announcements, 0 events) → idempotent resync → disconnect (credential triple NULLed) → invalid token rejected (`400 canvas_auth_failed`) → reconnect → resync, left **active**. **Reconnect path (10.1C) verified live 2026-09-16**: disconnect → `200` · reconnect → **`200` on the same row `8b8e2cb6…`** (`created_at` unchanged at 10:50:30Z, all 16 courses still linked) · second connect on the active row → `409` · manual resync `202` → `succeeded` · hourly cron `succeeded` at 12:00:17Z. Zero PAT-shaped strings and zero warn/error lines in the api and worker logs since the api was recreated. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · notification-shade capture (9.1) — a persistent local "Capture" notification on its own channel; verified live on the Rabbit R1 (9.1). |
 | Reminders (9.4) | Scheduled by the primary device from **`GET /reminders`** — one item per one-off task with a reminder and one per open occurrence of a recurring task (derived from the parent's `remind_at` wall clock and its day-offset from `due_at`, in `recurrence_timezone`; `snoozed_until` overrides). Deterministic identifiers `reminder:<key>:<instant>`, exact alarms (`window=0 exactAllowReason=permission`), category `reminder` with **Done / Snooze 1h / Tomorrow 9am**, all `opensAppToForeground: true`. Verified live with the app process killed (`am kill`, not force-stop — force-stop puts the package in Android's stopped state, which cancels every alarm). |
 | Notification channels (9.1) | `reminders` (MAX, local reminders only) · `alerts` (HIGH — integration/monitor alerts) · `updates` (DEFAULT — confirmations + mail digest) · `capture` (LOW — the local shortcut only, never through `notifications.dispatch`). All four verified listed and toggleable in Android's per-app settings on the Rabbit R1. |
@@ -75,7 +76,7 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress. |
 | Backups | **None, by design** (ADR-024). |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE** (re-verified 2026-09-16). No CI, no Actions workflow, no repository secret. **`main` is the canonical branch again as of 2026-09-16** (fast-forwarded to the Phase 10 tip; PR #1 merged). |
-| Test baseline | **6,265 tests across 13 packages** at 10.2 (`bd0c68d`): api 1,478 · mobile 1,467 · core 955 · worker 728 · schema 540 · health-providers 332 · api-client 200 · canvas-providers 75 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25 (was 6,054 at 10.1C, 6,044 at 10.1, 5,815 at 9.8). |
+| Test baseline | **6,265 tests across 13 packages** at 10.2 (`b2c273b`, re-run on the merged `main` checkout): api 1,478 · mobile 1,467 · core 955 · worker 728 · schema 540 · health-providers 332 · api-client 200 · canvas-providers 75 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25 (was 6,054 at 10.1C, 6,044 at 10.1, 5,815 at 9.8). |
 | pg-boss | **31 queues, 11 schedules** (worker startup log at 10.1B; `pgboss.queue` reads one more with the internal `__pgboss__send-it`). Every retrying queue has a dead-letter queue (9.0): `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues, `occurrences.generate-lazy`, `occurrences.expand-window`. `occurrences.expand-window` has a phase-2 idempotent lazy repair since 9.4. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C) · `health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now` (9.0). First scheduled run 2026-09-13T04:00Z; the job's daily runs have not been individually re-verified since the 9.0 acceptance. |
 | Alert keys | Occurrence-scoped (ADR-058). Producers: health-sync breaker (first live emission 2026-09-12T03:00:14Z), `occurrences.generate-lazy.dead:<occurrenceId>`, `occurrences.expand-window.dead:<UTC date>` (9.0; also covers a failed 9.4 phase-2 repair), `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (9.5). The three 9.x producers are unexercised in production by design. |
@@ -823,20 +824,129 @@ client (the lane checked from `apps/mobile`); `settings.tsx` was already non-pre
 at HEAD and only the new hunk is formatted. Relative day labels ("Tomorrow") were not added to
 the card. The `personalos_test_api102`/`_worker102` clones were dropped at closeout.
 
-**Deployment plan — NOT executed (owner authorization required).** All three images change (api,
-worker, web) and there is a migration, so the full frozen order applies: commit and push; tag the
-serving api/worker/web images `rollback-pre-10.2` by digest; `git archive` to
-`/home/himallinux/personal-os-10.2-release`; build all three; **verify the new api image carries
-`0021_canvas_assignment_grades.sql` and that production's `select max(created_at) from
-drizzle.__drizzle_migrations` is `1789376000000` (below `0021`'s `1789377000000`)**; migrate with
-`--no-deps` from the new image and confirm the row count goes **21 → 22** and the two columns
-exist; recreate `api worker web` (never `postgres`); confirm 31 queues / 11 schedules, `/health`
-ok; the next hourly `canvas.sync-cron` populates `score`/`grade` for the owner's 355 real
-assignments (an idempotent content-gated write, one pass); `GET /academic/today?tz=America/Chicago`
-against the real account; EAS `production-internal` build → versionCode 23 → `adb install -r` on
-the Rabbit R1 with the usual preserved-state checks; walk Today → Academics → a real course on the
-device. Rollback: retag `rollback-pre-10.2` and recreate; `0021` is additive, so the 10.1B/10.1C
-images run against the post-migration schema.
+**Deployment plan (as authorized; executed 2026-09-16 — see the record below).** Full frozen
+order: commit and push; tag the serving images `rollback-pre-10.2` by digest; `git archive` to a
+per-release directory; build all three; verify the new api image carries `0021` and production's
+watermark is below it; migrate with `--no-deps`; recreate `api worker web` (never `postgres`);
+validate against the real account; EAS build → versionCode 23 → `adb install -r`.
+
+#### Deployment — COMPLETE for api / worker / web (2026-09-16, 17:26–17:31Z); Rabbit build PENDING
+
+**Owner authorization received 2026-09-16 (~17:20Z)** with a step list; this record follows it.
+
+**Step 0 — merge.** `claude/academic-intelligence-foundation-8931dd` fast-forwarded into `main`
+(`1a2b5c5` → `7c7164e`, then `b2c273b` after one lint fix — the frozen-upcoming-shape pin test's
+unused destructure, caught by linting `main` with eslint's exit code captured rather than piped
+through `tail`, which had hidden the summary line in the worktree). Both pushed to the private
+`origin`. Final checks on the merged checkout: `pnpm build --force` 12/12 · `pnpm typecheck`
+23/23 · `npx eslint apps packages` exit 0 · `prettier --check` clean · `git diff --check` clean ·
+`pnpm test --force` **23/23 tasks, 6,265 tests, zero failing** · working-copy gitleaks: the same
+nine pre-existing findings in git-ignored local files (`.env`, `apps/mobile/.env`, two
+`google-services.json`), history clean. Two environment notes: a root `npx eslint .` from the main
+checkout recurses into `.claude/worktrees/*` (three worktrees present, one from another session)
+and exhausts the heap — lint `apps packages` explicitly; `git worktree list` showed
+`codebase-repo-cleanup-24ab28` and `zen-zhukovsky-11cc89` alongside this one, untouched.
+
+**Step 1 — pre-deployment validation (read-only).** Production journal: 21 rows, `max(created_at)
+1789376000000`, **0 future-dated rows** (host clock `1789579478040` ms) — the local watermark
+poison was confirmed absent; `0021` (`when 1789377000000`) therefore applies; `score`/`grade`
+columns absent (nothing partially applied). Canvas connection `8b8e2cb6…` `active`, credential
+present, last cron sync `succeeded` 17:00:18Z (16/355/21/0). `/health` ok, worker `stale:false`,
+all four containers healthy; provenance api = `personal-os-10.1c-release`, worker/web =
+`personal-os-10.1-release`. Cloud Ask OFF (`ai_task_routes` has no `ask` row).
+
+**Step 2 — rollback point.** Running images tagged by resolved id: api `60cfdb04138c` (10.1C),
+worker `c53a04754053` (10.1B), web `c8209f9fcdc5` (10.1B) → `personal-os-{api,worker,web}:rollback-pre-10.2`.
+DB 21 rows / `1789376000000`; git api `f85779a`, worker/web `1e406f7`; Rabbit versionCode 22.
+
+**Step 3 — frozen order.** `git archive` of `b2c273b` → `/home/himallinux/personal-os-10.2-release`
+(1,175 tracked files; 0 `.env`/`google-services.json`; `docs/STATUS.md` and `README.md` hashes match
+`main` exactly). Built api/worker/web (`build_exit=0`, running containers untouched — verified by
+image id before proceeding). **Image verification before anything ran:** api carries 22 `.sql`
+files with `0021_canvas_assignment_grades.sql` and a journal whose last entry is idx 21 /
+`1789377000000`, `dist/routes/academic.js` + `dist/read-models/academic.js`, and the compiled
+`omit({` in the schema package; worker `dist/canvas/orchestrate.js` carries `invalid_token`,
+`persist.js` the score column, `translate.js` the grade field; no `.env` or private key in the api
+image. **Migration** from the new api image with `--no-deps` and the `MIGRATIONS_DATABASE_URL`
+pass-through: **21 → 22** by row count, new row `id 22 · created_at 1789377000000 · hash
+f8c3ed8896c0…` — byte-identical to the tracked file's SHA-256 — `score real` and `grade text`
+both nullable, all 355 assignment rows untouched (0 scored). **Rollout**, each service alone,
+`postgres` never named: api recreated 17:30:32Z → `(healthy)`, `/health` ok; worker 17:30:49Z →
+`worker.started` with **31 queues / 11 schedules** (unchanged — 10.2 adds no queue); web
+17:30:59Z. All `RestartCount=0`; postgres still "Up 2 weeks".
+
+**Step 4 — production validation (real account, real routes).** A manual sync
+(`POST /canvas-connections/…/sync` → 202) finished in 28 s: `coursesSeen 16 · coursesFailed 0 ·
+assignmentsSynced 355 · announcementsSynced 21 · eventsSynced 0`; **165 assignments now carry
+`score` and `grade`** (166 in `graded` state; 1 graded without a numeric score, legitimate); the
+connection stayed `active`, credential intact, `last_sync_error` null — the idempotent
+content-gated write populated the two columns in one pass, as designed. `GET /academic/today?tz=
+America/Chicago` → `configured:true`, `overdue 11 · due_today 1 · due_this_week 8 · missing 5 ·
+unread_announcements 12` (5 announcement rows shown, honest total 12; 0 events — the account has
+none); every overdue row open and due before `effective_now`, every due-today row at/after it,
+sections sorted, every `source_base_url` the owner's own instance, announcements unread-first.
+`GET /academic/courses` → 16 courses (2026 Fall 6 · 2026 Spring 5 · Default Term 5), all
+`active`, counts and next-due populated. `GET /academic/courses/:id` on the course with the most
+grades (a Spring MARK course, 50 assignments, all graded) → 50 numeric percentages **consistent
+with `score / points_possible`**, `open` consistent with submission status, `due_at asc nulls
+last`, no `description`/`entered_*`/`attachments` key anywhere. **The frozen 10.1 route**
+`GET /canvas-assignments/upcoming?within_days=14` → 15 rows carrying `course_name` and
+`canvas_base_url` and **no `score`/`grade` key** — the deployed client's contract. Error paths
+404 / 400 / 400 / 400. Over the Tailscale HTTPS route the api answers identically.
+
+**Web client (a real browser over Tailscale).** The browser pane now loads `:8443` (the Phase 2
+limitation is gone). A throwaway web device `10.2-verification-browser` was paired with a
+single-use code minted by `generate-pairing-code.js` in the api container (the
+`cp6-security-probe` precedent) and **revoked afterwards** (row retained, `revoked_at` set; 0
+unconsumed pairing codes). Verified in the live web app: the **Academics** card on Today with
+`OVERDUE · 11` (real compliance-training and INSY rows, a `Missing` badge), `DUE TODAY · 1`,
+"+8 more"-style overflow, "Courses ›"; `/academic` — "16 courses across 3 terms", grouped 2026
+FALL / 2026 SPRING / DEFAULT TERM with open / overdue (red) / next-due per course; `/academic/[id]`
+for `2268-ACCT-2302-004` — `OVERDUE · 2` (one `Missing`), `UPCOMING · 22`, `NO DUE DATE · 2`,
+`SUBMITTED & GRADED · 7` with real `score / points · %` labels (`14 / 15 · 93.3%`, `14.94 / 15 ·
+99.6%`, a `0 / 5`), every assignment row a `link` (same-origin `uta.instructure.com`); the
+header "Open this course in Canvas" is absent because Canvas's courses API returns no `html_url`
+for a course (the row is null, so the gated link correctly does not render). Console: only the
+pre-existing `/briefs/current` 404s.
+
+**The deployed versionCode-22 Rabbit, on the physical device.** Today → scrolled → the 10.1
+"Canvas" card renders with real MATH-1315 rows and due dates against the **new** api — the
+regression the adversarial review caught (an added key would have blanked this card behind a
+strict schema) proven absent on the device it protects, and doubly important now that the
+replacement build is blocked for two weeks. Recorded honestly: the app was relaunched with
+`am force-stop` (the project's own record says to use `am kill`), which puts the package in the
+stopped state and cancels its alarms; the relaunch cleared the stopped state (`stopped=false`) and
+`GET /reminders?horizon_days=30` is currently empty, so **no reminder alarm existed to lose** (0
+scheduled before and after); the capture-shortcut notification is present.
+
+**Step 5 — privacy / security.** api log since recreation: 0 PAT-shaped strings, 0 warn/error, 0
+lines carrying a `score`/`grade`/`percentage` field; worker log: 0 / 0 / 0 (the `canvas.sync.*`
+lines are counts-only). Egress Guard 5 passed in the merged gate; Cloud Ask has no route row, so
+no model call can occur at all; `tailscale serve` shows both routes `tailnet only`; Postgres
+publishes no host port; the credential triple is present and was never read by anything but the
+sync; nothing beyond the six ADR-068 tables plus the two ADR-068a columns is stored.
+
+**Warnings / issues discovered.** (1) **EAS build refused**: "This account has used its Android
+builds from the Free plan this month" (resets 2026-10-01); the upload succeeded and the remote
+`versionCode` counter ticked 22 → 23 before the refusal, so the next successful build will carry
+a higher code. A plan upgrade is a purchase and an owner decision; a local build is impossible on
+this machine (no JVM). (2) One `mail.gmail.sync-connection` job started 17:30:36Z on the old
+worker, 13 s before that container was recreated, and was expired by pg-boss as `job timed out`
+at 17:46:35Z — the documented restart semantics; its `mail_sync_runs` row shows the honest
+`failed`-opened-never-finished shape and the next cron `succeeded` at 17:47:53Z; no `retry`/`active`
+jobs remain. (3) The disconnect → reconnect regression step was **not exercised live**: it needs
+the owner's real PAT, which the integrator does not handle; `apps/api/src/services/canvas-connection.ts`
+is byte-unchanged since its 10.1C live validation on this same connection row, and its reconnect
+tests passed in the gate. The owner can exercise it from Settings at any time. (4) The
+`am force-stop` note above.
+
+**Phase 10.2 production closure status: api / worker / web DEPLOYED and PRODUCTION-VALIDATED;
+device client PENDING.** Not claimed complete: the Rabbit versionCode-23 install and the on-device
+walk of the academic screens wait on the EAS quota (or a plan decision), and the live
+disconnect/reconnect step waits on the owner. Rollback, if ever needed: `docker tag
+personal-os-{api,worker,web}:rollback-pre-10.2 personal-os-{api,worker,web}:latest` then the
+frozen `up -d --no-deps --no-build --force-recreate api worker web`; `0021` is additive, so the
+pre-10.2 images run against the post-migration schema.
 
 ---
 
@@ -1062,10 +1172,10 @@ blocker/major findings) was **deployed to production on 2026-09-16 and its recon
 live** — see the deployment record at the end of the 10.1C entry above. Production serves the
 10.1C api (`f85779a`) alongside the 10.1B worker and web (`1e406f7`).
 
-**Checkpoint 10.2 — the Academic Intelligence Layer — is implemented, locally verified (6,265/6,265)
-and independently reviewed, and is waiting on the owner to authorize its deployment** (migration
-`0021`, all three images, versionCode 23). Its record is above; its deployment plan is at the end of
-that record. Nothing after 10.2 is selected.
+**Checkpoint 10.2 — the Academic Intelligence Layer — is deployed (api/worker/web, level 22) and
+production-validated; its Rabbit R1 build is pending the EAS quota.** The record, including the
+deployment and its two open items (device build, live disconnect/reconnect), is above. Nothing after
+10.2 is selected.
 
 ---
 
@@ -1097,9 +1207,9 @@ phase is in `docs/history/`; the one-line summary is:
 | **10.0** | Codebase consolidation & agent readiness: proven-dead mobile/API code removed (Expo starter scaffold, 6 dead query/outbox exports, 3 dormant API error classes, 1 unused health-connection helper, 1 unused test fixture), 4 orphaned Expo dependencies removed (`expo-image`/`expo-status-bar`/`expo-web-browser`/`@babel/plugin-transform-react-jsx`), a duplicate date-parsing implementation consolidated, new `docs/AGENT-READINESS.md` canonical-boundary inventory, `tags`/`item_tags` classified safe-to-drop (not acted on). Zero behavior change, zero migration, worker untouched. **Deployed (api/web, level 20, no migration) and accepted on the Rabbit R1 (versionCode 21) 2026-09-15.** |
 | **10.1** | Canvas LMS integration: read-only, Personal-Access-Token-authenticated sync of courses/assignments/announcements/calendar events into six new tables (migration `0020`), a Today "upcoming assignments" card, a same-origin-checked "open in Canvas" link, CalDAV-derived SSRF protection on `canvas_base_url`. **Deployed (api/worker/web, level 21) and live-validated against the owner's real UTA account and the physical Rabbit R1 (versionCode 22) 2026-09-16** (ADR-068). |
 | **10.1C** | Canvas reconnect lifecycle fix: `connectCanvasConnection` SELECTs any prior row by `canvas_base_url` first and reactivates a non-active row in place (same `id`/`created_at`, FK-linked history preserved), refuses an active row (`409 canvas_already_connected`) and a different `canvas_user_id` (`409 canvas_account_mismatch`); route returns 200 on reactivation, 201 on creation. **Deployed (api only, no migration) and live-validated against the owner's real UTA account 2026-09-16** — reconnect `200` on the same row with history preserved, cron succeeding since. |
-| **10.2** | Academic Intelligence Layer: a provider-agnostic academic read model computed over the Canvas tables (`GET /academic/today`, `/academic/courses`, `/academic/courses/:id`; ADR-070), `score`/`grade` synced under ADR-068a (migration `0021`), a deterministic Today card (Overdue / Due today / Due this week / unread announcements) and `/academic` course screens, the single same-origin-gated "open in Canvas" call site, `invalid_token` wired into the worker's auth-failure path, an egress guard keeping academic data out of every AI lane. **Implemented and verified locally 2026-09-16 (6,265 tests, browser-verified with seeded data); NOT deployed.** |
+| **10.2** | Academic Intelligence Layer: a provider-agnostic academic read model computed over the Canvas tables (`GET /academic/today`, `/academic/courses`, `/academic/courses/:id`; ADR-070), `score`/`grade` synced under ADR-068a (migration `0021`), a deterministic Today card (Overdue / Due today / Due this week / unread announcements) and `/academic` course screens, the single same-origin-gated "open in Canvas" call site, `invalid_token` wired into the worker's auth-failure path, an egress guard keeping academic data out of every AI lane. **Deployed (api/worker/web, level 22) and production-validated against the owner's real UTA account 2026-09-16** (ADR-070/068a); Rabbit versionCode-23 build pending the EAS Free-plan quota. |
 
-**Production is at migration level 21** and serves the api image built from `f85779a` (10.1C) with worker and web from `1e406f7` (10.1B).
+**Production is at migration level 22** and serves api, worker and web built from `b2c273b` (10.2).
 All three Google integrations plus Canvas are active. Monitoring runs against five active targets
 including both Tailscale Serve routes, with full CRUD. A daily retention cron bounds
 `monitor_checks`/`mail_messages`/`mail_digests`/`mail_sync_runs`/`health_sync_runs` and sweeps
@@ -1108,14 +1218,16 @@ queue. Calendar events authored in Personal OS sync outward to the owner's chose
 imported events are read-only. Search covers tasks, notes, events, projects, captures and mail with
 an explainable score, and every text field is bounded at write. Cloud Ask, when the owner enables
 it, answers questions about today's schedule with cited sources and can suggest one task to focus
-on. Canvas assignments sync hourly and surface on Today. The Rabbit R1 runs `com.himal.personalos`
-versionCode 22, built from `1e406f7`.
+on. Canvas assignments sync hourly with their grades and surface on Today and the `/academic` screens.
+The Rabbit R1 still runs `com.himal.personalos` versionCode 22, built from `1e406f7`, pending the
+10.2 build.
 
 ## Current work
 
-**Checkpoint 10.2 awaits deployment authorization.** Code, migration `0021`, ADR-068a/ADR-070 and
-this record are committed as `bd0c68d` on `claude/academic-intelligence-foundation-8931dd`; production is
-untouched (level 21, 10.1C api, 10.1B worker/web, Rabbit versionCode 22).
+**Checkpoint 10.2 deployed; two items open.** (1) The Rabbit versionCode-23 EAS build — refused
+on the Free-plan monthly quota (resets 2026-10-01); an owner decision between waiting and a plan
+upgrade. (2) The live Canvas disconnect → reconnect step — needs the owner's PAT, from Settings.
+`main` is `b2c273b` and canonical; the feature branch is fully contained in it.
 
 **Repository housekeeping done 2026-09-16 (this reconciliation, no product change):** `main`
 fast-forwarded to the Phase 10 tip and made canonical again (PR #1 merged); the decision log split
@@ -1131,7 +1243,15 @@ removed from the primary checkout.
 
 ## Last verification
 
-**Checkpoint 10.2 gate (2026-09-16), `bd0c68d` on `claude/academic-intelligence-foundation-8931dd`.** `pnpm build --force` 12/12 · `pnpm typecheck`
+**Checkpoint 10.2 deployment (2026-09-16, 17:26–17:49Z), read directly from production.** Migration
+21 → 22 with the tracked file's hash · api/worker/web recreated from `personal-os-10.2-release`
+(`b2c273b`), `RestartCount=0`, postgres untouched · manual sync 16/355/21/0, 165 graded rows
+populated · academic routes validated on real data · web client verified in a real browser · the
+versionCode-22 Rabbit's card verified on the device · 0 PAT-shaped strings and 0 warn/error in both
+logs · 31 queues / 11 schedules · Serve tailnet-only · Postgres unpublished. Full table in the 10.2
+entry's deployment record.
+
+**Checkpoint 10.2 gate (2026-09-16), `b2c273b` on `main`.** `pnpm build --force` 12/12 · `pnpm typecheck`
 23/23 · `npx eslint .` clean · `npx prettier --check .` clean · `git diff --check` clean · `gitleaks
 detect` no leaks · `pnpm test --force` **23/23 tasks, 6,265 tests across 13 packages, zero failing**
 · migration `0021` applied locally 21 → 22 and `db:reconcile` clean · live local browser verification
@@ -1170,9 +1290,11 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. **Authorize (or decline) the Checkpoint 10.2 deployment** — the frozen order with migration
-   `0021`, all three images and a versionCode-23 Rabbit build, as planned at the end of the 10.2
-   entry. Until then production serves 10.1C/10.1B unchanged.
+1. **Close the two open 10.2 items.** Rabbit versionCode-23: wait for the EAS quota reset on
+   2026-10-01 or upgrade the plan (owner purchase), then `eas build --profile production-internal`,
+   `adb install -r`, and walk Today → Academics → a course on the device. Live disconnect →
+   reconnect on the real connection from Settings with the owner's PAT (the integrator does not
+   handle it).
 
 2. **Then choose the next checkpoint — a product-direction decision for the owner.** Candidates
    carried from the 9.8 and 10.0/10.1 closeouts: widen the Canvas integration further (device-token

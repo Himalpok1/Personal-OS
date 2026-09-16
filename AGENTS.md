@@ -159,12 +159,12 @@ The project is phase-gated.
 
 **`docs/STATUS.md` is the canonical statement of the current phase and of what is approved next. Read it before assuming scope.** This section states the rule; it does not track the phase number.
 
-As of 2026-09-16: **Phases 0–9 are complete and production-deployed at migration level 21.** Phase 8
+As of 2026-09-16: **Phases 0–9 are complete and production-deployed; production is at migration level 22.** Phase 8
 closed under ADR-061 (`docs/PHASE-8-CLOSEOUT.md`, `docs/history/phase-8.md`); Phase 9 closed under
 ADR-069 (`docs/history/phase-9.md`). **Phase 10 — Codebase Consolidation & Agent Readiness — is open:
-Checkpoints 10.0, 10.1/10.1B and 10.1C are deployed and accepted** (production api at `f85779a`,
-worker/web at `1e406f7`, migration level 21), and no checkpoint after 10.1C is selected — the next
-product direction is an owner decision. Standing rules carry forward regardless of phase: read-only
+Checkpoints 10.0, 10.1/10.1B, 10.1C and 10.2 are deployed** (production api, worker and web at
+`b2c273b`, migration level 22; the 10.2 Rabbit build is pending), and no checkpoint after 10.2 is
+selected — the next product direction is an owner decision. Standing rules carry forward regardless of phase: read-only
 intelligence before write-capable intelligence, no unrestricted full-content cloud egress, no pgvector
 or Postgres image change without its own infrastructure ADR (ADR-056), every new alert producer
 carries an occurrence-scoped dedupe key (ADR-058), and the API performs no background work inline —
