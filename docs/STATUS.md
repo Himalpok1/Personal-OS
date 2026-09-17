@@ -28,10 +28,11 @@ bundle — is IMPLEMENTED, VERIFIED (6,530 tests, 23/23 tasks), INDEPENDENTLY RE
 DEPLOYED** (merged to `main` at `965900f`; worker+web recreated in production, no migration;
 api/postgres untouched; the Rabbit R1 accepted on versionCode 28, built locally 2026-09-16 ~23:04Z,
 zero crash lines). **Checkpoint 10.5 — Personal Context Layer — is IMPLEMENTED, VERIFIED (6,588
-tests, 23/23 tasks) and INDEPENDENTLY REVIEWED clean, but NOT YET DEPLOYED**: one narrow FK
-(`tasks.canvas_assignment_id`, migration `0022`, ADR-074) plus two new `GET /<entity>/:id/context`
-read models and mobile linking UI — the first checkpoint since 10.1C to need an `api`+`db` rebuild,
-not just `worker`/`web`/mobile. Pending owner authorization to deploy.
+tests, 23/23 tasks), INDEPENDENTLY REVIEWED clean, and DEPLOYED** (merged to `main` at `f29418b`;
+migration `0022` applied, level 23; `api`+`web` recreated in production, `worker`/`postgres`
+untouched; the Rabbit R1 accepted on versionCode 29, built locally 2026-09-17 ~08:00Z, zero crash
+lines): one narrow FK (`tasks.canvas_assignment_id`) plus two new `GET /<entity>/:id/context` read
+models and mobile linking UI, live-exercised against real production data and cleaned up after.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -1691,11 +1692,71 @@ as debt below, not fixed, to avoid a one-off inconsistency with `project_id`'s e
 
 **New ADR:** `docs/decisions/ADR-074.md` (Locked), indexed in `docs/DECISIONS.md`.
 
-**NOT YET DEPLOYED.** No production/Rabbit R1 action taken. Deployment needs `api` (the write path
-and both context routes) and `db` (migration `0022`, applied to production via the frozen order) —
-the first checkpoint since 10.1C to need an `api` rebuild — plus `apps/mobile` for the link picker
-and context screens (a client rebuild). `worker` is untouched and needs no redeploy. See *Next
-action*.
+**Deployment — COMPLETE (2026-09-17 07:45–08:00Z), owner-authorized ("deploy it").** Repository:
+`claude/personal-os-phase-10-4-a254c7` pushed, PR #5 opened, confirmed a true fast-forward, pushed
+directly to `main` (`de150f1` → `f29418b`); PR #5 auto-closed `MERGED`.
+
+**Pre-deployment read (production, before anything was touched).** `/health` ok/connected/
+`stale:false`; migration `22` rows unchanged; all four containers healthy, `api` still on its 10.1C
+image, `web`/`worker` still on their 10.4 images.
+
+**Frozen order, WITH a migration step for the first time since 10.2 — `api`+`web` rebuilt,
+`worker` untouched.** Running `api`/`web` images tagged `rollback-pre-10.5` by digest. `git archive`
+of `f29418b` shipped to `/home/himallinux/personal-os-10.5-release` (1,268 tracked files, 0
+`.env`/`google-services.json`, 23 migration files present). Built `api`+`web` only — **verified
+before touching anything running**: the new api image's `dist/read-models/academic.js` carries
+`getAcademicCourseContext`, `dist/routes/tasks.js` carries `canvasAssignmentId`, a standalone
+`dist/read-models/project-context.js` exists, and the image ships `0022_task_canvas_assignment_
+link.sql`; the new web image's served bundle contains `"Assignment"`-related strings. **Migration**:
+the runtime image ships `drizzle-kit` only as a devDependency (no separate migration image exists),
+so it was invoked via `docker compose run --rm --no-deps --entrypoint sh api` with
+`MIGRATIONS_DATABASE_URL` passed explicitly (the running `api` container's own environment
+deliberately does not carry the migrator credential) — **`22 → 23`**, confirmed by a direct
+row-count-and-column query (`canvas_assignment_id | uuid` present) rather than trusting "migrations
+applied successfully" alone, per this project's own Checkpoint 5.7 discipline. `api`
+recreated alone → `(healthy)`, zero warn/error in the following 60s; `web` recreated alone → `200`.
+`worker` (`Up 4 hours`, unchanged `StartedAt`) and `postgres` (`Up 2 weeks`) confirmed untouched by
+their own container start timestamps throughout.
+
+**Production validation, live, against real data.** `GET /academic/courses/:id/context` on a real
+course (`2262-INSY-3305-002`) returned the full course detail plus the new `related_reminders`
+section shape. `GET /projects/:id/context` on a real (archived) project returned `related_captures`
+and `recent_activity` sections, correctly empty for a project with none. **The write path was
+exercised live and cleaned up afterward**: `PATCH /tasks/:id {canvas_assignment_id}` on a real task
+(`"Verify Grok transcription"`) linked it to a real assignment, confirmed via a re-read, then
+unlinked back to `null` and re-confirmed — no residue left in production data. 63 pg-boss jobs
+completed in the following window, zero failed/retry/active; all four integrations (Canvas, Gmail,
+Health, Google Calendar) still `active`; zero warn/error and zero token-shaped strings in the api
+log across the whole validation window.
+
+**Rabbit R1 — built locally, verified before install, installed, walked on-device.** Pre-flight:
+versionCode 28, cert SHA-256 `4601e3a2…` (pulled and verified with `apksigner`, matching every prior
+checkpoint's continuity check). `packages/core`/`schema`/`api-client` rebuilt fresh in the primary
+checkout before the client build. `eas build --local --profile production-internal` with the
+production env values (`EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID`, absolute
+`GOOGLE_SERVICES_JSON` path) → `BUILD SUCCESSFUL`, 108 MB APK. **Verified before installing**: the
+Hermes bundle `strings`-checked — 0 `localhost:3000`, 1 `tail62a68f`, the new context-screen UI
+strings present; `apksigner` showed the identical SHA-256 to the installed app's. `adb install -r`
+→ `Success` (itself signing-continuity proof). Post-install: **versionCode 29**, `firstInstallTime`
+preserved (no re-pair), exact-alarm appop still `allow`, notifications still granted. Launched with
+`am start`; logcat cleared and swept for `FATAL EXCEPTION`/`AndroidRuntime` across the whole
+session: **zero**, both immediately after launch and after the full on-device walk below.
+**Screenshots taken directly off the device** confirmed: Today renders cleanly; search for the
+production-validation task ("Grok") returned real results; the task's detail screen renders a
+genuinely new **"Assignment"** field (graduation-cap icon, "None") beneath the existing Project
+field, mirroring that field's exact visual treatment; tapping it expanded the picker and showed real
+course chips (`2268-ACCT-2302-004`, `2268-BIOL-1442-002`, etc.) pulled live from the device's synced
+Canvas data — the full linking flow reachable and functional on-device, closed without linking
+(left as found) to avoid mutating real data from a verification pass.
+
+**Post-deployment state:** production serves `api`+`web` at `f29418b` (10.5); `worker`/`postgres`
+untouched; migration level **23**. The Rabbit R1 runs `com.himal.personalos` versionCode 29, built
+locally from `f29418b`.
+
+**Rollback, if ever needed:** `docker tag personal-os-{api,web}:rollback-pre-10.5
+personal-os-{api,web}:latest` then the frozen `up -d --no-deps --no-build --force-recreate api web`
+— migration `0022` is additive-only (one nullable column, one index, one FK), so the pre-10.5 images
+run correctly against the post-migration schema; no schema rollback would be needed or performed.
 
 ---
 
@@ -1940,7 +2001,8 @@ live** — see the deployment record at the end of the 10.1C entry above. Produc
 **Checkpoint 10.2 — the Academic Intelligence Layer — is deployed (api/worker/web at `1edb61b`,
 level 22), production-validated, accepted on the Rabbit R1 (versionCode 25, built locally), and
 amended the same day by the current-term rule (ADR-070a) and the credential-in-log hotfix.** The
-record is above; the one open owner action (rotate the PAT) is in *Next action*.
+record is above; the Canvas PAT rotation/reconnect carried from this incident is now done (owner
+reconnected 2026-09-17).
 
 **Checkpoint 10.3 — Academic Intelligence Expansion + Mobile UX Modernization — is deployed**
 (api/web at `ba23472`, level 22 unchanged; worker/postgres untouched — no rebuild needed) **and
@@ -1954,12 +2016,13 @@ authorized: "deploy it"). See the full entry above. No migration; touches `packa
 are untouched. Production serves `worker`+`web` at `965900f`; `api`/`postgres` untouched. The
 Rabbit R1 runs versionCode 28.
 
-**Checkpoint 10.5 — Personal Context Layer — is implemented, verified (6,588 tests, 23/23 tasks) and
-independently reviewed clean, but NOT YET DEPLOYED.** See the full entry above. Migration `0022`
-(one nullable FK, `tasks.canvas_assignment_id`), two new `GET /<entity>/:id/context` read models,
-and mobile linking UI. This is the first checkpoint since 10.1C to need `api` and `db` touched, not
-just `worker`/`web`/mobile — deployment needs the full frozen order including a migration step. See
-*Next action*.
+**Checkpoint 10.5 — Personal Context Layer — is implemented, verified (6,588 tests, 23/23 tasks),
+independently reviewed clean, merged to `main` (`f29418b`), and DEPLOYED** (owner authorized:
+"deploy it"). See the full entry above. Migration `0022` (one nullable FK,
+`tasks.canvas_assignment_id`) applied, level 23; two new `GET /<entity>/:id/context` read models and
+mobile linking UI live-exercised against real production data and cleaned up after. This was the
+first checkpoint since 10.1C to need `api` and `db` touched, not just `worker`/`web`/mobile —
+production serves `api`+`web` at `f29418b`, `worker`/`postgres` untouched, Rabbit R1 versionCode 29.
 
 ---
 
@@ -1994,11 +2057,10 @@ phase is in `docs/history/`; the one-line summary is:
 | **10.2** | Academic Intelligence Layer: a provider-agnostic academic read model computed over the Canvas tables (`GET /academic/today`, `/academic/courses`, `/academic/courses/:id`; ADR-070), `score`/`grade` synced under ADR-068a (migration `0021`), a deterministic Today card (Overdue / Due today / Due this week / unread announcements) and `/academic` course screens, the single same-origin-gated "open in Canvas" call site, `invalid_token` wired into the worker's auth-failure path, an egress guard keeping academic data out of every AI lane. **Deployed (api/worker/web, level 22) and production-validated against the owner's real UTA account 2026-09-16** (ADR-070/068a); Rabbit R1 accepted on versionCode 25, built locally after the EAS quota refused the cloud build. |
 | **10.3** | Academic Intelligence Expansion + Mobile UX Modernization: deterministic urgency / explainable priority scoring / workload status / course attention / grade summary as optional keys on the academic read model (ADR-071, no migration), a token-based mobile design system (`components/ui/`, three new Expo modules, web dark mode fixed) and every screen restyled on it. **Implemented, verified (6,477 tests), independently reviewed (twice — the full adversarial pass and a four-lane final release gate), merged to `main` (`ba23472`) and DEPLOYED 2026-09-16/17** (api/web recreated, worker/postgres untouched); Rabbit R1 accepted on versionCode 27, built locally after catching and fixing a wrong-API-URL build before it ever reached the device. |
 | **10.4** | "Focus Now" — a deterministic, client-side-only unified ranking merging personal urgent items and academic priorities on Today (`packages/core/src/focus-now`, ADR-072, no new route/migration/AI call); Canvas invalid-token alerting gated on two consecutive connection-level auth failures, mirroring Gmail/Health/Calendar's existing alert producers (`apps/worker/src/canvas/alerts.ts`, ADR-073 amending ADR-068 §6); a four-item mobile polish bundle (`SegmentedControl` promoted to the design system, courses-screen skeleton flash fixed, accessible Settings loading states, haptic on destructive confirms). **Implemented, verified (6,530 tests, 23/23 tasks, zero failing), independently reviewed clean, merged to `main` (`965900f`) and DEPLOYED 2026-09-16/17** (worker+web recreated, api/postgres untouched, no migration); Rabbit R1 accepted on versionCode 28, built locally. |
-| **10.5** | Personal Context Layer: exactly one narrow, explicit-write-only FK (`tasks.canvas_assignment_id`, migration `0022`, ADR-074) instead of the generic entity/relationship table a preceding 4-lane architecture review found this codebase already tried once and got zero adoption for (`item_tags`, Checkpoint 10.0); two new `GET /<entity>/:id/context` read models (`related_reminders` on course context, `related_captures`/`recent_activity` on project context) built entirely over existing FKs, zero extra migration; a task-detail linking picker and two zero-schema navigation fixes on mobile. **Implemented, verified (6,588 tests, 23/23 tasks, zero failing) and independently reviewed clean — NOT YET DEPLOYED**, pending owner authorization. |
+| **10.5** | Personal Context Layer: exactly one narrow, explicit-write-only FK (`tasks.canvas_assignment_id`, migration `0022`, ADR-074) instead of the generic entity/relationship table a preceding 4-lane architecture review found this codebase already tried once and got zero adoption for (`item_tags`, Checkpoint 10.0); two new `GET /<entity>/:id/context` read models (`related_reminders` on course context, `related_captures`/`recent_activity` on project context) built entirely over existing FKs; a task-detail linking picker and two zero-schema navigation fixes on mobile. **Implemented, verified (6,588 tests, 23/23 tasks, zero failing), independently reviewed clean, merged to `main` (`f29418b`) and DEPLOYED 2026-09-17** (migration `0022` applied, level 23; api/web recreated, worker/postgres untouched); Rabbit R1 accepted on versionCode 29, built locally, the write path and both context routes live-exercised against real production data. |
 
-**Production is at migration level 22** and serves `worker`+`web` built from `965900f` (10.4);
-`api`/`postgres` are untouched since 10.1C/2026-08-30 respectively — Checkpoint 10.5 (migration
-`0022`, level 23) is implemented and verified but not yet deployed. Google Calendar, Gmail, Health
+**Production is at migration level 23** and serves `api`+`web` built from `f29418b` (10.5);
+`worker`/`postgres` are untouched since 10.4/2026-08-30 respectively. Google Calendar, Gmail, Health
 and Canvas are all **active** (the Canvas PAT was rotated and reconnected by the owner on
 2026-09-17, the same connection row reactivated in place, real data flowing again — closing the
 open action carried since the 10.2 credential-in-log incident). Monitoring runs
@@ -2010,30 +2072,29 @@ owner's chosen writable calendar; imported events are read-only. Search covers t
 events, projects, captures and mail with an explainable score, and every text field is bounded at
 write. Cloud Ask, when the owner enables it, answers questions about today's schedule with cited
 sources and can suggest one task to focus on. Academic intelligence (urgency, priorities, workload,
-course attention, grade summary) is live on `/academic/today` and `/academic/courses`, now
-answering with real Fall 2026 data. Today also carries a deterministic, client-side "Focus Now"
-card unifying personal and academic urgency. The Rabbit R1 runs `com.himal.personalos`
-versionCode 28, built locally from `965900f`. Checkpoint 10.5's task↔Canvas-assignment linking and
-context read models are implemented and verified but not yet deployed, so they are not yet reachable
-from any client.
+course attention, grade summary) is live on `/academic/today` and `/academic/courses`, answering
+with real Fall 2026 data. Today also carries a deterministic, client-side "Focus Now" card unifying
+personal and academic urgency. A task can now be explicitly linked to a Canvas assignment
+(`tasks.canvas_assignment_id`), surfacing as a "related reminder" on that assignment's course
+context and a "related capture"/activity trail on its project context. The Rabbit R1 runs
+`com.himal.personalos` versionCode 29, built locally from `f29418b`.
 
 ## Current work
 
-**Checkpoint 10.5 is implemented, verified (6,588 tests, 23/23 tasks) and independently reviewed
-clean, uncommitted in this worktree, NOT deployed.** It is the first checkpoint since 10.1C to touch
-`apps/api` and `packages/db` — deployment needs the full frozen order (migration `0022`, then
-`api`/`web` rebuilt, `worker` untouched, plus an `apps/mobile` client rebuild for the link picker and
-context screens) rather than the worker/web-only or mobile-only shape the last few checkpoints used.
-Owner authorization to deploy is pending.
+**Checkpoint 10.5 is implemented, verified (6,588 tests, 23/23 tasks), independently reviewed
+clean, merged to `main` (`f29418b`), and DEPLOYED.** `main` is `f29418b` and canonical; PR #5
+merged; production serves `api`+`web` at that commit (`worker`/`postgres` untouched); migration
+`0022` applied, level 23; the Rabbit R1 runs versionCode 29. The write path
+(`PATCH /tasks/:id {canvas_assignment_id}`) and both new context routes were exercised live against
+real production data (a real task linked to a real assignment, then unlinked) and left exactly as
+found. It was the first checkpoint since 10.1C to need `apps/api`/`packages/db` in its own right.
 
 **Checkpoint 10.4 is implemented, verified, independently reviewed clean, merged to `main`, and
-DEPLOYED.** `main` is `965900f` and canonical; PR #4 merged; production serves `worker`+`web` at
-that commit (`api`/`postgres` untouched); the Rabbit R1 runs versionCode 28. **The Canvas PAT
-rotation/reconnect carried from 10.2/10.3 is now done** — the owner reconnected on 2026-09-17, the
-academic surfaces and Focus Now's academic half now show real data, and 10.4's new Canvas alert path
-remains unexercised in production (nothing has failed since). Android APKs are built locally (see
-the 10.2 entry's *Device build* paragraph, and the 10.3/10.4 deployment records' build-verification
-discipline); the EAS build service is no longer on the release path.
+DEPLOYED.** `main` is now `f29418b` (10.5 built on top of it); `api`/`web` were later rebuilt by
+10.5, but `worker` still serves 10.4's own image (`965900f`); the Rabbit R1 runs versionCode 29
+(10.5's build, which naturally includes 10.4's client-side work). Android APKs are built locally
+(see the 10.2 entry's *Device build* paragraph, and the 10.3/10.4/10.5 deployment records' build-
+verification discipline); the EAS build service is no longer on the release path.
 
 **Repository housekeeping done 2026-09-16 (this reconciliation, no product change):** `main`
 fast-forwarded to the Phase 10 tip and made canonical again (PR #1 merged); the decision log split
@@ -2163,21 +2224,14 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. **Authorize Checkpoint 10.5 for deployment** (owner) — code is implemented, fully verified
-   (build/typecheck/lint/prettier/gitleaks/6,588 tests, all green) and independently reviewed clean
-   (zero blocking findings across migration safety, the no-automatic-guessing invariant, the Guard 5
-   privacy boundary, write-path validation, mobile regressions, test integrity and scope
-   discipline). This is the first checkpoint since 10.1C to need `apps/api` and `packages/db`
-   touched — deployment needs the FULL frozen order (ship the release, build `api`+`web`, verify the
-   new api image, run `drizzle-kit migrate` with `--no-deps` for migration `0022`, verify 22→23,
-   recreate `api` then `web`, `worker`/`postgres` untouched) plus a local Android build + install for
-   the link picker and context screens on the Rabbit R1.
+1. Nothing is gating. Checkpoint 10.5 is implemented, verified, independently reviewed clean,
+   merged to `main` (`f29418b`), and **DEPLOYED** — migration `0022` applied (level 23), `api`+`web`
+   recreated in production, `worker`/`postgres` untouched, both new context routes and the write
+   path live-exercised against real data, Rabbit R1 accepted on versionCode 29. Checkpoint 10.4 is
+   likewise deployed and accepted; the Canvas PAT rotation/reconnect carried from 10.2/10.3 is done.
+   No checkpoint after 10.5 is selected.
 
-2. Nothing else is gating Phase 10. Checkpoint 10.4 is deployed and accepted (worker/web at
-   `965900f`, Rabbit R1 versionCode 28); the Canvas PAT rotation/reconnect carried from 10.2/10.3 is
-   done (owner reconnected 2026-09-17, real data flowing). No checkpoint after 10.5 is selected.
-
-3. **Then choose the next checkpoint — a product-direction decision for the owner.** Candidates
+2. **Choose the next checkpoint — a product-direction decision for the owner.** Candidates
    carried forward: widen the Canvas integration further (device-token auth on the academic routes;
    announcement/event surfaces beyond the course screen); widen the intelligence lane
    (`get_calendar_context`/`get_task_context`, Option B "what changed", Option C weekly-review
@@ -2192,7 +2246,7 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
    since 10.5 chose NOT to revive that table for the context layer) and the deferred `knip`
    dead-code-tooling question.
 
-4. **Open owner actions outside any checkpoint:** `docs/SOURCE-DURABILITY.md` Option 2 — the encrypted
+3. **Open owner actions outside any checkpoint:** `docs/SOURCE-DURABILITY.md` Option 2 — the encrypted
    configuration copy — is still not done and remains the sharpest source-durability risk; and the
    `EXPO_TOKEN` that sat in a mode-644 Expo dev log (deleted 2026-09-16) should be rotated.
 
