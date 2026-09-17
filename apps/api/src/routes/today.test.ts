@@ -11,6 +11,9 @@ import {
   aiDailyBriefs,
   aiModels,
   aiProviderConnections,
+  canvasAssignments,
+  canvasConnections,
+  canvasCourses,
   inboxItems,
   occurrences,
   projects,
@@ -19,7 +22,7 @@ import {
 } from "@personal-os/db";
 import { TodayResponseSchema } from "@personal-os/schema";
 import type { FastifyInstance } from "fastify";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
 
 const TZ = "America/Chicago";
@@ -564,6 +567,105 @@ describe("GET /today", () => {
     expect(body.reviews.daily.last_completed_at).toBe(
       completions.find(({ daysBack }) => daysBack === 1)!.at.toISOString(),
     );
+  });
+
+  describe("canvas_assignment_id on task items (Checkpoint 10.6, ADR-075)", () => {
+    // truncateTestTables leaves the Canvas tables alone (tasks.test.ts's own
+    // note); deleting the connection cascades its course and assignment.
+    afterEach(async () => {
+      await app.db.delete(canvasConnections);
+    });
+
+    async function seedAssignment(): Promise<string> {
+      const [connection] = await app.db
+        .insert(canvasConnections)
+        .values({
+          canvasBaseUrl: `https://${crypto.randomUUID()}.instructure.com`,
+          canvasUserId: 1,
+          canvasUserName: "Test Student",
+          status: "active",
+        })
+        .returning();
+      const [course] = await app.db
+        .insert(canvasCourses)
+        .values({ connectionId: connection!.id, canvasCourseId: 4315, name: "Advanced Web Dev" })
+        .returning();
+      const [assignment] = await app.db
+        .insert(canvasAssignments)
+        .values({
+          connectionId: connection!.id,
+          courseId: course!.id,
+          canvasAssignmentId: 99001,
+          title: "Project 2 -- a Canvas title that must never appear in /today",
+          submissionState: "unsubmitted",
+        })
+        .returning();
+      return assignment!.id;
+    }
+
+    it("emits the opaque link on a one-off task and null on an unlinked one, never the assignment's title", async () => {
+      const assignmentId = await seedAssignment();
+      const now = new Date();
+      await app.db.insert(tasks).values([
+        {
+          title: "Linked reminder",
+          timezone: TZ,
+          status: "active",
+          dueAt: new Date(now.getTime() - HOUR_MS),
+          canvasAssignmentId: assignmentId,
+        },
+        {
+          title: "Unlinked task",
+          timezone: TZ,
+          status: "active",
+          dueAt: new Date(now.getTime() - 2 * HOUR_MS),
+        },
+      ]);
+
+      const response = await getToday(TZ);
+      expect(response.statusCode).toBe(200);
+      const body = TodayResponseSchema.parse(response.json());
+
+      const linked = body.overdue.items.find((item) => item.title === "Linked reminder");
+      const unlinked = body.overdue.items.find((item) => item.title === "Unlinked task");
+      expect(linked?.canvas_assignment_id).toBe(assignmentId);
+      expect(unlinked?.canvas_assignment_id).toBeNull();
+      expect(response.body).not.toContain("a Canvas title that must never appear");
+    });
+
+    it("carries the parent's link on an occurrence row of a recurring task", async () => {
+      const assignmentId = await seedAssignment();
+      const now = new Date();
+      const [parent] = await app.db
+        .insert(tasks)
+        .values({
+          title: "Weekly reading",
+          timezone: TZ,
+          status: "active",
+          rrule: "FREQ=WEEKLY",
+          recurrenceTimezone: TZ,
+          recurrenceAnchor: "due_date",
+          dueAt: new Date(now.getTime() - 3 * HOUR_MS),
+          canvasAssignmentId: assignmentId,
+        })
+        .returning();
+      await app.db.insert(occurrences).values({
+        parentType: "task",
+        parentId: parent!.id,
+        occursAt: new Date(now.getTime() - HOUR_MS),
+        occursLocal: wallClockToNaiveDate(
+          toWallClockComponents(new Date(now.getTime() - HOUR_MS), TZ),
+        ),
+        status: "scheduled",
+      });
+
+      const response = await getToday(TZ);
+      expect(response.statusCode).toBe(200);
+      const body = TodayResponseSchema.parse(response.json());
+      const row = body.overdue.items.find((item) => item.title === "Weekly reading");
+      expect(row?.occurrence_id).toBeTruthy();
+      expect(row?.canvas_assignment_id).toBe(assignmentId);
+    });
   });
 
   describe("brief metadata (Checkpoint 5.5)", () => {

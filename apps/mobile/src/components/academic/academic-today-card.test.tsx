@@ -13,14 +13,18 @@
 //   2. honest totals in every header and a "+N more" line whenever the total
 //      exceeds the rows rendered, with rows capped per section;
 //   3. the badge rule (Missing beats Late; neither for a plain open row);
-//   4. the same-origin gate Checkpoint 10.1 verified live: a matching origin
-//      renders a `link` with a handler, a mismatched one renders no role and
-//      no handler, and `html_url` is never rendered as text either way.
+//   4. Checkpoint 10.6 (ADR-076 §3): every assignment row is a BUTTON that
+//      opens the in-app assignment sheet -- never a link -- and `html_url`
+//      is never rendered as text. The same-origin gate Checkpoint 10.1
+//      verified live moved with the Canvas link into the sheet
+//      (assignment-sheet.test.tsx pins it there).
 
 import { Pressable, Text, View } from "react-native";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAcademicToday } from "@/queries/academic";
 import { AcademicTodayCard } from "./academic-today-card";
+import { getAssignmentSheet, resetAssignmentSheetForTests } from "./assignment-sheet";
+import { WorkloadBar } from "./workload-bar";
 import {
   MAX_PRIORITY_ROWS,
   MAX_ROWS_PER_SECTION,
@@ -39,7 +43,9 @@ import {
 
 vi.mock("@/queries/academic", () => ({ useAcademicToday: vi.fn() }));
 
-const HOST_TYPES = new Set<unknown>([View, Text, Pressable]);
+// The workload bar is an animated leaf (a React effect), listed as a host
+// so the walk asserts on its props (docs/MOBILE-DESIGN-SYSTEM.md → Testing).
+const HOST_TYPES = new Set<unknown>([View, Text, Pressable, WorkloadBar]);
 
 function deepRender(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(deepRender);
@@ -108,6 +114,7 @@ function mockQuery(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetAssignmentSheetForTests();
   mockQuery();
 });
 
@@ -327,8 +334,40 @@ describe("unread announcements footer", () => {
   });
 });
 
-describe("same-origin gating (Checkpoint 10.1's live-verified rule, preserved)", () => {
-  it("renders a row on the connection's own origin as a link with a handler", () => {
+describe("assignment rows open the in-app sheet (Checkpoint 10.6, ADR-076 §3)", () => {
+  it("renders a row as a button that opens the assignment sheet for exactly that assignment", () => {
+    mockQuery({
+      data: academicToday({
+        overdue: {
+          items: [
+            assignment({ id: "a1", html_url: `${SOURCE_BASE_URL}/courses/1/assignments/1001` }),
+          ],
+          total: 1,
+        },
+      }),
+    });
+    const [row] = findRows(render());
+    expect(row.props.accessibilityRole).toBe("button");
+    expect(typeof row.props.onPress).toBe("function");
+    row.props.onPress();
+    expect(getAssignmentSheet().visible).toBe(true);
+    expect(getAssignmentSheet().record?.assignment.id).toBe("a1");
+    // The card itself hands the sheet no explanation -- that is Focus Now's.
+    expect(getAssignmentSheet().record?.explanation).toBeUndefined();
+  });
+
+  it("is a button on every origin -- the origin check now gates the sheet's own Canvas row, not the tap", () => {
+    for (const html_url of ["https://evil.example.com/courses/1/assignments/1001", null]) {
+      mockQuery({
+        data: academicToday({ overdue: { items: [assignment({ html_url })], total: 1 } }),
+      });
+      const [row] = findRows(render());
+      expect(row.props.accessibilityRole).toBe("button");
+      expect(typeof row.props.onPress).toBe("function");
+    }
+  });
+
+  it("carries no link role anywhere on the card", () => {
     mockQuery({
       data: academicToday({
         overdue: {
@@ -337,34 +376,7 @@ describe("same-origin gating (Checkpoint 10.1's live-verified rule, preserved)",
         },
       }),
     });
-    const [row] = findRows(render());
-    expect(row.props.accessibilityRole).toBe("link");
-    expect(row.props.disabled).toBe(false);
-    expect(typeof row.props.onPress).toBe("function");
-  });
-
-  it("renders a row on any other origin as inert text: no role, no handler", () => {
-    mockQuery({
-      data: academicToday({
-        overdue: {
-          items: [assignment({ html_url: "https://evil.example.com/courses/1/assignments/1001" })],
-          total: 1,
-        },
-      }),
-    });
-    const [row] = findRows(render());
-    expect(row.props.accessibilityRole).toBeUndefined();
-    expect(row.props.disabled).toBe(true);
-    expect(row.props.onPress).toBeUndefined();
-  });
-
-  it("renders a row with no html_url as inert too", () => {
-    mockQuery({
-      data: academicToday({ overdue: { items: [assignment({ html_url: null })], total: 1 } }),
-    });
-    const [row] = findRows(render());
-    expect(row.props.accessibilityRole).toBeUndefined();
-    expect(row.props.onPress).toBeUndefined();
+    expect(findPressables(render()).some((p) => p.props.accessibilityRole === "link")).toBe(false);
   });
 
   it("never renders html_url as text, openable or not", () => {
@@ -593,7 +605,7 @@ describe("the Do next block", () => {
     expect(text.indexOf("Priority one")).toBeLessThan(text.indexOf("Week one"));
   });
 
-  it("renders a priority row through the same same-origin gate as every other row", () => {
+  it("renders a priority row as the same sheet-opening button as every other row (10.6)", () => {
     mockQuery({
       data: academicToday({
         priorities: {
@@ -613,10 +625,10 @@ describe("the Do next block", () => {
       }),
     });
     const [ok, bad] = findRows(render());
-    expect(ok.props.accessibilityRole).toBe("link");
-    expect(typeof ok.props.onPress).toBe("function");
-    expect(bad.props.accessibilityRole).toBeUndefined();
-    expect(bad.props.onPress).toBeUndefined();
+    expect(ok.props.accessibilityRole).toBe("button");
+    expect(bad.props.accessibilityRole).toBe("button");
+    bad.props.onPress();
+    expect(getAssignmentSheet().record?.assignment.id).toBe("bad");
   });
 
   it("is absent when the key is absent or empty", () => {
@@ -650,14 +662,13 @@ describe("the workload strip", () => {
     )[0];
     expect(strip).toBeDefined();
     expect(strip.props.accessibilityLabel).toContain("4 due");
-    // Eight bars: the styled Views carrying a height.
-    const bars = findAll(
-      strip,
-      (n) => n.type === View && typeof n.props?.style?.height === "number",
-    );
+    // Eight bars: the animated leaves (Checkpoint 10.6), each handed its
+    // measured height and a resolved palette colour.
+    const bars = findAll(strip, (n) => n.type === WorkloadBar);
     expect(bars).toHaveLength(8);
-    expect(Math.max(...bars.map((b) => b.props.style.height))).toBeGreaterThan(
-      Math.min(...bars.map((b) => b.props.style.height)),
+    expect(bars.every((b) => typeof b.props.color === "string")).toBe(true);
+    expect(Math.max(...bars.map((b) => b.props.heightPx))).toBeGreaterThan(
+      Math.min(...bars.map((b) => b.props.heightPx)),
     );
   });
 

@@ -1,34 +1,70 @@
-// Render-level tests for <FocusNowCard /> (Checkpoint 10.4, ADR-072).
+// Render-level tests for <FocusNowCard /> (Checkpoint 10.4, ADR-072;
+// explanations and quick actions from Checkpoint 10.6, ADR-075/076).
 //
 // Copies academic-today-card.test.tsx's technique exactly, for the same
 // reason recorded there: this app has no render library, so the component
 // is called directly and the plain React element tree it returns is walked.
-// Both source hooks (`useToday`, `useAcademicToday`) are mocked below, and
-// `useRouter` resolves to src/__mocks__/expo-router.ts.
+// Both source hooks (`useToday`, `useAcademicToday`) and the task-action
+// hook are mocked below, `useRouter` resolves to src/__mocks__/expo-router.ts,
+// and the two leaves that need React hooks (the completion glyph, the task
+// sheet host) are listed as host types per the leaf-wrapper rule.
 //
 // What these pin:
 //   1. the card's whole posture -- NOTHING while either source is loading,
 //      on either error, or once merged there is nothing to show;
 //   2. the merged order (score desc);
 //   3. a reason chip rendered per row;
-//   4. the academic row's same-origin gate (Checkpoint 10.1/10.2's rule),
-//      reused unmodified through SourceLink.
+//   4. a task row: completion circle + Why button + swipe actions, the row
+//      itself navigating; an academic row opening the in-app assignment
+//      sheet (never a link -- the Canvas link lives in the sheet);
+//   5. the one task-sheet host mounted by the card.
 
-import { Pressable, Text, View } from "react-native";
+import { Platform, Pressable, Text, View } from "react-native";
+import ReanimatedSwipeable from "react-native-gesture-handler/ReanimatedSwipeable";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getAssignmentSheet,
+  resetAssignmentSheetForTests,
+} from "@/components/academic/assignment-sheet";
 import {
   assignment,
   priorityItem,
   SOURCE_BASE_URL,
 } from "@/components/academic/fixtures.test-support";
+import { CompletionGlyph } from "@/components/ui";
 import { useAcademicToday } from "@/queries/academic";
 import { useToday } from "@/queries/today";
 import { FocusNowCard } from "./focus-now-card";
+import {
+  FocusNowTaskSheetHost,
+  getFocusNowTaskSheet,
+  resetFocusNowTaskSheetForTests,
+} from "./focus-now-task-sheet";
+import { useTodayTaskActions } from "./use-today-task-actions";
 
 vi.mock("@/queries/today", () => ({ useToday: vi.fn() }));
 vi.mock("@/queries/academic", () => ({ useAcademicToday: vi.fn() }));
+// The hook module reaches the API client (expo at import), so it is mocked
+// whole; the pure decisions it shares with the rows live in
+// today-task-actions-state.ts and stay real.
+vi.mock("./use-today-task-actions", () => ({ useTodayTaskActions: vi.fn() }));
 
-const HOST_TYPES = new Set<unknown>([View, Text, Pressable]);
+// The swipeable (the gesture-handler mock) is kept as a host so its
+// `renderLeftActions`/`renderRightActions` props stay on the element.
+const LEAF_TYPES = new Set<unknown>([CompletionGlyph, FocusNowTaskSheetHost, ReanimatedSwipeable]);
+const HOST_TYPES = new Set<unknown>([View, Text, Pressable, ...LEAF_TYPES]);
+
+/** Vitest resolves react-native to the web build, where a swipe never renders; the panels need a device. */
+function onAndroid<T>(fn: () => T): T {
+  const platform = Platform as unknown as { OS: string };
+  const previous = platform.OS;
+  platform.OS = "android";
+  try {
+    return fn();
+  } finally {
+    platform.OS = previous;
+  }
+}
 
 function deepRender(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(deepRender);
@@ -175,8 +211,14 @@ function mockAcademic(overrides: Record<string, unknown> = {}) {
   } as never);
 }
 
+const complete = vi.fn();
+const snooze = vi.fn();
+
 beforeEach(() => {
   vi.clearAllMocks();
+  resetAssignmentSheetForTests();
+  resetFocusNowTaskSheetForTests();
+  vi.mocked(useTodayTaskActions).mockReturnValue({ complete, snooze, pending: false });
   mockToday();
   mockAcademic();
 });
@@ -264,13 +306,132 @@ describe("the merged list", () => {
       String(p.props.accessibilityLabel).startsWith("Overdue task"),
     );
     expect(row).toBeDefined();
-    expect(row.props.accessibilityRole).toBe("button");
+    // Checkpoint 10.6 (ADR-076 §2): the row wraps its own completion circle
+    // and Why button, so it is `containsControl` -- no button role of its own
+    // (no <button> inside a <button> on web); the tap still navigates.
+    expect(row.props.accessibilityRole).toBeUndefined();
     expect(typeof row.props.onPress).toBe("function");
   });
 });
 
-describe("the academic row's same-origin gate (reused from source-link.tsx)", () => {
-  it("is a link with a handler on the connection's own origin", () => {
+describe("a task row's quick actions (ADR-076 §2/§4)", () => {
+  function overdueTask(overrides: Record<string, unknown> = {}) {
+    mockToday({
+      data: todayFixture({
+        overdue: {
+          items: [
+            taskItem({
+              id: "o1",
+              title: "Overdue task",
+              due_at: "2026-09-15T00:00:00Z",
+              ...overrides,
+            }),
+          ],
+          total: 1,
+        },
+      }),
+    });
+  }
+
+  it("carries a completion circle that runs the shared completion action", () => {
+    overdueTask();
+    const circle = findPressables(render()).find(
+      (p) => p.props.accessibilityLabel === "Complete Overdue task",
+    );
+    expect(circle).toBeDefined();
+    expect(circle.props.accessibilityRole).toBe("button");
+    circle.props.onPress({ stopPropagation: () => {} });
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0]![0]).toMatchObject({ id: "o1" });
+  });
+
+  it("opens the task sheet from the Why button and from a long press, never a navigation", () => {
+    overdueTask();
+    const tree = render();
+    const why = findPressables(tree).find((p) => p.props.testID === "focus-now-why-o1");
+    expect(why).toBeDefined();
+    expect(why.props.accessibilityLabel).toBe("Why is Overdue task here?");
+    why.props.onPress();
+    expect(getFocusNowTaskSheet()).toMatchObject({
+      visible: true,
+      error: null,
+      row: { id: "o1", kind: "task" },
+    });
+    resetFocusNowTaskSheetForTests();
+    const row = findPressables(tree).find(
+      (p) =>
+        String(p.props.accessibilityLabel).startsWith("Overdue task, ") &&
+        typeof p.props.onLongPress === "function",
+    );
+    expect(row).toBeDefined();
+    // The row navigates on tap and is not a button itself (it contains two).
+    expect(row.props.accessibilityRole).toBeUndefined();
+    expect(typeof row.props.onPress).toBe("function");
+    row.props.onLongPress();
+    expect(getFocusNowTaskSheet().visible).toBe(true);
+  });
+
+  it("offers Done on a right swipe and Snooze on a left swipe for a snoozable row", () => {
+    onAndroid(() => {
+      overdueTask();
+      const swipeable = findAll(render(), (n) => n.type === ReanimatedSwipeable);
+      expect(swipeable).toHaveLength(1);
+      const [node] = swipeable;
+      expect(typeof node.props.renderLeftActions).toBe("function");
+      const rightPanel = deepRender(node.props.renderRightActions(0, 0, { close: () => {} }));
+      const done = findPressables(rightPanel).find((p) => p.props.accessibilityLabel === "Done");
+      expect(done).toBeDefined();
+      done.props.onPress();
+      expect(complete).toHaveBeenCalledTimes(1);
+      const leftPanel = deepRender(node.props.renderLeftActions(0, 0, { close: () => {} }));
+      const snoozeAction = findPressables(leftPanel).find(
+        (p) => p.props.accessibilityLabel === "Snooze",
+      );
+      expect(snoozeAction).toBeDefined();
+      snoozeAction.props.onPress();
+      expect(getFocusNowTaskSheet().visible).toBe(true);
+    });
+  });
+
+  it("offers no Snooze swipe on a recurring parent row (no occurrence, an rrule)", () => {
+    onAndroid(() => {
+      overdueTask({ rrule: "FREQ=DAILY", occurrence_id: null, parent_task_id: null });
+      const [node] = findAll(render(), (n) => n.type === ReanimatedSwipeable);
+      expect(node.props.renderLeftActions).toBeUndefined();
+      expect(typeof node.props.renderRightActions).toBe("function");
+    });
+  });
+
+  it("on web renders the row alone -- every swipe action stays reachable from the row's own controls", () => {
+    overdueTask();
+    const tree = render();
+    expect(findAll(tree, (n) => n.type === ReanimatedSwipeable)).toHaveLength(0);
+    expect(
+      findPressables(tree).some((p) => p.props.accessibilityLabel === "Complete Overdue task"),
+    ).toBe(true);
+    expect(findPressables(tree).some((p) => p.props.testID === "focus-now-why-o1")).toBe(true);
+  });
+
+  it("re-opens the sheet with the failure line when the circle's completion fails", () => {
+    overdueTask();
+    const circle = findPressables(render()).find(
+      (p) => p.props.accessibilityLabel === "Complete Overdue task",
+    );
+    circle.props.onPress({ stopPropagation: () => {} });
+    const callbacks = complete.mock.calls[0]![1];
+    callbacks.onError("Couldn't complete.");
+    expect(getFocusNowTaskSheet()).toMatchObject({ visible: true, error: "Couldn't complete." });
+  });
+
+  it("mounts the task sheet host exactly once", () => {
+    overdueTask();
+    const hosts = findAll(render(), (n) => n.type === FocusNowTaskSheetHost);
+    expect(hosts).toHaveLength(1);
+  });
+});
+
+describe("an academic row (ADR-076 §3)", () => {
+  it("is a button that opens the in-app assignment sheet with its explanation -- not a link", () => {
     mockAcademic({
       data: academicFixture({
         priorities: {
@@ -292,21 +453,24 @@ describe("the academic row's same-origin gate (reused from source-link.tsx)", ()
       String(p.props.accessibilityLabel).startsWith("Same-origin assignment"),
     );
     expect(row).toBeDefined();
-    expect(row.props.accessibilityRole).toBe("link");
-    expect(typeof row.props.onPress).toBe("function");
+    expect(row.props.accessibilityRole).toBe("button");
+    row.props.onPress();
+    const sheet = getAssignmentSheet();
+    expect(sheet.visible).toBe(true);
+    expect(sheet.record?.assignment.id).toBe("a1");
+    expect(sheet.record?.explanation?.explanations.map((e) => e.reason)).toEqual([
+      "due_within_24h",
+      "no_submission",
+    ]);
   });
 
-  it("is inert -- no role, no handler -- on any other origin", () => {
+  it("never renders html_url as text and carries no link role on the card at all", () => {
     mockAcademic({
       data: academicFixture({
         priorities: {
           items: [
             priorityItem({
-              assignment: assignment({
-                id: "a1",
-                title: "Cross-origin assignment",
-                html_url: "https://evil.example.com/x",
-              }),
+              assignment: assignment({ id: "a1", html_url: "https://evil.example.com/x" }),
             }),
           ],
           total: 1,
@@ -314,11 +478,7 @@ describe("the academic row's same-origin gate (reused from source-link.tsx)", ()
       }),
     });
     const tree = render();
-    const row = findPressables(tree).find((p) =>
-      String(p.props.accessibilityLabel).startsWith("Cross-origin assignment"),
-    );
-    expect(row).toBeDefined();
-    expect(row.props.accessibilityRole).toBeUndefined();
-    expect(row.props.onPress).toBeUndefined();
+    expect(getTextContent(tree)).not.toContain("http");
+    expect(findPressables(tree).some((p) => p.props.accessibilityRole === "link")).toBe(false);
   });
 });

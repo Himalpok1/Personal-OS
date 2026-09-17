@@ -97,6 +97,8 @@ Ordering below is the original log order: amendments (`ADR-046a`, `ADR-047a`, `A
 | [ADR-072](decisions/ADR-072.md) | Checkpoint 10.4 (Lane 1): "Focus Now" is a deterministic, client-side merge of two already-fetched read models; no new route, no new database access, no AI call | Locked |
 | [ADR-073](decisions/ADR-073.md) | Checkpoint 10.4 (Lane 4): a single, hysteresis-gated Canvas invalid-token alert, amending ADR-068 §6's "no alert" stance | Locked |
 | [ADR-074](decisions/ADR-074.md) | Checkpoint 10.5: exactly one narrow, explicit, nullable FK (tasks.canvas_assignment_id) instead of a generic entity/relationship table (migration 0022) | Locked |
+| [ADR-075](decisions/ADR-075.md) | Checkpoint 10.6 (Intelligence): explainable, context-aware Focus Now (closed reason vocabulary with sources, frozen context points, linked-task dedupe) and a deterministic client-composed daily briefing; one opaque optional key on `/today` | Locked |
+| [ADR-076](decisions/ADR-076.md) | Checkpoint 10.6 (Mobile): motion, gesture and interaction primitives on the already-installed Reanimated/gesture-handler stack, no new dependency; Today reorganised actionable-first | Locked |
 
 ## Open later-phase decisions
 

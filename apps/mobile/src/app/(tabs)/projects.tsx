@@ -3,6 +3,7 @@ import { useProjectSummaries, useUnarchiveProject } from "@/queries/projects";
 import { useRouter } from "expo-router";
 import { FlatList, Pressable, RefreshControl, View } from "react-native";
 import { FLOATING_CLEARANCE, FLOATING_CTA_CLEARANCE } from "@/components/floating-layout";
+import { projectProgress } from "@/components/projects/project-progress";
 import {
   PROJECT_STALLED_PRESENTATION,
   projectDisplayStatus,
@@ -14,6 +15,7 @@ import {
   Card,
   EmptyState,
   ErrorState,
+  ProgressBar,
   ScreenFrame,
   SectionHeader,
   SkeletonList,
@@ -33,6 +35,9 @@ function ProjectRow({ project }: { project: ProjectSummaryItem }) {
   const { colors } = useTheme();
   const displayStatus = projectDisplayStatus(project);
   const status = projectStatusPresentation(displayStatus);
+  // Done over open + done (project-progress.ts); null -- no bar -- when the
+  // project has neither, so an empty project is not drawn as "0% done".
+  const progress = projectProgress(project.counts);
 
   // The body and the Unarchive control are SIBLINGS on an inert card, not
   // nested pressables: the pre-10.3 row stopped the unarchive tap's
@@ -76,7 +81,15 @@ function ProjectRow({ project }: { project: ProjectSummaryItem }) {
             Next: {project.next_action.title}
           </AppText>
         ) : null}
-        <AppText variant="caption" tone="muted" className="mt-1">
+        {progress ? (
+          <ProgressBar
+            value={progress.fraction}
+            tone={displayStatus === "completed" ? "success" : "primary"}
+            accessibilityLabel={progress.label}
+            className="mt-2.5"
+          />
+        ) : null}
+        <AppText variant="caption" tone="muted" className="mt-1.5">
           {project.counts.open} open · {project.counts.done} done · {project.counts.overdue} overdue
           {project.target_date ? ` · Target ${formatShortDate(project.target_date)}` : ""}
         </AppText>

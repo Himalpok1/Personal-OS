@@ -29,6 +29,7 @@ import {
   type FreshnessDescription,
   type HealthConnectionDisplayState,
 } from "@/components/health/connection-state";
+import { IntegrationSummaryRow } from "@/components/settings/integration-summary-row";
 import {
   calendarConnectionChipLabel,
   calendarConnectionChipTone,
@@ -44,6 +45,7 @@ import {
   ListRow,
   ScreenFrame,
   SectionHeader,
+  Skeleton,
   SkeletonList,
   StatusChip,
 } from "@/components/ui";
@@ -600,11 +602,7 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
         inset
       />
 
-      {isLoading || isPersistedLoading ? (
-        <AppText variant="body" tone="muted" className="py-2">
-          Loading calendars…
-        </AppText>
-      ) : null}
+      {isLoading || isPersistedLoading ? <SkeletonList rows={2} /> : null}
       {isError ? (
         <InlineRetry
           message="Couldn't load Google calendars."
@@ -730,11 +728,7 @@ function CaldavCalendarConnectionCard({ connection }: { connection: CalendarConn
         inset
       />
 
-      {isLoading || isPersistedLoading ? (
-        <AppText variant="body" tone="muted" className="py-2">
-          Loading calendars…
-        </AppText>
-      ) : null}
+      {isLoading || isPersistedLoading ? <SkeletonList rows={2} /> : null}
       {isError ? (
         <InlineRetry
           message="Couldn't load CalDAV calendars."
@@ -1207,6 +1201,9 @@ function ConnectedMailCard() {
         last
       />
 
+      {/* A skeleton where the status line WILL appear (Checkpoint 10.6); the
+          live region below it stays mounted so the arrival is still announced. */}
+      {connectionsQuery.isLoading ? <Skeleton width="70%" height={14} className="mt-1" /> : null}
       <AppText
         variant="body"
         tone="secondary"
@@ -1214,7 +1211,7 @@ function ConnectedMailCard() {
         accessibilityLiveRegion="polite"
         accessibilityRole="text"
       >
-        {connectionsQuery.isLoading ? "Loading…" : MAIL_STATUS_TEXT[overallState]}
+        {connectionsQuery.isLoading ? "" : MAIL_STATUS_TEXT[overallState]}
       </AppText>
 
       {connections.map((connection) => {
@@ -1225,12 +1222,11 @@ function ConnectedMailCard() {
         // document -- none of which this is.
         return (
           <View key={connection.id} className="mt-3">
+            {/* One state chip per card -- the header's (Checkpoint 10.6). The
+                row says its own state in words on the subtitle. */}
             <ListRow
               title={connection.external_account_id}
               subtitle={MAIL_STATUS_TEXT[state]}
-              trailing={
-                <StatusChip label={state.replace(/_/g, " ")} tone={mailConnectionChipTone(state)} />
-              }
               inset
               last
             />
@@ -1381,13 +1377,12 @@ function CanvasConnectionRow({ connection }: { connection: CanvasConnection }) {
 
   return (
     <View className="mt-3">
+      {/* One state chip per card -- the header's (Checkpoint 10.6). The row
+          says its own state in words on the meta line. */}
       <ListRow
         title={connection.canvas_base_url}
         subtitle={connection.canvas_user_name ?? undefined}
         meta={CANVAS_STATUS_TEXT[state]}
-        trailing={
-          <StatusChip label={state.replace(/_/g, " ")} tone={canvasConnectionChipTone(state)} />
-        }
         inset
         last
       />
@@ -1491,6 +1486,7 @@ function ConnectedCanvasCard() {
         last
       />
 
+      {connectionsQuery.isLoading ? <Skeleton width="70%" height={14} className="mt-1" /> : null}
       <AppText
         variant="body"
         tone="secondary"
@@ -1498,7 +1494,7 @@ function ConnectedCanvasCard() {
         accessibilityLiveRegion="polite"
         accessibilityRole="text"
       >
-        {connectionsQuery.isLoading ? "Loading…" : CANVAS_STATUS_TEXT[overallState]}
+        {connectionsQuery.isLoading ? "" : CANVAS_STATUS_TEXT[overallState]}
       </AppText>
 
       {connections.map((connection) => (
@@ -1622,11 +1618,13 @@ function MonitoringCard() {
   const overview = useMonitorOverview();
   const router = useRouter();
 
+  // Null while the first load is in flight: a skeleton line stands in for
+  // the summary (Checkpoint 10.6), and the live region announces it on arrival.
   const summary = overview.isError
     ? "Can't reach Personal OS, so the monitoring status is unknown."
     : overview.data
       ? describeMonitorSummary(overview.data.configured, overview.data.active_incident_count)
-      : "Loading…";
+      : null;
 
   const tone = monitorSummaryTone(overview.isError, overview.data?.active_incident_count ?? 0);
 
@@ -1639,6 +1637,7 @@ function MonitoringCard() {
         inset
         last
       />
+      {summary === null ? <Skeleton width="70%" height={14} className="mt-1" /> : null}
       <AppText
         variant="body"
         tone={tone}
@@ -1646,7 +1645,7 @@ function MonitoringCard() {
         accessibilityLiveRegion="polite"
         accessibilityRole="text"
       >
-        {summary}
+        {summary ?? ""}
       </AppText>
       <AppText variant="caption" tone="muted" className="min-h-[16px]">
         {overview.data && overview.data.configured
@@ -1757,6 +1756,7 @@ function ConnectedHealthCard() {
         last
       />
 
+      {state === null ? <Skeleton width="70%" height={14} className="mt-1" /> : null}
       <AppText
         variant="body"
         tone="secondary"
@@ -1764,7 +1764,7 @@ function ConnectedHealthCard() {
         accessibilityLiveRegion="polite"
         accessibilityRole="text"
       >
-        {state === null ? "Loading…" : HEALTH_STATUS_TEXT[state]}
+        {state === null ? "" : HEALTH_STATUS_TEXT[state]}
       </AppText>
 
       <AppText variant="caption" tone="muted" className="min-h-[16px]">
@@ -1865,6 +1865,8 @@ export default function SettingsScreen() {
           </View>
 
           <SectionHeader title="Integrations" icon="link-variant" />
+          {/* Every connection state at a glance, before the cards (10.6). */}
+          <IntegrationSummaryRow />
           <ConnectedCanvasCard />
           <ConnectedCalendarsCard />
           <ConnectedMailCard />

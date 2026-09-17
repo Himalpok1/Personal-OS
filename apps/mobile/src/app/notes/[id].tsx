@@ -8,6 +8,7 @@ import {
   ScreenCentered,
   ScreenFrame,
   SkeletonCard,
+  showToast,
 } from "@/components/ui";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
@@ -174,7 +175,15 @@ export default function EditNoteScreen() {
               message:
                 "This hides it from your lists. There's currently no way to view or restore it from the app.",
               confirmLabel: "Archive",
-              onConfirm: () => archiveNote.mutate(note.id, { onSuccess: () => router.back() }),
+              onConfirm: () =>
+                archiveNote.mutate(note.id, {
+                  // The toast outlives this screen (root-mounted host), so
+                  // it is what confirms the archive once the list is back.
+                  onSuccess: () => {
+                    showToast({ message: "Note archived" });
+                    router.back();
+                  },
+                }),
             })
           }
           disabled={archiveNote.isPending}

@@ -14,8 +14,10 @@ import { queryClient } from "@/queries/client";
 import { useQueryLifecycle } from "@/queries/use-query-lifecycle";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, ThemeProvider } from "expo-router";
-import { navigationTheme, useSyncWebColorSchemeClass, useTheme } from "@/components/ui";
+import { AssignmentSheetHost } from "@/components/academic/assignment-sheet";
+import { ToastHost, navigationTheme, useSyncWebColorSchemeClass, useTheme } from "@/components/ui";
 import { View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import * as Application from "expo-application";
 
@@ -36,18 +38,35 @@ export default function RootLayout() {
   // selectors need in step with the hook (components/ui/web-color-scheme.ts).
   useSyncWebColorSchemeClass(scheme);
   return (
-    // SafeAreaProvider is required by react-native-safe-area-context's
-    // SafeAreaView, which quick-add-fab.tsx has consumed since Phase 3 -- it
-    // was never actually mounted, so those insets silently resolved to zero.
-    <SafeAreaProvider>
-      <QueryClientProvider client={queryClient}>
-        <DeviceIdentityProvider>
-          <ThemeProvider value={navigationTheme(scheme)}>
-            <RootContent />
-          </ThemeProvider>
-        </DeviceIdentityProvider>
-      </QueryClientProvider>
-    </SafeAreaProvider>
+    // Checkpoint 10.6: react-native-gesture-handler needs its root view
+    // OUTSIDE everything a gesture can happen in (the swipeable rows), so it
+    // is the outermost node; style, not className -- it is not one of the
+    // components NativeWind's interop wraps.
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      {/* SafeAreaProvider is required by react-native-safe-area-context's
+          SafeAreaView, which quick-add-fab.tsx has consumed since Phase 3 --
+          it was never actually mounted, so those insets silently resolved to
+          zero. */}
+      <SafeAreaProvider>
+        <QueryClientProvider client={queryClient}>
+          <DeviceIdentityProvider>
+            <ThemeProvider value={navigationTheme(scheme)}>
+              <RootContent />
+              {/* Checkpoint 10.6: the one toast surface, above every shell
+                  (pairing included) and every screen; showToast() from any
+                  mutation lands here. */}
+              <ToastHost />
+              {/* Checkpoint 10.6 (ADR-076 §3): the in-app assignment sheet's
+                  ONE host, app-wide. Its store is module-global, and Expo
+                  Router keeps the Today tab mounted under a pushed course
+                  screen, so a host per screen would draw two modals for one
+                  record (10.6 review, finding 2). */}
+              <AssignmentSheetHost />
+            </ThemeProvider>
+          </DeviceIdentityProvider>
+        </QueryClientProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 

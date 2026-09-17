@@ -17,9 +17,14 @@ const MODES: readonly SegmentedOption<CalendarViewMode>[] = [
 export function ViewModeToggle({
   value,
   onChange,
+  className = "flex-1",
 }: {
   value: CalendarViewMode;
   onChange: (mode: CalendarViewMode) => void;
+  /** Layout-only classes on the well; the one-row chrome (10.6) gives it a fixed width. */
+  className?: string;
 }) {
-  return <SegmentedControl value={value} options={MODES} onChange={onChange} className="flex-1" />;
+  return (
+    <SegmentedControl value={value} options={MODES} onChange={onChange} className={className} />
+  );
 }

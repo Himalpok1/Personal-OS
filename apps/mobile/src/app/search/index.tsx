@@ -17,6 +17,7 @@ import { AskModeToggle, type SearchAskMode } from "@/components/ask/mode-toggle"
 import { TextField } from "@/components/ask/text-field";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import {
+  AnimatedView,
   AppText,
   Button,
   Card,
@@ -26,6 +27,7 @@ import {
   ScreenFrame,
   SectionHeader,
   StatusChip,
+  enterFade,
   type ChipTone,
   type IconName,
 } from "@/components/ui";
@@ -71,6 +73,11 @@ import { buildSearchRows, searchRowKey, type SearchRow } from "@/utils/search-se
 // app works (there is no render library in its dependencies). Checkpoint 10.3
 // composed both on the design system's hookless primitives; every testID,
 // label, state and the FlatList's row model are unchanged.
+//
+// Checkpoint 10.6 (ADR-076 §1): each list row -- a section header or a result
+// -- is wrapped in the animated leaf `AnimatedView` with the `enterFade`
+// preset, so a result set fades in rather than snapping; under the test mock
+// the leaf is a plain View, so the walk is unchanged. Nothing else moved.
 
 const TYPE_ACCESSIBILITY: Record<SearchResult["type"], string> = {
   task: "task",
@@ -428,13 +435,15 @@ export function SearchView({
           data={buildSearchRows(state.response)}
           keyExtractor={searchRowKey}
           ListHeaderComponent={<SearchResultNotes response={state.response} stale={stale} />}
-          renderItem={({ item }) =>
-            item.kind === "header" ? (
-              <SearchSectionHeader row={item} />
-            ) : (
-              <SearchResultRow result={item.result} onSelect={onSelectResult} />
-            )
-          }
+          renderItem={({ item }) => (
+            <AnimatedView entering={enterFade}>
+              {item.kind === "header" ? (
+                <SearchSectionHeader row={item} />
+              ) : (
+                <SearchResultRow result={item.result} onSelect={onSelectResult} />
+              )}
+            </AnimatedView>
+          )}
           keyboardShouldPersistTaps="handled"
           // FLOATING_CLEARANCE_PX plus the keyboard, in contentContainerStyle
           // rather than contentContainerClassName -- the keyboard height is a

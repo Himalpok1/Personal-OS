@@ -1,5 +1,5 @@
 import { FieldLabel, textFieldClass } from "@/components/ask/text-field";
-import { AppText, Button, ScreenFrame } from "@/components/ui";
+import { AppText, Button, ScreenFrame, tokens } from "@/components/ui";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { usePlaceholderColor } from "@/components/placeholder-color";
@@ -11,13 +11,19 @@ import { useRouter } from "expo-router";
 import { useState } from "react";
 import { ScrollView, TextInput, View } from "react-native";
 
+const DEFAULT_PROJECT_COLOR = tokens.colors.primary.DEFAULT;
+
 export default function NewProjectScreen() {
   const keyboardHeight = useKeyboardHeight();
   const placeholderColor = usePlaceholderColor();
   const router = useRouter();
   const createProject = useCreateProject();
   const [name, setName] = useState("");
-  const [color, setColor] = useState("#3b82f6");
+  // The default swatch is the palette's own primary (Checkpoint 10.6), read
+  // from the light-scheme token rather than the live scheme so the colour a
+  // project is SAVED with does not depend on the mode the form was opened in.
+  // It stays a field the owner can overwrite with any colour string.
+  const [color, setColor] = useState(DEFAULT_PROJECT_COLOR);
 
   const submit = () => {
     if (!name.trim()) return;
@@ -66,7 +72,7 @@ export default function NewProjectScreen() {
           <TextInput
             value={color}
             onChangeText={setColor}
-            placeholder="#3b82f6"
+            placeholder={DEFAULT_PROJECT_COLOR}
             placeholderTextColor={placeholderColor}
             autoCapitalize="none"
             autoCorrect={false}

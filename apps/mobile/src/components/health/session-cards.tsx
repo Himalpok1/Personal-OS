@@ -16,9 +16,10 @@
 // axis the provider filter and the tombstone sweep use too.
 import { View } from "react-native";
 import type { HealthSleepSession, HealthWorkoutSession } from "@personal-os/schema";
-import { AppText, ListRow, cardClass } from "@/components/ui";
+import { AppText, Icon, ListRow, cardClass } from "@/components/ui";
 import { formatShortDate } from "@/utils/local-date";
 import { formatDuration } from "./format";
+import { describeSleepTrend } from "./sleep-trend";
 
 // The summary card is `accessible` -- one spoken element for the whole night
 // -- which `Card` cannot express, so it composes the same vocabulary through
@@ -102,12 +103,16 @@ export function SleepSummaryCard({ session, averageSeconds, compact }: SleepSumm
   const bedtime = civilTime(session.start_at, session.start_utc_offset_seconds);
   const wake = civilTime(session.end_at, session.end_utc_offset_seconds);
   const wakeDate = formatShortDate(session.wake_local_date);
+  // Last night against the trailing week -- the one comparison the summary
+  // already carries (sleep-trend.ts). Null exactly when the average is.
+  const trend = describeSleepTrend(session.duration_seconds, averageSeconds);
 
   const accessibilityLabel = [
     `Sleep, night ending ${wakeDate}`,
     `${duration} total`,
     `bedtime ${bedtime}, woke ${wake}`,
     averageSeconds === null ? null : `seven day average ${formatDuration(averageSeconds)}`,
+    trend === null ? null : trend.caption,
   ]
     .filter((part): part is string => part !== null)
     .join(". ");
@@ -134,6 +139,14 @@ export function SleepSummaryCard({ session, averageSeconds, compact }: SleepSumm
         <AppText variant="label" tone="secondary" className="mt-3 font-normal">
           7-day average {formatDuration(averageSeconds)}
         </AppText>
+      )}
+      {trend === null ? null : (
+        <View className="mt-1 flex-row items-center gap-1">
+          <Icon name={trend.icon} size="xs" tone="on-surface-muted" />
+          <AppText variant="caption" tone="muted">
+            {trend.caption}
+          </AppText>
+        </View>
       )}
 
       {/* Rendered from the CONTRACT, not hardcoded: `stages` is always null

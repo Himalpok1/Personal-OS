@@ -79,6 +79,8 @@ interface TodayTaskRow {
   rrule: string | null;
   parentTaskId: string | null;
   status: string;
+  /** Checkpoint 10.6: the opaque link 10.5 added (ADR-074), emitted as-is. */
+  canvasAssignmentId: string | null;
   occurrenceId?: string;
   /** Occurrence rows only (Checkpoint 9.4): the snooze, when set. */
   snoozedUntil?: Date | null;
@@ -99,6 +101,7 @@ interface TodayOccurrenceRow {
   parentTimezone: string;
   parentRemindAt: Date | null;
   parentStatus: string;
+  parentCanvasAssignmentId: string | null;
 }
 
 // Drizzle's raw sql<T> expressions bypass column mappers (it overrides the
@@ -121,6 +124,7 @@ function toTodayTaskItem(row: TodayTaskRow): TodayTaskItem {
     project_name: row.projectName ?? null,
     rrule: row.rrule,
     parent_task_id: row.parentTaskId,
+    canvas_assignment_id: row.canvasAssignmentId,
     ...(row.occurrenceId !== undefined
       ? {
           occurrence_id: row.occurrenceId,
@@ -243,6 +247,7 @@ export async function buildTodayResponse(
       rrule: tasks.rrule,
       parentTaskId: tasks.parentTaskId,
       status: tasks.status,
+      canvasAssignmentId: tasks.canvasAssignmentId,
     })
     .from(tasks)
     .leftJoin(projects, eq(tasks.projectId, projects.id))
@@ -274,6 +279,7 @@ export async function buildTodayResponse(
       parentTimezone: tasks.timezone,
       parentRemindAt: tasks.remindAt,
       parentStatus: tasks.status,
+      parentCanvasAssignmentId: tasks.canvasAssignmentId,
     })
     .from(occurrences)
     .innerJoin(tasks, eq(occurrences.parentId, tasks.id))
@@ -308,6 +314,7 @@ export async function buildTodayResponse(
       rrule: occ.parentRrule,
       parentTaskId: null,
       status: occ.parentStatus,
+      canvasAssignmentId: occ.parentCanvasAssignmentId,
     });
   }
 
@@ -338,6 +345,7 @@ export async function buildTodayResponse(
       rrule: parent.rrule,
       parentTaskId: parent.id,
       status: parent.status,
+      canvasAssignmentId: parent.canvasAssignmentId,
       occurrenceId: occ.id,
       snoozedUntil: occ.snoozedUntil,
     }),

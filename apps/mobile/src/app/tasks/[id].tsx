@@ -15,6 +15,7 @@ import {
   ScreenCentered,
   ScreenFrame,
   SkeletonCard,
+  showToast,
 } from "@/components/ui";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
@@ -360,7 +361,12 @@ export default function EditTaskScreen() {
               onConfirm: () => {
                 setSaveError(null);
                 archiveTask.mutate(task.id, {
-                  onSuccess: () => router.back(),
+                  // The toast outlives this screen (root-mounted host), so
+                  // it is what confirms the archive once the list is back.
+                  onSuccess: () => {
+                    showToast({ message: "Task archived" });
+                    router.back();
+                  },
                   onError: () => setSaveError("Couldn't archive this task. Please try again."),
                 });
               },

@@ -800,6 +800,22 @@ describe("sleep and workout cards", () => {
     expect(text).toContain("7-day average 7h 20m");
   });
 
+  it("SleepSummaryCard adds a trend line against the 7-day average, and omits it when there is no average (10.6)", () => {
+    // 7h 31m against 7h 20m: eleven minutes above. The caption is spelled in
+    // minutes, never as a third `Nh Nm` duration (the count pinned above).
+    const withAverage = getTextContent(
+      deepRender(SleepSummaryCard({ session: sleepSession(), averageSeconds: 26_400 })),
+    );
+    expect(withAverage).toContain("11 min above your 7-day average");
+    expect(withAverage).toContain("trending-up");
+
+    const withoutAverage = getTextContent(
+      deepRender(SleepSummaryCard({ session: sleepSession(), averageSeconds: null })),
+    );
+    expect(withoutAverage).not.toContain("7-day average");
+    expect(withoutAverage).not.toContain("trending-");
+  });
+
   it("renders session times in the zone they were LIVED, not the viewer's zone", () => {
     // Same instants, but the row says it happened at +09:00. The rendered
     // clock must follow the stored offset, which is the whole reason both

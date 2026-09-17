@@ -5,11 +5,19 @@
 //
 // Rows inside a `Card` use `inset` so the divider stops short of the card's
 // rounded corners; rows on the canvas use the default full-bleed divider.
+//
+// Checkpoint 10.6: `trailingChips` draws up to two `StatusChip`s (and a
+// `+N` for the rest) as the trailing element, `onLongPress` gives a row a
+// secondary action, and `entering` lets a list animate a row in -- the row
+// then renders as the interop-wrapped animated host (components/ui/
+// animated.ts) with its classes intact, no wrapper node.
 import type { ReactNode } from "react";
 import { Pressable, View, type AccessibilityRole } from "react-native";
+import type { EntryOrExitLayoutType } from "react-native-reanimated";
+import { AnimatedPressable, AnimatedView } from "./animated";
 import { Icon, type IconName } from "./icon";
 import { AppText, type TextTone } from "./text";
-import type { ChipTone } from "./status-chip";
+import { StatusChip, type ChipTone } from "./status-chip";
 import type { ColorRole } from "./theme";
 
 const DISC_CLASS: Record<ChipTone, string> = {
@@ -30,6 +38,21 @@ const DISC_ICON_ROLE: Record<ChipTone, ColorRole> = {
   info: "on-info-container",
 };
 
+export interface TrailingChip {
+  label: string;
+  tone: ChipTone;
+}
+
+export const TRAILING_CHIP_CAP = 2;
+
+/** Pure: which chips to draw and how many collapse into `+N`. */
+export function trailingChipsVisible(
+  chips: readonly TrailingChip[],
+  cap: number = TRAILING_CHIP_CAP,
+): { shown: TrailingChip[]; overflow: number } {
+  return { shown: chips.slice(0, cap), overflow: Math.max(0, chips.length - cap) };
+}
+
 export interface ListRowProps {
   title: string;
   subtitle?: string;
@@ -42,7 +65,17 @@ export interface ListRowProps {
   trailing?: ReactNode;
   /** Draw a chevron as the trailing element when there is no explicit one. */
   chevron?: boolean;
+  /**
+   * Small state chips drawn as the trailing element (after an explicit
+   * `trailing`, before a chevron). At most `TRAILING_CHIP_CAP` are shown; the
+   * rest collapse to `+N`.
+   */
+  trailingChips?: TrailingChip[];
   onPress?: () => void;
+  /** A secondary action on a long press (a context sheet); the row must also have `onPress`. */
+  onLongPress?: () => void;
+  /** A Reanimated entering animation (`enterRise` from motion.ts), for a row that has just appeared. */
+  entering?: EntryOrExitLayoutType;
   accessibilityLabel?: string;
   accessibilityRole?: AccessibilityRole;
   /**
@@ -73,7 +106,10 @@ export function ListRow({
   leading,
   trailing,
   chevron = false,
+  trailingChips,
   onPress,
+  onLongPress,
+  entering,
   accessibilityLabel,
   accessibilityRole,
   containsControl = false,
@@ -130,34 +166,64 @@ export function ListRow({
           </AppText>
         ) : null}
       </View>
-      {trailing ??
-        (chevron ? <Icon name="chevron-right" size="md" tone="on-surface-muted" /> : null)}
+      {trailing ?? null}
+      {trailingChips && trailingChips.length > 0 ? (
+        <TrailingChipGroup chips={trailingChips} />
+      ) : null}
+      {trailing == null && chevron ? (
+        <Icon name="chevron-right" size="md" tone="on-surface-muted" />
+      ) : null}
     </>
   );
   if (onPress) {
+    const Host = entering ? AnimatedPressable : Pressable;
     return (
-      <Pressable
+      <Host
         onPress={onPress}
+        onLongPress={onLongPress}
         disabled={disabled}
         accessibilityRole={accessibilityRole ?? (containsControl ? undefined : "button")}
         accessibilityLabel={accessibilityLabel ?? title}
         hitSlop={4}
         className={container}
+        entering={entering}
         testID={testID}
       >
         {content}
-      </Pressable>
+      </Host>
     );
   }
+  const Host = entering ? AnimatedView : View;
   return (
-    <View
+    <Host
       className={container}
       // Same rule as Card: a labelled inert row is one accessible group.
       accessible={accessibilityLabel !== undefined ? true : undefined}
       accessibilityLabel={accessibilityLabel}
+      entering={entering}
       testID={testID}
     >
       {content}
+    </Host>
+  );
+}
+
+/** The trailing chip group: wraps onto a second line inside its own column, never the title's. */
+export function TrailingChipGroup({ chips }: { chips: readonly TrailingChip[] }) {
+  const { shown, overflow } = trailingChipsVisible(chips);
+  return (
+    <View className="max-w-[45%] flex-row flex-wrap items-center justify-end gap-1">
+      {shown.map((chip, index) => (
+        <StatusChip key={`${chip.label}:${index}`} label={chip.label} tone={chip.tone} size="sm" />
+      ))}
+      {overflow > 0 ? (
+        <StatusChip
+          label={`+${overflow}`}
+          tone="neutral"
+          size="sm"
+          accessibilityLabel={`${overflow} more`}
+        />
+      ) : null}
     </View>
   );
 }

@@ -2,25 +2,30 @@
 // in the tree-walking idiom every mobile component test uses (no render
 // library; hooks resolve to the vitest aliases for nativewind, expo-haptics,
 // expo-linear-gradient and @expo/vector-icons).
-import { Platform, Pressable, Text, View } from "react-native";
+import { Platform, Pressable, RefreshControl, Text, TextInput, View } from "react-native";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Haptics from "expo-haptics";
+import { AnimatedNumberCounter } from "./animated-number";
 import { Button, IconButton, buttonClasses } from "./button";
-import { Card, GradientCard, cardClass } from "./card";
+import { Card, GradientCard, cardClass, softCardClass } from "./card";
 import { EmptyState } from "./empty-state";
 import { ErrorState } from "./error-state";
 import { triggerHaptic } from "./haptics";
-import { ListRow } from "./list-row";
-import { MetricCard } from "./metric-card";
+import { ListRow, TRAILING_CHIP_CAP, trailingChipsVisible } from "./list-row";
+import { MetricCard, metricAnimatedValue, metricSpokenLabel } from "./metric-card";
+import { enterRise } from "./motion";
 import { ProgressBar, clampProgress } from "./progress-bar";
+import { useRefreshControl } from "./screen";
 import { SectionHeader, sectionTitleText } from "./section-header";
 import { StatusChip, chipClasses } from "./status-chip";
 import { textClass } from "./text";
-import { tokens } from "./theme";
+import { LIGHT_COLORS, tokens } from "./theme";
 import { applyWebColorSchemeClass, followSystemColorSchemeOnWeb } from "./web-color-scheme";
 import * as NativeWind from "nativewind";
 
-const HOST_TYPES = new Set<unknown>([View, Text, Pressable]);
+// Checkpoint 10.6: the animated counter is a leaf with a React effect, so
+// the walk stops at it (interactions.test.tsx explains the rule).
+const HOST_TYPES = new Set<unknown>([View, Text, Pressable, TextInput, AnimatedNumberCounter]);
 
 function deepRender(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(deepRender);
@@ -309,5 +314,212 @@ describe("text vocabulary and web dark class", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// Checkpoint 10.6 additions to the existing primitives. Every test above
+// still passes unchanged; these pin only what was added.
+describe("10.6 additions", () => {
+  it("IconButton is inert while busy or disabled and says so", () => {
+    const onPress = vi.fn();
+    const busy = deepRender(
+      <IconButton
+        icon="archive-arrow-down-outline"
+        onPress={onPress}
+        accessibilityLabel="Archive"
+        busy
+      />,
+    ) as any;
+    busy.props.onPress();
+    expect(onPress).not.toHaveBeenCalled();
+    expect(busy.props.disabled).toBe(true);
+    expect(busy.props.accessibilityState).toEqual({ disabled: true, busy: true });
+    expect(busy.props.className).toContain("opacity-50");
+    const live = deepRender(
+      <IconButton
+        icon="archive-arrow-down-outline"
+        onPress={onPress}
+        accessibilityLabel="Archive"
+      />,
+    ) as any;
+    live.props.onPress();
+    expect(onPress).toHaveBeenCalledTimes(1);
+    expect(live.props.accessibilityState).toEqual({ disabled: false, busy: false });
+    // Buttons keep their own active classes: no stacked opacity fallback.
+    expect(live.props.className).not.toContain("active:opacity-80");
+    expect(live.props.className).toContain("active:opacity-70");
+  });
+
+  it("a pressable Card keeps the opacity fallback on web and every class it was given", () => {
+    const pressed = deepRender(
+      <Card onPress={() => {}} className="flex-1 mt-2">
+        {null}
+      </Card>,
+    ) as any;
+    expect(pressed.type).toBe(Pressable);
+    expect(pressed.props.className).toContain("flex-1 mt-2");
+    expect(pressed.props.className).toContain("active:opacity-80");
+    expect(pressed.props.hitSlop).toBe(4);
+  });
+
+  it("Card variant=soft draws the soft gradient under the children with no surface token", () => {
+    expect(softCardClass("md", "mt-2")).toBe("overflow-hidden rounded-card p-4 mt-2");
+    expect(softCardClass("none")).not.toContain("bg-");
+    const tree = deepRender(
+      <Card variant="soft">
+        <View testID="inner" />
+      </Card>,
+    ) as any;
+    expect(tree.type).toBe(View);
+    expect(tree.props.className).toBe("overflow-hidden rounded-card p-4");
+    const gradient = findAll(tree, (n) => Array.isArray(n.props?.colors))[0];
+    expect(gradient.props.colors).toEqual(tokens.gradients.soft.light);
+    expect(gradient.props.pointerEvents).toBe("none");
+    expect(findAll(tree, (n) => n.props?.testID === "inner")).toHaveLength(1);
+    // The ordinary card draws no gradient layer at all.
+    const plain = deepRender(<Card>{null}</Card>);
+    expect(findAll(plain, (n) => Array.isArray(n.props?.colors))).toHaveLength(0);
+  });
+
+  it("ListRow caps trailing chips at two and collapses the rest to +N", () => {
+    const chips = [
+      { label: "Missing", tone: "danger" as const },
+      { label: "Late", tone: "warning" as const },
+      { label: "Graded", tone: "success" as const },
+    ];
+    expect(TRAILING_CHIP_CAP).toBe(2);
+    expect(trailingChipsVisible(chips)).toEqual({ shown: chips.slice(0, 2), overflow: 1 });
+    expect(trailingChipsVisible(chips.slice(0, 1))).toEqual({
+      shown: chips.slice(0, 1),
+      overflow: 0,
+    });
+    const tree = deepRender(<ListRow title="Essay" trailingChips={chips} chevron last />);
+    expect(text(tree)).toContain("Missing");
+    expect(text(tree)).toContain("Late");
+    expect(text(tree)).not.toContain("Graded");
+    expect(text(tree)).toContain("+1");
+    const overflow = findAll(tree, (n) => n.props?.accessibilityLabel === "1 more");
+    expect(overflow).toHaveLength(1);
+    // The chevron still follows the chips when there is no explicit trailing.
+    expect(
+      findAll(tree, (n) => n.props?.testID === "icon:MaterialCommunityIcons:chevron-right"),
+    ).toHaveLength(1);
+    expect(pressables(tree)).toHaveLength(0);
+  });
+
+  it("ListRow forwards onLongPress and an entering animation onto the same node", () => {
+    const onLongPress = vi.fn();
+    const row = deepRender(
+      <ListRow title="Task" onPress={() => {}} onLongPress={onLongPress} entering={enterRise} />,
+    ) as any;
+    // Under the mocks the animated interop host IS Pressable: no wrapper node.
+    expect(row.type).toBe(Pressable);
+    expect(row.props.entering).toBe(enterRise);
+    expect(row.props.className).toContain("min-h-[52px]");
+    row.props.onLongPress();
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+    const inert = deepRender(<ListRow title="Task" entering={enterRise} />) as any;
+    expect(inert.type).toBe(View);
+    expect(inert.props.entering).toBe(enterRise);
+    const plain = deepRender(<ListRow title="Task" />) as any;
+    expect(plain.props.entering).toBeUndefined();
+  });
+
+  it("EmptyState size=compact is one 44px labelled row with an optional ghost action", () => {
+    const onPress = vi.fn();
+    const tree = deepRender(
+      <EmptyState
+        icon="check-circle-outline"
+        title="Nothing overdue"
+        body="All clear"
+        size="compact"
+        tone="success"
+        action={{ label: "Add", onPress }}
+      />,
+    ) as any;
+    expect(tree.props.className).toContain("min-h-[44px]");
+    expect(tree.props.className).toContain("flex-row");
+    expect(tree.props.accessible).toBe(true);
+    expect(tree.props.accessibilityLabel).toBe("Nothing overdue. All clear");
+    expect(text(tree)).toContain("Nothing overdue · All clear");
+    const [action] = pressables(tree);
+    expect(action.props.accessibilityLabel).toBe("Add");
+    action.props.onPress();
+    expect(onPress).toHaveBeenCalledTimes(1);
+    const bare = deepRender(
+      <EmptyState icon="inbox-outline" title="Inbox is clear" size="compact" />,
+    ) as any;
+    expect(bare.props.accessibilityLabel).toBe("Inbox is clear");
+    expect(pressables(bare)).toHaveLength(0);
+  });
+
+  it("SectionHeader action.icon replaces the default chevron", () => {
+    const withIcon = deepRender(
+      <SectionHeader
+        title="Reminders"
+        action={{ label: "Add", onPress: () => {}, icon: "plus" }}
+      />,
+    );
+    expect(
+      findAll(withIcon, (n) => n.props?.testID === "icon:MaterialCommunityIcons:plus"),
+    ).toHaveLength(1);
+    expect(
+      findAll(withIcon, (n) => n.props?.testID === "icon:MaterialCommunityIcons:chevron-right"),
+    ).toHaveLength(0);
+    const plain = deepRender(
+      <SectionHeader title="Reminders" action={{ label: "All", onPress: () => {} }} />,
+    );
+    expect(
+      findAll(plain, (n) => n.props?.testID === "icon:MaterialCommunityIcons:chevron-right"),
+    ).toHaveLength(1);
+  });
+
+  it("MetricCard counts only plain integer strings, and speaks its delta", () => {
+    expect(metricAnimatedValue("6,120")).toBe(6120);
+    expect(metricAnimatedValue("8")).toBe(8);
+    expect(metricAnimatedValue("-3")).toBe(-3);
+    expect(metricAnimatedValue("1.27")).toBeNull();
+    expect(metricAnimatedValue("12:30")).toBeNull();
+    expect(metricAnimatedValue("1,27")).toBeNull();
+    expect(metricAnimatedValue("")).toBeNull();
+    expect(
+      metricSpokenLabel({
+        label: "Overdue",
+        value: "2",
+        delta: { label: "+1 today", tone: "danger" },
+      }),
+    ).toBe("Overdue 2, +1 today");
+    const tree = deepRender(
+      <MetricCard
+        label="Overdue"
+        value="2"
+        delta={{ label: "+1 today", tone: "danger" }}
+        animate
+      />,
+    ) as any;
+    expect(tree.props.accessibilityLabel).toBe("Overdue 2, +1 today");
+    expect(text(tree)).toContain("+1 today");
+    const delta = findAll(tree, (n) => n.type === Text && text(n) === "+1 today")[0];
+    expect(delta.props.className).toContain("text-danger");
+    // On web the animated value is a plain Text of the same string; the
+    // value never leaves the row as a different number.
+    const values = findAll(tree, (n) => n.type === Text && text(n) === "2");
+    expect(values).toHaveLength(1);
+    expect(values[0].props.accessibilityLabel).toBe("2");
+    const decimal = deepRender(<MetricCard label="Distance" value="1.27" unit="km" animate />);
+    expect(text(decimal)).toContain("1.27");
+  });
+
+  it("useRefreshControl tints the control from the palette and is absent without onRefresh", () => {
+    expect(useRefreshControl(false, undefined)).toBeUndefined();
+    const onRefresh = vi.fn();
+    const control = useRefreshControl(true, onRefresh) as any;
+    expect(control.type).toBe(RefreshControl);
+    expect(control.props.refreshing).toBe(true);
+    expect(control.props.tintColor).toBe(LIGHT_COLORS.primary);
+    expect(control.props.colors).toEqual([LIGHT_COLORS.primary]);
+    expect(control.props.progressBackgroundColor).toBe(LIGHT_COLORS.surface);
+    control.props.onRefresh();
+    expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 });

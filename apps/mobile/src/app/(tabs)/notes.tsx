@@ -1,6 +1,8 @@
 import type { Note } from "@personal-os/schema";
+import { confirmDestructive } from "@/components/confirm-destructive";
 import { FLOATING_CLEARANCE, FLOATING_CTA_CLEARANCE } from "@/components/floating-layout";
 import {
+  AnimatedView,
   Button,
   Card,
   EmptyState,
@@ -9,45 +11,94 @@ import {
   ListRow,
   ScreenFrame,
   SkeletonList,
-  useTheme,
+  SwipeableRow,
+  enterFade,
+  showToast,
+  swipeEnabled,
+  useRefreshControl,
+  type SwipeAction,
 } from "@/components/ui";
 import { useArchiveNote, useNotes } from "@/queries/notes";
 import { useRouter } from "expo-router";
-import { FlatList, RefreshControl, View } from "react-native";
+import { FlatList, Platform, View } from "react-native";
+
+// The Notes tab (Checkpoint 10.6, ADR-076 §2): a note row archives by
+// swiping left on a device; on web -- where a swipe does not exist -- the
+// trailing archive button stays, so the action is reachable there and from
+// the note's own screen everywhere. Both routes go through the same
+// `confirmDestructive` gate the detail screen has always had (the list row
+// used to fire unconfirmed -- the ledger's "List-row Archive and Drop still
+// fire without confirmation" entry, closed for notes here as the Tasks list
+// closed it for tasks), and a landed archive says so in a toast.
+
+const ARCHIVE_COPY = {
+  title: "Archive this note?",
+  message:
+    "This hides it from your lists. There's currently no way to view or restore it from the app.",
+  confirmLabel: "Archive",
+} as const;
 
 function NoteRow({ note }: { note: Note }) {
   const router = useRouter();
   const archive = useArchiveNote();
+  // The web target keeps its visible control; a device gets the swipe.
+  const showButton = !swipeEnabled(Platform.OS);
 
-  // The row and its Archive control are SIBLINGS on an inert card, side by
-  // side, not nested pressables: the pre-10.3 row stopped the archive tap's
-  // propagation by hand, and siblings need no such guard (same reasoning as
-  // the project rows). Behaviour is unchanged -- the row opens the note, the
-  // button archives it.
+  const onArchive = () =>
+    confirmDestructive({
+      ...ARCHIVE_COPY,
+      onConfirm: () => {
+        // A pending archive is never re-fired (the pre-10.3 rule).
+        if (archive.isPending) return;
+        archive.mutate(note.id, {
+          onSuccess: () => showToast({ message: "Note archived" }),
+        });
+      },
+    });
+
+  const swipeArchive: SwipeAction[] = archive.isPending
+    ? []
+    : [
+        {
+          key: "archive",
+          label: "Archive",
+          icon: "archive-arrow-down-outline",
+          tone: "danger",
+          onPress: onArchive,
+        },
+      ];
+
   return (
-    <Card padding="none" className="mb-3 flex-row items-center pr-1">
-      <ListRow
-        icon="note-text-outline"
-        title={note.title}
-        // `meta`, not `subtitle`: the body preview stays the one line it has
-        // always been (a subtitle would give it two).
-        meta={note.body}
-        onPress={() => router.push(`/notes/${note.id}`)}
-        accessibilityLabel={`Open note: ${note.title}`}
-        last
-        className="flex-1"
-      />
-      <IconButton
-        icon="archive-arrow-down-outline"
-        // IconButton has no `disabled`; the guard keeps the pre-10.3 rule
-        // that a pending archive is never re-fired.
-        onPress={() => {
-          if (!archive.isPending) archive.mutate(note.id);
-        }}
-        accessibilityLabel={`Archive note: ${note.title}`}
-        tone="on-surface-variant"
-        className={archive.isPending ? "opacity-50" : ""}
-      />
+    <Card padding="none" className="mb-2">
+      <SwipeableRow rightActions={swipeArchive}>
+        <ListRow
+          icon="note-text-outline"
+          title={note.title}
+          // `meta`, not `subtitle`: the body preview stays the one line it has
+          // always been (a subtitle would give it two).
+          meta={note.body}
+          onPress={() => router.push(`/notes/${note.id}`)}
+          accessibilityLabel={`Open note: ${note.title}`}
+          trailing={
+            showButton ? (
+              <IconButton
+                icon="archive-arrow-down-outline"
+                onPress={onArchive}
+                accessibilityLabel={`Archive note: ${note.title}`}
+                tone="on-surface-variant"
+                busy={archive.isPending}
+              />
+            ) : undefined
+          }
+          // With its own archive button inside, the row drops its button
+          // role (no <button> in a <button> on web); on a device the row is
+          // the plain pressable it always was.
+          containsControl={showButton}
+          inset
+          last
+          className={showButton ? "pl-4 pr-1" : "px-4"}
+        />
+      </SwipeableRow>
     </Card>
   );
 }
@@ -55,7 +106,7 @@ function NoteRow({ note }: { note: Note }) {
 export default function NotesScreen() {
   const router = useRouter();
   const { data, isLoading, isError, isRefetching, refetch } = useNotes();
-  const { colors } = useTheme();
+  const refreshControl = useRefreshControl(isRefetching, () => void refetch());
 
   return (
     <ScreenFrame>
@@ -72,17 +123,16 @@ export default function NotesScreen() {
         <FlatList
           data={data?.items ?? []}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <NoteRow note={item} />}
+          renderItem={({ item }) => (
+            // The animated leaf around each row: fades in on appearance
+            // (`enterFade`, not `enterRise` -- see app/tasks/index.tsx for
+            // why a `withInitialValues` preset is unsafe on a web FlatList).
+            <AnimatedView entering={enterFade}>
+              <NoteRow note={item} />
+            </AnimatedView>
+          )}
           contentContainerClassName={`${FLOATING_CLEARANCE} flex-grow px-4 pt-4`}
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefetching}
-              onRefresh={() => void refetch()}
-              tintColor={colors.primary}
-              colors={[colors.primary]}
-              progressBackgroundColor={colors.surface}
-            />
-          }
+          refreshControl={refreshControl}
           ListEmptyComponent={
             <EmptyState
               size="screen"

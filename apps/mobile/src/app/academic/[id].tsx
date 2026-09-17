@@ -12,6 +12,7 @@ import { useEffect } from "react";
 import { View } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
 import { rememberAcademicAssignments } from "@/components/academic/academic-assignment-cache";
+import { openAssignmentSheet } from "@/components/academic/assignment-sheet";
 import { assignmentUrgency, urgencyContext } from "@/components/academic/assignment-urgency";
 import {
   formatDateLabel,
@@ -21,6 +22,7 @@ import {
   formatWhenLabel,
   submissionBadge,
 } from "@/components/academic/format";
+import { GradeProgress } from "@/components/academic/grade-progress";
 import { gradeSummaryView, hasGradedWork } from "@/components/academic/grade-summary-label";
 import { partitionAssignments } from "@/components/academic/partition-assignments";
 import { isSameOrigin } from "@/components/academic/same-origin";
@@ -33,7 +35,6 @@ import {
   ErrorState,
   GradientCard,
   ListRow,
-  ProgressBar,
   Screen,
   ScreenCentered,
   ScreenFrame,
@@ -51,7 +52,11 @@ import { deviceTimezone } from "@/queries/today";
 // recent announcements and calendar events. Every row that can open in
 // Canvas does so through SourceLink, whose same-origin check is the one
 // thing that makes a provider-supplied `html_url` safe to open
-// (components/academic/same-origin.ts).
+// (components/academic/same-origin.ts). Checkpoint 10.6 (ADR-076 §3): an
+// ASSIGNMENT row opens the in-app assignment sheet first (this screen
+// mounts its one host) and the sheet carries the SourceLink; announcement
+// and event rows still open through SourceLink directly, and the grade bar
+// fills in on mount.
 //
 // THE CLIENT-SIDE DERIVATIONS on this screen are the overdue / upcoming
 // split of already-OPEN rows and the urgency chip on each upcoming row --
@@ -83,25 +88,21 @@ function AssignmentRow({
   // -- submissionBadge is null only for a plain open row), so the trailing
   // column is empty only for an open, undated or non-urgent row.
   const chips = [
-    chip ? <StatusChip key="urgency" tone={chip.tone} label={chip.label} /> : null,
-    badge ? <StatusChip key="badge" tone={badgeChipTone(badge.tone)} label={badge.text} /> : null,
-  ].filter((node) => node !== null);
+    chip ? { tone: chip.tone, label: chip.label } : null,
+    badge ? { tone: badgeChipTone(badge.tone), label: badge.text } : null,
+  ].filter((spec) => spec !== null);
   return (
-    <SourceLink
-      htmlUrl={item.html_url}
-      sourceBaseUrl={item.source_base_url}
+    <ListRow
+      title={item.title}
+      subtitle={points === null ? detail : `${detail} · ${points}`}
+      trailingChips={chips.length === 0 ? undefined : chips}
+      onPress={() => openAssignmentSheet({ assignment: item })}
       accessibilityLabel={`${item.title}, ${item.open ? `due ${due}` : `grade ${detail}`}${
         chip ? `, ${chip.label}` : ""
       }${badge ? `, ${badge.text}` : ""}`}
-      className="active:opacity-70"
-    >
-      <ListRow
-        title={item.title}
-        subtitle={points === null ? detail : `${detail} · ${points}`}
-        trailing={chips.length === 0 ? null : <View className="items-end gap-1">{chips}</View>}
-        last={last}
-      />
-    </SourceLink>
+      chevron
+      last={last}
+    />
   );
 }
 
@@ -233,10 +234,8 @@ function GradeSummaryBlock({ summary }: { summary: AcademicGradeSummary }) {
         </AppText>
       </View>
       {view.fraction === null ? null : (
-        <ProgressBar
+        <GradeProgress
           value={view.fraction}
-          onGradient
-          size="md"
           className="mt-2"
           accessibilityLabel={`Weighted grade ${view.headline}`}
         />

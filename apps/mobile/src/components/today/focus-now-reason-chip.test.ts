@@ -1,11 +1,25 @@
 import { ACADEMIC_PRIORITY_REASONS } from "@personal-os/core/academic/urgency";
+import { FOCUS_NOW_REASON_LABEL } from "@personal-os/core/focus-now/explain";
+import {
+  FOCUS_NOW_CONTEXT_REASONS,
+  FOCUS_NOW_REASON_ORDER,
+} from "@personal-os/core/focus-now/score";
 import { describe, expect, it } from "vitest";
 import { FOCUS_NOW_REASON_CHIP, focusNowReasonChips } from "./focus-now-reason-chip";
 
 describe("FOCUS_NOW_REASON_CHIP", () => {
-  it("covers every academic reason plus the one task-only reason", () => {
+  it("covers every academic reason, the task-only reason and the six context reasons (ADR-075)", () => {
     const keys = Object.keys(FOCUS_NOW_REASON_CHIP).sort();
-    expect(keys).toEqual([...ACADEMIC_PRIORITY_REASONS, "top_priority"].sort());
+    expect(keys).toEqual(
+      [...ACADEMIC_PRIORITY_REASONS, "top_priority", ...FOCUS_NOW_CONTEXT_REASONS].sort(),
+    );
+    expect(keys).toEqual([...FOCUS_NOW_REASON_ORDER].sort());
+  });
+
+  it("uses core's own label for every reason, so the chip and the sheet never disagree", () => {
+    for (const reason of FOCUS_NOW_REASON_ORDER) {
+      expect(FOCUS_NOW_REASON_CHIP[reason].label).toBe(FOCUS_NOW_REASON_LABEL[reason]);
+    }
   });
 
   it("matches the Academics card's own words for every reason the two share", () => {
@@ -18,13 +32,35 @@ describe("FOCUS_NOW_REASON_CHIP", () => {
   it("has a distinct chip for the task-only reason", () => {
     expect(FOCUS_NOW_REASON_CHIP.top_priority).toEqual({ tone: "primary", label: "P1" });
   });
+
+  it("tones the six context reasons as ADR-075 §2 reads them", () => {
+    expect(FOCUS_NOW_REASON_CHIP.linked_assignment).toEqual({
+      tone: "primary",
+      label: "Linked assignment",
+    });
+    expect(FOCUS_NOW_REASON_CHIP.project_stalled).toEqual({
+      tone: "warning",
+      label: "Project stalled",
+    });
+    expect(FOCUS_NOW_REASON_CHIP.course_attention_high).toEqual({
+      tone: "warning",
+      label: "Course needs attention",
+    });
+    expect(FOCUS_NOW_REASON_CHIP.no_submission).toEqual({
+      tone: "neutral",
+      label: "Not submitted",
+    });
+    expect(FOCUS_NOW_REASON_CHIP.reminder_set).toEqual({ tone: "neutral", label: "Reminder set" });
+    expect(FOCUS_NOW_REASON_CHIP.snoozed).toEqual({ tone: "info", label: "Snoozed" });
+  });
 });
 
 describe("focusNowReasonChips", () => {
   it("maps reasons to chips in order", () => {
-    expect(focusNowReasonChips(["overdue", "top_priority"])).toEqual([
+    expect(focusNowReasonChips(["overdue", "top_priority", "linked_assignment"])).toEqual([
       { tone: "danger", label: "Overdue" },
       { tone: "primary", label: "P1" },
+      { tone: "primary", label: "Linked assignment" },
     ]);
   });
 

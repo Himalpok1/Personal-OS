@@ -39,7 +39,8 @@
 import { Pressable, Text, View } from "react-native";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useCurrentBrief, useGenerateBrief } from "@/queries/brief";
-import { BRIEF_COLLAPSED_LINES, BriefCard, ClampedBriefText } from "./brief-card";
+import { ClampedText } from "@/components/ui";
+import { BRIEF_COLLAPSED_LINES, BriefCard } from "./brief-card";
 
 vi.mock("@/queries/brief", () => ({
   useCurrentBrief: vi.fn(),
@@ -55,10 +56,11 @@ const HOST_TYPES = new Set<unknown>([View, Text, Pressable]);
 // function of its props -- there is no internal state to lose by invoking it
 // directly.
 //
-// ClampedBriefText is the one exception: it's a class component (see
-// brief-card.tsx's comment on why), so `typeof el.type === "function"` is
-// true for it too (ES6 classes are functions), but it cannot be invoked
-// without `new`. Detected via `Component.prototype.isReactComponent`, the
+// ClampedText (Checkpoint 10.6; the class component ClampedBriefText was
+// until then) is the one exception: it's a class component (see
+// components/ui/clamped-text.tsx's comment on why), so `typeof el.type ===
+// "function"` is true for it too (ES6 classes are functions), but it cannot
+// be invoked without `new`. Detected via `Component.prototype.isReactComponent`, the
 // same stable marker React itself uses to tell class components apart from
 // plain functions -- not an internals hack. Instantiated directly and its
 // render() output is walked exactly like any other node; its own dedicated
@@ -169,6 +171,56 @@ describe("<BriefCard />", () => {
     expect(buttons[0].props.disabled).toBeFalsy();
   });
 
+  it("PRESENT: clamps the prose through the design system's ClampedText at the Brief's own budget (10.6)", () => {
+    vi.mocked(useCurrentBrief).mockReturnValue({
+      isLoading: false,
+      data: CACHED_BRIEF,
+      error: null,
+    } as any);
+    vi.mocked(useGenerateBrief).mockReturnValue({
+      isPending: false,
+      error: null,
+      mutate: vi.fn(),
+    } as any);
+
+    // Before deepRender expands it: the element the card hands the clamp.
+    const clamp = findAll(BriefCard(), (n) => n.type === ClampedText);
+    expect(clamp).toHaveLength(1);
+    expect(clamp[0].props.text).toBe(CACHED_BRIEF.content.text);
+    expect(clamp[0].props.lines).toBe(BRIEF_COLLAPSED_LINES);
+  });
+
+  it("NO_PROVIDER: the line is one compact EmptyState row with the action inside it (10.6)", () => {
+    vi.mocked(useCurrentBrief).mockReturnValue({
+      isLoading: false,
+      data: null,
+      error: null,
+    } as any);
+    vi.mocked(useGenerateBrief).mockReturnValue({
+      isPending: false,
+      error: {
+        status: 409,
+        code: "no_provider_configured",
+        body: { error: "no_provider_configured" },
+      },
+      mutate: vi.fn(),
+    } as any);
+
+    const tree = renderBriefCard();
+    // The compact row is one accessible group whose label carries the sentence.
+    const rows = findAll(
+      tree,
+      (n) =>
+        n.type === View &&
+        typeof n.props?.accessibilityLabel === "string" &&
+        n.props.accessibilityLabel.startsWith("No AI provider is configured"),
+    );
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0].props.className)).toContain("min-h-[44px]");
+    expect(findButtons(rows[0])).toHaveLength(1);
+    expect(getTextContent(findButtons(rows[0])[0])).toBe("Try again");
+  });
+
   it("ERROR WITH CACHED BRIEF: a failed regeneration never destroys the visible cached prose", () => {
     vi.mocked(useCurrentBrief).mockReturnValue({
       isLoading: false,
@@ -270,11 +322,13 @@ describe("<BriefCard />", () => {
   });
 });
 
-// ClampedBriefText owns the Checkpoint 5.6 line-clamp/expand behavior for the
-// brief prose. Tested in isolation, constructed directly (bypassing
-// React.createElement) exactly like the class-component-detection comment on
-// deepRender above explains -- this gives full control over its instance
-// state without needing a real renderer.
+// The Brief's line-clamp/expand behavior (Checkpoint 5.6) is now the design
+// system's ClampedText (Checkpoint 10.6, ADR-076 §3), constructed here with
+// the Brief's own line budget so every invariant the retired ClampedBriefText
+// carried is still pinned from this card's side. Constructed directly
+// (bypassing React.createElement) exactly like the class-component-detection
+// comment on deepRender above explains -- this gives full control over its
+// instance state without needing a real renderer.
 //
 // One consequence of bare instantiation worth calling out: `this.setState`
 // on a class instance that was never mounted through a real reconciler is a
@@ -286,14 +340,18 @@ describe("<BriefCard />", () => {
 //   - render() output for a *given* state is verified by constructing an
 //     instance already in that state (Object.assign onto the class-field
 //     default) -- this is what exercises the rendered tree.
-describe("<ClampedBriefText />", () => {
+describe("<ClampedText /> as the Brief's clamp", () => {
   const TEXT_CLASS = "text-sm leading-5 text-neutral-700 dark:text-neutral-300";
 
   function makeInstance(
     text: string,
     initialState?: Partial<{ expanded: boolean; isClamped: boolean }>,
-  ): ClampedBriefText {
-    const instance = new ClampedBriefText({ text, textClassName: TEXT_CLASS });
+  ): ClampedText {
+    const instance = new ClampedText({
+      text,
+      lines: BRIEF_COLLAPSED_LINES,
+      textClassName: TEXT_CLASS,
+    });
     if (initialState) Object.assign(instance.state, initialState);
     return instance;
   }
@@ -392,7 +450,11 @@ describe("<ClampedBriefText />", () => {
     const instance = makeInstance("Same text.", { isClamped: true, expanded: true });
     const setStateSpy = vi.spyOn(instance, "setState");
 
-    instance.componentDidUpdate({ text: "Same text.", textClassName: TEXT_CLASS });
+    instance.componentDidUpdate({
+      text: "Same text.",
+      lines: BRIEF_COLLAPSED_LINES,
+      textClassName: TEXT_CLASS,
+    });
 
     expect(setStateSpy).not.toHaveBeenCalled();
   });
@@ -400,13 +462,18 @@ describe("<ClampedBriefText />", () => {
   it("resets expanded/measured state when the underlying brief text changes -- a regenerate must not leave a stale expanded view of the old text", () => {
     const instance = makeInstance("Old text.", { isClamped: true, expanded: true });
     const setStateSpy = vi.spyOn(instance, "setState");
-    const prevProps = { text: "Old text.", textClassName: TEXT_CLASS };
+    const prevProps = {
+      text: "Old text.",
+      lines: BRIEF_COLLAPSED_LINES,
+      textClassName: TEXT_CLASS,
+    };
 
     // Simulate React having already applied the new props to the instance
     // before invoking the lifecycle hook with the previous ones -- exactly
     // how React calls componentDidUpdate.
     (instance as unknown as { props: typeof prevProps }).props = {
       text: "New text.",
+      lines: BRIEF_COLLAPSED_LINES,
       textClassName: TEXT_CLASS,
     };
     instance.componentDidUpdate(prevProps);

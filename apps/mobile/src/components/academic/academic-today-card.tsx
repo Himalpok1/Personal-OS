@@ -19,6 +19,12 @@
 // its own -- every chip is a word for a value the server sent. The three
 // Checkpoint 10.3 keys are OPTIONAL on the wire (an older server omits them)
 // and every block guards on their absence.
+//
+// Checkpoint 10.6 (ADR-076 §3): an assignment row no longer leaves the app
+// on a tap. It opens the in-app assignment sheet (assignment-sheet.tsx --
+// the screen mounts its one host), which shows the assignment's facts and
+// only then offers "Open in Canvas" through SourceLink, so this file no
+// longer imports SourceLink at all. The workload bars grow in on mount.
 import { useRouter, type Href } from "expo-router";
 import type { AcademicAssignment, AcademicPriorityItem } from "@personal-os/schema";
 import { Pressable, View } from "react-native";
@@ -30,10 +36,11 @@ import {
   visiblePriorities,
   type AcademicSectionTone,
 } from "./academic-today-card-state";
+import { openAssignmentSheet } from "./assignment-sheet";
 import { courseLabel, formatDueLabel, pluralize, submissionBadge } from "./format";
-import { SourceLink } from "./source-link";
 import { badgeChipTone, urgencyChip } from "./urgency-chip";
 import { courseFocusRow } from "./course-focus";
+import { WorkloadBar } from "./workload-bar";
 import { workloadChip } from "./workload-state";
 import { workloadStripColumns, workloadStripLabel } from "./workload-strip";
 
@@ -60,22 +67,16 @@ function AssignmentRow({ item, last }: { item: AcademicAssignment; last: boolean
   const due = formatDueLabel(item.due_at);
   const badge = submissionBadge(item.submission);
   return (
-    <SourceLink
-      htmlUrl={item.html_url}
-      sourceBaseUrl={item.source_base_url}
+    <ListRow
+      title={item.title}
+      subtitle={`${course} · ${due}`}
+      trailingChips={badge ? [{ tone: badgeChipTone(badge.tone), label: badge.text }] : undefined}
+      onPress={() => openAssignmentSheet({ assignment: item })}
       accessibilityLabel={`${item.title}, ${course}, due ${due}${badge ? `, ${badge.text}` : ""}`}
-      className="active:opacity-70"
-    >
-      {/* The press lives on SourceLink (the one gated call site); the row is
-          a plain View, so there is exactly one pressable per assignment. */}
-      <ListRow
-        title={item.title}
-        subtitle={`${course} · ${due}`}
-        trailing={badge ? <StatusChip tone={badgeChipTone(badge.tone)} label={badge.text} /> : null}
-        inset
-        last={last}
-      />
-    </SourceLink>
+      inset
+      chevron
+      last={last}
+    />
   );
 }
 
@@ -86,27 +87,21 @@ function PriorityRow({ item, last }: { item: AcademicPriorityItem; last: boolean
   const chip = urgencyChip(item.urgency);
   const badge = submissionBadge(assignment.submission);
   return (
-    <SourceLink
-      htmlUrl={assignment.html_url}
-      sourceBaseUrl={assignment.source_base_url}
+    <ListRow
+      title={assignment.title}
+      subtitle={`${course} · ${due}`}
+      trailingChips={[
+        { tone: chip.tone, label: chip.label },
+        ...(badge ? [{ tone: badgeChipTone(badge.tone), label: badge.text }] : []),
+      ]}
+      onPress={() => openAssignmentSheet({ assignment })}
       accessibilityLabel={`${assignment.title}, ${course}, due ${due}, ${chip.label}${
         badge ? `, ${badge.text}` : ""
       }`}
-      className="active:opacity-70"
-    >
-      <ListRow
-        title={assignment.title}
-        subtitle={`${course} · ${due}`}
-        trailing={
-          <View className="items-end gap-1">
-            <StatusChip tone={chip.tone} label={chip.label} />
-            {badge ? <StatusChip tone={badgeChipTone(badge.tone)} label={badge.text} /> : null}
-          </View>
-        }
-        inset
-        last={last}
-      />
-    </SourceLink>
+      inset
+      chevron
+      last={last}
+    />
   );
 }
 
@@ -129,12 +124,10 @@ function WorkloadStrip({ days }: { days: Parameters<typeof workloadStripColumns>
       <View className="mt-1.5 flex-row items-end gap-1.5">
         {columns.map((column) => (
           <View key={column.date} className="flex-1 items-center">
-            <View
-              className="w-full rounded-sm"
-              style={{
-                height: column.heightPx,
-                backgroundColor: column.dueTotal > 0 ? colors.primary : colors["outline-strong"],
-              }}
+            <WorkloadBar
+              heightPx={column.heightPx}
+              color={column.dueTotal > 0 ? colors.primary : colors["outline-strong"]}
+              testID={`workload-bar-${column.date}`}
             />
             <AppText variant="caption" tone="muted" className="mt-1">
               {column.weekdayInitial}

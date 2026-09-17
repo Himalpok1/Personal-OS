@@ -19,6 +19,11 @@ import {
   canOfferUndo,
   selectUndoableOccurrence,
   snoozeTarget,
+  taskListMetaLine,
+  taskListPrimaryLabel,
+  taskListPrimaryWord,
+  taskListRowActions,
+  taskListRowChips,
   UNDO_ALREADY_UNDONE_MESSAGE,
   UNDO_REOPEN_TASK_FIRST_MESSAGE,
   UNDO_WINDOW_MS,
@@ -410,5 +415,126 @@ describe("classifySnoozeError", () => {
     for (const err of [new ApiClientError(500, "internal_error"), new TypeError("Network")]) {
       expect(classifySnoozeError(err)).toBe(GENERIC_SNOOZE_MESSAGE);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The task list row (Checkpoint 10.6, ADR-076 §2).
+// ---------------------------------------------------------------------------
+
+describe("taskListRowActions", () => {
+  it("offers exactly the pre-10.6 action set per status, on new controls", () => {
+    // inbox: Start + Archive; active: Done + Drop + Archive; done / dropped:
+    // Reopen + Archive -- the button row the list drew before the circle,
+    // the swipe and the sheet replaced it.
+    expect(taskListRowActions("inbox")).toEqual({
+      primary: "start",
+      circle: "open",
+      more: ["archive"],
+    });
+    expect(taskListRowActions("active")).toEqual({
+      primary: "complete",
+      circle: "open",
+      more: ["drop", "archive"],
+    });
+    expect(taskListRowActions("done")).toEqual({
+      primary: "reopen",
+      circle: "done",
+      more: ["reopen", "archive"],
+    });
+    expect(taskListRowActions("dropped")).toEqual({
+      primary: "reopen",
+      circle: null,
+      more: ["reopen", "archive"],
+    });
+  });
+
+  it("never offers Drop outside `active`, and Archive on every status (the web route)", () => {
+    for (const status of ["inbox", "active", "done", "dropped"] as const) {
+      const actions = taskListRowActions(status);
+      expect(actions.more.includes("drop")).toBe(status === "active");
+      expect(actions.more).toContain("archive");
+    }
+  });
+
+  it("names the primary control after the task, with the same verbs the buttons used", () => {
+    expect(taskListPrimaryLabel("start", "Water plants")).toBe("Start task: Water plants");
+    expect(taskListPrimaryLabel("complete", "Water plants")).toBe("Complete task: Water plants");
+    expect(taskListPrimaryLabel("reopen", "Water plants")).toBe("Reopen task: Water plants");
+    expect(taskListPrimaryWord("start")).toBe("Start");
+    expect(taskListPrimaryWord("complete")).toBe("Done");
+    expect(taskListPrimaryWord("reopen")).toBe("Reopen");
+  });
+});
+
+describe("taskListRowChips", () => {
+  it("draws P1 in the primary tone, other priorities neutral, nothing for null", () => {
+    expect(taskListRowChips({ priority: 1, project_id: null }, null)).toEqual([
+      { label: "P1", tone: "primary" },
+    ]);
+    expect(taskListRowChips({ priority: 3, project_id: null }, null)).toEqual([
+      { label: "P3", tone: "neutral" },
+    ]);
+    expect(taskListRowChips({ priority: null, project_id: null }, null)).toEqual([]);
+  });
+
+  it("adds the project's name only when the row has a project AND the name is known", () => {
+    const linked = { priority: null, project_id: "44444444-4444-4444-8444-444444444444" };
+    expect(taskListRowChips(linked, "Kitchen")).toEqual([{ label: "Kitchen", tone: "neutral" }]);
+    // The projects list has not loaded (or the project is archived and
+    // absent from it): no chip, never an opaque id.
+    expect(taskListRowChips(linked, null)).toEqual([]);
+    expect(taskListRowChips(linked, "")).toEqual([]);
+    expect(taskListRowChips({ priority: 2, project_id: null }, "Kitchen")).toEqual([
+      { label: "P2", tone: "neutral" },
+    ]);
+  });
+
+  it("orders priority before project", () => {
+    expect(
+      taskListRowChips({ priority: 1, project_id: "44444444-4444-4444-8444-444444444444" }, "Home"),
+    ).toEqual([
+      { label: "P1", tone: "primary" },
+      { label: "Home", tone: "neutral" },
+    ]);
+  });
+});
+
+describe("taskListMetaLine", () => {
+  const oneOff = {
+    rrule: null,
+    recurrence_anchor: null,
+    recurrence_timezone: null,
+    recurrence_until: null,
+    recurrence_count: null,
+  };
+
+  it("shows a one-off task's due instant through formatDueLabel, never toLocaleString", () => {
+    const line = taskListMetaLine({ ...oneOff, due_at: "2026-09-22T23:59:00.000Z" });
+    expect(line).toMatch(/^Due /);
+    // formatDueLabel's shape: "<Mon D> · <time>" -- no year, no seconds.
+    expect(line).toContain(" · ");
+    expect(line).not.toMatch(/2026/);
+    expect(line).not.toMatch(/:\d\d:\d\d/);
+  });
+
+  it("shows the repeat summary for a recurring task, whose due_at is only the series anchor", () => {
+    const line = taskListMetaLine({
+      ...oneOff,
+      rrule: "FREQ=DAILY",
+      recurrence_anchor: "due_date",
+      recurrence_timezone: "America/Chicago",
+      due_at: "2026-01-01T15:00:00.000Z",
+    });
+    expect(line).toMatch(/^Repeats · /);
+    expect(line).not.toContain("Due ");
+  });
+
+  it("is null with neither a due instant nor a rule", () => {
+    expect(taskListMetaLine({ ...oneOff, due_at: null })).toBeNull();
+  });
+
+  it("never renders an unreadable instant as 'Invalid Date'", () => {
+    expect(taskListMetaLine({ ...oneOff, due_at: "not-a-date" })).toBe("Due —");
   });
 });

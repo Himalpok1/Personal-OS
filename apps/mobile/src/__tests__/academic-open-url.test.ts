@@ -41,9 +41,10 @@ function source(path: string): string {
 describe("academic surfaces open URLs through exactly one gated place", () => {
   const nonTest = Object.entries(SOURCES).filter(([path]) => !/\.test\.tsx?$/.test(path));
 
-  it("scans the card, the helpers and both screens", () => {
+  it("scans the card, the sheet, the helpers and both screens", () => {
     const paths = nonTest.map(([path]) => path);
     expect(paths).toContain("../components/academic/academic-today-card.tsx");
+    expect(paths).toContain("../components/academic/assignment-sheet.tsx");
     expect(paths).toContain("../app/academic/index.tsx");
     expect(paths).toContain("../app/academic/[id].tsx");
     expect(paths).toContain(SOURCE_LINK);
@@ -90,9 +91,11 @@ describe("academic surfaces open URLs through exactly one gated place", () => {
       .filter(([, body]) => /(?<!=)\{[a-zA-Z_.]*html_url\}/.test(stripComments(body)))
       .map(([path]) => path);
     expect(offenders).toEqual([]);
-    // ...and the guard is not vacuous: the prop form IS present.
-    expect(source("../components/academic/academic-today-card.tsx")).toContain(
-      "htmlUrl={item.html_url}",
+    // ...and the guard is not vacuous: the prop form IS present -- since
+    // Checkpoint 10.6 (ADR-076 §3) in the assignment sheet, the one place an
+    // assignment's Canvas link is offered, rather than on the card's rows.
+    expect(source("../components/academic/assignment-sheet.tsx")).toContain(
+      "htmlUrl={assignment.html_url}",
     );
   });
 

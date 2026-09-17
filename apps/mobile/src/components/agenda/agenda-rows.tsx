@@ -10,14 +10,22 @@
 // SIBLINGS rather than nesting inside one pressable: under react-native-web
 // a nested Pressable's tap bubbles to the row's own onPress, which is the
 // rule every list row in this app records.
+//
+// Checkpoint 10.6 (ADR-076 §2): the hand-rolled completion circle is the
+// design system's `CompletionCircle` -- the same `open` / `pending` states,
+// the same 44px target, the same disabled-while-pending rule -- and it sits
+// in the ListRow's `leading` slot under `containsControl`, exactly as Today's
+// rows do. The circle stops its own tap's propagation, so the row's onPress
+// (open the task) does not also fire; the Skip / +1 day button stays a
+// sibling. Every mutation, label and fallback is unchanged.
 import { ApiClientError } from "@personal-os/api-client";
 import type { AgendaItem, AgendaTaskItem, AgendaOccurrenceItem, AgendaEventItem } from "@personal-os/schema";
 import { useRouter, type Href } from "expo-router";
-import { Pressable, View } from "react-native";
+import { View } from "react-native";
 import {
   AppText,
   Button,
-  Icon,
+  CompletionCircle,
   ListRow,
   SectionHeader as UiSectionHeader,
   type SectionTone,
@@ -139,27 +147,23 @@ export function AgendaTaskRow({
 
   return (
     <View className={`flex-row items-center gap-1 pl-3 pr-2 ${last ? "" : ROW_DIVIDER_CLASS}`}>
-      <Pressable
-        onPress={onComplete}
-        hitSlop={8}
-        accessibilityLabel={`Complete ${item.title}`}
-        accessibilityRole="button"
-        // `pending` previously only drew the indicator dot; all three action
-        // controls in this row stayed tappable mid-flight (6.7A, A2).
-        disabled={pending}
-        className="h-11 w-11 items-center justify-center active:opacity-70"
-      >
-        <Icon
-          name={pending ? "progress-clock" : "checkbox-blank-circle-outline"}
-          size="lg"
-          tone={pending ? "on-surface-muted" : "on-surface-variant"}
-        />
-      </Pressable>
       <ListRow
+        leading={
+          // `pending` previously only drew the indicator dot; all three action
+          // controls in this row stayed tappable mid-flight (6.7A, A2). The
+          // circle disables itself in that state.
+          <CompletionCircle
+            state={pending ? "pending" : "open"}
+            tone="success"
+            onPress={onComplete}
+            accessibilityLabel={`Complete ${item.title}`}
+          />
+        }
         title={item.title}
         meta={meta.length > 0 ? meta : undefined}
         onPress={() => router.push(`/tasks/${item.id}`)}
         accessibilityLabel={`Open task: ${item.title}`}
+        containsControl
         inset
         last
         className="flex-1"

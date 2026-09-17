@@ -1760,6 +1760,163 @@ run correctly against the post-migration schema; no schema rollback would be nee
 
 ---
 
+### Checkpoint 10.6 — Intelligence + Mobile Experience Expansion: IMPLEMENTED, VERIFIED, INDEPENDENTLY REVIEWED (2026-09-17)
+
+**Objective (owner-directed, 2026-09-17).** Two equal pillars: move Today from "here is your
+information" to "here is what matters, why, and what you can do next" — deterministic, explainable,
+source-cited, no new AI call, no agent runtime — and make the universal Expo client feel like a
+polished consumer product (motion, haptics, swipe actions, sheets, quick actions) on the Rabbit R1's
+480×640 screen. External agent frameworks (OpenClaw, Hermes) stay out of scope by the owner's own
+instruction. Decision records: **ADR-075** (intelligence) and **ADR-076** (mobile). **No migration**
+(level stays 23); `apps/worker`, `packages/db` and `packages/schema/src/academic.ts` untouched.
+
+**A bounded architecture + product review preceded any code** (two read-only lanes, intelligence and
+mobile UX). Three findings shaped the scope: (1) every "why" a recommendation needs was already on the
+wire or one join away; (2) the one structural gap was that `GET /today` task items did not carry
+`tasks.canvas_assignment_id` (ADR-074), so a task could not be recognised as an assignment's own
+reminder; (3) `AcademicPriorityReasonSchema` is a closed enum inside a `.strict()` item that the
+deployed versionCode-29 client parses with `schema.parse`, so a NEW server-side reason would blank the
+Academics card and Focus Now on every installed device — while `TodayTaskItemSchema` is a plain
+`z.object` whose optional keys an older client simply strips. On the mobile side the decisive fact was
+that `react-native-reanimated@4.5.1`, `react-native-gesture-handler@2.32` and `react-native-worklets`
+are ALREADY direct dependencies of `apps/mobile` (via Expo Router), in every shipped APK, with the
+worklets babel plugin auto-wired by `babel-preset-expo` — so motion and gestures cost no new dependency
+and no native change; nothing in `src/` had used either.
+
+**Execution model.** The integrator made the one wire change first (schema + read model + route
+tests), wrote both ADRs as the frozen contract, then ran three parallel lanes with disjoint file
+ownership — **C** core intelligence (`packages/core/src/focus-now/**`), **D** design-system motion
+(`components/ui/**`, root layout, mocks), **S1** secondary screens on existing primitives (health,
+settings, projects, inbox, calendar) — followed by two more once those landed — **S2a** Today / Focus
+Now / academic surfaces and **S2b** tasks / agenda / brief / mail / notes / search — and an
+independent adversarial review. No lane touched the shared test database; the integrator ran the
+root gate.
+
+**Intelligence (ADR-075):**
+
+- **One wire change, additive and optional.** `TodayTaskItemSchema.canvas_assignment_id` (nullable
+  uuid, optional), emitted by `read-models/today.ts` for one-off tasks, synthesised recurring parents
+  and occurrence rows alike. `brief/collect-input.ts` and `intelligence/today-context.ts` map fields
+  explicitly into `.strict()` targets, so the id reaches no model; a route test seeds an assignment
+  titled "…must never appear in /today" and asserts the raw body lacks it.
+- **Explainability layer** — `packages/core/src/focus-now/{reasons,explain}.ts`: a closed vocabulary
+  (academic's six + `top_priority` + six new CONTEXT reasons `linked_assignment`, `project_stalled`,
+  `course_attention_high`, `no_submission`, `reminder_set`, `snoozed`), one frozen order
+  (`sortReasons`), and per reason a label, a one-sentence deterministic "why" and a `source` from a
+  closed set (`task`, `reminder`, `project`, `canvas_assignment`, `course`, `calendar`).
+  `explainFocusNowCandidate` returns the ranked explanations plus the auditable equation
+  (`400 overdue + 25 P1 + 25 linked assignment = 450`).
+- **Context-aware prioritization** — `FOCUS_NOW_CONTEXT_POINTS` (25/25/25/0/0/0) on top of a
+  candidate's `baseScore`; an academic candidate's base is the server's score VERBATIM (ADR-072
+  holds), context is a separately listed layer (`contextPoints`, `score = base + context`).
+- **Linked-task dedupe** — `mergeLinkedCandidates`: a task linked to a priority item collapses into ONE
+  row of kind `task` (the thing the owner can complete in-app): max base, summed context + the linked
+  bonus, sorted reason union, assignment id retained for display.
+- **Deterministic daily briefing** — `composeBriefing` (client composition over `/today`,
+  `/academic/today`, `/health-summary` and the merged Focus Now list; sections `academic`, `schedule`,
+  `health`, `focus`, every line with a source label and a typed `ref`; omitted when a source is absent;
+  the sleep line only when the latest session and 7-day average both exist and the wake date is today
+  or yesterday) and `freeBlocks` (08:00–22:00 local, ≥ 60 min, DST-tested on 2026-03-08 and 2026-11-01
+  in America/Chicago, all-day excluded, in-progress events truncated). NOT a server read model: Guard 5
+  keeps academic out of `/today` and ADR-046 keeps health out of every AI-visible object.
+
+**Mobile (ADR-076):**
+
+- **Design system** (`components/ui/`, `docs/MOBILE-DESIGN-SYSTEM.md` Motion + Gestures sections):
+  `motion.ts` (durations, springs, `useMotionEnabled`, `enterFade`/`enterRise`/`exitFade`/
+  `layoutSettle`), `animated.ts` (`AnimatedPressable`/`AnimatedView` = `createAnimatedComponent` of
+  the interop-wrapped host, so one node takes both `className` and an animated style — the reverse
+  registration silently drops the class-derived styles on native), `PressableScale` (0.97 spring; wired
+  into `Card`, `GradientCard`, `MetricCard`, `Button`, `IconButton`), `CompletionCircle`,
+  `SwipeableRow` (web renders children only), `Toast` (root-mounted host + module-level `showToast`
+  for hookless callers), `AnimatedNumber`, `ClampedText` (replacing the two clamp class components),
+  `BottomSheet`/`SheetRow`; `ListRow trailingChips/onLongPress/entering`, `EmptyState size="compact"`,
+  `MetricCard delta/animate`, `Card variant="soft"`, `IconButton busy/disabled`, `useRefreshControl`;
+  `GestureHandlerRootView` outermost in `app/_layout.tsx`; vitest mocks for Reanimated and
+  gesture-handler. No token changed; `theme.test.ts`'s contrast contract unchanged.
+- **Today, actionable-first**: header → **BriefingCard** (the one gradient block; headline, sections
+  with on-gradient source pills, ref lines pressable, the Ask chip kept inside it under the same gate)
+  → reminder notice → **Focus Now** (rows with `CompletionCircle`, reason chips capped at 2, a 44px
+  "Why?" button opening a sheet with reason → why → source chips, the equation, Open task / Mark done /
+  three snooze options through the existing occurrence-first + 409-fallback and snooze mutations;
+  swipe Done / Snooze) → Suggested Focus (ask-gated) → Overdue → Due today → Events (compact empty
+  state) → Brief → Health → Mail → Academics → a collapsed reviews card → Upcoming (rows pressable) →
+  Inbox ("Open inbox") → Projects ("All projects"). The duplicate stat row is gone. Pinned by
+  `__tests__/today-screen-order.test.ts`; the two older position pins updated with ADR-076 comments.
+- **Academics**: every assignment row (Today card, Focus Now, course screen) opens an in-app
+  `BottomSheet` (title, course, due, points, submission, grade, the Focus Now explanation) whose
+  "Open in Canvas" still goes through `SourceLink` — the one `Linking.openURL` call site, same-origin
+  gated, pinned both ways; the sheet's host is mounted ONCE at the root; `WorkloadBar` and
+  `GradeProgress` animate in.
+- **Tasks list** rebuilt on `ListRow` + `CompletionCircle` + swipe (Done / Archive through
+  `confirmDestructive`) + a "More" sheet (Drop / Reopen / Archive), `formatDueLabel` instead of
+  `toLocaleString`, per-status action set pinned byte-identical by pure helpers; **Agenda** on
+  `CompletionCircle`; **Brief/Mail** on `ClampedText` + compact empty states; **Notes** swipe-to-archive
+  (the list row now confirms — closing that ledger entry for notes); **Search** rows fade in;
+  **Health** trends on `SegmentedControl` + a sleep-vs-7-day caption; **Settings** skeletons instead of
+  "Loading…", one state chip per integration card, an Integrations summary row; **Projects** progress
+  bars and a view hero above the form, the default colour from the palette; **Inbox** Open / Dismissed
+  segmented control (Dismissed shows archived rows only — a deliberate reading); **Calendar** one chrome
+  row with a compact label under 560px.
+
+**Verification (integrator, serial, full monorepo).** `pnpm build --force` **12/12** · `pnpm typecheck`
+**23/23** · `npx eslint apps packages` and `apps/mobile`'s own `eslint .` exit 0 · root
+`prettier --check .` clean; every mobile file that was prettier-clean at HEAD still is, every new file
+formatted · `git diff --check` clean · `gitleaks detect --no-git` no leaks · `pnpm test --force`
+**23/23 tasks, 6,816 tests across 13 packages, zero failing** (core 1,111 [+80] · mobile 1,782
+[+146] · api 1,515 [+2]; db 79, schema 563, canvas-providers 79, health-providers 332, ai-providers
+25, api-client 206, monitoring 151, calendar-providers 119, mail-providers 116, worker 738 unchanged)
+· cache-cleared `expo export --platform web`: entry bundle 3.36 → **4.50 MB** (+1.1 MB, the price of
+Reanimated 4 + worklets + gesture-handler), contains `GestureHandlerRootView`. **Live browser
+verification** (local dev API + Expo web at 480×800, the real local `personalos` data, light and
+dark): the briefing hero ("4 overdue, 1 due today.", a free block sourced "Calendar", three focus
+lines sourced "Task"), the Focus Now rows, the explanation sheet ("Overdue — Past its due time ·
+Task", "Reminder set — A reminder is scheduled · Reminder", `400 overdue = 400`, actions and three
+snooze rows), the rows settling after their entering fade, then the whole new order down to Projects;
+`document.querySelectorAll('button button').length === 0`; `.dark` present under the dark scheme.
+
+**Independent adversarial review — SAFE AFTER FIXES, all closed in-checkpoint.** Eight lenses, run by
+an agent with no implementation context, every claim re-run rather than trusted. **One CONFIRMED
+MAJOR:** the briefing's event adapter read `starts_at ?? occurs_at`, but for a timed recurring
+instance `/today` emits `starts_at`/`ends_at` as the series TEMPLATE's instants and `occurs_at` as
+today's (the class of bug Checkpoint 5.7.1 fixed in the Brief collector) — so "Next:" and the free
+blocks would have been wrong for the owner's real synced classes from the first render; the test had
+passed on a fixture shape the server never produces. Fixed (`occurs_at ?? starts_at`, end = start +
+template duration) with a regression test on the real wire shape that asserts the free time is split
+around the lecture. **One PLAUSIBLE MINOR:** two `AssignmentSheetHost`s subscribed to one
+module-global store — Expo Router keeps the Today tab mounted under a pushed course screen, so opening
+an assignment there would draw two modals; fixed by mounting the host once at the root beside
+`ToastHost`, pins updated. **Notes closed:** ADR-076's "three checkboxes replaced" and "Inbox swipe"
+overstatements reworded to the code; the briefing now waits for its two optional sources to settle
+before its first render so the gradient block never grows mid-view. Lenses A (AI exposure — the id
+cannot reach a model; every egress guard green), B (wire compatibility — `academic.ts` diff empty,
+`TodayTaskItemSchema` non-strict), C (intelligence math — hand-checked; DST tests genuinely straddle
+the transitions), D (mobile regressions — deliberate changes enumerated and pinned), E (motion — the
+animated-host construction verified sound against `react-native-css-interop@0.2.6` and Reanimated's
+source), F (tokens), G (test integrity — no pin loosened) CLEAN. Two further integrator finds during
+integration: `enterRise` had been built with `.withInitialValues`, which Reanimated's web manager
+treats as a custom keyframe and pins `position: absolute` after it ends, collapsing every row of a web
+list (now the built-in `FadeInDown`, documented); and `ErrorState`/`EmptyState`'s action button was
+`self-start` inside an `items-center` column (pre-existing at HEAD; wrapped and centred).
+
+**Unchanged and reaffirmed:** ADR-018, ADR-024, ADR-041/043 (the AI Daily Brief is untouched — the
+deterministic briefing is a separate surface), ADR-046 (health consumed only by the client
+composition, never sent), ADR-056/066/067 (no new AI call site; Guards 1–5 green), ADR-058, ADR-065,
+ADR-068/068a/070/070a/071/072/073/074.
+
+**Recorded, not fixed:** `runOnJS` in `components/ui/bottom-sheet.tsx` is a deprecated Reanimated 4
+re-export (`scheduleOnRN` from `react-native-worklets` is the replacement; it works today and needs a
+vitest mock for the worklets package to switch); `components/academic/grade-progress.tsx` restates
+the on-gradient `bg-white/25` / `bg-white` pair rather than reusing `ProgressBar`'s `onGradient`
+variant (an animated fill the primitive does not offer); the project screen still draws its own
+completion circle; no Undo action on the completion toasts; snooze-from-Today is offered only for
+one-off tasks and occurrence rows (a recurring parent row has no instance to snooze); the
++1.1 MB web bundle; `BriefingTodayInput.inboxAttentionTotal` is accepted by core but no briefing line
+reads it yet; the Settings hub split, a persisted appearance preference and the FAB/PTT band remain
+candidates.
+
+---
+
 ## Remaining warnings / technical debt
 
 > **Open entries only.** Every entry below is verbatim from the pre-2026-09-16 ledger, in its original

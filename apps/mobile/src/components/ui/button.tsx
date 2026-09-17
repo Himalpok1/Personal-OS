@@ -7,9 +7,15 @@
 // `busy` renders the label dimmed and disables the press, mirroring
 // use-busy-press.ts's rule that a pending mutation must not be re-fired by a
 // second tap; callers wire it to `mutation.isPending`.
-import { Pressable, View } from "react-native";
+//
+// Checkpoint 10.6: both buttons render through `PressableScale`, so a press
+// settles the node to 97% on a device. Each variant keeps its own `active:`
+// class (an outline button tints, a primary one dims), so the scale's own
+// opacity fallback is switched off here -- two opacities would stack.
+import { View } from "react-native";
 import { triggerHaptic } from "./haptics";
 import { Icon, type IconName } from "./icon";
+import { PressableScale } from "./pressable-scale";
 import { AppText } from "./text";
 import type { ColorRole } from "./theme";
 
@@ -97,7 +103,8 @@ export function Button({
   const classes = buttonClasses(variant, size, block);
   const inert = busy || disabled;
   return (
-    <Pressable
+    <PressableScale
+      activeClassName={null}
       onPress={() => {
         if (inert) return;
         if (haptic) triggerHaptic("light");
@@ -124,7 +131,7 @@ export function Button({
       >
         {busy ? `${label}…` : label}
       </AppText>
-    </Pressable>
+    </PressableScale>
   );
 }
 
@@ -135,6 +142,13 @@ export interface IconButtonProps {
   tone?: ColorRole;
   /** `plain` is an unboxed 44px target for a header; `tonal` sits in a tinted disc. */
   variant?: "plain" | "tonal";
+  /**
+   * Checkpoint 10.6: the same pending/disabled contract as `Button`. `busy`
+   * is wired to a mutation's `isPending` so a second tap on an archive icon
+   * never re-fires it (the guard notes.tsx used to keep by hand).
+   */
+  busy?: boolean;
+  disabled?: boolean;
   className?: string;
   testID?: string;
 }
@@ -145,18 +159,28 @@ export function IconButton({
   accessibilityLabel,
   tone = "on-surface",
   variant = "plain",
+  busy = false,
+  disabled = false,
   className,
   testID,
 }: IconButtonProps) {
+  const inert = busy || disabled;
   return (
-    <Pressable
-      onPress={onPress}
+    <PressableScale
+      activeClassName={null}
+      onPress={() => {
+        if (inert) return;
+        onPress();
+      }}
+      disabled={inert}
       hitSlop={8}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ disabled: inert, busy }}
       className={[
         "h-11 w-11 items-center justify-center rounded-full active:opacity-70",
         variant === "tonal" ? "bg-surface-container dark:bg-surface-container-dark" : "",
+        inert ? "opacity-50" : "",
         className,
       ]
         .filter(Boolean)
@@ -166,6 +190,6 @@ export function IconButton({
       <View pointerEvents="none">
         <Icon name={icon} size="lg" tone={tone} />
       </View>
-    </Pressable>
+    </PressableScale>
   );
 }

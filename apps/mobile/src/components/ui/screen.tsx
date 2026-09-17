@@ -9,8 +9,18 @@
 // `ScreenHeader` is the in-flow title block -- display title, optional
 // subtitle, optional trailing actions -- used INSTEAD of a navigator header
 // on the tabs and on the screens that want a hero above their content.
-import type { ReactNode } from "react";
-import { RefreshControl, ScrollView, View, type ScrollViewProps } from "react-native";
+//
+// `useRefreshControl` (Checkpoint 10.6) is the palette-tinted RefreshControl
+// `Screen` wires for itself, exposed so a FlatList tab hands the same element
+// to its list's `refreshControl` instead of restating the four colour props.
+import type { ReactElement, ReactNode } from "react";
+import {
+  RefreshControl,
+  ScrollView,
+  View,
+  type RefreshControlProps,
+  type ScrollViewProps,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { FLOATING_CLEARANCE } from "../floating-layout";
 import { AppText } from "./text";
@@ -39,6 +49,27 @@ export interface ScreenProps extends Omit<
   testID?: string;
 }
 
+/**
+ * A RefreshControl tinted from the palette, or undefined when there is no
+ * `onRefresh` (so a list without one gets no pull-to-refresh at all).
+ */
+export function useRefreshControl(
+  refreshing: boolean,
+  onRefresh: (() => void) | undefined,
+): ReactElement<RefreshControlProps> | undefined {
+  const { colors } = useTheme();
+  if (!onRefresh) return undefined;
+  return (
+    <RefreshControl
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+      tintColor={colors.primary}
+      colors={[colors.primary]}
+      progressBackgroundColor={colors.surface}
+    />
+  );
+}
+
 export function Screen({
   children,
   refreshing = false,
@@ -49,8 +80,8 @@ export function Screen({
   testID,
   ...rest
 }: ScreenProps) {
-  const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const refreshControl = useRefreshControl(refreshing, onRefresh);
   return (
     <ScrollView
       {...rest}
@@ -63,17 +94,7 @@ export function Screen({
       // must only ADD a key the class does not set (floating-layout.ts).
       contentContainerStyle={safeTop ? { paddingTop: insets.top } : undefined}
       keyboardShouldPersistTaps="handled"
-      refreshControl={
-        onRefresh ? (
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.primary}
-            colors={[colors.primary]}
-            progressBackgroundColor={colors.surface}
-          />
-        ) : undefined
-      }
+      refreshControl={refreshControl}
       testID={testID}
     >
       {children}

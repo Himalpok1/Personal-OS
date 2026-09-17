@@ -1,7 +1,13 @@
-import type { ComponentProps } from "react";
-import { Component } from "react";
-import { Pressable, Text, View } from "react-native";
-import { AppText, Button, Card, SectionHeader, SkeletonCard, textClass } from "@/components/ui";
+import {
+  AppText,
+  Button,
+  Card,
+  ClampedText,
+  EmptyState,
+  SectionHeader,
+  SkeletonCard,
+  textClass,
+} from "@/components/ui";
 import { useCurrentMailDigest, useGenerateMailDigest } from "@/queries/mail";
 import {
   canGenerateDigest,
@@ -12,6 +18,13 @@ import {
 // THE ONE new Today card (Checkpoint 7.6). Checkpoint 10.3 moved its chrome
 // onto the design system (Card, SectionHeader, Button, AppText); every
 // state, label and behaviour is unchanged.
+//
+// Checkpoint 10.6 (ADR-076 §3): the prose clamp is the design system's
+// `ClampedText` (the class component `ClampedDigestText` used to be, now
+// shared with the Daily Brief), and the unavailable / not-configured /
+// no-mailbox states are compact `EmptyState` rows -- one line each, so the
+// card takes no more of Today than it says. MailDigestCard stays HOOKLESS:
+// digest-today-card.test.tsx calls it directly with no React dispatcher.
 
 // ===========================================================================
 // THE VERTICAL CAP
@@ -22,91 +35,6 @@ import {
 // Overdue below the fold -- so it clamps to this many lines, and only when the
 // text actually overflows them.
 export const DIGEST_COLLAPSED_LINES = 5;
-
-type TextLayoutEvent = Parameters<NonNullable<ComponentProps<typeof Text>["onTextLayout"]>>[0];
-
-interface ClampedDigestTextProps {
-  text: string;
-  textClassName: string;
-  containerClassName?: string;
-}
-
-interface ClampedDigestTextState {
-  expanded: boolean;
-  isClamped: boolean;
-}
-
-/**
- * A class component, for the same reason `ClampedBriefText` is one.
- *
- * This app's test harness calls components directly with no React renderer and
- * therefore no dispatcher, so any `useState` here would break every render-level
- * test in the file rather than just new ones. Instance state needs no
- * dispatcher.
- *
- * The hidden measurement Text is load-bearing, not decoration: `onTextLayout` on
- * a Text that ALREADY has `numberOfLines` set reports the TRUNCATED line count,
- * so measuring the visible clamped copy would report exactly the limit forever
- * and the toggle would never appear. Guessing from string length is also wrong
- * -- font, width and locale all affect wrapping -- which is why `isClamped`
- * starts false and nothing renders until a real measurement returns.
- */
-export class ClampedDigestText extends Component<ClampedDigestTextProps, ClampedDigestTextState> {
-  state: ClampedDigestTextState = { expanded: false, isClamped: false };
-
-  componentDidUpdate(prevProps: ClampedDigestTextProps): void {
-    if (prevProps.text !== this.props.text) {
-      this.setState({ expanded: false, isClamped: false });
-    }
-  }
-
-  handleMeasureLayout = (event: TextLayoutEvent): void => {
-    const isClamped = event.nativeEvent.lines.length > DIGEST_COLLAPSED_LINES;
-    if (isClamped !== this.state.isClamped) this.setState({ isClamped });
-  };
-
-  toggleExpanded = (): void => {
-    this.setState((prev) => ({ expanded: !prev.expanded }));
-  };
-
-  render() {
-    const { text, textClassName, containerClassName } = this.props;
-    const { expanded, isClamped } = this.state;
-
-    return (
-      <View className={containerClassName}>
-        <Text
-          className={textClassName}
-          style={{ position: "absolute", opacity: 0, zIndex: -1 }}
-          onTextLayout={this.handleMeasureLayout}
-          accessible={false}
-          pointerEvents="none"
-        >
-          {text}
-        </Text>
-        <Text
-          className={textClassName}
-          numberOfLines={expanded ? undefined : DIGEST_COLLAPSED_LINES}
-        >
-          {text}
-        </Text>
-        {isClamped ? (
-          <Pressable
-            onPress={this.toggleExpanded}
-            accessibilityRole="button"
-            accessibilityState={{ expanded }}
-            hitSlop={8}
-            className="mt-1 min-h-[44px] items-center justify-start"
-          >
-            <AppText variant="label" tone="primary">
-              {expanded ? "Show less" : "Show more"}
-            </AppText>
-          </Pressable>
-        ) : null}
-      </View>
-    );
-  }
-}
 
 function ActionButton({
   label,
@@ -177,15 +105,18 @@ export function MailDigestCard() {
     return (
       <Card className="mb-3">
         <Title />
-        {/* We could not read it, so we claim nothing about the mail itself. */}
-        <AppText variant="body" tone="secondary" className="mb-3">
-          {"Can't reach Personal OS, so the mail digest is unavailable."}
-        </AppText>
-        {/* RETRY, NOT GENERATE. Generating is the wrong action when the problem
+        {/* We could not read it, so we claim nothing about the mail itself.
+            RETRY, NOT GENERATE. Generating is the wrong action when the problem
             is that we could not read -- but offering nothing at all would make
             this a dead end, the P1 class Checkpoint 6.5 fixed on three detail
             screens. */}
-        <ActionButton label="Retry" onPress={onRetry} />
+        <EmptyState
+          size="compact"
+          icon="cloud-off-outline"
+          title="Can't reach Personal OS, so the mail digest is unavailable."
+          action={{ label: "Retry", onPress: onRetry }}
+          className="-mx-4"
+        />
       </Card>
     );
   }
@@ -197,11 +128,16 @@ export function MailDigestCard() {
         {/* Two different sentences, because they are two different situations.
             Telling someone to connect a mailbox when the server has no Gmail
             credentials at all would send them somewhere that cannot help. */}
-        <AppText variant="body" tone="secondary">
-          {state.kind === "not_configured"
-            ? "Gmail isn't set up on this server."
-            : "Connect a mailbox in Settings to start getting daily mail digests."}
-        </AppText>
+        <EmptyState
+          size="compact"
+          icon="email-off-outline"
+          title={
+            state.kind === "not_configured"
+              ? "Gmail isn't set up on this server."
+              : "Connect a mailbox in Settings to start getting daily mail digests."
+          }
+          className="-mx-4"
+        />
       </Card>
     );
   }
@@ -223,8 +159,9 @@ export function MailDigestCard() {
       <Card className="mb-3">
         <Title />
         {state.previousText ? (
-          <ClampedDigestText
+          <ClampedText
             text={state.previousText}
+            lines={DIGEST_COLLAPSED_LINES}
             textClassName={PROSE_CLASS}
             containerClassName="mb-3"
           />
@@ -244,8 +181,9 @@ export function MailDigestCard() {
       <Card className="mb-3">
         <Title />
         {state.previousText ? (
-          <ClampedDigestText
+          <ClampedText
             text={state.previousText}
+            lines={DIGEST_COLLAPSED_LINES}
             textClassName={PROSE_CLASS}
             containerClassName="mb-3"
           />
@@ -266,8 +204,9 @@ export function MailDigestCard() {
         <Title />
         {/* A failed request never destroys the cached digest. */}
         {state.previousText ? (
-          <ClampedDigestText
+          <ClampedText
             text={state.previousText}
+            lines={DIGEST_COLLAPSED_LINES}
             textClassName={PROSE_CLASS}
             containerClassName="mb-3"
           />
@@ -287,7 +226,7 @@ export function MailDigestCard() {
       {/* Only `content.text` is ever rendered. `MailDigestContentSchema` is
           `.passthrough()`, so iterating its keys would put unvalidated model
           output on screen. */}
-      <ClampedDigestText text={state.text} textClassName={PROSE_CLASS} />
+      <ClampedText text={state.text} lines={DIGEST_COLLAPSED_LINES} textClassName={PROSE_CLASS} />
       {/* Says WHICH day and WHICH zone the digest covers. The zone is server
           configuration and can legitimately differ from this device's, so
           labelling it "today" without qualification could be wrong. */}

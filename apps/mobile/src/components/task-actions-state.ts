@@ -1,6 +1,11 @@
 import { ApiClientError } from "@personal-os/api-client";
 import type { NextOccurrence } from "@personal-os/core/recurrence/next-occurrence";
+import {
+  describeTaskRepeat,
+  type TaskRepeatFields,
+} from "@personal-os/core/recurrence/task-presets";
 import type { TaskStatus } from "@personal-os/schema";
+import { formatDueLabel } from "@/components/academic/format";
 import { formatFieldLabel } from "@/components/datetime-field-state";
 
 /**
@@ -330,4 +335,109 @@ export function detailCompletionTarget(
 ): CompletionTarget {
   if (task.rrule !== null && next !== null) return { kind: "occurrence", occurrenceId: next.id };
   return { kind: "task", taskId: task.id };
+}
+
+// ---------------------------------------------------------------------------
+// The task LIST row (Checkpoint 10.6, ADR-076 §2). Pure decisions behind
+// app/tasks/index.tsx's row: what its completion circle and swipe-right
+// panel do, what its "More" sheet offers, the chips it wears and its one
+// meta line. The action SET per status is byte-identical to the pre-10.6
+// button row -- inbox: Start + Archive; active: Done + Drop + Archive;
+// done / dropped: Reopen + Archive -- only the controls that carry them
+// changed (a circle, a swipe, a sheet).
+// ---------------------------------------------------------------------------
+
+/** What the leading circle (and the swipe-right panel) does on a list row. */
+export type TaskListPrimary = "start" | "complete" | "reopen";
+
+/** What the row's "More" sheet offers, in display order. */
+export type TaskListMoreAction = "drop" | "reopen" | "archive";
+
+export interface TaskListRowActions {
+  primary: TaskListPrimary;
+  /**
+   * The completion circle's resting state; `null` means no circle at all (a
+   * dropped task is neither open nor done, so it wears an icon disc instead
+   * and reopens from the sheet or a swipe).
+   */
+  circle: "open" | "done" | null;
+  more: TaskListMoreAction[];
+}
+
+export function taskListRowActions(status: TaskStatus): TaskListRowActions {
+  switch (status) {
+    case "inbox":
+      // Start -> Done semantics as before: the circle on a new task STARTS it
+      // (inbox -> active, `canActivateTask`); the next tap, on the active row,
+      // completes it.
+      return { primary: "start", circle: "open", more: ["archive"] };
+    case "active":
+      return { primary: "complete", circle: "open", more: ["drop", "archive"] };
+    case "done":
+      // The filled circle reopens (an "uncheck"); Reopen is ALSO in the sheet
+      // so the action has a labelled, non-icon route on every platform.
+      return { primary: "reopen", circle: "done", more: ["reopen", "archive"] };
+    case "dropped":
+      return { primary: "reopen", circle: null, more: ["reopen", "archive"] };
+  }
+}
+
+const PRIMARY_LABEL: Record<TaskListPrimary, string> = {
+  start: "Start",
+  complete: "Done",
+  reopen: "Reopen",
+};
+
+/** "Start task: …" / "Complete task: …" / "Reopen task: …" -- the circle's and the swipe panel's whole name. */
+export function taskListPrimaryLabel(primary: TaskListPrimary, title: string): string {
+  const verb = primary === "complete" ? "Complete" : PRIMARY_LABEL[primary];
+  return `${verb} task: ${title}`;
+}
+
+/** The short word on the swipe panel. */
+export function taskListPrimaryWord(primary: TaskListPrimary): string {
+  return PRIMARY_LABEL[primary];
+}
+
+export interface TaskListChip {
+  label: string;
+  tone: "primary" | "neutral";
+}
+
+/**
+ * The chips a list row wears: the priority as `P<n>` (P1 in the primary
+ * tone, the Focus Now reason chip's own colour for "top priority"; the rest
+ * neutral) and the project's name. `priority` is an unconstrained nullable
+ * smallint (lower = higher, docs/ARCHITECTURE.md); nothing here assumes
+ * more than that a non-null value is worth a word.
+ */
+export function taskListRowChips(
+  task: { priority: number | null; project_id: string | null },
+  projectName: string | null,
+): TaskListChip[] {
+  const chips: TaskListChip[] = [];
+  if (task.priority !== null) {
+    chips.push({ label: `P${task.priority}`, tone: task.priority === 1 ? "primary" : "neutral" });
+  }
+  if (task.project_id !== null && projectName !== null && projectName.length > 0) {
+    chips.push({ label: projectName, tone: "neutral" });
+  }
+  return chips;
+}
+
+/**
+ * The row's one muted line. A recurring task's `due_at` is the SERIES
+ * ANCHOR (contract §0) -- persisted since 9.4 and never advanced -- so on a
+ * rule that has been running for a month it would read as a due date a month
+ * overdue, forever; the repeat summary is the honest line, and the actual
+ * next instance lives on the detail screen's "Next:" line. A one-off task
+ * shows its due instant through the academic surfaces' `formatDueLabel`
+ * ("Sep 22 · 11:59 PM"), never `toLocaleString()`'s seconds and year.
+ */
+export function taskListMetaLine(
+  task: TaskRepeatFields & { due_at: string | null },
+): string | null {
+  if (task.rrule !== null) return `Repeats · ${describeTaskRepeat(task)}`;
+  if (task.due_at !== null) return `Due ${formatDueLabel(task.due_at)}`;
+  return null;
 }

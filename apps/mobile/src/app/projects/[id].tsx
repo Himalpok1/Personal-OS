@@ -2,8 +2,10 @@ import { FieldLabel, textFieldClass } from "@/components/ask/text-field";
 import { confirmDestructive } from "@/components/confirm-destructive";
 import { RecentActivitySection } from "@/components/projects/recent-activity-section";
 import { RelatedCapturesSection } from "@/components/projects/related-captures-section";
+import { projectProgress } from "@/components/projects/project-progress";
 import {
   PROJECT_STALLED_PRESENTATION,
+  projectDisplayStatus,
   projectStatusPresentation,
 } from "@/components/projects/status-presentation";
 import {
@@ -13,6 +15,7 @@ import {
   ErrorState,
   Icon,
   ListRow,
+  ProgressBar,
   ScreenCentered,
   ScreenFrame,
   SectionHeader,
@@ -226,8 +229,22 @@ export default function ProjectDetailScreen() {
   const openTasks = tasks.items.filter((t) => t.status === "inbox" || t.status === "active");
   const closedTasks = tasks.items.filter((t) => t.status === "done" || t.status === "dropped");
 
-  const status = projectStatusPresentation(project.status);
+  // The hero reads the status the Projects tab reads (archived wins over the
+  // lifecycle status), so the two screens can never disagree about one row.
+  const displayStatus = projectDisplayStatus(project);
+  const status = projectStatusPresentation(displayStatus);
+  // Done over open + done (project-progress.ts); null -- no bar -- when the
+  // project has neither, so an empty project is not drawn as "0% done".
+  const progress = projectProgress(computed.counts);
   const taskRowPending = completeTask.isPending || completeOccurrence.isPending;
+  const heroSpoken = [
+    `${project.name}, ${status.label}`,
+    computed.stalled ? PROJECT_STALLED_PRESENTATION.label : null,
+    progress ? progress.label : "no tasks yet",
+    computed.next_action ? `next: ${computed.next_action.title}` : "no next action",
+  ]
+    .filter((part): part is string => part !== null)
+    .join(". ");
 
   return (
     <ScreenFrame>
@@ -241,26 +258,65 @@ export default function ProjectDetailScreen() {
         }}
         keyboardShouldPersistTaps="handled"
       >
-        <View className="mb-4 flex-row items-center gap-2">
-          <View
-            className="h-4 w-4 rounded-full"
-            style={{ backgroundColor: project.color ?? colors["on-surface-muted"] }}
-          />
-          <TextInput
-            value={name}
-            onChangeText={setName}
-            onBlur={() => {
-              const trimmed = name.trim();
-              if (trimmed && trimmed !== project.name) commitMetadata({ name: trimmed });
-            }}
-            // The server's own bound (packages/schema/src/text-bounds.ts), so an
-            // over-long paste is stopped here rather than refused as a 400.
-            maxLength={ENTITY_TITLE_MAX_CHARS}
-            accessibilityLabel="Project name"
-            className={textFieldClass({ extra: "flex-1 text-title font-semibold" })}
-          />
-          <StatusChip label={status.label} tone={status.tone} />
-        </View>
+        {/* A view-first hero ABOVE the form (Checkpoint 10.6): the project as a
+            reader sees it -- colour, name, status, progress, next action -- all
+            from the same detail query, before the editable fields below. */}
+        <Card className="mb-4" accessibilityLabel={heroSpoken}>
+          <View className="flex-row items-center gap-2">
+            <View
+              className="h-4 w-4 rounded-full"
+              // The project's own colour is data; the fallback is the palette's
+              // muted role rather than a hex of this screen's own.
+              style={{ backgroundColor: project.color ?? colors["on-surface-muted"] }}
+            />
+            <AppText variant="title" numberOfLines={2} className="flex-1">
+              {project.name}
+            </AppText>
+            {computed.stalled ? (
+              <StatusChip
+                label={PROJECT_STALLED_PRESENTATION.label}
+                tone={PROJECT_STALLED_PRESENTATION.tone}
+              />
+            ) : null}
+            <StatusChip label={status.label} tone={status.tone} />
+          </View>
+          {progress ? (
+            <ProgressBar
+              value={progress.fraction}
+              tone={displayStatus === "completed" ? "success" : "primary"}
+              accessibilityLabel={progress.label}
+              className="mt-3"
+            />
+          ) : null}
+          <AppText variant="caption" tone="muted" className="mt-1.5">
+            {progress ? progress.label : "No tasks yet"} · {computed.counts.overdue} overdue
+            {project.target_date ? ` · Target ${formatShortDate(project.target_date)}` : ""}
+          </AppText>
+          <AppText
+            variant="label"
+            tone={computed.next_action ? "secondary" : "muted"}
+            numberOfLines={1}
+            className="mt-1.5 font-normal"
+          >
+            {computed.next_action ? `Next: ${computed.next_action.title}` : "No next action"}
+          </AppText>
+        </Card>
+
+        <SectionHeader title="Details" icon="pencil-outline" spacing="none" className="pb-2" />
+        <FieldLabel>Name</FieldLabel>
+        <TextInput
+          value={name}
+          onChangeText={setName}
+          onBlur={() => {
+            const trimmed = name.trim();
+            if (trimmed && trimmed !== project.name) commitMetadata({ name: trimmed });
+          }}
+          // The server's own bound (packages/schema/src/text-bounds.ts), so an
+          // over-long paste is stopped here rather than refused as a 400.
+          maxLength={ENTITY_TITLE_MAX_CHARS}
+          accessibilityLabel="Project name"
+          className={textFieldClass({ extra: "mb-4 text-title font-semibold" })}
+        />
 
         <FieldLengthCounter length={name.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
 

@@ -1,4 +1,8 @@
 import { AgendaView } from "@/components/agenda/agenda-view";
+import {
+  CALENDAR_CHROME_COMPACT_MAX_WIDTH,
+  calendarChromeLabel,
+} from "@/components/calendar/chrome-label";
 import { MonthGrid } from "@/components/calendar/month-grid";
 import { ViewModeToggle, type CalendarViewMode } from "@/components/calendar/view-mode-toggle";
 import { WeekGrid } from "@/components/calendar/week-grid";
@@ -10,7 +14,7 @@ import type { EventRangeItem } from "@personal-os/schema";
 import { addMonths, addWeeks, endOfDay, format, startOfDay, subMonths, subWeeks } from "date-fns";
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { Pressable, View } from "react-native";
+import { Pressable, useWindowDimensions, View } from "react-native";
 import { AppText, Card, ErrorState, IconButton, ScreenFrame, SkeletonCard } from "@/components/ui";
 
 // Month/Week are grid views over a computed [from, to] window; Agenda is a
@@ -88,46 +92,62 @@ export default function CalendarScreen() {
     router.push(`/events/new?startsAt=${date.toISOString()}&endsAt=${end.toISOString()}`);
   };
 
-  const label =
-    viewMode === "month"
-      ? format(anchor, "MMMM yyyy")
-      : `${format(getWeekDays(anchor)[0]!, "MMM d")} - ${format(getWeekDays(anchor)[6]!, "MMM d, yyyy")}`;
+  // ONE chrome row (Checkpoint 10.6): previous / period / next, the
+  // Month · Week · Agenda control and the new-event button share a 44px row,
+  // so the grid below gets the height the second row used to take. At the
+  // Rabbit R1's width the period label takes its compact form
+  // (chrome-label.ts); a wider window keeps the full one. The grids' own
+  // geometry and the day-cell tap semantics are untouched.
+  const { width } = useWindowDimensions();
+  const compact = width < CALENDAR_CHROME_COMPACT_MAX_WIDTH;
+  const label = viewMode === "agenda" ? null : calendarChromeLabel(viewMode, anchor, compact);
 
   return (
     <ScreenFrame>
-      {viewMode === "agenda" ? null : (
-        <View className="flex-row items-center justify-between px-2 pt-2">
-          {/* "Previous month"/"Next month" is wrong when the user is on Week
-              -- the label must track the current view mode, matching the
-              precedent already set by "Jump to today" below. */}
-          <IconButton
-            icon="chevron-left"
-            onPress={() => setAnchor((current) => shiftAnchor(viewMode, current, -1))}
-            accessibilityLabel={viewMode === "month" ? "Previous month" : "Previous week"}
-          />
+      <View className="flex-row items-center gap-1 px-1 pb-1 pt-2">
+        {viewMode === "agenda" ? (
+          // Agenda owns its own range: no period navigation, the control
+          // keeps its place and the spacer holds the row's shape.
+          <View className="flex-1" />
+        ) : (
+          <>
+            {/* "Previous month"/"Next month" is wrong when the user is on Week
+                -- the label must track the current view mode, matching the
+                precedent already set by "Jump to today" below. */}
+            <IconButton
+              icon="chevron-left"
+              onPress={() => setAnchor((current) => shiftAnchor(viewMode, current, -1))}
+              accessibilityLabel={viewMode === "month" ? "Previous month" : "Previous week"}
+            />
 
-          <Pressable
-            onPress={() => setAnchor(new Date())}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="Jump to today"
-            className="min-h-[44px] flex-1 items-center justify-center px-2 active:opacity-70"
-          >
-            <AppText variant="title" numberOfLines={1}>
-              {label}
-            </AppText>
-          </Pressable>
+            <Pressable
+              onPress={() => setAnchor(new Date())}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Jump to today"
+              className="min-h-[44px] flex-1 items-center justify-center active:opacity-70"
+            >
+              <AppText variant={compact ? "label" : "title"} numberOfLines={1}>
+                {label}
+              </AppText>
+            </Pressable>
 
-          <IconButton
-            icon="chevron-right"
-            onPress={() => setAnchor((current) => shiftAnchor(viewMode, current, 1))}
-            accessibilityLabel={viewMode === "month" ? "Next month" : "Next week"}
-          />
-        </View>
-      )}
+            <IconButton
+              icon="chevron-right"
+              onPress={() => setAnchor((current) => shiftAnchor(viewMode, current, 1))}
+              accessibilityLabel={viewMode === "month" ? "Next month" : "Next week"}
+            />
+          </>
+        )}
 
-      <View className="flex-row items-center gap-2 px-4 py-2">
-        <ViewModeToggle value={viewMode} onChange={setViewMode} />
+        <ViewModeToggle
+          value={viewMode}
+          onChange={setViewMode}
+          // Wide enough for "Agenda" at the label size plus the segment padding
+          // (measured in the browser at 480px), never wider: the period label
+          // owns whatever is left.
+          className={compact ? "w-[228px]" : "w-[280px]"}
+        />
 
         <IconButton
           icon="plus"

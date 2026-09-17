@@ -28,6 +28,22 @@ export default defineConfig({
         import.meta.dirname,
         "./src/__mocks__/expo-vector-icons.ts",
       ),
+      // Checkpoint 10.6 motion and gesture dependencies. The subpath alias
+      // comes BEFORE the package alias: aliases match as prefixes in order,
+      // so the package entry alone would rewrite the subpath to a path inside
+      // the mock file.
+      "react-native-gesture-handler/ReanimatedSwipeable": path.resolve(
+        import.meta.dirname,
+        "./src/__mocks__/react-native-gesture-handler.ts",
+      ),
+      "react-native-gesture-handler": path.resolve(
+        import.meta.dirname,
+        "./src/__mocks__/react-native-gesture-handler.ts",
+      ),
+      "react-native-reanimated": path.resolve(
+        import.meta.dirname,
+        "./src/__mocks__/react-native-reanimated.ts",
+      ),
     },
   },
   test: {

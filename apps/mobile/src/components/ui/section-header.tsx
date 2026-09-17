@@ -23,8 +23,11 @@ export interface SectionHeaderProps {
   count?: number;
   tone?: SectionTone;
   icon?: IconName;
-  /** A trailing text action, e.g. "See all". */
-  action?: { label: string; onPress: () => void; accessibilityLabel?: string };
+  /**
+   * A trailing text action, e.g. "See all". `icon` (10.6) replaces the
+   * default chevron -- a "plus" for "Add", a "refresh" for "Sync".
+   */
+  action?: { label: string; onPress: () => void; accessibilityLabel?: string; icon?: IconName };
   /** Any trailing element instead of a text action. */
   trailing?: ReactNode;
   /** Vertical rhythm: `page` sits between sections on a screen; `card` sits inside a card. */
@@ -81,7 +84,7 @@ export function SectionHeader({
           <AppText variant="label" tone="primary">
             {action.label}
           </AppText>
-          <Icon name="chevron-right" size="sm" tone="primary" />
+          <Icon name={action.icon ?? "chevron-right"} size="sm" tone="primary" />
         </Pressable>
       ) : (
         (trailing ?? null)

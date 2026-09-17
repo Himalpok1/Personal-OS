@@ -2,7 +2,7 @@ import { ApiClientError } from "@personal-os/api-client";
 import type { HealthMetricSeriesResponse } from "@personal-os/schema";
 import { useLocalSearchParams } from "expo-router";
 import { useState } from "react";
-import { Pressable, useWindowDimensions, View } from "react-native";
+import { useWindowDimensions } from "react-native";
 import { formatHealthValue, metricLabel } from "@/components/health/format";
 import { HealthChart } from "@/components/health/health-chart";
 import { METRIC_EXPLANATIONS, resolveMetricDisplay } from "@/components/health/metric-state";
@@ -16,8 +16,9 @@ import {
   ScreenCentered,
   ScreenFrame,
   ScreenHeader,
+  SegmentedControl,
   SkeletonScreen,
-  buttonClasses,
+  type SegmentedOption,
 } from "@/components/ui";
 import { useHealthMetricSeries, useHealthSummary } from "@/queries/health";
 import { addLocalDays, formatShortDate, todayLocalDate } from "@/utils/local-date";
@@ -46,36 +47,19 @@ function chartKind(aggregation: HealthMetricSeriesResponse["aggregation"]): "bar
   return aggregation === "sum" ? "bar" : "line";
 }
 
-// A segmented range chip. Composed from the design system's `buttonClasses`
-// rather than rendered through `Button` because a range toggle must announce
-// `accessibilityState.selected`, which `Button` (a plain action) does not
-// carry -- and dropping it would leave a screen reader unable to tell which
-// range is showing.
-function RangeChip({
-  days,
-  selected,
-  onPress,
-}: {
-  days: RangeDays;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  const classes = buttonClasses(selected ? "tonal" : "ghost", "sm", false);
-  return (
-    <Pressable
-      onPress={onPress}
-      hitSlop={8}
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      accessibilityLabel={`Show the last ${days} days`}
-      className={`${classes.container} flex-1`}
-    >
-      <AppText variant="label" tone="inherit" className={`${classes.label} font-semibold`}>
-        {days} days
-      </AppText>
-    </Pressable>
-  );
-}
+// The range toggle is the design system's SegmentedControl (Checkpoint 10.6;
+// it replaced a local chip that predated the control's promotion at 10.4).
+// Every segment keeps the `selected` accessibility state and the "Show the
+// last N days" label the chip announced, so a screen reader can still tell
+// which range is showing. The control is generic over string values, so the
+// numeric range round-trips through its own string form.
+type RangeValue = `${RangeDays}`;
+
+const RANGE_OPTIONS: readonly SegmentedOption<RangeValue>[] = RANGES.map((days) => ({
+  value: `${days}` as RangeValue,
+  label: `${days} days`,
+  accessibilityLabel: `Show the last ${days} days`,
+}));
 
 function RangeSelector({
   value,
@@ -85,16 +69,12 @@ function RangeSelector({
   onChange: (days: RangeDays) => void;
 }) {
   return (
-    <View className="flex-row gap-2 pt-4">
-      {RANGES.map((days) => (
-        <RangeChip
-          key={days}
-          days={days}
-          selected={days === value}
-          onPress={() => onChange(days)}
-        />
-      ))}
-    </View>
+    <SegmentedControl
+      value={`${value}` as RangeValue}
+      options={RANGE_OPTIONS}
+      onChange={(next) => onChange(Number(next) as RangeDays)}
+      className="mt-4"
+    />
   );
 }
 

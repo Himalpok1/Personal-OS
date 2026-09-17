@@ -8,6 +8,8 @@
 // `useColorScheme`. Mocking it here follows the same route already taken for
 // `expo-router` in this directory, aliased in vitest.config.mts.
 //
+import { createElement } from "react";
+
 // Light is the right default: it is what an unstyled test render implies, and
 // it keeps `usePlaceholderColor` returning a deterministic value.
 export const useColorScheme = () => ({
@@ -27,3 +29,11 @@ export const colorScheme = {
   get: () => "light" as const,
   toggle: () => {},
 };
+
+// Checkpoint 10.6: components/ui/animated.ts resolves the interop-wrapped
+// Pressable/View by creating an element through NativeWind's own JSX helper
+// and reading its type back. Under vitest there is no interop wrapper, so
+// the element's type is simply the component it was given -- which is what
+// lets a tree-walking test see `Pressable` where a device draws an animated,
+// class-styled one.
+export const createInteropElement = createElement;

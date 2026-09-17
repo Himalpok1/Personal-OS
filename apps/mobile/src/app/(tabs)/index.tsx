@@ -5,7 +5,6 @@ import type {
   TodayResponse,
   TodayTaskItem,
 } from "@personal-os/schema";
-import { useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, type Href } from "expo-router";
 import { createContext, useCallback, useContext, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
@@ -14,22 +13,22 @@ import { BriefCard } from "@/components/brief/brief-card";
 import { HealthTodayCard } from "@/components/health/health-today-card";
 import { MailDigestCard } from "@/components/mail/digest-today-card";
 import { ReminderNoticeCard } from "@/components/reminder-notice-card";
+import { BriefingCard } from "@/components/today/briefing-card";
 import { FocusNowCard } from "@/components/today/focus-now-card";
+import { useTodayTaskActions } from "@/components/today/use-today-task-actions";
 import {
   SuggestedFocusCard,
   type SuggestedFocusState,
 } from "@/components/focus/suggested-focus-card";
-import { classifyTaskActionError, completionTarget } from "@/components/task-actions-state";
 import {
   AppText,
   Button,
   Card,
+  CompletionCircle,
   EmptyState,
   ErrorState,
-  GradientCard,
   Icon,
   ListRow,
-  MetricCard,
   Screen,
   ScreenCentered,
   ScreenFrame,
@@ -37,6 +36,9 @@ import {
   SectionHeader,
   SkeletonScreen,
   StatusChip,
+  SwipeableRow,
+  enterRise,
+  showToast,
   useTheme,
   type ChipTone,
   type IconName,
@@ -49,27 +51,25 @@ import {
   isFocusNotEnoughCandidatesError,
   useSuggestFocus,
 } from "@/queries/focus";
-import { useCompleteOccurrence } from "@/queries/occurrences";
-import { useCompleteTask } from "@/queries/tasks";
 import { useToday } from "@/queries/today";
 import { askSourceHref } from "@/utils/ask-navigation";
 import { eventDetailHref } from "@/utils/event-navigation";
 import { eventTimeLabel } from "@/utils/event-time-label";
 import { greetingForHour, hourFromInstant, importantThingsLine } from "@/utils/greeting";
-import {
-  addLocalDays,
-  formatHeaderDate,
-  formatShortDate,
-  parseLocalDate,
-} from "@/utils/local-date";
+import { addLocalDays, formatHeaderDate, parseLocalDate } from "@/utils/local-date";
 
 // The Today command centre (Checkpoint 5.1; rebuilt on the design system in
-// Checkpoint 10.3). Every data path and behaviour from before the rebuild is
-// kept -- task completion with its occurrence fallback, the review banners,
-// the Ask chip and Suggested Focus behind the `ask` switch, the five
-// self-owned cards (reminders, brief, health, mail, academics), the events /
-// upcoming / inbox / projects sections -- and only the chrome changed: one
-// hero gradient, a stat row, sections on cards.
+// Checkpoint 10.3; reorganised actionable-first in Checkpoint 10.6, ADR-076
+// §4). Every data path and behaviour from before is kept -- task completion
+// with its occurrence fallback, the reviews, the Ask chip and Suggested
+// Focus behind the `ask` switch, the self-owned cards (reminders, brief,
+// health, mail, academics), the events / upcoming / inbox / projects
+// sections. What 10.6 changed is the ORDER and the quick actions: the one
+// gradient block is now the deterministic daily briefing (ADR-075 §4), the
+// duplicate stat row is gone, Focus Now and the two task sections come
+// before the cards, every task row carries a completion circle and swipe
+// actions, and every academic row opens an in-app sheet -- whose one host
+// this screen mounts at the end.
 
 /**
  * Where the "Ask about today" chip goes (Checkpoint 9.7). `preset=focus`
@@ -132,116 +132,61 @@ const PROJECT_STATUS_CHIP: Record<
   completed: { tone: "info", label: "Completed" },
 };
 
-// Completing from Today must refresh this read model plus everything the
-// completion can move. The task/occurrence hooks already invalidate their
-// own domains ("tasks" / ["occurrences", "tasks"]); this adds "today" so
-// the command center refetches too.
-function useInvalidateAfterCompletion() {
-  const queryClient = useQueryClient();
-  return () => {
-    void queryClient.invalidateQueries({ queryKey: ["today"] });
-    void queryClient.invalidateQueries({ queryKey: ["tasks"] });
-    void queryClient.invalidateQueries({ queryKey: ["occurrences"] });
-  };
-}
-
 // Completion rule (Checkpoint 9.3): a row that carries `occurrence_id` IS
 // the materialized occurrence of a recurring task, so it completes that
-// occurrence directly -- one round trip, instead of the old
-// POST /tasks/:id/complete -> 409 -> POST /occurrences/:id/complete detour.
-// A row without one is a one-off task and goes through the task endpoint;
-// the recurring 409s that path can still return are classified in
-// components/task-actions-state.ts (use the named occurrence, or explain
-// that none is generated yet).
+// occurrence directly; a one-off goes through the task endpoint with the
+// 409 -> occurrence fallback. Both live in components/today/
+// use-today-task-actions.ts since Checkpoint 10.6, shared with the Focus Now
+// rows and their sheet, so Today never runs a second copy of the rule.
 function TaskRow({ item, last }: { item: TodayTaskItem; last: boolean }) {
   const router = useRouter();
-  const complete = useCompleteTask();
-  const completeOccurrence = useCompleteOccurrence();
-  const invalidate = useInvalidateAfterCompletion();
+  const actions = useTodayTaskActions();
   const [error, setError] = useState<string | null>(null);
-  const pending = complete.isPending || completeOccurrence.isPending;
-
-  const showFailure = (err: unknown) => {
-    const failure = classifyTaskActionError(err);
-    if (failure.kind === "message") setError(failure.message);
-  };
 
   const onComplete = () => {
     setError(null);
-    const target = completionTarget(item);
-    if (target.kind === "occurrence") {
-      completeOccurrence.mutate(target.occurrenceId, {
-        onSuccess: invalidate,
-        onError: showFailure,
-      });
-      return;
-    }
-    complete.mutate(target.taskId, {
-      onSuccess: invalidate,
-      onError: (err) => {
-        const failure = classifyTaskActionError(err);
-        if (failure.kind === "use_occurrence") {
-          completeOccurrence.mutate(failure.occurrenceId, {
-            onSuccess: invalidate,
-            onError: showFailure,
-          });
-          return;
-        }
-        setError(failure.message);
-      },
+    actions.complete(item, {
+      onSuccess: () => showToast({ message: "Completed", tone: "success" }),
+      onError: setError,
     });
   };
 
-  // The completion circle is an icon-only pressable inside the row's own
-  // pressable (ListRow's `leading`), drawn from the palette by role so it
-  // needs no colour class of its own.
-  const checkbox = (
-    <Pressable
-      onPress={(e) => {
-        // Stop the tap from also triggering the row's onPress (navigate to
-        // task detail) -- both handlers are on nested Pressables. Same
-        // precedent as components/calendar/day-cell.tsx. On native the touch
-        // responder already grants to the inner view, but Pressable maps to
-        // bubbling DOM events under react-native-web, where this app also
-        // ships, so the guard is load-bearing there.
-        e.stopPropagation();
-        onComplete();
-      }}
-      hitSlop={8}
-      accessibilityLabel={`Complete ${item.title}`}
-      accessibilityRole="button"
-      accessibilityState={{ disabled: pending, busy: pending }}
-      // Without this the pending flags only drew the indicator dot -- the
-      // circle stayed tappable and rapid taps fired concurrent completion
-      // mutations (including the 409 -> occurrence fallback) (6.7A, A1).
-      disabled={pending}
-      className="h-11 w-11 items-center justify-center rounded-full active:opacity-70"
-    >
-      <Icon
-        name={pending ? "circle-slice-8" : "checkbox-blank-circle-outline"}
-        size="lg"
-        // on-surface-variant, not outline-strong: the ring is this control's only
-        // visual boundary and must clear 3:1 (10.3 review); agenda-rows.tsx and
-        // projects/[id].tsx draw the same circle in the same tone.
-        tone={pending ? "primary" : "on-surface-variant"}
-      />
-    </Pressable>
-  );
-
   return (
     <View>
-      <ListRow
-        title={item.title}
-        subtitle={taskRowSubtitle(item)}
-        leading={checkbox}
-        onPress={() => router.push(`/tasks/${item.id}`)}
-        accessibilityLabel={item.title}
-        // The checkbox is its own button, so the row must not be one too
-        // (nested <button>s are invalid on web; see ListRow's prop comment).
-        containsControl
-        chevron
-        last={last || error !== null}
-      />
+      <SwipeableRow
+        rightActions={[
+          {
+            key: "done",
+            label: "Done",
+            icon: "check",
+            tone: "success",
+            haptic: "success",
+            onPress: onComplete,
+          },
+        ]}
+      >
+        <ListRow
+          title={item.title}
+          subtitle={taskRowSubtitle(item)}
+          // The completion circle (Checkpoint 10.6) stops its tap propagating
+          // so the row's own onPress (navigate) does not also fire, and the
+          // row is marked containsControl so it drops its button role -- the
+          // same two rules the hand-rolled circle kept before it.
+          leading={
+            <CompletionCircle
+              state={actions.pending ? "pending" : "open"}
+              onPress={onComplete}
+              accessibilityLabel={`Complete ${item.title}`}
+            />
+          }
+          onPress={() => router.push(`/tasks/${item.id}`)}
+          accessibilityLabel={item.title}
+          containsControl
+          entering={enterRise}
+          chevron
+          last={last || error !== null}
+        />
+      </SwipeableRow>
       {/* A completion failure reads as its own inert row under the task, so
           the divider logic stays ListRow's and the message keeps its tone. */}
       {error ? (
@@ -402,9 +347,7 @@ function EventsSection({ events }: { events: TodayEventItem[] }) {
       />
       <Card padding="none">
         {events.length === 0 ? (
-          <AppText variant="body" tone="muted" className="px-4 py-3">
-            No events today.
-          </AppText>
+          <EmptyState size="compact" icon="calendar-blank-outline" title="No events today" />
         ) : (
           <>
             {timed.map((event, index) => (
@@ -433,6 +376,7 @@ function EventsSection({ events }: { events: TodayEventItem[] }) {
 }
 
 function UpcomingSection({ data }: { data: TodayResponse }) {
+  const router = useRouter();
   const days = data.upcoming.days.filter((day) => day.total > 0);
   // Fully-empty horizon means no section at all -- not an empty-state block.
   if (days.length === 0) return null;
@@ -445,27 +389,32 @@ function UpcomingSection({ data }: { data: TodayResponse }) {
             <AppText variant="overline" tone="muted" className="px-4 pb-1 pt-3">
               {upcomingDayLabel(day.date, data.local_date)}
             </AppText>
-            {day.tasks.map((task) => (
-              <View
+            {/* Checkpoint 10.6 (ADR-076 §4): every upcoming row opens its
+                task or event, the way the rows above it already do. */}
+            {day.tasks.map((task, index) => (
+              <ListRow
                 key={`${day.date}-task-${task.id}`}
-                className="flex-row items-center gap-2 px-4 py-1"
-              >
-                <Icon name="checkbox-blank-circle-outline" size="xs" tone="on-surface-muted" />
-                <AppText variant="body" numberOfLines={1} className="flex-1">
-                  {task.title}
-                </AppText>
-              </View>
+                title={task.title}
+                subtitle={task.project_name ?? undefined}
+                icon="checkbox-blank-circle-outline"
+                onPress={() => router.push(`/tasks/${task.id}`)}
+                accessibilityLabel={`Open task: ${task.title}`}
+                chevron
+                last={index === day.tasks.length - 1 && day.events.length === 0}
+              />
             ))}
-            {day.events.map((event) => (
-              <View
+            {day.events.map((event, index) => (
+              <ListRow
                 key={`${day.date}-event-${event.id}`}
-                className="flex-row items-center gap-2 px-4 py-1"
-              >
-                <Icon name="calendar-blank-outline" size="xs" tone="on-surface-muted" />
-                <AppText variant="body" tone="secondary" numberOfLines={1} className="flex-1">
-                  {event.title}
-                </AppText>
-              </View>
+                title={event.title}
+                subtitle={eventTimeLabel(event, "All day")}
+                icon="calendar-blank-outline"
+                iconTone="info"
+                onPress={() => router.push(eventDetailHref(event.id, event.occurs_at) as Href)}
+                accessibilityLabel={`Open event: ${event.title}`}
+                chevron
+                last={index === day.events.length - 1}
+              />
             ))}
           </View>
         ))}
@@ -485,6 +434,11 @@ function InboxSection({ data }: { data: TodayResponse }) {
         count={waiting}
         tone="warning"
         icon="inbox-arrow-down-outline"
+        action={{
+          label: "Open inbox",
+          onPress: () => router.push(INBOX_ROUTE),
+          accessibilityLabel: "Open inbox",
+        }}
       />
       <Card
         onPress={() => router.push(INBOX_ROUTE)}
@@ -543,6 +497,7 @@ function ProjectCard({ project }: { project: TodayProjectSummary }) {
 }
 
 function ProjectsSection({ data }: { data: TodayResponse }) {
+  const router = useRouter();
   const projects = data.projects.items;
   return (
     <View>
@@ -550,6 +505,13 @@ function ProjectsSection({ data }: { data: TodayResponse }) {
         title="Active projects"
         count={data.projects.active_count}
         icon="folder-outline"
+        // The stat row that used to carry the Projects navigation is gone
+        // (ADR-076 §4); the section header is the way in now.
+        action={{
+          label: "All projects",
+          onPress: () => router.push(PROJECTS_ROUTE),
+          accessibilityLabel: "All projects",
+        }}
       />
       {projects.length === 0 ? (
         <Card padding="none">
@@ -625,15 +587,58 @@ function ReviewBanner({
   );
 }
 
-function HeroStat({ value, label }: { value: number; label: string }) {
+/**
+ * The two review entry points (Checkpoint 10.6, ADR-076 §4): when BOTH are
+ * idle they collapse into one card with two rows, since two full-width
+ * "Start" banners 8px apart cost a screenful on the Rabbit R1 for the same
+ * two taps; once either is in progress or settled, each keeps its own
+ * banner so its state reads as before.
+ */
+function ReviewsBlock({ reviews }: { reviews: TodayResponse["reviews"] }) {
+  const router = useRouter();
+  if (reviews.daily.status === null && reviews.weekly.status === null) {
+    return (
+      <Card padding="none" className="mt-3">
+        <ListRow
+          title="Daily review"
+          icon="calendar-check-outline"
+          iconTone="primary"
+          onPress={() => router.push("/reviews/daily")}
+          accessibilityLabel="Start daily review"
+          chevron
+          inset
+        />
+        <ListRow
+          title="Weekly review"
+          icon="calendar-week"
+          iconTone="primary"
+          onPress={() => router.push("/reviews/weekly")}
+          accessibilityLabel="Start weekly review"
+          chevron
+          inset
+          last
+        />
+      </Card>
+    );
+  }
   return (
-    <View className="min-w-[72px]">
-      <AppText variant="display" tone="on-gradient">
-        {String(value)}
-      </AppText>
-      <AppText variant="caption" tone="on-gradient-muted" numberOfLines={1}>
-        {label}
-      </AppText>
+    <View className="mt-3 gap-2">
+      <ReviewBanner
+        title="Daily review"
+        resumeTitle="Resume daily review"
+        doneTitle="Daily review completed"
+        skippedTitle="Daily review skipped"
+        href="/reviews/daily"
+        info={reviews.daily}
+      />
+      <ReviewBanner
+        title="Weekly review"
+        resumeTitle="Resume weekly review"
+        doneTitle="Weekly review completed"
+        skippedTitle="Weekly review skipped"
+        href="/reviews/weekly"
+        info={reviews.weekly}
+      />
     </View>
   );
 }
@@ -706,8 +711,10 @@ export default function TodayScreen() {
   // (`dataUpdatedAt`), never from a clock read in render (react-hooks/purity);
   // it moves forward on every refetch, including pull-to-refresh.
   const greeting = greetingForHour(hourFromInstant(dataUpdatedAt));
-  const eventsToday = data.events_today.items.length;
 
+  // ADR-076 §4 -- the order, actionable-first: header → briefing → reminder
+  // notice → Focus Now (→ Suggested Focus) → Overdue → Due today → Events →
+  // Brief → Health → Mail → Academics → reviews → Upcoming → Inbox → Projects.
   return (
     <Screen safeTop refreshing={isRefetching} onRefresh={() => void refetch()}>
       <ScreenHeader
@@ -720,22 +727,11 @@ export default function TodayScreen() {
         actions={UI_TEST_MODE ? undefined : <TodayHeaderActions />}
       />
 
-      {/* The ONE gradient on Today: the day at a glance. Counts only -- the
-          summary carries no completed count, so no progress is invented. */}
-      <GradientCard gradient="hero" className="mt-4">
-        <View className="flex-row items-center justify-between gap-3">
-          <AppText variant="overline" tone="on-gradient-muted">
-            At a glance
-          </AppText>
-          <AppText variant="caption" tone="on-gradient-muted" numberOfLines={1}>
-            {formatShortDate(data.local_date)}
-          </AppText>
-        </View>
-        <View className="mt-3 flex-row flex-wrap gap-x-6 gap-y-2">
-          <HeroStat value={data.summary.overdue_total} label="Overdue" />
-          <HeroStat value={data.summary.due_today_total} label="Due today" />
-          <HeroStat value={eventsToday} label={eventsToday === 1 ? "Event" : "Events"} />
-        </View>
+      {/* The ONE gradient on Today: the deterministic daily briefing
+          (Checkpoint 10.6, ADR-075 §4) -- the same overdue / due-today /
+          events counts the old hero drew, now as a headline over the four
+          sections core composes from this screen's own responses. */}
+      <BriefingCard>
         {/* Checkpoint 9.7 ("Ask about today"). Rendered ONLY while the "ask"
             task route exists -- the same switch that hides the Ask mode on
             the search screen -- so an owner who never opted in never sees
@@ -743,7 +739,8 @@ export default function TodayScreen() {
             pre-fills its question; nothing is sent until they tap Ask. The
             pill is composed here: no primitive exists for a pressable on a
             gradient (white-alpha is scheme-invariant, like ProgressBar's
-            `onGradient` track). */}
+            `onGradient` track). It stays inside the one hero block, which
+            is now the briefing (ADR-076 §4). */}
         {askEnabled ? (
           <Pressable
             testID="today-ask-chip"
@@ -761,36 +758,30 @@ export default function TodayScreen() {
             </AppText>
           </Pressable>
         ) : null}
-      </GradientCard>
+      </BriefingCard>
 
-      {/* The stat row: the same four counts the summary chips carried, with
-          the same two navigations (Inbox, Projects). */}
-      <View className="mt-3 flex-row flex-wrap gap-2">
-        <MetricCard
-          label="Overdue"
-          value={String(data.summary.overdue_total)}
-          tone={data.summary.overdue_total > 0 ? "danger" : "neutral"}
-        />
-        <MetricCard label="Due today" value={String(data.summary.due_today_total)} tone="info" />
-        <MetricCard
-          label="Inbox"
-          value={String(data.summary.inbox_attention_total)}
-          onPress={() => router.push(INBOX_ROUTE)}
-          accessibilityLabel={`Inbox ${data.summary.inbox_attention_total}. Opens the inbox.`}
-        />
-        <MetricCard
-          label="Projects"
-          value={String(data.summary.active_project_count)}
-          onPress={() => router.push(PROJECTS_ROUTE)}
-          accessibilityLabel={`Projects ${data.summary.active_project_count}. Opens projects.`}
-        />
+      <View className="mt-3">
+        {/* Checkpoint 8.4 Lane 6. Renders NOTHING unless reminders genuinely
+            cannot fire on this device. Informational only -- it never promotes
+            a device or flips a setting (ADR-019/036); it names the reason and
+            points at the screen that can fix it. Placed first because "your
+            reminders are not running" outranks anything below it. */}
+        <ReminderNoticeCard />
+
+        {/* Checkpoint 10.4 (ADR-072; explanations and quick actions 10.6,
+            ADR-075): the one merged, ranked "what should I focus on right
+            now" card, over Today's own overdue/due-today tasks and the
+            Academics card's own ranked "Do next" candidates. Owns its own
+            two queries (already fetched for this screen) and derives nothing
+            server-side -- see components/today/focus-now-card.tsx. */}
+        <FocusNowCard />
       </View>
 
       {/* Checkpoint 9.8. Gated on the same switch as the Ask chip, right
-          after it. SuggestedFocusCard enforces FOCUS_MIN_CANDIDATES itself
-          too, so this is belt-and-braces, matching the existing
-          `askEnabled ? (...) : null` idiom rather than duplicating the
-          threshold check here. */}
+          after Focus Now (ADR-076 §4). SuggestedFocusCard enforces
+          FOCUS_MIN_CANDIDATES itself too, so this is belt-and-braces,
+          matching the existing `askEnabled ? (...) : null` idiom rather than
+          duplicating the threshold check here. */}
       {askEnabled ? (
         <SuggestedFocusCard
           candidateCount={focusCandidateCount(data.summary)}
@@ -800,44 +791,32 @@ export default function TodayScreen() {
         />
       ) : null}
 
-      <View className="mt-3 gap-2">
-        <ReviewBanner
-          title="Daily review"
-          resumeTitle="Resume daily review"
-          doneTitle="Daily review completed"
-          skippedTitle="Daily review skipped"
-          href="/reviews/daily"
-          info={data.reviews.daily}
-        />
-        <ReviewBanner
-          title="Weekly review"
-          resumeTitle="Resume weekly review"
-          doneTitle="Weekly review completed"
-          skippedTitle="Weekly review skipped"
-          href="/reviews/weekly"
-          info={data.reviews.weekly}
-        />
-      </View>
+      <TaskSection
+        title="Overdue"
+        tone="danger"
+        icon="alert-circle-outline"
+        section={data.overdue}
+        emptyTitle="Nothing overdue"
+        emptyTone="success"
+      />
 
-      <View className="mt-3">
-        {/* Checkpoint 8.4 Lane 6. Renders NOTHING unless reminders genuinely
-            cannot fire on this device. Informational only -- it never promotes
-            a device or flips a setting (ADR-019/036); it names the reason and
-            points at the screen that can fix it. Placed above the Brief because
-            "your reminders are not running" outranks anything below it. */}
-        <ReminderNoticeCard />
+      <TaskSection
+        title="Due today"
+        tone="info"
+        icon="calendar-today"
+        section={data.due_today}
+        emptyTitle="Nothing due today"
+        emptyTone="neutral"
+        action={{
+          label: "All tasks",
+          onPress: () => router.push("/tasks"),
+          accessibilityLabel: "All tasks",
+        }}
+      />
 
-        {/* Checkpoint 10.4 (ADR-072): the one merged, ranked "what should I
-            focus on right now" card, over Today's own overdue/due-today
-            tasks and the Academics card's own ranked "Do next" candidates.
-            Placed above the Brief because a deterministic, cited ranking of
-            what to do next outranks a generated summary; below the reminder
-            banner for the same reason that banner outranks everything else.
-            Owns its own two queries (already fetched for this screen and the
-            Academics card below) and derives nothing server-side -- see
-            components/today/focus-now-card.tsx. */}
-        <FocusNowCard />
+      <EventsSection events={data.events_today.items} />
 
+      <View className="mt-6">
         {/* Checkpoint 5.5: manual/on-demand Daily Brief (ADR-041). The card
             owns its own GET /briefs/current query -- Today only carries brief
             metadata, and rendering Today never triggers a model call. */}
@@ -869,30 +848,8 @@ export default function TodayScreen() {
         <AcademicTodayCard />
       </View>
 
-      <TaskSection
-        title="Overdue"
-        tone="danger"
-        icon="alert-circle-outline"
-        section={data.overdue}
-        emptyTitle="Nothing overdue"
-        emptyTone="success"
-      />
+      <ReviewsBlock reviews={data.reviews} />
 
-      <TaskSection
-        title="Due today"
-        tone="info"
-        icon="calendar-today"
-        section={data.due_today}
-        emptyTitle="Nothing due today"
-        emptyTone="neutral"
-        action={{
-          label: "All tasks",
-          onPress: () => router.push("/tasks"),
-          accessibilityLabel: "All tasks",
-        }}
-      />
-
-      <EventsSection events={data.events_today.items} />
       <UpcomingSection data={data} />
       <InboxSection data={data} />
       <ProjectsSection data={data} />

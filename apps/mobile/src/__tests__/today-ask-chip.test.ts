@@ -25,21 +25,24 @@ describe("Today's 'Ask about today' chip (Checkpoint 9.7)", () => {
     expect(today).toMatch(/testID="today-ask-chip"[\s\S]*?router\.push\(ASK_ABOUT_TODAY_HREF\)/);
   });
 
-  it("sits inside the day-at-a-glance hero, under its counts, and never calls the Ask API itself", () => {
+  it("sits inside the ONE hero block -- the daily briefing since 10.6 -- and never calls the Ask API itself", () => {
     // Checkpoint 10.3 moved the chip from the summary-chip row into the ONE
-    // hero card, right under the same overdue / due-today counts: still no
-    // new section, no header icon, no sixth tab.
-    const heroStart = today.indexOf('<GradientCard gradient="hero"');
-    const heroEnd = today.indexOf("</GradientCard>");
+    // hero card, right under the overdue / due-today counts. Checkpoint 10.6
+    // (ADR-076 §4) made that hero the deterministic daily briefing
+    // (components/today/briefing-card.tsx, ADR-075 §4), whose headline
+    // carries the same counts (briefing-card-state.test.ts pins that); the
+    // chip is passed to it as children, so it still renders inside the one
+    // gradient block, under the headline and the sections, gated exactly as
+    // before: still no new section, no header icon, no sixth tab.
+    const heroStart = today.indexOf("<BriefingCard>");
+    const heroEnd = today.indexOf("</BriefingCard>");
     expect(heroStart).toBeGreaterThan(-1);
     expect(heroEnd).toBeGreaterThan(heroStart);
     const hero = today.slice(heroStart, heroEnd);
     expect(hero).toContain('testID="today-ask-chip"');
-    expect(hero).toContain("data.summary.overdue_total");
-    expect(hero).toContain("data.summary.due_today_total");
-    expect(hero.indexOf("data.summary.due_today_total")).toBeLessThan(
-      hero.indexOf('testID="today-ask-chip"'),
-    );
+    // The screen draws no gradient of its own any more -- the briefing card
+    // is the one `GradientCard gradient="hero"` on Today.
+    expect(today).not.toContain("<GradientCard");
     expect(today).not.toContain("askCloud");
     expect(today).not.toContain("useAskCloud");
   });

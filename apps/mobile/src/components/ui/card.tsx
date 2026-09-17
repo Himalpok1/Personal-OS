@@ -8,20 +8,27 @@
 // overview, the health summary) -- gradients improve hierarchy only while
 // they are rare, so screens are expected to use ONE.
 //
-// Both accept an `onPress`; a pressable card renders a Pressable with the
-// `button` role and dims on press, an inert one renders a View. Neither
-// adds horizontal margin: the parent (`Screen` or a section) owns the gutter,
-// so a card in a two-column row and a card on its own align the same way.
+// Both accept an `onPress`; a pressable card renders through
+// `PressableScale` with the `button` role (Checkpoint 10.6: it settles to 97%
+// under the finger on a device, dims on web), an inert one renders a View.
+// Neither adds horizontal margin: the parent (`Screen` or a section) owns the
+// gutter, so a card in a two-column row and a card on its own align the same
+// way.
+//
+// `variant="soft"` (10.6) is the quiet tinted panel: the `soft` gradient
+// preset under the ordinary on-surface text tones, for a block that should
+// read as a gentle highlight (a suggestion, a summary) without becoming the
+// screen's one hero gradient.
 import { LinearGradient } from "expo-linear-gradient";
 import type { ReactNode } from "react";
 import {
-  Pressable,
   StyleSheet,
   View,
   type AccessibilityRole,
   type StyleProp,
   type ViewStyle,
 } from "react-native";
+import { PressableScale } from "./pressable-scale";
 import { useGradient, type GradientName } from "./theme";
 
 export type CardPadding = "none" | "sm" | "md" | "lg";
@@ -33,11 +40,15 @@ const PADDING_CLASS: Record<CardPadding, string> = {
   lg: "p-5",
 };
 
+export type CardVariant = "surface" | "soft";
+
 export interface CardProps {
   children: ReactNode;
   padding?: CardPadding;
   /** `raised` uses the stronger shadow -- for the one block that should lead a section. */
   elevation?: "flat" | "card" | "raised";
+  /** `soft` draws the `soft` gradient preset under the content as a tinted inert panel. */
+  variant?: CardVariant;
   onPress?: () => void;
   accessibilityLabel?: string;
   accessibilityRole?: AccessibilityRole;
@@ -67,10 +78,16 @@ export function cardClass(
     .join(" ");
 }
 
+/** The soft variant's own class: the gradient is the surface, so no bg/border token. */
+export function softCardClass(padding: CardPadding = "md", extra?: string): string {
+  return ["overflow-hidden rounded-card", PADDING_CLASS[padding], extra].filter(Boolean).join(" ");
+}
+
 export function Card({
   children,
   padding = "md",
   elevation = "card",
+  variant = "surface",
   onPress,
   accessibilityLabel,
   accessibilityRole,
@@ -78,20 +95,41 @@ export function Card({
   style,
   testID,
 }: CardProps) {
-  const classes = cardClass(padding, elevation, className);
+  const softStops = useGradient("soft");
+  const soft = variant === "soft";
+  const classes = soft
+    ? softCardClass(padding, className)
+    : cardClass(padding, elevation, className);
+  // The soft panel's gradient is an absolutely-filled layer under the
+  // children; LinearGradient takes no className (see GradientCard), so the
+  // radius and clipping live on the wrapper's class and the layer only fills.
+  const body = soft ? (
+    <>
+      <LinearGradient
+        colors={softStops}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+        pointerEvents="none"
+      />
+      {children}
+    </>
+  ) : (
+    children
+  );
   if (onPress) {
     return (
-      <Pressable
+      <PressableScale
         onPress={onPress}
         accessibilityRole={accessibilityRole ?? "button"}
         accessibilityLabel={accessibilityLabel}
         hitSlop={4}
-        className={`${classes} active:opacity-80`}
+        className={classes}
         style={style}
         testID={testID}
       >
-        {children}
-      </Pressable>
+        {body}
+      </PressableScale>
     );
   }
   return (
@@ -108,7 +146,7 @@ export function Card({
       }
       testID={testID}
     >
-      {children}
+      {body}
     </View>
   );
 }
@@ -150,17 +188,18 @@ export function GradientCard({
     .join(" ");
   if (onPress) {
     return (
-      <Pressable
+      <PressableScale
         onPress={onPress}
         accessibilityRole={accessibilityRole ?? "button"}
         accessibilityLabel={accessibilityLabel}
         hitSlop={4}
-        className={`${wrapperClass} active:opacity-90`}
+        activeClassName="active:opacity-90"
+        className={wrapperClass}
         style={style}
         testID={testID}
       >
         {body}
-      </Pressable>
+      </PressableScale>
     );
   }
   return (

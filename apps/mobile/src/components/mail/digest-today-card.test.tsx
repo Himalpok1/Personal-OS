@@ -16,7 +16,8 @@
 import { Pressable, Text, View } from "react-native";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useCurrentMailDigest, useGenerateMailDigest } from "@/queries/mail";
-import { DIGEST_COLLAPSED_LINES, MailDigestCard, ClampedDigestText } from "./digest-today-card";
+import { ClampedText } from "@/components/ui";
+import { DIGEST_COLLAPSED_LINES, MailDigestCard } from "./digest-today-card";
 
 vi.mock("@/queries/mail", () => ({
   useCurrentMailDigest: vi.fn(),
@@ -239,16 +240,32 @@ describe("failure", () => {
   });
 });
 
-describe("ClampedDigestText", () => {
+// The digest's clamp is the design system's ClampedText since Checkpoint 10.6
+// (ADR-076 §3; the retired ClampedDigestText was a byte-for-byte twin of the
+// Brief's). Constructed here with the digest's own budget so the invariants
+// that class carried are still pinned from this card's side.
+describe("ClampedText as the digest's clamp", () => {
+  function clamp(text: string): ClampedText {
+    return new ClampedText({ text, lines: DIGEST_COLLAPSED_LINES, textClassName: "" });
+  }
+
+  it("the present card hands its prose to ClampedText at the digest's budget", () => {
+    mockQuery({ data: { configured: true, has_active_mailbox: true, digest: DIGEST } });
+    const clamps = findAll(MailDigestCard(), (n: any) => n.type === ClampedText);
+    expect(clamps).toHaveLength(1);
+    expect(clamps[0].props.lines).toBe(DIGEST_COLLAPSED_LINES);
+    expect(clamps[0].props.text).toBe(DIGEST.content.text);
+  });
+
   it("renders no toggle until a real measurement says it overflows", () => {
     // Guessing from string length is explicitly wrong: font, width and locale
     // all affect wrapping.
-    const instance = new ClampedDigestText({ text: "short", textClassName: "" });
+    const instance = clamp("short");
     expect(findButtons(deepRender(instance.render()))).toHaveLength(0);
   });
 
   it("shows the toggle once measurement reports more lines than the cap", () => {
-    const instance = new ClampedDigestText({ text: "long", textClassName: "" });
+    const instance = clamp("long");
     instance.state = { expanded: false, isClamped: true };
     const buttons = findButtons(deepRender(instance.render()));
     expect(buttons).toHaveLength(1);
@@ -256,7 +273,7 @@ describe("ClampedDigestText", () => {
   });
 
   it("clamps to the cap when collapsed and lifts it when expanded", () => {
-    const instance = new ClampedDigestText({ text: "long", textClassName: "" });
+    const instance = clamp("long");
     instance.state = { expanded: false, isClamped: true };
 
     const collapsed = findAll(deepRender(instance.render()), (n: any) => n.type === Text);
@@ -271,12 +288,16 @@ describe("ClampedDigestText", () => {
   });
 
   it("resets expansion when the text changes, so a regenerate cannot leave a stale view", () => {
-    const instance = new ClampedDigestText({ text: "old", textClassName: "" });
+    const instance = clamp("old");
     instance.state = { expanded: true, isClamped: true };
     const applied: unknown[] = [];
 
     (instance as any).setState = (next: unknown) => applied.push(next);
-    instance.componentDidUpdate({ text: "different", textClassName: "" });
+    instance.componentDidUpdate({
+      text: "different",
+      lines: DIGEST_COLLAPSED_LINES,
+      textClassName: "",
+    });
     expect(applied).toEqual([{ expanded: false, isClamped: false }]);
   });
 });

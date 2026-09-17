@@ -10,7 +10,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { View } from "react-native";
 import { confirmDestructive } from "@/components/confirm-destructive";
-import { AppText, Button, Card, type ButtonVariant } from "@/components/ui";
+import {
+  AppText,
+  Button,
+  Card,
+  showToast,
+  triggerHaptic,
+  type ButtonVariant,
+} from "@/components/ui";
 import { deviceTimezone, formatFieldLabel } from "@/components/datetime-field-state";
 import { ReminderActionBanner } from "@/components/reminder-action-banner";
 import {
@@ -64,6 +71,11 @@ import {
 // action, label, testID and confirmation gate is unchanged; only the
 // variant each action wears is new -- Complete is the primary action of the
 // screen, Start/Skip are tonal, Reopen and Undo outline, Drop danger.
+//
+// Checkpoint 10.6 (ADR-076 §3): a completion that lands fires the success
+// haptic and a "Task completed" toast -- the same feedback the list row's
+// completion circle gives -- on top of the invalidations. Nothing else about
+// the controls changed.
 
 const SNOOZE_CHIPS: { choice: SnoozeChoice; label: string }[] = [
   { choice: "tomorrowMorning", label: "Tomorrow 9am" },
@@ -160,6 +172,15 @@ export function TaskActions({ task }: { task: Task }) {
     void queryClient.invalidateQueries({ queryKey: ["occurrences"] });
   };
 
+  // Complete is the one action confirmed out loud: the haptic and the toast
+  // fire on the SERVER's success, never on the tap, so a refused completion
+  // (a 409 on a closed row) never claims what did not happen.
+  const afterComplete = () => {
+    afterChange();
+    triggerHaptic("success");
+    showToast({ message: "Task completed", tone: "success" });
+  };
+
   const showFailure = (err: unknown) => {
     const failure = classifyTaskActionError(err);
     setError(failure.kind === "message" ? failure.message : GENERIC_TASK_ACTION_MESSAGE);
@@ -171,7 +192,7 @@ export function TaskActions({ task }: { task: Task }) {
       // The server named the open occurrence of this recurring task --
       // completing it is what "Complete" meant. Transparent to the user.
       completeOccurrence.mutate(failure.occurrenceId, {
-        onSuccess: afterChange,
+        onSuccess: afterComplete,
         onError: showFailure,
       });
       return;
@@ -182,10 +203,10 @@ export function TaskActions({ task }: { task: Task }) {
   const runComplete = () => {
     const target = detailCompletionTarget(task, next);
     if (target.kind === "occurrence") {
-      completeOccurrence.mutate(target.occurrenceId, { onSuccess: afterChange, onError: fail });
+      completeOccurrence.mutate(target.occurrenceId, { onSuccess: afterComplete, onError: fail });
       return;
     }
-    complete.mutate(target.taskId, { onSuccess: afterChange, onError: fail });
+    complete.mutate(target.taskId, { onSuccess: afterComplete, onError: fail });
   };
 
   const run = (action: TaskAction) => {

@@ -50,13 +50,17 @@ export function ErrorState({
         {message}
       </AppText>
       {onRetry ? (
-        <Button
-          label={retryLabel}
-          onPress={onRetry}
-          accessibilityLabel={retryAccessibilityLabel ?? retryLabel}
-          variant="primary"
-          className="mt-4"
-        />
+        // Wrapped so the button centres under the copy: `Button` sets
+        // `self-start` unless `block`, which would pin it to the left edge of
+        // this `items-center` column (visible on web at HEAD before 10.6).
+        <View className="mt-4">
+          <Button
+            label={retryLabel}
+            onPress={onRetry}
+            accessibilityLabel={retryAccessibilityLabel ?? retryLabel}
+            variant="primary"
+          />
+        </View>
       ) : null}
     </View>
   );

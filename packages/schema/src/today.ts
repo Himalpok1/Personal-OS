@@ -46,6 +46,14 @@ export const TodayTaskItemSchema = TodayTaskItemBaseSchema.extend({
   // `due_at` already carries the effective (snoozed) instant, this only lets
   // a client label the row. Optional so every existing payload still parses.
   snoozed_until: z.string().datetime({ offset: true }).nullable().optional(),
+  // Checkpoint 10.6 (ADR-075): the ONE typed relationship 10.5 added
+  // (`tasks.canvas_assignment_id`, ADR-074), surfaced as an OPAQUE uuid so the
+  // client's Focus Now merge can recognise a task that IS an assignment's own
+  // reminder and show one row instead of two. Optional so every existing
+  // payload and the deployed client still parse; this schema is not
+  // `.strict()`, so an older client simply strips it. Never a Canvas title:
+  // /today feeds both AI collectors, and an id is all that may cross.
+  canvas_assignment_id: z.string().uuid().nullable().optional(),
 })
   .refine((item) => item.occurrence_id == null || item.parent_task_id !== null, {
     message: "an occurrence representation must carry its parent_task_id",

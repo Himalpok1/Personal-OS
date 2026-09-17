@@ -54,12 +54,22 @@ describe("Today's Suggested Focus card (Checkpoint 9.8)", () => {
     expect(today).toMatch(/const focusState: SuggestedFocusState = suggestFocus\.isPending/);
   });
 
-  it("sits right after the Ask chip's closing row, before the review banners", () => {
-    const afterChipRow = today.slice(
-      today.indexOf('testID="today-ask-chip"'),
-      today.indexOf('title="Daily review"'),
-    );
-    expect(afterChipRow).toContain("<SuggestedFocusCard");
+  it("sits right after Focus Now, before the Overdue section (Checkpoint 10.6, ADR-076 §4)", () => {
+    // Before 10.6 the card followed the Ask chip's hero and preceded the
+    // review banners. ADR-076 §4 reorganised Today actionable-first: the
+    // deterministic Focus Now card leads, the AI suggestion (still gated on
+    // the same `ask` switch) sits directly after it, and the Overdue task
+    // section follows -- the reviews moved below the cards.
+    const chipAt = today.indexOf('testID="today-ask-chip"');
+    const focusNowAt = today.indexOf("<FocusNowCard />");
+    const suggestedAt = today.indexOf("<SuggestedFocusCard");
+    const overdueAt = today.indexOf('title="Overdue"');
+    const reviewsAt = today.indexOf("<ReviewsBlock");
+    expect(chipAt).toBeGreaterThan(-1);
+    expect(focusNowAt).toBeGreaterThan(chipAt);
+    expect(suggestedAt).toBeGreaterThan(focusNowAt);
+    expect(overdueAt).toBeGreaterThan(suggestedAt);
+    expect(reviewsAt).toBeGreaterThan(overdueAt);
   });
 
   it("navigates a tapped source through the same askSourceHref helper Ask uses", () => {
