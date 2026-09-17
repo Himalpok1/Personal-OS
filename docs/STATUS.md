@@ -25,8 +25,10 @@ and DEPLOYED** (ADR-071; no migration; api/web recreated at `ba23472`, worker/po
 the Rabbit R1 accepted on versionCode 27, built locally). Academic data on Today/`/academic` will
 render `configured: false` until the owner reconnects Canvas. **Checkpoint 10.4 — "Focus Now"
 unified Today ranking (ADR-072), Canvas invalid-token alerting with two-run hysteresis (ADR-073),
-and a four-item mobile polish bundle — is IMPLEMENTED, VERIFIED (6,530 tests, 23/23 tasks) and
-INDEPENDENTLY REVIEWED clean, but NOT YET DEPLOYED**, pending owner authorization to deploy.
+and a four-item mobile polish bundle — is IMPLEMENTED, VERIFIED (6,530 tests, 23/23 tasks),
+INDEPENDENTLY REVIEWED clean, and DEPLOYED** (merged to `main` at `965900f`; worker+web recreated
+in production, no migration; api/postgres untouched; the Rabbit R1 accepted on versionCode 28,
+built locally 2026-09-16 ~23:04Z, zero crash lines).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -67,17 +69,17 @@ lines / 243 KB. Nothing has ever been deleted from the record — only relocated
 
 ## Production state at a glance
 
-Rows are as last verified first-hand at the checkpoint named in the row (10.1C's deployment check on
-2026-09-16 ~12:35Z for the deployment, Canvas and container rows; 10.1B for the Rabbit; 9.8 on
+Rows are as last verified first-hand at the checkpoint named in the row (10.4's deployment check on
+2026-09-16 ~23:07Z for the deployment, container and Rabbit rows; 10.1C for Canvas; 9.8 on
 2026-09-15 for the others unless stated). The
 per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs/history/phase-9.md`.
 
 | | |
 |---|---|
-| Migration level | **22** (`0000`–`0021`); local and production agree. 10.2 added `0021_canvas_assignment_grades` (ADR-068a), applied to production 2026-09-16 from the 10.2 api image — row 22, `created_at 1789377000000`, hash `f8c3ed88…` identical to the tracked file. |
-| Serving commit | **api, worker and web at `1edb61b`** (10.2 hotfix + ADR-070a, all three recreated 2026-09-16 ~22:53Z from `personal-os-10.2b-release`; images api `39da3c20c5f4`, worker `fcc97debae22`, web `3360ef674ca6`). Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,worker,web}:rollback-pre-10.2b` = the 10.2 images (`e4e115eb…` / `9c23c00b…` / `163f4ac0…`), `:rollback-pre-10.2` = the 10.1C api / 10.1B worker+web, plus every earlier tag, all by resolved digest. |
-| Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated by 10.1/10.1B/10.1C/10.2/10.2b); `GET /health` → `ok` / `connected` / `stale:false` (22:54Z) |
-| Rabbit R1 | `com.himal.personalos` **versionCode 25**, built from `8ae7bff` **locally** (`eas build --local`, profile `production-internal`, the EAS-managed keystore fetched at build time — signer SHA-256 `4601e3a2…` identical to the installed app's, compared with `apksigner` before installing), APK SHA-256 `4c02028e…`, `adb install -r` → `Success` with `firstInstallTime` 2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS`, the SecureStore credential and the primary-device row all preserved — no re-pair. **Academic surfaces walked on the device**: Today "Academics" card (Overdue · 11), Courses (16 across 3 terms), a course detail down to Submitted & graded with real grade labels; 0 crash lines. versionCodes 23 and 24 were consumed by a refused cloud attempt and a failed first local build (below). |
+| Migration level | **22** (`0000`–`0021`); local and production agree; unchanged by 10.3/10.4 (both shipped no migration). 10.2 added `0021_canvas_assignment_grades` (ADR-068a), applied to production 2026-09-16 from the 10.2 api image — row 22, `created_at 1789377000000`, hash `f8c3ed88…` identical to the tracked file. |
+| Serving commit | **api, postgres at `1edb61b`/10.1C-and-earlier (untouched by 10.3/10.4); worker and web at `965900f`** (10.4, both recreated 2026-09-16 ~23:00Z from `personal-os-10.4-release`; images worker `4cf1639685fa`, web `d5b2edb90d53`). Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{worker,web}:rollback-pre-10.4` = the pre-10.4 images (`fcc97debae22…` / `1ede9b84f9e7…`), plus every earlier tag, all by resolved digest. |
+| Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated since); `GET /health` → `ok` / `connected` / `stale:false` (23:07Z) |
+| Rabbit R1 | `com.himal.personalos` **versionCode 28**, built from `965900f` **locally** (`eas build --local`, profile `production-internal`, the EAS-managed keystore fetched at build time — signer SHA-256 `4601e3a2…` identical to the installed app's, compared with `apksigner` before installing), `adb install -r` → `Success` with `firstInstallTime` 2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS` all preserved — no re-pair. Today/Health/Mail Digest/Settings walked live; the new Focus Now card correctly renders nothing (nothing overdue/due-today/academic-priority on the real account right now); 0 crash lines. |
 | Academic layer (10.2 + ADR-070a) | `GET /academic/today?tz=` · `GET /academic/courses[?include_past_terms=]` · `GET /academic/courses/:id` — a provider-agnostic read model computed over the Canvas tables (ADR-070), **current term only by default** (ADR-070a: the most recently started term, by date — `current_term: 2026 Fall` echoed on the wire), a deterministic Today card and `/academic` course screens, `score`/`grade` synced (ADR-068a; 165 of 355 real assignments carry a grade). **Live and validated**: Today `overdue 2 · due today 1 · due this week 8 · 8 unread` from the 6 Fall 2026 courses (was 11 overdue across 16 courses in 3 terms before the rule); `include_past_terms=true` still lists all 16. |
 | Canvas (10.1/10.1B/10.1C + 10.2 hotfix) | `packages/canvas-providers` + six tables, PAT-authenticated, read-only, hourly `canvas.sync-cron`. Connection `8b8e2cb6…` **reactivated in place by the owner's live disconnect → reconnect** (22:32–22:33Z: same row, `created_at` unchanged, 16/355/22 still linked, manual sync `succeeded`). A pasted token is now trimmed and refused if it carries whitespace/control characters, the client refuses to build a header from one, and the api's error serializer scrubs bearer/PAT shapes (hotfix `4c614db`). **Live-validated against the owner's real UTA account 2026-09-16**: connect → sync (16 courses, 355 assignments, 19 announcements, 0 events) → idempotent resync → disconnect (credential triple NULLed) → invalid token rejected (`400 canvas_auth_failed`) → reconnect → resync, left **active**. **Reconnect path (10.1C) verified live 2026-09-16**: disconnect → `200` · reconnect → **`200` on the same row `8b8e2cb6…`** (`created_at` unchanged at 10:50:30Z, all 16 courses still linked) · second connect on the active row → `409` · manual resync `202` → `succeeded` · hourly cron `succeeded` at 12:00:17Z. Zero PAT-shaped strings and zero warn/error lines in the api and worker logs since the api was recreated. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · notification-shade capture (9.1) — a persistent local "Capture" notification on its own channel; verified live on the Rabbit R1 (9.1). |
@@ -90,7 +92,7 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress. |
 | Backups | **None, by design** (ADR-024). |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE** (re-verified 2026-09-16). No CI, no Actions workflow, no repository secret. **`main` is the canonical branch again as of 2026-09-16** (fast-forwarded to the Phase 10 tip; PR #1 merged). |
-| Test baseline | **6,477 tests across 13 packages** at the 10.3 commit (not yet deployed): api 1,496 · mobile 1,574 · core 1,014 · worker 728 · schema 563 · health-providers 332 · api-client 201 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25. Production (`1edb61b`) was 6,292: api 1,486 · mobile 1,467 · core 964 · schema 546 · api-client 200, the rest as now. |
+| Test baseline | **6,530 tests across 13 packages** at the 10.4 commit (`965900f`, deployed for worker/web): api 1,496 · mobile 1,600 · core 1,031 · worker 738 · schema 563 · health-providers 332 · api-client 201 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25. Was 6,477 at 10.3. |
 | pg-boss | **31 queues, 11 schedules** (worker startup log at 10.1B; `pgboss.queue` reads one more with the internal `__pgboss__send-it`). Every retrying queue has a dead-letter queue (9.0): `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues, `occurrences.generate-lazy`, `occurrences.expand-window`. `occurrences.expand-window` has a phase-2 idempotent lazy repair since 9.4. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C) · `health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now` (9.0). First scheduled run 2026-09-13T04:00Z; the job's daily runs have not been individually re-verified since the 9.0 acceptance. |
 | Alert keys | Occurrence-scoped (ADR-058). Producers: health-sync breaker (first live emission 2026-09-12T03:00:14Z), `occurrences.generate-lazy.dead:<occurrenceId>`, `occurrences.expand-window.dead:<UTC date>` (9.0; also covers a failed 9.4 phase-2 repair), `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (9.5). The three 9.x producers are unexercised in production by design. |
@@ -1391,7 +1393,7 @@ their pre-10.3 images — no rebuild was needed); migration level 22, unchanged;
 
 ---
 
-### Checkpoint 10.4 — Focus Now + Canvas alert hysteresis + mobile polish: IMPLEMENTED, VERIFIED — NOT DEPLOYED (2026-09-16/17)
+### Checkpoint 10.4 — Focus Now + Canvas alert hysteresis + mobile polish: IMPLEMENTED, VERIFIED, REVIEWED, DEPLOYED (2026-09-16/17)
 
 **Objective (owner-directed, 2026-09-16).** Not a new product surface from scratch: make Personal OS
 better at answering "what should I focus on right now" — deterministic first, explainable, privacy
@@ -1491,10 +1493,83 @@ not a defect); nothing under `apps/api`, `packages/schema`, `packages/db`, or an
 **New ADRs:** `docs/decisions/ADR-072.md` (Focus Now — Locked), `docs/decisions/ADR-073.md`
 (Canvas alert hysteresis, amending ADR-068 §6 — Locked); both indexed in `docs/DECISIONS.md`.
 
-**NOT YET DEPLOYED.** Code is implemented, fully verified, and independently reviewed clean.
-Per this project's own scope-control rule, production deployment, the Canvas alert's live behavior
-against the owner's real (currently `invalid_token`) connection, and any Rabbit R1 rebuild are
-owner-gated actions this checkpoint stops short of — see *Next action*.
+**Deployment — COMPLETE (2026-09-16 22:52–23:07Z), owner-authorized ("deploy it").** Repository:
+`claude/personal-os-phase-10-4-a254c7` pushed, PR #4 opened, confirmed a true fast-forward
+(`git merge-base --is-ancestor origin/main HEAD`), and pushed directly to `main` (`538bd22` →
+`965900f`) — the same fast-forward-only pattern Checkpoint 10.3 established; PR #4 auto-closed
+`MERGED`.
+
+**Pre-deployment read (production, before anything was touched).** `/health` ok/connected/
+`stale:false`; migration `22` rows, `max(created_at) 1789377000000` (unchanged — 10.4 ships no
+migration); Canvas connection `8b8e2cb6…` still `invalid_token` since 23:00:18Z the prior day
+(pre-existing, unrelated); all four containers healthy, `worker`/`web` on their 10.2b/10.3 images.
+
+**Frozen order, worker + web only (`api`/`postgres` never named).** Running `worker`/`web` images
+tagged `rollback-pre-10.4` by digest (`fcc97debae22…`/`1ede9b84f9e7…`). `git archive` of `965900f`
+shipped to `/home/himallinux/personal-os-10.4-release` (1,253 tracked files, 0 `.env`/
+`google-services.json`). Built `worker`+`web` only — **verified before touching anything running**:
+the new worker image's `dist/canvas/orchestrate.js`/`alerts.js` carry
+`enqueueCanvasInvalidTokenAlert`; the new web image's served bundle contains the string `"Focus
+Now"` (confirmed twice — once against the built image directly, once against the live HTTP
+response after rollout). `worker` recreated alone → `worker.started`, **31 queues / 11 schedules**
+unchanged, zero warn/error in the first 60s. `web` recreated alone → `200` on its published port.
+`api` (`Up 2 hours`, unchanged `StartedAt`) and `postgres` (`Up 2 weeks`, unchanged `StartedAt`)
+confirmed untouched by their own container start timestamps throughout.
+
+**Production validation.** `/health` still ok/connected/`stale:false`; migration count unchanged at
+22; 56 pg-boss jobs completed in the following 10 minutes, **zero failed/retry/active**; Gmail,
+Health and Google Calendar connections still `active` (Canvas unaffected, still `invalid_token`,
+pre-existing); both Tailscale Serve routes still `tailnet only`; the live web bundle at
+`https://personal-os.tail62a68f.ts.net:8443` re-confirmed to contain `"Focus Now"` over real HTTP,
+not just inside the built image.
+
+**Rabbit R1 — built locally, verified before install, installed, walked on-device.** Pre-flight
+read of the installed app: versionCode 27, cert SHA-256 `4601e3a2…` (pulled the live `base.apk` and
+verified with `apksigner`, matching every prior checkpoint's continuity check). Production env
+values re-confirmed via `eas env:list production` rather than trusted from memory —
+`EXPO_PUBLIC_API_URL=https://personal-os.tail62a68f.ts.net`,
+`EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=868049601968-ebh3hmk43mrtu9utmvj9mb2acs4mb6se.apps.googleusercontent.com`
+(deliberately NOT the different, dev-pointed values sitting in `apps/mobile/.env` — the exact trap
+Checkpoint 10.3 caught the hard way) — both passed as explicit env vars, plus the absolute
+`GOOGLE_SERVICES_JSON` path. `packages/core` rebuilt first so the new `focus-now` subpath actually
+resolves. `eas build --local --profile production-internal` → `BUILD SUCCESSFUL in 3m 33s`, 108 MB
+APK. **Verified before installing, the same two ways prior checkpoints did:** the Hermes bytecode
+bundle extracted and `strings`-checked — 0 occurrences of `localhost:3000`, 1 of `tail62a68f`, 1 of
+`"Focus Now"`; `apksigner verify --print-certs` on the new APK showed the **identical** SHA-256
+(`4601e3a2…`) to the installed app's, confirmed before `adb install -r` was run. Install → `Success`
+(an in-place replace only succeeds on a matching signature, so this is itself signing-continuity
+proof). Post-install: **versionCode 28**, `firstInstallTime` preserved at 2026-08-19 (no re-pair),
+exact-alarm appop still `allow`, `POST_NOTIFICATIONS` still `granted=true`.
+
+Launched with `am start` (never `am force-stop`, which cancels alarms — the 10.3 lesson). Logcat
+cleared before launch and swept for `FATAL EXCEPTION`/`AndroidRuntime` tied to
+`com.himal.personalos` across the whole session: **zero**, both immediately after launch and again
+after the full walk below. **Screenshots taken directly off the device** confirmed: Today renders
+the greeting header, the "At a glance" hero (0/0/0 — this account genuinely has nothing overdue,
+due today, or academic-priority right now, so the new Focus Now card correctly renders **nothing**,
+the same honest empty-state discipline the Academics card already established, not a bug);
+scrolling showed the Daily Brief, Health (1,713 steps · 1.27 km · 175/1,647 kcal) and Mail Digest
+cards all rendering real synced data; Settings showed the Canvas integration card with its
+"needs reconnect" chip and the exact copy "Canvas rejected the saved access token. Reconnect with a
+fresh one." — the pre-existing `invalid_token` state (unrelated to 10.4) still surfaces honestly,
+confirming the mobile-polish changes to that same screen didn't disturb it.
+
+**What was NOT validated live:** the Focus Now card's actual populated rendering (candidate items,
+reason chips, ranking) and the new Canvas alert firing for real, since the current account has
+nothing overdue/due-today/academic-priority right now and the real Canvas connection is
+`invalid_token` rather than mid-episode. Both paths are covered by their own test suites (24 and 10
+new tests respectively) and were walked with seeded local data during implementation; this is the
+same "not validated against production data, covered by seeded data instead" gap Checkpoint 10.3
+recorded for its own Academic card before the owner had reconnected.
+
+**Post-deployment state:** production serves `worker`+`web` at `965900f` (10.4); `api`/`postgres`
+remain on their pre-10.4 images (10.1C/2026-08-30 respectively) — no rebuild needed, migration level
+unchanged at 22. The Rabbit R1 runs `com.himal.personalos` versionCode 28, built locally from
+`965900f`.
+
+**Rollback, if ever needed:** `docker tag personal-os-{worker,web}:rollback-pre-10.4
+personal-os-{worker,web}:latest` then the frozen `up -d --no-deps --no-build --force-recreate worker
+web`; no schema involved, so no rollback-side migration concern either way.
 
 ---
 
@@ -1732,12 +1807,12 @@ PR #3 merged. The one gap: the academic surfaces answer `configured: false` in p
 the real Canvas connection independently went `invalid_token` hours before this deploy — see
 *Next action*.
 
-**Checkpoint 10.4 — "Focus Now" + Canvas alert hysteresis + mobile polish — is implemented and
-verified in this worktree (uncommitted) but NOT YET DEPLOYED.** See the full entry above. It
-requires no migration and touches `packages/core`, `apps/worker/src/canvas`, and `apps/mobile`
-only — `apps/api`, `packages/schema` and `packages/db` are untouched. Deployment is gated on the
-independent adversarial review completing and explicit owner authorization, per this project's own
-scope-control and destructive-action rules.
+**Checkpoint 10.4 — "Focus Now" + Canvas alert hysteresis + mobile polish — is implemented,
+verified, independently reviewed clean, merged to `main` (`965900f`), and DEPLOYED** (owner
+authorized: "deploy it"). See the full entry above. No migration; touches `packages/core`,
+`apps/worker/src/canvas`, and `apps/mobile` only — `apps/api`, `packages/schema` and `packages/db`
+are untouched. Production serves `worker`+`web` at `965900f`; `api`/`postgres` untouched. The
+Rabbit R1 runs versionCode 28.
 
 ---
 
@@ -1771,41 +1846,38 @@ phase is in `docs/history/`; the one-line summary is:
 | **10.1C** | Canvas reconnect lifecycle fix: `connectCanvasConnection` SELECTs any prior row by `canvas_base_url` first and reactivates a non-active row in place (same `id`/`created_at`, FK-linked history preserved), refuses an active row (`409 canvas_already_connected`) and a different `canvas_user_id` (`409 canvas_account_mismatch`); route returns 200 on reactivation, 201 on creation. **Deployed (api only, no migration) and live-validated against the owner's real UTA account 2026-09-16** — reconnect `200` on the same row with history preserved, cron succeeding since. |
 | **10.2** | Academic Intelligence Layer: a provider-agnostic academic read model computed over the Canvas tables (`GET /academic/today`, `/academic/courses`, `/academic/courses/:id`; ADR-070), `score`/`grade` synced under ADR-068a (migration `0021`), a deterministic Today card (Overdue / Due today / Due this week / unread announcements) and `/academic` course screens, the single same-origin-gated "open in Canvas" call site, `invalid_token` wired into the worker's auth-failure path, an egress guard keeping academic data out of every AI lane. **Deployed (api/worker/web, level 22) and production-validated against the owner's real UTA account 2026-09-16** (ADR-070/068a); Rabbit R1 accepted on versionCode 25, built locally after the EAS quota refused the cloud build. |
 | **10.3** | Academic Intelligence Expansion + Mobile UX Modernization: deterministic urgency / explainable priority scoring / workload status / course attention / grade summary as optional keys on the academic read model (ADR-071, no migration), a token-based mobile design system (`components/ui/`, three new Expo modules, web dark mode fixed) and every screen restyled on it. **Implemented, verified (6,477 tests), independently reviewed (twice — the full adversarial pass and a four-lane final release gate), merged to `main` (`ba23472`) and DEPLOYED 2026-09-16/17** (api/web recreated, worker/postgres untouched); Rabbit R1 accepted on versionCode 27, built locally after catching and fixing a wrong-API-URL build before it ever reached the device. |
-| **10.4** | "Focus Now" — a deterministic, client-side-only unified ranking merging personal urgent items and academic priorities on Today (`packages/core/src/focus-now`, ADR-072, no new route/migration/AI call); Canvas invalid-token alerting gated on two consecutive connection-level auth failures, mirroring Gmail/Health/Calendar's existing alert producers (`apps/worker/src/canvas/alerts.ts`, ADR-073 amending ADR-068 §6); a four-item mobile polish bundle (`SegmentedControl` promoted to the design system, courses-screen skeleton flash fixed, accessible Settings loading states, haptic on destructive confirms). **Implemented, verified (6,530 tests, 23/23 tasks, zero failing) and independently reviewed clean — NOT YET DEPLOYED**, pending owner authorization. |
+| **10.4** | "Focus Now" — a deterministic, client-side-only unified ranking merging personal urgent items and academic priorities on Today (`packages/core/src/focus-now`, ADR-072, no new route/migration/AI call); Canvas invalid-token alerting gated on two consecutive connection-level auth failures, mirroring Gmail/Health/Calendar's existing alert producers (`apps/worker/src/canvas/alerts.ts`, ADR-073 amending ADR-068 §6); a four-item mobile polish bundle (`SegmentedControl` promoted to the design system, courses-screen skeleton flash fixed, accessible Settings loading states, haptic on destructive confirms). **Implemented, verified (6,530 tests, 23/23 tasks, zero failing), independently reviewed clean, merged to `main` (`965900f`) and DEPLOYED 2026-09-16/17** (worker+web recreated, api/postgres untouched, no migration); Rabbit R1 accepted on versionCode 28, built locally. |
 
-**Production is at migration level 22** and serves api and web built from `ba23472` (10.3); worker
-and postgres are untouched since 10.2 (no rebuild needed — 10.3 shipped no worker code). Google
-Calendar, Gmail and Health are active; **Canvas is `invalid_token`** (the PAT the 10.2
-credential-in-log incident already flagged for rotation was independently rejected by Canvas at
-23:00:18Z on 2026-09-16, hours before the 10.3 deploy — see *Next action*). Monitoring runs against
-five active targets including both Tailscale Serve routes, with full CRUD. A daily retention cron
-bounds `monitor_checks`/`mail_messages`/`mail_digests`/`mail_sync_runs`/`health_sync_runs` and
-sweeps expired `health_oauth_states`/`mail_oauth_states`. Every retrying pg-boss queue has a
-dead-letter queue. Calendar events authored in Personal OS sync outward to the owner's chosen
-writable calendar; imported events are read-only. Search covers tasks, notes, events, projects,
-captures and mail with an explainable score, and every text field is bounded at write. Cloud Ask,
-when the owner enables it, answers questions about today's schedule with cited sources and can
-suggest one task to focus on. Academic intelligence (urgency, priorities, workload, course
-attention, grade summary) is live on `/academic/today` and `/academic/courses`, currently answering
-`configured: false` pending Canvas reconnection. The Rabbit R1 runs `com.himal.personalos`
-versionCode 27, built locally from `ba23472`.
+**Production is at migration level 22** and serves `worker`+`web` built from `965900f` (10.4);
+`api`/`postgres` are untouched since 10.1C/2026-08-30 respectively (no rebuild needed — 10.4 ships
+no api/db code). Google Calendar, Gmail and Health are active; **Canvas is `invalid_token`** (the
+PAT the 10.2 credential-in-log incident already flagged for rotation was independently rejected by
+Canvas at 23:00:18Z on 2026-09-16, unrelated to 10.3 or 10.4 — see *Next action*). Monitoring runs
+against five active targets including both Tailscale Serve routes, with full CRUD. A daily
+retention cron bounds `monitor_checks`/`mail_messages`/`mail_digests`/`mail_sync_runs`/
+`health_sync_runs` and sweeps expired `health_oauth_states`/`mail_oauth_states`. Every retrying
+pg-boss queue has a dead-letter queue. Calendar events authored in Personal OS sync outward to the
+owner's chosen writable calendar; imported events are read-only. Search covers tasks, notes,
+events, projects, captures and mail with an explainable score, and every text field is bounded at
+write. Cloud Ask, when the owner enables it, answers questions about today's schedule with cited
+sources and can suggest one task to focus on. Academic intelligence (urgency, priorities, workload,
+course attention, grade summary) is live on `/academic/today` and `/academic/courses`, currently
+answering `configured: false` pending Canvas reconnection. Today now also carries a deterministic,
+client-side "Focus Now" card unifying personal and academic urgency (renders nothing when there is
+nothing urgent, as currently on the real account). The Rabbit R1 runs `com.himal.personalos`
+versionCode 28, built locally from `965900f`.
 
 ## Current work
 
-**Checkpoint 10.4 is implemented, verified, and independently reviewed clean in this worktree,
-uncommitted, NOT deployed.** Deployment follows the frozen order for the touched services
-(`apps/worker`'s canvas job needs no migration; Focus Now and the mobile polish bundle are
-`apps/mobile`-only and need a client rebuild) — both are owner-gated steps this session stops
-short of.
-
-**Checkpoint 10.3 is deployed and accepted.** `main` is `ba23472` and canonical; PR #3 merged;
-production serves api/web at that commit (worker/postgres untouched); the Rabbit R1 runs
-versionCode 27. The one open owner action carried over from 10.2 — rotate the Canvas PAT — is now
-also what's needed to bring the new academic surfaces to life with real data, AND to exercise
-10.4's new Canvas alert path for real: the connection independently went `invalid_token` hours
-before the 10.3 deploy, unrelated to anything 10.3 or 10.4 touched. Android APKs are built locally
-(see the 10.2 entry's *Device build* paragraph, and the 10.3 deployment record's build-verification
-gotcha); the EAS build service is no longer on the release path.
+**Checkpoint 10.4 is implemented, verified, independently reviewed clean, merged to `main`, and
+DEPLOYED.** `main` is `965900f` and canonical; PR #4 merged; production serves `worker`+`web` at
+that commit (`api`/`postgres` untouched); the Rabbit R1 runs versionCode 28. The one open owner
+action carried over from 10.2/10.3 — rotate the Canvas PAT — is now what's needed to bring the
+academic surfaces AND the Focus Now card's academic half to life with real data, and to exercise
+10.4's new Canvas alert path for real (a genuine second consecutive auth failure would also
+exercise it, but reconnecting with a good token is the actual goal). Android APKs are built locally
+(see the 10.2 entry's *Device build* paragraph, and the 10.3/10.4 deployment records' build-
+verification discipline); the EAS build service is no longer on the release path.
 
 **Repository housekeeping done 2026-09-16 (this reconciliation, no product change):** `main`
 fast-forwarded to the Phase 10 tip and made canonical again (PR #1 merged); the decision log split
@@ -1907,27 +1979,21 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. **Authorize Checkpoint 10.4 for deployment** (owner) — the code is implemented, fully verified
-   (build/typecheck/lint/prettier/gitleaks/6,530 tests, all green), and independently reviewed
-   clean (zero findings across AI-leakage, credential-exposure, new-egress, dedupe-key-correctness,
-   mobile-regression and scope-discipline lenses), but sits uncommitted in this worktree pending
-   explicit go-ahead to deploy. Deploying the worker half (Canvas alerting) needs no migration and
-   follows the usual `apps/worker`-only frozen-order recreate; the "Focus Now" card and mobile
-   polish bundle are `apps/mobile`-only and need a client rebuild (`eas build --local`) to reach the
-   Rabbit R1 — neither has been deployed or built yet.
-
-2. **Rotate the Canvas PAT and reconnect** (owner) — closes three things at once now: the
+1. **Rotate the Canvas PAT and reconnect** (owner) — now closes three things at once: the
    credential that reached the api log and this chat during the 10.2 incident; the connection's
-   independent `invalid_token` flip on 2026-09-16 that is the ONLY reason the deployed 10.3
-   academic surfaces show `configured: false` in production; and it is the natural way to verify
-   10.4's new Canvas alert path live (a deliberate SECOND connection-level auth failure would also
-   exercise it, but reconnecting with a good token is the actual goal). Revoke the token in
-   Canvas → Account → Settings → Approved Integrations, mint a fresh one, and reconnect from
-   Settings (the app trims a pasted line break and refuses any other whitespace before touching
-   Canvas). Then re-read Today on the Rabbit (versionCode 27, already installed) — the Academics
-   card, "Do next", workload status and course-attention chips should all appear with real Fall
-   2026 data with no rebuild needed (though the NEW Focus Now card will not appear until 10.4 is
-   deployed and a new client is built and installed).
+   independent `invalid_token` flip on 2026-09-16 that is the ONLY reason the deployed academic
+   surfaces show `configured: false` in production; and it is the natural way to see 10.4's new
+   Canvas alert path fire for real (a deliberate SECOND connection-level auth failure on a bad
+   token would also exercise it, but reconnecting with a good token is the actual goal). Revoke
+   the token in Canvas → Account → Settings → Approved Integrations, mint a fresh one, and
+   reconnect from Settings (the app trims a pasted line break and refuses any other whitespace
+   before touching Canvas). Then re-read Today on the Rabbit (versionCode 28, already installed) —
+   the Academics card, "Do next", workload status, course-attention chips, AND the new Focus Now
+   card (already deployed) should all appear with real Fall 2026 data with no rebuild needed.
+
+2. Nothing else is gating. Checkpoint 10.4 is implemented, verified, independently reviewed clean,
+   merged to `main` (`965900f`), and DEPLOYED — worker+web recreated in production, no migration,
+   api/postgres untouched, Rabbit R1 accepted on versionCode 28. No checkpoint after it is selected.
 
 3. **Then choose the next checkpoint — a product-direction decision for the owner.** Candidates
    carried from the 9.8 and 10.0/10.1 closeouts: widen the Canvas integration further (device-token
