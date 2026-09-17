@@ -4,10 +4,12 @@
 // Copies academic-today-card.test.tsx's technique exactly, for the same
 // reason recorded there: this app has no render library, so the component
 // is called directly and the plain React element tree it returns is walked.
-// Both source hooks (`useToday`, `useAcademicToday`) and the task-action
-// hook are mocked below, `useRouter` resolves to src/__mocks__/expo-router.ts,
-// and the two leaves that need React hooks (the completion glyph, the task
-// sheet host) are listed as host types per the leaf-wrapper rule.
+// Both source hooks (`useToday`, `useAcademicToday`), the two memory hooks
+// (`useMemoriesForIntelligence`, `useMemorySettings` -- Checkpoint 10.7) and
+// the task-action hook are mocked below, `useRouter` resolves to
+// src/__mocks__/expo-router.ts, and the two leaves that need React hooks
+// (the completion glyph, the task sheet host) are listed as host types per
+// the leaf-wrapper rule.
 //
 // What these pin:
 //   1. the card's whole posture -- NOTHING while either source is loading,
@@ -17,7 +19,10 @@
 //   4. a task row: completion circle + Why button + swipe actions, the row
 //      itself navigating; an academic row opening the in-app assignment
 //      sheet (never a link -- the Canvas link lives in the sheet);
-//   5. the one task-sheet host mounted by the card.
+//   5. the one task-sheet host mounted by the card;
+//   6. memory (ADR-077 §5) as a SOFT source: rows render without memory
+//      reasons while it loads or after it errors, with them once it lands,
+//      never when the switch is off; the memory why names the memory.
 
 import { Platform, Pressable, Text, View } from "react-native";
 import ReanimatedSwipeable from "react-native-gesture-handler/ReanimatedSwipeable";
@@ -33,6 +38,7 @@ import {
 } from "@/components/academic/fixtures.test-support";
 import { CompletionGlyph } from "@/components/ui";
 import { useAcademicToday } from "@/queries/academic";
+import { useMemoriesForIntelligence, useMemorySettings } from "@/queries/memory";
 import { useToday } from "@/queries/today";
 import { FocusNowCard } from "./focus-now-card";
 import {
@@ -44,6 +50,10 @@ import { useTodayTaskActions } from "./use-today-task-actions";
 
 vi.mock("@/queries/today", () => ({ useToday: vi.fn() }));
 vi.mock("@/queries/academic", () => ({ useAcademicToday: vi.fn() }));
+vi.mock("@/queries/memory", () => ({
+  useMemoriesForIntelligence: vi.fn(),
+  useMemorySettings: vi.fn(),
+}));
 // The hook module reaches the API client (expo at import), so it is mocked
 // whole; the pure decisions it shares with the rows live in
 // today-task-actions-state.ts and stay real.
@@ -211,6 +221,45 @@ function mockAcademic(overrides: Record<string, unknown> = {}) {
   } as never);
 }
 
+const PROJECT_ID = "44444444-4444-4444-8444-444444444444";
+
+function memoryItem(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "aaaaaaaa-0000-4000-8000-000000000001",
+    kind: "preference",
+    statement: "I work best in the evening",
+    note: null,
+    source: "user",
+    suggestion_id: null,
+    project_id: PROJECT_ID,
+    canvas_course_id: null,
+    created_at: "2026-09-16T00:00:00.000Z",
+    updated_at: "2026-09-16T00:00:00.000Z",
+    project: { id: PROJECT_ID, name: "Thesis" },
+    course: null,
+    ...overrides,
+  };
+}
+
+/** Memory SETTLED and empty by default: the card's posture is pinned with no memory at all. */
+function mockMemories(overrides: Record<string, unknown> = {}) {
+  vi.mocked(useMemoriesForIntelligence).mockReturnValue({
+    isLoading: false,
+    isError: false,
+    data: { items: [], limit: 200, offset: 0, total: 1 },
+    ...overrides,
+  } as never);
+}
+
+function mockMemorySettings(overrides: Record<string, unknown> = {}) {
+  vi.mocked(useMemorySettings).mockReturnValue({
+    isLoading: false,
+    isError: false,
+    data: { enabled: true, memory_count: 0 },
+    ...overrides,
+  } as never);
+}
+
 const complete = vi.fn();
 const snooze = vi.fn();
 
@@ -221,6 +270,8 @@ beforeEach(() => {
   vi.mocked(useTodayTaskActions).mockReturnValue({ complete, snooze, pending: false });
   mockToday();
   mockAcademic();
+  mockMemories();
+  mockMemorySettings();
 });
 
 describe("renders nothing", () => {
@@ -480,5 +531,130 @@ describe("an academic row (ADR-076 §3)", () => {
     const tree = render();
     expect(getTextContent(tree)).not.toContain("http");
     expect(findPressables(tree).some((p) => p.props.accessibilityRole === "link")).toBe(false);
+  });
+});
+
+describe("memory as a soft source (Checkpoint 10.7, ADR-077 §5/§7)", () => {
+  function projectTask() {
+    mockToday({
+      data: todayFixture({
+        overdue: {
+          items: [
+            taskItem({
+              id: "o1",
+              title: "Thesis chapter",
+              due_at: "2026-09-15T00:00:00Z",
+              project_id: PROJECT_ID,
+              project_name: "Thesis",
+            }),
+          ],
+          total: 1,
+        },
+      }),
+    });
+  }
+
+  it("renders the rows WITHOUT memory reasons while the memory list is still loading -- memory never gates", () => {
+    projectTask();
+    mockMemories({ isLoading: true, data: undefined });
+    const text = getTextContent(render());
+    expect(text).toContain("Thesis chapter");
+    expect(text).toContain("Overdue");
+    expect(text).not.toContain("Matches your preference");
+  });
+
+  it("renders the rows WITHOUT memory reasons while the settings are still loading", () => {
+    projectTask();
+    mockMemories({ data: { items: [memoryItem()], limit: 200, offset: 0, total: 1 } });
+    mockMemorySettings({ isLoading: true, data: undefined });
+    const text = getTextContent(render());
+    expect(text).toContain("Thesis chapter");
+    expect(text).not.toContain("Matches your preference");
+  });
+
+  it("treats memory as absent when either memory query errored -- the rows still render", () => {
+    projectTask();
+    mockMemories({ isError: true, data: undefined });
+    let text = getTextContent(render());
+    expect(text).toContain("Thesis chapter");
+    expect(text).not.toContain("Matches your preference");
+    mockMemories({ data: { items: [memoryItem()], limit: 200, offset: 0, total: 1 } });
+    mockMemorySettings({ isError: true, data: undefined });
+    text = getTextContent(render());
+    expect(text).toContain("Thesis chapter");
+    expect(text).not.toContain("Matches your preference");
+  });
+
+  it("adds the memory reason chip once both memory queries are in and a memory is linked to the task's project", () => {
+    projectTask();
+    mockMemories({ data: { items: [memoryItem()], limit: 200, offset: 0, total: 1 } });
+    const text = getTextContent(render());
+    expect(text).toContain("Thesis chapter");
+    expect(text).toContain("Matches your preference");
+  });
+
+  it("adds nothing when the global switch is off, even with a linked memory", () => {
+    projectTask();
+    mockMemories({ data: { items: [memoryItem()], limit: 200, offset: 0, total: 1 } });
+    mockMemorySettings({ data: { enabled: false, memory_count: 1 } });
+    const text = getTextContent(render());
+    expect(text).toContain("Thesis chapter");
+    expect(text).not.toContain("Matches your preference");
+  });
+
+  it("opens the task sheet with the row's memory match, so the explanation can say You said: …", () => {
+    projectTask();
+    mockMemories({ data: { items: [memoryItem()], limit: 200, offset: 0, total: 1 } });
+    const why = findPressables(render()).find((p) => p.props.testID === "focus-now-why-o1");
+    why.props.onPress();
+    const sheet = getFocusNowTaskSheet();
+    expect(sheet.row?.reasons).toEqual(["overdue", "matches_preference"]);
+    expect(sheet.row?.memoryMatch?.matchesPreference?.statement).toBe("I work best in the evening");
+  });
+
+  it("passes the memory why into the assignment sheet for an academic row linked by course", () => {
+    const courseId = assignment().course_id;
+    mockAcademic({
+      data: academicFixture({
+        priorities: {
+          items: [
+            priorityItem({
+              assignment: assignment({ id: "a1", title: "Course-linked assignment" }),
+            }),
+          ],
+          total: 1,
+        },
+      }),
+    });
+    mockMemories({
+      data: {
+        items: [
+          memoryItem({
+            statement: "Do INSY work first thing",
+            project_id: null,
+            project: null,
+            canvas_course_id: courseId,
+            course: { id: courseId, name: "Advanced Web Development", course_code: "INSY 4315" },
+          }),
+        ],
+        limit: 200,
+        offset: 0,
+        total: 1,
+      },
+    });
+    const row = findPressables(render()).find((p) =>
+      String(p.props.accessibilityLabel).startsWith("Course-linked assignment"),
+    );
+    row.props.onPress();
+    const sheet = getAssignmentSheet();
+    const memoryLine = sheet.record?.explanation?.explanations.find(
+      (e) => e.reason === "matches_preference",
+    );
+    expect(memoryLine).toEqual({
+      reason: "matches_preference",
+      label: "Matches your preference",
+      why: "You said: Do INSY work first thing",
+      source: "memory",
+    });
   });
 });

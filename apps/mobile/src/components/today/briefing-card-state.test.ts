@@ -1,5 +1,6 @@
 import type { HealthSummaryResponse, TodayResponse, TodayTaskItem } from "@personal-os/schema";
 import { composeBriefing } from "@personal-os/core/focus-now/briefing";
+import type { MemoryLinkInput } from "@personal-os/core/memory/match";
 import { describe, expect, it } from "vitest";
 import {
   academicToday,
@@ -12,8 +13,11 @@ import { briefingFor, briefingInput, briefingLineTarget } from "./briefing-card-
 // The briefing adaptation (Checkpoint 10.6, ADR-075 §4): what reaches core's
 // `composeBriefing`, and when. Core's own tests pin the composition rules;
 // these pin the client's gates (academic only when configured, health only
-// when loaded and configured, never a clock read) and the ref → target
-// mapping the card navigates on.
+// when loaded and configured, never a clock read), the memory gate
+// (Checkpoint 10.7, ADR-077 §5/§7: a working-hours preference bounds the
+// free blocks and adds one "Memory"-sourced line; the switch off or memory
+// absent ⇒ the 10.6 briefing) and the ref → target mapping the card
+// navigates on.
 
 const NOW = new Date("2026-09-16T19:00:00Z"); // 2026-09-16 14:00 CDT
 
@@ -334,5 +338,130 @@ describe("briefingLineTarget", () => {
         view.focus,
       ),
     ).toBeNull();
+  });
+});
+
+describe("memory (Checkpoint 10.7, ADR-077 §5/§7)", () => {
+  const standup = today({
+    events_today: {
+      items: [
+        {
+          id: "e1",
+          title: "Standup",
+          starts_at: "2026-09-16T21:00:00Z", // 16:00 CDT
+          ends_at: "2026-09-16T21:30:00Z",
+          all_day: false,
+          start_date: null,
+          end_date: null,
+          location: null,
+          project_id: null,
+          rrule: null,
+          parent_event_id: null,
+          occurs_at: null,
+        },
+      ],
+    },
+  });
+
+  function memory(overrides: Partial<MemoryLinkInput> = {}): MemoryLinkInput {
+    return {
+      id: "m-0001",
+      kind: "preference",
+      statement: "Working hours 9-17",
+      projectId: null,
+      canvasCourseId: null,
+      ...overrides,
+    };
+  }
+
+  function scheduleTexts(memoryOptions: Parameters<typeof briefingFor>[4]): {
+    texts: string[];
+    sources: string[];
+  } {
+    const view = briefingFor(standup, undefined, undefined, NOW, memoryOptions)!;
+    const schedule = view.briefing.sections.find((section) => section.kind === "schedule")!;
+    return {
+      texts: schedule.lines.map((line) => line.text),
+      sources: schedule.lines.map((line) => line.source),
+    };
+  }
+
+  it("passes core the working hours a preference memory states, and nothing when there is no such memory", () => {
+    expect(
+      briefingInput(today(), undefined, undefined, [], NOW, {
+        memories: [memory()],
+        memoryEnabled: true,
+      }).memory,
+    ).toEqual({ workingHours: { dayStartHour: 9, dayEndHour: 17 } });
+    expect(
+      briefingInput(today(), undefined, undefined, [], NOW, {
+        memories: [memory({ statement: "I work best in the evening" })],
+        memoryEnabled: true,
+      }).memory,
+    ).toEqual({ workingHours: null });
+    expect(briefingInput(today(), undefined, undefined, [], NOW).memory).toBeNull();
+  });
+
+  it("adds the working-hours line, sourced memory and without a ref, and bounds the free blocks to it", () => {
+    const { texts, sources } = scheduleTexts({ memories: [memory()], memoryEnabled: true });
+    expect(texts).toEqual([
+      "1 event today",
+      "Next: Standup at 16:00",
+      "Working hours 09:00–17:00 — from your preferences",
+      "Free 14:00–16:00 (2h 00m)",
+    ]);
+    expect(sources).toEqual(["calendar", "calendar", "memory", "calendar"]);
+    const view = briefingFor(standup, undefined, undefined, NOW, {
+      memories: [memory()],
+      memoryEnabled: true,
+    })!;
+    const line = view.briefing.sections
+      .find((section) => section.kind === "schedule")!
+      .lines.find((candidate) => candidate.source === "memory")!;
+    expect(line.ref).toBeUndefined();
+    // Inert: no ref, so the card draws it as a plain line, never a press target.
+    expect(briefingLineTarget(line, view.focus)).toBeNull();
+  });
+
+  it("composes the 10.6 briefing when the switch is off, when memory is absent, and when omitted", () => {
+    const expected = [
+      "1 event today",
+      "Next: Standup at 16:00",
+      "Free 14:00–16:00 (2h 00m)",
+      "Free 16:30–22:00 (5h 30m)",
+    ];
+    expect(scheduleTexts({ memories: [memory()], memoryEnabled: false }).texts).toEqual(expected);
+    expect(scheduleTexts({ memories: null, memoryEnabled: true }).texts).toEqual(expected);
+    expect(scheduleTexts(undefined).texts).toEqual(expected);
+  });
+
+  it("hands the same memories to the focus rows, so a Focus now line and the card never disagree", () => {
+    const PROJECT_ID = "44444444-4444-4444-8444-444444444444";
+    const view = briefingFor(
+      today({
+        overdue: {
+          items: [
+            task({
+              id: "o1",
+              title: "Thesis chapter",
+              due_at: "2026-09-15T00:00:00Z",
+              project_id: PROJECT_ID,
+            }),
+          ],
+          total: 1,
+        },
+      }),
+      academicToday(),
+      undefined,
+      NOW,
+      {
+        memories: [memory({ statement: "Evenings for the thesis", projectId: PROJECT_ID })],
+        memoryEnabled: true,
+      },
+    )!;
+    expect(view.focus[0]!.reasons).toEqual(["overdue", "matches_preference"]);
+    expect(view.focus[0]!.memoryMatch?.matchesPreference?.statement).toBe(
+      "Evenings for the thesis",
+    );
   });
 });

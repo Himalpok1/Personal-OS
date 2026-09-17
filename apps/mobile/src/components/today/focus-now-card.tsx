@@ -17,6 +17,15 @@
 // is loading or erroring, or once merged there is nothing to show -- the
 // AcademicTodayCard convention, restated in focusNowRows's own doc comment.
 //
+// MEMORY IS A SOFT THIRD SOURCE (Checkpoint 10.7, ADR-077 §5). The two
+// memory queries (`useMemoriesForIntelligence` / `useMemorySettings`) never
+// gate the list: while either is loading the rows render WITHOUT memory
+// reasons and re-render with them once both are in; if either errors, memory
+// is simply absent. The one `effectiveNow` stays Today's own `dataUpdatedAt`
+// -- never the memory query's, never a clock read. Matching is by typed link
+// in core (memory-inputs.ts → focus-now-card-state.ts); the matched memory
+// rides on the row so every sheet can say "You said: …".
+//
 // EVERY ROW EXPLAINS ITSELF. A task row carries a completion circle, swipes
 // to Done / Snooze, opens the task on tap, and opens its explanation sheet
 // (focus-now-task-sheet.tsx) from the "Why?" button or a long press. An
@@ -48,6 +57,7 @@ import {
   type SwipeAction,
 } from "@/components/ui";
 import { useAcademicToday } from "@/queries/academic";
+import { useMemoriesForIntelligence, useMemorySettings } from "@/queries/memory";
 import { useToday } from "@/queries/today";
 import {
   focusNowExplanation,
@@ -58,6 +68,7 @@ import {
 } from "./focus-now-card-state";
 import { focusNowReasonChips } from "./focus-now-reason-chip";
 import { FocusNowTaskSheetHost, openFocusNowTaskSheet } from "./focus-now-task-sheet";
+import { memoryIntelligenceInput } from "./memory-inputs";
 import { canSnoozeTodayTask } from "./today-task-actions-state";
 import { useTodayTaskActions } from "./use-today-task-actions";
 
@@ -182,6 +193,8 @@ function FocusNowRowView({ row, last }: { row: FocusNowRow; last: boolean }) {
 export function FocusNowCard() {
   const today = useToday();
   const academic = useAcademicToday();
+  const memories = useMemoriesForIntelligence();
+  const memorySettings = useMemorySettings();
 
   // Nothing while either source is loading, and nothing on either error --
   // the AcademicTodayCard convention: a slow or failing source must never
@@ -189,7 +202,10 @@ export function FocusNowCard() {
   if (today.data === undefined || today.isError) return null;
   if (academic.data === undefined || academic.isError) return null;
 
-  const rows = focusNowRows(today.data, academic.data, new Date(today.dataUpdatedAt));
+  // Memory never gates: loading ⇒ rows without memory reasons (re-rendered
+  // when it lands); errored or switched off ⇒ absent (memory-inputs.ts).
+  const memory = memoryIntelligenceInput(memories, memorySettings);
+  const rows = focusNowRows(today.data, academic.data, new Date(today.dataUpdatedAt), memory);
   if (rows === null) return null;
 
   return (

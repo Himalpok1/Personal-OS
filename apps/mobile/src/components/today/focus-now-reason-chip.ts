@@ -3,7 +3,8 @@ import type { FocusNowReason } from "@personal-os/core/focus-now/score";
 import type { ChipTone } from "@/components/ui/status-chip";
 
 // Chip vocabulary for the Focus Now card (Checkpoint 10.4, ADR-072; the six
-// context reasons added by Checkpoint 10.6, ADR-075). Pure, React-free. Maps
+// context reasons added by Checkpoint 10.6, ADR-075; the two memory reasons
+// by Checkpoint 10.7, ADR-077 §5). Pure, React-free. Maps
 // the CLOSED `FocusNowReason` vocabulary onto a word and a StatusChip tone --
 // the same words the Academics card already uses
 // (`components/academic/urgency-chip.ts`) for the reasons the two share, so
@@ -33,6 +34,11 @@ const REASON_TONE: Readonly<Record<FocusNowReason, ChipTone>> = {
   no_submission: "neutral",
   reminder_set: "neutral",
   snoozed: "info",
+  // ADR-077 §5: a memory reason is the owner's own saved preference or goal,
+  // matched by typed link -- a quiet nudge (primary) and an affirmation
+  // (success), never an urgency tone.
+  matches_preference: "primary",
+  supports_goal: "success",
 };
 
 export const FOCUS_NOW_REASON_CHIP: Readonly<Record<FocusNowReason, ChipSpec>> = Object.freeze(

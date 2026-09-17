@@ -104,6 +104,7 @@ function row(overrides: Partial<FocusNowTaskRow> = {}): FocusNowTaskRow {
     linkedAssignmentId: null,
     task: item,
     linkedPriorityItem: null,
+    memoryMatch: null,
     ...overrides,
   };
 }
@@ -150,6 +151,32 @@ describe("FocusNowTaskSheetContent", () => {
     expect(text).toContain("P1");
     expect(text).toContain("Marked P1");
     expect(text).toContain("300 due <24h + 25 P1 = 325");
+  });
+
+  it("names the matched memory on a memory reason -- You said: … -- with a Memory source chip (ADR-077 §5)", () => {
+    const text = getTextContent(
+      renderContent({
+        row: row({
+          reasons: ["due_within_24h", "top_priority", "matches_preference"],
+          contextPoints: 15,
+          score: 340,
+          memoryMatch: {
+            matchesPreference: {
+              id: "m1",
+              kind: "preference",
+              statement: "I work best in the evening",
+              projectId: "44444444-4444-4444-8444-444444444444",
+              canvasCourseId: null,
+            },
+            supportsGoal: null,
+          },
+        }),
+      }),
+    );
+    expect(text).toContain("Matches your preference");
+    expect(text).toContain("You said: I work best in the evening");
+    expect(text).toContain("Memory");
+    expect(text).toContain("300 due <24h + 25 P1 + 15 preference = 340");
   });
 
   it("offers Open task, Mark done and the three snooze targets, each wired to its callback", () => {

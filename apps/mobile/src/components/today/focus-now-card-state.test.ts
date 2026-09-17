@@ -1,4 +1,5 @@
 import { FOCUS_NOW_CAP } from "@personal-os/core/focus-now/score";
+import type { MemoryLinkInput } from "@personal-os/core/memory/match";
 import type { TodayResponse, TodayTaskItem } from "@personal-os/schema";
 import { describe, expect, it } from "vitest";
 import {
@@ -12,6 +13,7 @@ import {
   focusNowRowPriorityItem,
   focusNowRows,
   type FocusNowAcademicRow,
+  type FocusNowMemoryOptions,
   type FocusNowTaskRow,
 } from "./focus-now-card-state";
 
@@ -476,5 +478,275 @@ describe("focusNowExplanation (ADR-075 §1)", () => {
     expect(focusNowRowPriorityItem(merged!)?.assignment.id).toBe("a1");
     const [plain] = focusNowRows(today, academicToday(), NOW)!;
     expect(focusNowRowPriorityItem(plain!)).toBeNull();
+  });
+});
+
+describe("focusNowRows -- memory by typed link (Checkpoint 10.7, ADR-077 §5/§7)", () => {
+  const PROJECT_ID = "44444444-4444-4444-8444-444444444444";
+  const ASSIGNMENT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const COURSE_ID = assignment().course_id;
+
+  function memory(overrides: Partial<MemoryLinkInput> = {}): MemoryLinkInput {
+    return {
+      id: "m-0001",
+      kind: "preference",
+      statement: "I work best in the evening",
+      projectId: null,
+      canvasCourseId: null,
+      ...overrides,
+    };
+  }
+
+  function enabled(memories: MemoryLinkInput[]): FocusNowMemoryOptions {
+    return { memories, memoryEnabled: true };
+  }
+
+  function projectTaskToday(overrides: Partial<TodayTaskItem> = {}) {
+    return emptyToday({
+      overdue: {
+        items: [
+          task({
+            id: "t1",
+            title: "Thesis chapter",
+            due_at: "2026-09-15T00:00:00Z",
+            project_id: PROJECT_ID,
+            project_name: "Thesis",
+            ...overrides,
+          }),
+        ],
+        total: 1,
+      },
+    });
+  }
+
+  function courseAcademic() {
+    return academicToday({
+      priorities: {
+        items: [
+          priorityItem({
+            assignment: assignment({ id: ASSIGNMENT_ID, title: "Project milestone 2" }),
+            urgency: "critical",
+            score: 400,
+            reasons: ["overdue"],
+          }),
+        ],
+        total: 1,
+      },
+    });
+  }
+
+  it("adds matches_preference (+15) to a task from a preference memory linked to its project, and returns the match on the row", () => {
+    const preference = memory({ projectId: PROJECT_ID });
+    const [row] = focusNowRows(projectTaskToday(), academicToday(), NOW, enabled([preference]))!;
+    expect(row!.reasons).toEqual(["overdue", "matches_preference"]);
+    expect(row!.baseScore).toBe(400);
+    expect(row!.contextPoints).toBe(15);
+    expect(row!.score).toBe(415);
+    expect(row!.memoryMatch).toEqual({ matchesPreference: preference, supportsGoal: null });
+  });
+
+  it("adds supports_goal (+15) from a goal memory linked to the task's project, and both reasons when both are linked", () => {
+    const goal = memory({
+      id: "m-goal",
+      kind: "goal",
+      statement: "Finish the thesis by December",
+      projectId: PROJECT_ID,
+    });
+    const preference = memory({ projectId: PROJECT_ID });
+    const [goalOnly] = focusNowRows(projectTaskToday(), academicToday(), NOW, enabled([goal]))!;
+    expect(goalOnly!.reasons).toEqual(["overdue", "supports_goal"]);
+    expect(goalOnly!.contextPoints).toBe(15);
+    expect(goalOnly!.memoryMatch).toEqual({ matchesPreference: null, supportsGoal: goal });
+    const [both] = focusNowRows(
+      projectTaskToday(),
+      academicToday(),
+      NOW,
+      enabled([goal, preference]),
+    )!;
+    expect(both!.reasons).toEqual(["overdue", "matches_preference", "supports_goal"]);
+    expect(both!.contextPoints).toBe(30);
+    expect(both!.score).toBe(430);
+    expect(both!.memoryMatch).toEqual({ matchesPreference: preference, supportsGoal: goal });
+  });
+
+  it("adds matches_preference to an assignment from a preference memory linked to its course, on top of the server's verbatim score", () => {
+    const preference = memory({ statement: "Do INSY work first thing", canvasCourseId: COURSE_ID });
+    const [row] = focusNowRows(emptyToday(), courseAcademic(), NOW, enabled([preference]))!;
+    expect(row!.kind).toBe("academic_assignment");
+    expect(row!.baseScore).toBe(400);
+    expect(row!.reasons).toEqual(["overdue", "no_submission", "matches_preference"]);
+    expect(row!.contextPoints).toBe(15);
+    expect(row!.score).toBe(415);
+    expect(row!.memoryMatch).toEqual({ matchesPreference: preference, supportsGoal: null });
+    expect(focusNowExplanation(row!).explanations.at(-1)).toEqual({
+      reason: "matches_preference",
+      label: "Matches your preference",
+      why: "You said: Do INSY work first thing",
+      source: "memory",
+    });
+  });
+
+  it("never matches by text: a memory whose statement contains the task title but has no link adds nothing", () => {
+    const unlinked = memory({ statement: "Thesis chapter is what matters most this week" });
+    const [row] = focusNowRows(projectTaskToday(), academicToday(), NOW, enabled([unlinked]))!;
+    expect(row!.reasons).toEqual(["overdue"]);
+    expect(row!.contextPoints).toBe(0);
+    expect(row!.memoryMatch).toBeNull();
+  });
+
+  it("adds nothing for a memory linked to a DIFFERENT project or course", () => {
+    const other = memory({ projectId: "55555555-5555-4555-8555-555555555555" });
+    const [row] = focusNowRows(projectTaskToday(), academicToday(), NOW, enabled([other]))!;
+    expect(row!.reasons).toEqual(["overdue"]);
+    expect(row!.memoryMatch).toBeNull();
+    const otherCourse = memory({ canvasCourseId: "66666666-6666-4666-8666-666666666666" });
+    const [academicRow] = focusNowRows(
+      emptyToday(),
+      courseAcademic(),
+      NOW,
+      enabled([otherCourse]),
+    )!;
+    expect(academicRow!.reasons).toEqual(["overdue", "no_submission"]);
+    expect(academicRow!.memoryMatch).toBeNull();
+  });
+
+  it("treats every memory as absent when the switch is off, and when memory is absent or omitted", () => {
+    const preference = memory({ projectId: PROJECT_ID });
+    for (const options of [
+      { memories: [preference], memoryEnabled: false },
+      { memories: null, memoryEnabled: true },
+      undefined,
+    ] as (FocusNowMemoryOptions | undefined)[]) {
+      const [row] = focusNowRows(projectTaskToday(), academicToday(), NOW, options)!;
+      expect(row!.reasons).toEqual(["overdue"]);
+      expect(row!.contextPoints).toBe(0);
+      expect(row!.memoryMatch).toBeNull();
+    }
+  });
+
+  it("reaches a task linked to one of today's assignments through that assignment's course -- and only then", () => {
+    const preference = memory({ statement: "Do INSY work first thing", canvasCourseId: COURSE_ID });
+    const linkedToday = projectTaskToday({
+      project_id: null,
+      project_name: null,
+      canvas_assignment_id: ASSIGNMENT_ID,
+    });
+    // The assignment is NOT a candidate today: no course to resolve, so no match.
+    const [alone] = focusNowRows(linkedToday, academicToday(), NOW, enabled([preference]))!;
+    expect(alone!.reasons).toEqual(["overdue"]);
+    expect(alone!.memoryMatch).toBeNull();
+    // The assignment IS a candidate today: the merged row carries the reason once.
+    const [merged] = focusNowRows(linkedToday, courseAcademic(), NOW, enabled([preference]))!;
+    expect(merged!.kind).toBe("task");
+    expect(merged!.reasons).toEqual([
+      "overdue",
+      "linked_assignment",
+      "no_submission",
+      "matches_preference",
+    ]);
+    expect(merged!.contextPoints).toBe(40);
+    expect(merged!.score).toBe(440);
+    expect(merged!.memoryMatch).toEqual({ matchesPreference: preference, supportsGoal: null });
+  });
+
+  it("gives a merged task+assignment row each memory bonus ONCE when both sides match, naming the task's own memory first", () => {
+    const projectPreference = memory({
+      id: "m-project",
+      statement: "Evenings for the thesis",
+      projectId: PROJECT_ID,
+    });
+    const coursePreference = memory({
+      id: "m-course",
+      statement: "Do INSY work first thing",
+      canvasCourseId: COURSE_ID,
+    });
+    const goal = memory({
+      id: "m-goal",
+      kind: "goal",
+      statement: "Graduate in May",
+      projectId: PROJECT_ID,
+    });
+    const linkedToday = projectTaskToday({ canvas_assignment_id: ASSIGNMENT_ID });
+    const rows = focusNowRows(
+      linkedToday,
+      courseAcademic(),
+      NOW,
+      enabled([projectPreference, coursePreference, goal]),
+    )!;
+    expect(rows).toHaveLength(1);
+    const [row] = rows as [FocusNowTaskRow];
+    expect(row.kind).toBe("task");
+    // task: overdue 400 + preference + goal; academic: overdue 400 + no_submission + preference.
+    // Union: matches_preference ONCE (+15), supports_goal (+15), linked (+25) = 55.
+    expect(row.reasons).toEqual([
+      "overdue",
+      "linked_assignment",
+      "no_submission",
+      "matches_preference",
+      "supports_goal",
+    ]);
+    expect(row.baseScore).toBe(400);
+    expect(row.contextPoints).toBe(55);
+    expect(row.score).toBe(455);
+    expect(row.reasons.filter((reason) => reason === "matches_preference")).toHaveLength(1);
+    expect(row.memoryMatch).toEqual({ matchesPreference: projectPreference, supportsGoal: goal });
+    expect(row.linkedPriorityItem?.assignment.id).toBe(ASSIGNMENT_ID);
+    expect(focusNowExplanation(row).equation).toBe(
+      "400 overdue + 25 linked assignment + 15 preference + 15 goal = 455",
+    );
+  });
+
+  it("names the assignment's memory on a merged row when only the assignment side matched", () => {
+    const coursePreference = memory({
+      id: "m-course",
+      statement: "Do INSY work first thing",
+      canvasCourseId: COURSE_ID,
+    });
+    const linkedToday = projectTaskToday({
+      project_id: null,
+      project_name: null,
+      canvas_assignment_id: ASSIGNMENT_ID,
+    });
+    // Give the task no course route of its own by matching through the academic side only:
+    // the task ALSO resolves the course (it is a candidate today), so both sides match the same memory.
+    const [row] = focusNowRows(linkedToday, courseAcademic(), NOW, enabled([coursePreference]))!;
+    expect(row!.memoryMatch?.matchesPreference).toEqual(coursePreference);
+    expect(focusNowExplanation(row!).explanations.at(-1)?.why).toBe(
+      "You said: Do INSY work first thing",
+    );
+  });
+
+  it("orders two otherwise-equal rows by the memory bonus, and never lifts a row past one due sooner", () => {
+    const preference = memory({ projectId: PROJECT_ID });
+    const today = emptyToday({
+      overdue: {
+        items: [
+          task({ id: "plain", title: "Plain", due_at: "2026-09-14T00:00:00Z" }),
+          task({
+            id: "pref",
+            title: "Preferred",
+            due_at: "2026-09-15T00:00:00Z",
+            project_id: PROJECT_ID,
+          }),
+        ],
+        total: 2,
+      },
+      due_today: {
+        items: [
+          task({ id: "later", title: "Later today", due_at: "2026-09-16T23:00:00Z" }),
+          task({
+            id: "later-pref",
+            title: "Later today, preferred",
+            due_at: "2026-09-16T23:30:00Z",
+            project_id: PROJECT_ID,
+          }),
+        ],
+        total: 2,
+      },
+    });
+    const rows = focusNowRows(today, academicToday(), NOW, enabled([preference]))!;
+    // 415 (pref) > 400 (plain, though due sooner): memory reorders within the rung;
+    // 315 (later-pref) > 300 (later); but no due-today row passes an overdue one.
+    expect(rows.map((r) => r.id)).toEqual(["pref", "plain", "later-pref", "later"]);
   });
 });

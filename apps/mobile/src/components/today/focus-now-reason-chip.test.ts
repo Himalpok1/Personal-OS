@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { FOCUS_NOW_REASON_CHIP, focusNowReasonChips } from "./focus-now-reason-chip";
 
 describe("FOCUS_NOW_REASON_CHIP", () => {
-  it("covers every academic reason, the task-only reason and the six context reasons (ADR-075)", () => {
+  it("covers every academic reason, the task-only reason, the six context reasons (ADR-075) and the two memory reasons (ADR-077)", () => {
     const keys = Object.keys(FOCUS_NOW_REASON_CHIP).sort();
     expect(keys).toEqual(
       [...ACADEMIC_PRIORITY_REASONS, "top_priority", ...FOCUS_NOW_CONTEXT_REASONS].sort(),
@@ -52,6 +52,17 @@ describe("FOCUS_NOW_REASON_CHIP", () => {
     });
     expect(FOCUS_NOW_REASON_CHIP.reminder_set).toEqual({ tone: "neutral", label: "Reminder set" });
     expect(FOCUS_NOW_REASON_CHIP.snoozed).toEqual({ tone: "info", label: "Snoozed" });
+  });
+
+  it("tones the two memory reasons as a nudge and an affirmation, never an urgency (ADR-077 §5)", () => {
+    expect(FOCUS_NOW_REASON_CHIP.matches_preference).toEqual({
+      tone: "primary",
+      label: "Matches your preference",
+    });
+    expect(FOCUS_NOW_REASON_CHIP.supports_goal).toEqual({
+      tone: "success",
+      label: "Supports a goal",
+    });
   });
 });
 

@@ -12,6 +12,13 @@
 // is loading (the screen shows its skeleton then). A section core omits
 // simply does not render -- nothing here invents a section or a count.
 //
+// Memory (Checkpoint 10.7, ADR-077 §5) joins as a fourth, optional source
+// through the same two hooks the Focus Now card reads, and joins the SETTLE
+// set below: the block waits for the memory queries like it waits for the
+// academic and health ones, and a failed one contributes nothing. Its one
+// visible effect here is the "Working hours … — from your preferences" line
+// (source "Memory"), which carries no `ref` and is therefore inert.
+//
 // The "Ask about today" chip is NOT drawn here: the screen passes it as
 // `children`, gated exactly where and how it was (Checkpoint 9.7's `ask`
 // switch), so it keeps living inside the one hero block.
@@ -23,11 +30,13 @@ import { openAssignmentSheet } from "@/components/academic/assignment-sheet";
 import { AppText, GradientCard } from "@/components/ui";
 import { useAcademicToday } from "@/queries/academic";
 import { useHealthSummary } from "@/queries/health";
+import { useMemoriesForIntelligence, useMemorySettings } from "@/queries/memory";
 import { useToday } from "@/queries/today";
 import { formatShortDate } from "@/utils/local-date";
 import { briefingFor, briefingLineTarget, type BriefingLineTarget } from "./briefing-card-state";
 import { focusNowExplanation, type FocusNowRow } from "./focus-now-card-state";
 import { FOCUS_NOW_SOURCE_LABEL } from "./focus-now-source-label";
+import { memoryIntelligenceInput } from "./memory-inputs";
 
 /** The on-gradient pill (docs/MOBILE-DESIGN-SYSTEM.md rule 1's documented exception), as a source chip. */
 function SourceChip({ label }: { label: string }) {
@@ -119,14 +128,19 @@ export function BriefingCard({ children }: { children?: ReactNode }) {
   const today = useToday();
   const academic = useAcademicToday();
   const health = useHealthSummary();
+  const memories = useMemoriesForIntelligence();
+  const memorySettings = useMemorySettings();
 
   if (today.data === undefined || today.isError) return null;
-  // Wait for the two optional sources to SETTLE (data or error) before the
+  // Wait for the optional sources to SETTLE (data or error) before the
   // first render, the Focus Now card's own posture: a gradient block that
   // grows a section mid-view on every cold load reads as a glitch (10.6
   // review, finding 5). A failed source still contributes nothing below.
+  // Memory (ADR-077 §5) is in the same set, on the same terms.
   if (academic.data === undefined && !academic.isError) return null;
   if (health.data === undefined && !health.isError) return null;
+  const memory = memoryIntelligenceInput(memories, memorySettings);
+  if (!memory.settled) return null;
 
   // A source that failed contributes nothing -- exactly as if it had not
   // loaded -- rather than a stale or partial section.
@@ -135,6 +149,7 @@ export function BriefingCard({ children }: { children?: ReactNode }) {
     academic.isError ? undefined : academic.data,
     health.isError ? undefined : health.data,
     new Date(today.dataUpdatedAt),
+    memory,
   );
   if (view === null) return null;
   const { briefing, focus } = view;

@@ -7,13 +7,14 @@ import {
   type BriefingInput,
   type BriefingLine,
 } from "@personal-os/core/focus-now/briefing";
+import { memoryWorkingHours } from "@personal-os/core/memory/match";
 import type {
   AcademicTodayResponse,
   HealthSummaryResponse,
   TodayEventItem,
   TodayResponse,
 } from "@personal-os/schema";
-import { focusNowRows, type FocusNowRow } from "./focus-now-card-state";
+import { focusNowRows, type FocusNowMemoryOptions, type FocusNowRow } from "./focus-now-card-state";
 
 // Pure, React-free adaptation of the three responses the Today screen
 // already fetches into core's `BriefingInput` (Checkpoint 10.6, ADR-075 §4):
@@ -32,6 +33,13 @@ import { focusNowRows, type FocusNowRow } from "./focus-now-card-state";
 //              yesterday)
 //   focus      the same merged, ranked rows the Focus Now card shows, so a
 //              "Focus now" line and the card below it never disagree
+//   memory     (Checkpoint 10.7, ADR-077 §5) the working-hours `preference`
+//              memory, read by core's fixed grammar (`memoryWorkingHours`),
+//              bounds the free blocks and adds one "Working hours HH:MM–HH:MM
+//              — from your preferences" line sourced `memory`; the same
+//              memories also reach the focus rows through `focusNowRows`.
+//              Absent (not loaded, errored, or the switch off) ⇒ core
+//              receives no memory and the briefing is the 10.6 one
 
 /**
  * The instants a Today event occupies. For a timed RECURRING instance the
@@ -76,12 +84,19 @@ function healthInput(health: HealthSummaryResponse | undefined): BriefingHealthI
   };
 }
 
+/** Core's memory input: the working hours the owner's `preference` memories state, or nothing (ADR-077 §5/§7). */
+function memoryInput(memory: FocusNowMemoryOptions | undefined): BriefingInput["memory"] {
+  if (memory === undefined || memory.memories === null || !memory.memoryEnabled) return null;
+  return { workingHours: memoryWorkingHours(memory.memories, { enabled: true }) };
+}
+
 export function briefingInput(
   today: TodayResponse,
   academic: AcademicTodayResponse | undefined,
   health: HealthSummaryResponse | undefined,
   focus: readonly FocusNowRow[],
   effectiveNow: Date,
+  memory?: FocusNowMemoryOptions,
 ): BriefingInput {
   return {
     effectiveNow,
@@ -95,6 +110,7 @@ export function briefingInput(
     academic: academicInput(academic),
     health: healthInput(health),
     focus,
+    memory: memoryInput(memory),
   };
 }
 
@@ -109,18 +125,20 @@ export interface BriefingView {
  * screen shows its skeleton then). The focus rows are the Focus Now card's
  * own (`focusNowRows`), which are empty -- never null -- here when the
  * academic source has not loaded, so the briefing can still lead with the
- * personal counts.
+ * personal counts. `memory` reaches both the focus rows and the schedule
+ * section; absent, it changes nothing.
  */
 export function briefingFor(
   today: TodayResponse | undefined,
   academic: AcademicTodayResponse | undefined,
   health: HealthSummaryResponse | undefined,
   effectiveNow: Date,
+  memory?: FocusNowMemoryOptions,
 ): BriefingView | null {
   if (today === undefined) return null;
-  const focus = focusNowRows(today, academic, effectiveNow) ?? [];
+  const focus = focusNowRows(today, academic, effectiveNow, memory) ?? [];
   return {
-    briefing: composeBriefing(briefingInput(today, academic, health, focus, effectiveNow)),
+    briefing: composeBriefing(briefingInput(today, academic, health, focus, effectiveNow, memory)),
     focus,
   };
 }

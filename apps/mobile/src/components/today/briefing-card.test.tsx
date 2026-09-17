@@ -1,11 +1,14 @@
 // Render-level tests for <BriefingCard /> (Checkpoint 10.6, ADR-075 §4 /
-// ADR-076 §4). Tree-walk idiom; the three query hooks are mocked.
+// ADR-076 §4; memory from Checkpoint 10.7, ADR-077 §5). Tree-walk idiom; the
+// three query hooks and the two memory hooks are mocked.
 //
 // What these pin: nothing while today is loading or errored; the headline
 // and the section overlines; a source chip on every line; a "Focus now"
 // line opening the assignment sheet (academic) or navigating (task); a
 // failed academic/health source contributing nothing; the children (the
-// screen's Ask chip) rendered inside the block.
+// screen's Ask chip) rendered inside the block; memory in the settle set
+// (loading ⇒ nothing yet; errored ⇒ absent), the working-hours line with its
+// "Memory" pill and no press target, and nothing when the switch is off.
 
 import { Pressable, Text, View } from "react-native";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,12 +23,17 @@ import {
 } from "@/components/academic/fixtures.test-support";
 import { useAcademicToday } from "@/queries/academic";
 import { useHealthSummary } from "@/queries/health";
+import { useMemoriesForIntelligence, useMemorySettings } from "@/queries/memory";
 import { useToday } from "@/queries/today";
 import { BriefingCard } from "./briefing-card";
 
 vi.mock("@/queries/today", () => ({ useToday: vi.fn() }));
 vi.mock("@/queries/academic", () => ({ useAcademicToday: vi.fn() }));
 vi.mock("@/queries/health", () => ({ useHealthSummary: vi.fn() }));
+vi.mock("@/queries/memory", () => ({
+  useMemoriesForIntelligence: vi.fn(),
+  useMemorySettings: vi.fn(),
+}));
 
 const HOST_TYPES = new Set<unknown>([View, Text, Pressable]);
 
@@ -175,6 +183,42 @@ function mockHealth(overrides: Record<string, unknown> = {}) {
   } as never);
 }
 
+function workingHoursMemory() {
+  return {
+    id: "aaaaaaaa-0000-4000-8000-000000000001",
+    kind: "preference",
+    statement: "Working hours 9-17",
+    note: null,
+    source: "user",
+    suggestion_id: null,
+    project_id: null,
+    canvas_course_id: null,
+    created_at: "2026-09-16T00:00:00.000Z",
+    updated_at: "2026-09-16T00:00:00.000Z",
+    project: null,
+    course: null,
+  };
+}
+
+/** Memory SETTLED and empty by default, so every 10.6 pin holds with no memory at all. */
+function mockMemories(overrides: Record<string, unknown> = {}) {
+  vi.mocked(useMemoriesForIntelligence).mockReturnValue({
+    isLoading: false,
+    isError: false,
+    data: { items: [], limit: 200, offset: 0, total: 0 },
+    ...overrides,
+  } as never);
+}
+
+function mockMemorySettings(overrides: Record<string, unknown> = {}) {
+  vi.mocked(useMemorySettings).mockReturnValue({
+    isLoading: false,
+    isError: false,
+    data: { enabled: true, memory_count: 0 },
+    ...overrides,
+  } as never);
+}
+
 function render(children?: unknown): unknown {
   return deepRender(BriefingCard({ children: children as never }));
 }
@@ -185,6 +229,8 @@ beforeEach(() => {
   mockToday();
   mockAcademic();
   mockHealth();
+  mockMemories();
+  mockMemorySettings();
 });
 
 describe("renders nothing", () => {
@@ -203,6 +249,14 @@ describe("renders nothing", () => {
     expect(BriefingCard({})).toBeNull();
     mockAcademic();
     mockHealth({ isLoading: true, isError: false, data: undefined });
+    expect(BriefingCard({})).toBeNull();
+  });
+
+  it("while a memory query is still loading -- memory joins the settle set (ADR-077 §5)", () => {
+    mockMemories({ isLoading: true, isError: false, data: undefined });
+    expect(BriefingCard({})).toBeNull();
+    mockMemories();
+    mockMemorySettings({ isLoading: true, isError: false, data: undefined });
     expect(BriefingCard({})).toBeNull();
   });
 });
@@ -261,5 +315,56 @@ describe("the briefing", () => {
   it("renders its children -- the screen's Ask chip -- inside the block", () => {
     const tree = render(<View testID="today-ask-chip" />);
     expect(findAll(tree, (n) => n.props?.testID === "today-ask-chip")).toHaveLength(1);
+  });
+});
+
+describe("memory (Checkpoint 10.7, ADR-077 §5/§7)", () => {
+  const MEMORY_LIST = { items: [workingHoursMemory()], limit: 200, offset: 0, total: 1 };
+
+  it("adds the working-hours line with a Memory pill, inert (no ref, no press target), and bounds the free time", () => {
+    mockMemories({ data: MEMORY_LIST });
+    const tree = render();
+    const text = getTextContent(tree);
+    expect(text).toContain("Working hours 09:00–17:00 — from your preferences");
+    expect(text).toContain("Memory");
+    // The line is a plain View, never a Pressable: briefingLineTarget is null without a ref.
+    const pressables = findAll(tree, (n) => n.type === Pressable);
+    expect(
+      pressables.some((p) => String(p.props.accessibilityLabel).startsWith("Working hours")),
+    ).toBe(false);
+    const inert = findAll(tree, (n) =>
+      String(n.props?.accessibilityLabel ?? "").startsWith("Working hours 09:00–17:00"),
+    );
+    expect(inert).toHaveLength(1);
+    expect(inert[0].props.accessibilityLabel).toBe(
+      "Working hours 09:00–17:00 — from your preferences. Source: Memory",
+    );
+    // Free time is bounded by the stated 17:00, not the 22:00 default: the
+    // fixture's standup is 16:00–16:30 CDT, so the afternoon block ends at
+    // 16:00 and the 30-minute tail to 17:00 is below freeBlocks' 60-minute
+    // floor (with the default bound it would read "16:30–22:00").
+    expect(text).toContain("Free 14:00–16:00 (2h 00m)");
+    expect(text).not.toContain("–22:00");
+  });
+
+  it("renders the 10.6 briefing when the switch is off, even with a working-hours memory", () => {
+    mockMemories({ data: MEMORY_LIST });
+    mockMemorySettings({ data: { enabled: false, memory_count: 1 } });
+    const text = getTextContent(render());
+    expect(text).not.toContain("Working hours");
+    expect(text).not.toContain("Memory");
+    expect(text).toContain("–22:00");
+  });
+
+  it("treats memory as absent when either memory query errored, and still renders", () => {
+    mockMemories({ isError: true, data: undefined });
+    let text = getTextContent(render());
+    expect(text).toContain("Briefing");
+    expect(text).not.toContain("Working hours");
+    mockMemories({ data: MEMORY_LIST });
+    mockMemorySettings({ isError: true, data: undefined });
+    text = getTextContent(render());
+    expect(text).toContain("Briefing");
+    expect(text).not.toContain("Working hours");
   });
 });
