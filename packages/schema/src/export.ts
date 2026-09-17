@@ -4,7 +4,8 @@
 // SCOPE: USER-AUTHORED CORE ONLY, AND EVERY OMISSION IS A DECISION
 // ===========================================================================
 //
-// Four entities: `projects`, `tasks`, `notes`, `inbox_items`. These are the
+// Five entities: `projects`, `tasks`, `notes`, `inbox_items` and (since
+// Checkpoint 10.7) `memories`. These are the
 // tables whose every row exists because the owner typed, dictated or captured
 // it. Nothing else is included, and the exclusions are not an unfinished list:
 //
@@ -40,6 +41,7 @@ import { NoteSchema } from "./notes.js";
 import { ProjectSchema } from "./projects.js";
 import { CaptureSourceSchema } from "./capture.js";
 import { TaskSchema } from "./tasks.js";
+import { MemorySchema } from "./memories.js";
 
 /**
  * Bumped only on a BREAKING change to the envelope, so a file written today
@@ -76,6 +78,16 @@ export const EXPORT_ENTITY_MAX_ROWS = 10_000;
 export const TaskExportSchema = TaskSchema;
 export const NoteExportSchema = NoteSchema;
 export const ProjectExportSchema = ProjectSchema;
+/**
+ * Checkpoint 10.7 (ADR-077): memories are the owner's most deliberately
+ * authored content -- every row was typed or explicitly accepted -- and the
+ * only user-authored entity with no soft delete, so the export is the one undo
+ * a deletion has (ADR-024). The FLAT row is exported (ids, never the resolved
+ * project/course names -- those are display denormalization). The
+ * `memory_suggestions` decision table and the `memory_settings` switch are
+ * plumbing, like `client_uuid`, and stay out.
+ */
+export const MemoryExportSchema = MemorySchema;
 
 /**
  * Inbox items are the one NARROWED shape, and the narrowing is deliberate.
@@ -131,6 +143,7 @@ export const ExportCountsSchema = z
     tasks: ExportEntityCountSchema,
     notes: ExportEntityCountSchema,
     inbox_items: ExportEntityCountSchema,
+    memories: ExportEntityCountSchema,
   })
   .strict();
 export type ExportCounts = z.infer<typeof ExportCountsSchema>;
@@ -163,6 +176,7 @@ export const ExportResponseSchema = z
     tasks: z.array(TaskExportSchema),
     notes: z.array(NoteExportSchema),
     inbox_items: z.array(InboxItemExportSchema),
+    memories: z.array(MemoryExportSchema),
   })
   .strict();
 export type ExportResponse = z.infer<typeof ExportResponseSchema>;

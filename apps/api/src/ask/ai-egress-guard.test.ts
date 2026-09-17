@@ -565,3 +565,117 @@ describe("academic data never reaches an AI lane (Checkpoint 10.2, Guard 5)", ()
     for (const binding of CANVAS_TABLE_BINDINGS) expect(code).toContain(binding);
   });
 });
+
+// ===========================================================================
+// GUARD 6 -- memory never reaches an AI lane, another read model, or the
+// worker (Checkpoint 10.7, ADR-077 §6).
+// ===========================================================================
+//
+// The Personal Memory layer is the owner's most deliberately authored text --
+// preferences, goals and facts they typed on purpose. ADR-077 makes it
+// DETERMINISTIC-ONLY: it influences Focus Now and the briefing on the client
+// (packages/core, by explicit typed link) and is never part of any prompt, any
+// pg-boss job payload or any push body. Guard 5's structure is reused
+// verbatim, parameterised for the memory tables, with one addition: the
+// worker tree is walked too, because "never rides a job or a push" is a
+// worker-side property (ADR-077 invariant 4). Lifting this boundary is a
+// future ADR plus a new ASK_TODAY_CONSENT_FROM vintage, never an edit here.
+const MEMORY_READ_MODEL = path.join(API_SRC, "read-models/memories.ts");
+const MEMORY_ROUTES = [
+  path.join(API_SRC, "routes/memories.ts"),
+  path.join(API_SRC, "routes/memory-settings.ts"),
+  path.join(API_SRC, "routes/memory-suggestions.ts"),
+];
+const MEMORY_TABLE_BINDINGS = ["memories", "memorySuggestions", "memorySettings"] as const;
+const MEMORY_TABLE_NAMES = ["memory_suggestions", "memory_settings"] as const;
+const MEMORY_TABLE_IDENTIFIER = new RegExp(
+  `\\b(?:${[...MEMORY_TABLE_BINDINGS, ...MEMORY_TABLE_NAMES].join("|")})\\b`,
+);
+const FORBIDDEN_MEMORY_SPECIFIERS: readonly [string, RegExp][] = [
+  ["read-models/memories", /(?:^|\/)read-models\/memories(?:\.js)?$/],
+  ["@personal-os/core/memory/*", /^@personal-os\/core\/memory(?:\/|$)/],
+];
+const MEMORY_RELATIVE_SPECIFIER = /(?:^|\/)memories(?:\.js)?$/;
+
+describe("memory never reaches an AI lane, another read model, or the worker (Checkpoint 10.7, Guard 6)", () => {
+  const laneFiles = AI_LANE_DIRS.flatMap((dir) => walk(dir));
+  const workerFiles = walk(WORKER_SRC);
+
+  it("walks every AI lane and the worker, so an empty directory cannot pass by finding nothing", () => {
+    const rels = laneFiles.map(relToRepo);
+    expect(rels).toContain("apps/api/src/intelligence/today-context.ts");
+    expect(rels).toContain("apps/api/src/brief/collect-input.ts");
+    expect(workerFiles.map(relToRepo)).toContain("apps/worker/src/jobs/retention-cleanup.ts");
+  });
+
+  it("no AI-lane file and no worker file imports the memory read model, core's memory helpers, or names a memory table", () => {
+    const offenders: string[] = [];
+    for (const file of [...laneFiles, ...workerFiles]) {
+      const original = readFileSync(file, "utf8");
+      for (const specifier of importSpecifiers(original)) {
+        for (const [label, pattern] of FORBIDDEN_MEMORY_SPECIFIERS) {
+          if (pattern.test(specifier)) offenders.push(`${relToRepo(file)}: ${label}`);
+        }
+      }
+      const code = stripLineComments(original);
+      const identifier = MEMORY_TABLE_IDENTIFIER.exec(code);
+      if (identifier) offenders.push(`${relToRepo(file)}: ${identifier[0]}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("no other read model imports, re-exports or names the memory module or tables (one-hop evasion)", () => {
+    const offenders: string[] = [];
+    const siblings = walk(READ_MODELS_DIR).filter((f) => f !== MEMORY_READ_MODEL);
+    expect(siblings.map(relToRepo)).toContain("apps/api/src/read-models/today.ts");
+    expect(siblings.map(relToRepo)).toContain("apps/api/src/read-models/reminders.ts");
+    for (const file of siblings) {
+      const original = readFileSync(file, "utf8");
+      for (const specifier of importSpecifiers(original)) {
+        if (MEMORY_RELATIVE_SPECIFIER.test(specifier) || /core\/memory/.test(specifier)) {
+          offenders.push(`${relToRepo(file)}: ${specifier}`);
+        }
+      }
+      const code = stripLineComments(original);
+      const reexport = /export\s+(?:\*|\{[^}]*\})\s+from\s*["'][^"']*memories[^"']*["']/.exec(code);
+      if (reexport) offenders.push(`${relToRepo(file)}: ${reexport[0]}`);
+      // user-export.ts is the ONE sibling allowed to name the table: GET /export
+      // carries memories as user-authored core (ADR-059/077 §2), and Guard 2
+      // already lists it as a reviewed body reader.
+      if (relToRepo(file) === "apps/api/src/read-models/user-export.ts") continue;
+      const identifier = MEMORY_TABLE_IDENTIFIER.exec(code);
+      if (identifier) offenders.push(`${relToRepo(file)}: ${identifier[0]}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("the memory read model and routes import neither the AI SDK, the provider package, nor an AI lane", () => {
+    const offenders: string[] = [];
+    for (const file of [MEMORY_READ_MODEL, ...MEMORY_ROUTES]) {
+      const code = stripLineComments(readFileSync(file, "utf8"));
+      for (const [label, pattern] of FORBIDDEN_ACADEMIC_LANE_IMPORTS) {
+        if (pattern.test(code)) offenders.push(`${relToRepo(file)}: ${label}`);
+      }
+      // ADR-077 §6: memory never rides a job or a push. The memory route set
+      // has no reason to touch the queue at all.
+      if (/\bboss\b|pg-boss|\.send\s*\(/.test(code)) offenders.push(`${relToRepo(file)}: queue`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("the memory read model contains no write verb -- writes live in the routes, reads in the projection", () => {
+    const code = stripLineComments(readFileSync(MEMORY_READ_MODEL, "utf8"));
+    const offenders: string[] = [];
+    for (const [label, pattern] of FORBIDDEN_INTELLIGENCE_WRITE_VERBS) {
+      if (pattern.test(code)) offenders.push(label);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("actually reads the memory read model, so a moved file cannot pass vacuously", () => {
+    const all = importSpecifiers(readFileSync(MEMORY_READ_MODEL, "utf8"));
+    expect(all).toContain("@personal-os/db");
+    const code = stripLineComments(readFileSync(MEMORY_READ_MODEL, "utf8"));
+    for (const binding of MEMORY_TABLE_BINDINGS) expect(code).toContain(binding);
+  });
+});

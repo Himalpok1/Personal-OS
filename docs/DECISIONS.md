@@ -99,6 +99,7 @@ Ordering below is the original log order: amendments (`ADR-046a`, `ADR-047a`, `A
 | [ADR-074](decisions/ADR-074.md) | Checkpoint 10.5: exactly one narrow, explicit, nullable FK (tasks.canvas_assignment_id) instead of a generic entity/relationship table (migration 0022) | Locked |
 | [ADR-075](decisions/ADR-075.md) | Checkpoint 10.6 (Intelligence): explainable, context-aware Focus Now (closed reason vocabulary with sources, frozen context points, linked-task dedupe) and a deterministic client-composed daily briefing; one opaque optional key on `/today` | Locked |
 | [ADR-076](decisions/ADR-076.md) | Checkpoint 10.6 (Mobile): motion, gesture and interaction primitives on the already-installed Reanimated/gesture-handler stack, no new dependency; Today reorganised actionable-first | Locked |
+| [ADR-077](decisions/ADR-077.md) | Checkpoint 10.7: the Personal Memory & Preference Layer — three flat tables with two narrow FKs (migration 0023), owner-only writes, computed-never-stored suggestions, deterministic link-based influence on Focus Now/briefing, and Guard 6 keeping memory out of every AI lane, job and push | Locked |
 
 ## Open later-phase decisions
 

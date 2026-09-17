@@ -140,6 +140,18 @@ import {
   listAcademicCourses,
 } from "./academic.js";
 import { getToday } from "./today.js";
+import {
+  createMemory,
+  decideMemorySuggestion,
+  deleteAllMemories,
+  deleteMemory,
+  getMemory,
+  getMemorySettings,
+  listMemories,
+  listMemorySuggestions,
+  updateMemory,
+  updateMemorySettings,
+} from "./memories.js";
 import { transcribe } from "./transcribe.js";
 
 export { ApiClientError, type ZodLikeSchema } from "./client.js";
@@ -234,6 +246,17 @@ export type {
   AcademicTodayResponse,
 } from "./academic.js";
 export type { AgendaParams, AgendaResponse } from "./agenda.js";
+export type {
+  MemoryCreate,
+  MemoryItem,
+  MemoryListParams,
+  MemoryListResponse,
+  MemorySettings,
+  MemorySuggestion,
+  MemorySuggestionDecideRequest,
+  MemorySuggestionDecideResponse,
+  MemoryUpdate,
+} from "./memories.js";
 export type {
   MonitorIncidentListParams,
   MonitorTarget,
@@ -374,6 +397,19 @@ export function createApiClient(baseUrl: string) {
     // Checkpoint 10.5 (ADR-074) -- a superset of getAcademicCourse: adds the
     // owner's own tasks/reminders explicitly linked to this course.
     getAcademicCourseContext: getAcademicCourseContext.bind(null, baseUrl),
+
+    // Checkpoint 10.7 (ADR-077) -- Personal Memory & Preference Layer. Every
+    // write is the owner's explicit act; nothing here reaches a model.
+    getMemorySettings: getMemorySettings.bind(null, baseUrl),
+    updateMemorySettings: updateMemorySettings.bind(null, baseUrl),
+    listMemories: listMemories.bind(null, baseUrl),
+    getMemory: getMemory.bind(null, baseUrl),
+    createMemory: createMemory.bind(null, baseUrl),
+    updateMemory: updateMemory.bind(null, baseUrl),
+    deleteMemory: deleteMemory.bind(null, baseUrl),
+    deleteAllMemories: deleteAllMemories.bind(null, baseUrl),
+    listMemorySuggestions: listMemorySuggestions.bind(null, baseUrl),
+    decideMemorySuggestion: decideMemorySuggestion.bind(null, baseUrl),
 
     getMonitorOverview: getMonitorOverview.bind(null, baseUrl),
     listMonitorIncidents: listMonitorIncidents.bind(null, baseUrl),

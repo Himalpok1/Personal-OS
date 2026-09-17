@@ -32,3 +32,4 @@ export * from "./intelligence-tools.js";
 export * from "./focus.js";
 export * from "./canvas.js";
 export * from "./academic.js";
+export * from "./memories.js";

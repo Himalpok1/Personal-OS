@@ -14,11 +14,12 @@ function body(overrides: Record<string, unknown> = {}) {
     generated_at: "2026-09-03T12:00:00.000Z",
     scope: "user_authored_core",
     truncated: false,
-    counts: { projects: ZERO, tasks: ZERO, notes: ZERO, inbox_items: ZERO },
+    counts: { projects: ZERO, tasks: ZERO, notes: ZERO, inbox_items: ZERO, memories: ZERO },
     projects: [],
     tasks: [],
     notes: [],
     inbox_items: [],
+    memories: [],
     ...overrides,
   };
 }
@@ -44,14 +45,27 @@ describe("ExportResponseSchema", () => {
 
   it("rejects a counts object that gained an entity", () => {
     const widened = body({
-      counts: { projects: ZERO, tasks: ZERO, notes: ZERO, inbox_items: ZERO, events: ZERO },
+      counts: {
+        projects: ZERO,
+        tasks: ZERO,
+        notes: ZERO,
+        inbox_items: ZERO,
+        memories: ZERO,
+        events: ZERO,
+      },
     });
     expect(ExportResponseSchema.safeParse(widened).success).toBe(false);
   });
 
   it("rejects dishonest counts", () => {
     const dishonest = body({
-      counts: { projects: ZERO, tasks: ZERO, notes: { returned: 9, total: 1 }, inbox_items: ZERO },
+      counts: {
+        projects: ZERO,
+        tasks: ZERO,
+        notes: { returned: 9, total: 1 },
+        inbox_items: ZERO,
+        memories: ZERO,
+      },
     });
     expect(ExportResponseSchema.safeParse(dishonest).success).toBe(false);
   });

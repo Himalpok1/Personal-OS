@@ -73,3 +73,14 @@ export const PARSER_PROJECT_REF_MAX_CHARS = 200;
 export function tooLongMessage(field: string, max: number): string {
   return `${field} must be at most ${max} characters`;
 }
+
+/**
+ * Checkpoint 10.7 (ADR-077): a memory's statement -- one sentence the owner
+ * wants Personal OS to keep ("I work best in the evening"). User-typed, so
+ * REJECTED over the bound, never truncated. Deliberately shorter than a task
+ * body: a memory is a fact or a preference, not a document.
+ */
+export const MEMORY_STATEMENT_MAX_CHARS = 1000;
+
+/** A memory's optional free-text note (why it matters, when it changed). */
+export const MEMORY_NOTE_MAX_CHARS = 2000;

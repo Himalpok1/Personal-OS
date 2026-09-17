@@ -67,6 +67,19 @@ describe("buildLogRecord", () => {
     expect(record["senderAddress"]).toBe("[forbidden-field]");
   });
 
+  it("drops a memory statement by name (Checkpoint 10.7, ADR-077 §6)", () => {
+    const record = buildLogRecord(
+      "info",
+      "memory.created",
+      { statement: "evening", memoryStatement: "x", kind: "preference", count: 3 },
+      AT,
+    );
+    expect(record["statement"]).toBe("[forbidden-field]");
+    expect(record["memoryStatement"]).toBe("[forbidden-field]");
+    expect(record["kind"]).toBe("preference");
+    expect(record["count"]).toBe(3);
+  });
+
   it("drops the Ask lane's own vocabulary by name (Checkpoint 8.6B)", () => {
     const record = buildLogRecord(
       "info",

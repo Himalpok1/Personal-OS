@@ -41,3 +41,6 @@ export * from "./canvas-assignments.js";
 export * from "./canvas-announcements.js";
 export * from "./canvas-events.js";
 export * from "./canvas-sync-runs.js";
+export * from "./memory-settings.js";
+export * from "./memory-suggestions.js";
+export * from "./memories.js";

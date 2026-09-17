@@ -97,6 +97,11 @@ const FORBIDDEN_FIELD_FRAGMENTS: readonly string[] = [
   "question",
   "prompt",
   "answer",
+  // Checkpoint 10.7 (ADR-077 §6): a memory's `statement` is the owner's most
+  // deliberately authored text. Counts-only logging is the contract; the name
+  // fragment is the backstop. No route in the tree logs a field of this name
+  // for any other purpose (verified by grep before adding).
+  "statement",
 ];
 
 /**

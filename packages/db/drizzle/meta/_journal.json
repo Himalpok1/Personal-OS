@@ -162,6 +162,13 @@
       "when": 1789378000000,
       "tag": "0022_task_canvas_assignment_link",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1789379000000,
+      "tag": "0023_personal_memory_layer",
+      "breakpoints": true
     }
   ]
 }
