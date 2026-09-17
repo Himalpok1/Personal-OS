@@ -37,8 +37,18 @@ import { AppText } from "./text";
 /** The offscreen distance a sheet slides from before its height is measured. */
 export const SHEET_FALLBACK_HEIGHT = 600;
 
-/** Pure: the sheet's vertical offset for a progress in [0, 1]. */
+/**
+ * Pure: the sheet's vertical offset for a progress in [0, 1]. Marked a
+ * worklet because the animated style below runs on the UI runtime, where a
+ * plain JS function is a "remote function" and calling it synchronously is a
+ * fatal native error (`[Worklets] Tried to synchronously call a Remote
+ * Function`) -- the versionCode-30 build crashed on launch exactly this way
+ * (Checkpoint 10.6). The style worklet still inlines the arithmetic rather
+ * than calling out at all; this directive is belt-and-braces for any future
+ * caller.
+ */
 export function sheetTranslateY(progress: number, height: number): number {
+  "worklet";
   return (1 - progress) * height;
 }
 
@@ -204,8 +214,10 @@ export function BottomSheet({
   }, [motion, open, progress]);
 
   const backdropStyle = useAnimatedStyle(() => ({ opacity: progress.get() }));
+  // Inlined `sheetTranslateY`: a worklet must not call into a JS-thread
+  // function (see that helper's comment); `height` is captured by value.
   const sheetStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: sheetTranslateY(progress.get(), height) }],
+    transform: [{ translateY: (1 - progress.get()) * height }],
   }));
 
   const mounted = open || closing;

@@ -33,6 +33,12 @@ migration `0022` applied, level 23; `api`+`web` recreated in production, `worker
 untouched; the Rabbit R1 accepted on versionCode 29, built locally 2026-09-17 ~08:00Z, zero crash
 lines): one narrow FK (`tasks.canvas_assignment_id`) plus two new `GET /<entity>/:id/context` read
 models and mobile linking UI, live-exercised against real production data and cleaned up after.
+**Checkpoint 10.6 — Intelligence + Mobile Experience Expansion — is IMPLEMENTED, VERIFIED (6,816
+tests, 23/23 tasks), INDEPENDENTLY REVIEWED (safe after fixes, all closed), merged to `main`
+(`3a90c0c`, PR #6) and DEPLOYED** (owner authorized: "Deploy"; no migration; `api`+`web` recreated in
+production 2026-09-17 ~10:08Z, `worker`/`postgres` untouched; Rabbit R1 — see the 10.6 record):
+explainable, context-aware Focus Now, a deterministic client-composed daily briefing, and a motion +
+gesture design system on the already-installed Reanimated/gesture-handler stack (ADR-075/076).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -80,9 +86,9 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 
 | | |
 |---|---|
-| Migration level | **22** (`0000`–`0021`); local and production agree; unchanged by 10.3/10.4 (both shipped no migration). 10.2 added `0021_canvas_assignment_grades` (ADR-068a), applied to production 2026-09-16 from the 10.2 api image — row 22, `created_at 1789377000000`, hash `f8c3ed88…` identical to the tracked file. |
-| Serving commit | **api, postgres at `1edb61b`/10.1C-and-earlier (untouched by 10.3/10.4); worker and web at `965900f`** (10.4, both recreated 2026-09-16 ~23:00Z from `personal-os-10.4-release`; images worker `4cf1639685fa`, web `d5b2edb90d53`). Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{worker,web}:rollback-pre-10.4` = the pre-10.4 images (`fcc97debae22…` / `1ede9b84f9e7…`), plus every earlier tag, all by resolved digest. |
-| Containers | all four `RestartCount=0`; api `(healthy)`; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated since); `GET /health` → `ok` / `connected` / `stale:false` (23:07Z) |
+| Migration level | **23** (`0000`–`0022`); local and production agree; unchanged by 10.6 (no migration). 10.5 added `0022_task_canvas_assignment_link` (ADR-074), applied to production 2026-09-17 from the 10.5 api image. |
+| Serving commit | **api and web at `3a90c0c`** (10.6, both recreated 2026-09-17 ~10:08Z from `personal-os-10.6-release`; images api `dccf3ff797df`, web `2732d63f84e3`); **worker at `965900f`** (10.4, untouched since — 10.5 and 10.6 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,web}:rollback-pre-10.6` = the 10.5 images (`d293d6f813d7` / `7e8cce9615b3`), plus every earlier tag, all by resolved digest. |
+| Containers | all four `RestartCount=0`; api `(healthy)` within 8 s of the 10.6 recreation; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated since); `GET /health` → `ok` / `connected` / `stale:false` (2026-09-17 10:08Z) |
 | Rabbit R1 | `com.himal.personalos` **versionCode 28**, built from `965900f` **locally** (`eas build --local`, profile `production-internal`, the EAS-managed keystore fetched at build time — signer SHA-256 `4601e3a2…` identical to the installed app's, compared with `apksigner` before installing), `adb install -r` → `Success` with `firstInstallTime` 2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS` all preserved — no re-pair. Today/Health/Mail Digest/Settings walked live; the new Focus Now card correctly renders nothing (nothing overdue/due-today/academic-priority on the real account right now); 0 crash lines. |
 | Academic layer (10.2 + ADR-070a) | `GET /academic/today?tz=` · `GET /academic/courses[?include_past_terms=]` · `GET /academic/courses/:id` — a provider-agnostic read model computed over the Canvas tables (ADR-070), **current term only by default** (ADR-070a: the most recently started term, by date — `current_term: 2026 Fall` echoed on the wire), a deterministic Today card and `/academic` course screens, `score`/`grade` synced (ADR-068a; 165 of 355 real assignments carry a grade). **Live and validated**: Today `overdue 2 · due today 1 · due this week 8 · 8 unread` from the 6 Fall 2026 courses (was 11 overdue across 16 courses in 3 terms before the rule); `include_past_terms=true` still lists all 16. |
 | Canvas (10.1/10.1B/10.1C + 10.2 hotfix) | `packages/canvas-providers` + six tables, PAT-authenticated, read-only, hourly `canvas.sync-cron`. Connection `8b8e2cb6…` **reactivated in place by the owner's live disconnect → reconnect** (22:32–22:33Z: same row, `created_at` unchanged, 16/355/22 still linked, manual sync `succeeded`). A pasted token is now trimmed and refused if it carries whitespace/control characters, the client refuses to build a header from one, and the api's error serializer scrubs bearer/PAT shapes (hotfix `4c614db`). **Live-validated against the owner's real UTA account 2026-09-16**: connect → sync (16 courses, 355 assignments, 19 announcements, 0 events) → idempotent resync → disconnect (credential triple NULLed) → invalid token rejected (`400 canvas_auth_failed`) → reconnect → resync, left **active**. **Reconnect path (10.1C) verified live 2026-09-16**: disconnect → `200` · reconnect → **`200` on the same row `8b8e2cb6…`** (`created_at` unchanged at 10:50:30Z, all 16 courses still linked) · second connect on the active row → `409` · manual resync `202` → `succeeded` · hourly cron `succeeded` at 12:00:17Z. Zero PAT-shaped strings and zero warn/error lines in the api and worker logs since the api was recreated. |
@@ -96,7 +102,7 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress. |
 | Backups | **None, by design** (ADR-024). |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE** (re-verified 2026-09-16). No CI, no Actions workflow, no repository secret. **`main` is the canonical branch again as of 2026-09-16** (fast-forwarded to the Phase 10 tip; PR #1 merged). |
-| Test baseline | **6,530 tests across 13 packages** at the 10.4 commit (`965900f`, deployed for worker/web): api 1,496 · mobile 1,600 · core 1,031 · worker 738 · schema 563 · health-providers 332 · api-client 201 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25. Was 6,477 at 10.3. |
+| Test baseline | **6,816 tests across 13 packages** at the 10.6 commit (`3a90c0c`, deployed for api/web): api 1,515 · mobile 1,782 · core 1,111 · worker 738 · schema 563 · health-providers 332 · api-client 206 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25. Was 6,588 at 10.5. |
 | pg-boss | **31 queues, 11 schedules** (worker startup log at 10.1B; `pgboss.queue` reads one more with the internal `__pgboss__send-it`). Every retrying queue has a dead-letter queue (9.0): `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues, `occurrences.generate-lazy`, `occurrences.expand-window`. `occurrences.expand-window` has a phase-2 idempotent lazy repair since 9.4. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C) · `health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now` (9.0). First scheduled run 2026-09-13T04:00Z; the job's daily runs have not been individually re-verified since the 9.0 acceptance. |
 | Alert keys | Occurrence-scoped (ADR-058). Producers: health-sync breaker (first live emission 2026-09-12T03:00:14Z), `occurrences.generate-lazy.dead:<occurrenceId>`, `occurrences.expand-window.dead:<UTC date>` (9.0; also covers a failed 9.4 phase-2 repair), `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (9.5). The three 9.x producers are unexercised in production by design. |
@@ -1915,6 +1921,49 @@ one-off tasks and occurrence rows (a recurring parent row has no instance to sno
 reads it yet; the Settings hub split, a persisted appearance preference and the FAB/PTT band remain
 candidates.
 
+#### Deployment — COMPLETE for api/web (2026-09-17 10:05–10:09Z), owner-authorized ("Deploy")
+
+**Repository.** `claude/phase-10-6-kickoff-f61cf9` pushed; PR #6 opened; confirmed a true
+fast-forward (`git merge-base --is-ancestor origin/main HEAD`) and pushed to `main`
+(`8e3bd9b` → `3a90c0c`); PR #6 auto-closed `MERGED`.
+
+**Pre-deployment read (production, before anything was touched).** `/health` ok/connected/
+`stale:false`; migration `23` rows, `max(created_at) 1789378000000`; api/web on the 10.5 images,
+worker on 10.4; all four integrations `active`; the one `failed` pg-boss job the documented
+2026-09-16 mail-sync timeout; Rabbit R1 on the USB bus at versionCode 29.
+
+**Frozen order, `api` + `web` only, no migration.** `git diff --stat 8e3bd9b..3a90c0c -- apps/worker
+packages/db` is empty, so `worker` was neither rebuilt nor tagged. Running `api`/`web` images tagged
+`rollback-pre-10.6` by id (`d293d6f813d7` / `7e8cce9615b3`). `git archive` of `3a90c0c` shipped to
+`/home/himallinux/personal-os-10.6-release` (1,316 tracked files; no `.env`, no
+`google-services.json`; 23 migration files; the ADR-075 SHA-256 identical to the worktree's). Built
+`api`+`web` (`build_exit=0`, running containers untouched — verified by `docker ps` before and after).
+**Verified before rollout:** the api image's `dist/read-models/today.js` carries `canvasAssignmentId`
+and `canvas_assignment_id`, `packages/schema/dist/today.js` carries the key, 23 `.sql` files with
+`0022_task_canvas_assignment_link.sql` last (equal to production's watermark, so no migrate step —
+the 10.3/10.4 precedent), no `.env`/`google-services.json` baked in; the web image's served bundle
+(4.50 MB) contains `GestureHandlerRootView` ×2, "Focus Now", "Why it's here", "Past its due time",
+"Open in Canvas" ×2, the tailnet hostname once and `localhost:3000` never. `api` recreated alone →
+`(healthy)` after 8 s, `/health` ok; `web` recreated alone → `200` on its published port. `worker`
+(started 03:57Z) and `postgres` (started 2026-08-30) confirmed untouched by their own start
+timestamps; all four `RestartCount=0`.
+
+**Production validation (real routes, real account).** `/health`, `/today`, `/academic/today`,
+`/academic/courses`, `/reminders`, `/health-summary`, `/mail-digests/current`, `/search` all `200`
+locally and `/today` + the web root `200` over the Tailscale HTTPS route. `GET /academic/today` on
+the real account: `configured: true`, `current_term 2026 Fall`, 5 priority items whose reason
+vocabulary is exactly the pre-10.6 set (`overdue`, `due_within_24h`, `due_this_week`,
+`marked_missing`, `high_points`) — the installed versionCode-29 client's strict schema keeps parsing,
+as ADR-075 §5 requires. **The real account currently has zero open personal tasks** (`overdue 0 ·
+due_today 0 · upcoming 0 · inbox 0 · projects 0`), so the new `canvas_assignment_id` key could not be
+observed on live data; it rests on the two route tests, which ran on the identical code. api log
+since recreation: **0** warn/error lines, **0** token-shaped strings; 71 pg-boss jobs completed in
+the following window, 0 failed/retry/active.
+
+**Rollback, if ever needed:** `docker tag personal-os-{api,web}:rollback-pre-10.6
+personal-os-{api,web}:latest` then the frozen `up -d --no-deps --no-build --force-recreate api web`;
+no schema involved.
+
 ---
 
 ## Remaining warnings / technical debt
@@ -2181,6 +2230,14 @@ mobile linking UI live-exercised against real production data and cleaned up aft
 first checkpoint since 10.1C to need `api` and `db` touched, not just `worker`/`web`/mobile —
 production serves `api`+`web` at `f29418b`, `worker`/`postgres` untouched, Rabbit R1 versionCode 29.
 
+
+**Checkpoint 10.6 — Intelligence + Mobile Experience Expansion — is implemented, verified (6,816
+tests, 23/23 tasks), independently reviewed (safe after fixes, all closed in-checkpoint), merged to
+`main` (`3a90c0c`, PR #6), and DEPLOYED** (owner authorized: "Deploy"). See the full entry above. No
+migration; touches `packages/schema/src/today.ts` (one optional key), `apps/api/src/read-models/
+today.ts`, `packages/core/src/focus-now/**` and `apps/mobile/**` — `apps/worker`, `packages/db` and
+the strict academic schemas are untouched. Production serves `api`+`web` at `3a90c0c`;
+`worker`/`postgres` untouched. The Rabbit R1 record is in the 10.6 entry.
 ---
 
 ## Completed
@@ -2215,9 +2272,10 @@ phase is in `docs/history/`; the one-line summary is:
 | **10.3** | Academic Intelligence Expansion + Mobile UX Modernization: deterministic urgency / explainable priority scoring / workload status / course attention / grade summary as optional keys on the academic read model (ADR-071, no migration), a token-based mobile design system (`components/ui/`, three new Expo modules, web dark mode fixed) and every screen restyled on it. **Implemented, verified (6,477 tests), independently reviewed (twice — the full adversarial pass and a four-lane final release gate), merged to `main` (`ba23472`) and DEPLOYED 2026-09-16/17** (api/web recreated, worker/postgres untouched); Rabbit R1 accepted on versionCode 27, built locally after catching and fixing a wrong-API-URL build before it ever reached the device. |
 | **10.4** | "Focus Now" — a deterministic, client-side-only unified ranking merging personal urgent items and academic priorities on Today (`packages/core/src/focus-now`, ADR-072, no new route/migration/AI call); Canvas invalid-token alerting gated on two consecutive connection-level auth failures, mirroring Gmail/Health/Calendar's existing alert producers (`apps/worker/src/canvas/alerts.ts`, ADR-073 amending ADR-068 §6); a four-item mobile polish bundle (`SegmentedControl` promoted to the design system, courses-screen skeleton flash fixed, accessible Settings loading states, haptic on destructive confirms). **Implemented, verified (6,530 tests, 23/23 tasks, zero failing), independently reviewed clean, merged to `main` (`965900f`) and DEPLOYED 2026-09-16/17** (worker+web recreated, api/postgres untouched, no migration); Rabbit R1 accepted on versionCode 28, built locally. |
 | **10.5** | Personal Context Layer: exactly one narrow, explicit-write-only FK (`tasks.canvas_assignment_id`, migration `0022`, ADR-074) instead of the generic entity/relationship table a preceding 4-lane architecture review found this codebase already tried once and got zero adoption for (`item_tags`, Checkpoint 10.0); two new `GET /<entity>/:id/context` read models (`related_reminders` on course context, `related_captures`/`recent_activity` on project context) built entirely over existing FKs; a task-detail linking picker and two zero-schema navigation fixes on mobile. **Implemented, verified (6,588 tests, 23/23 tasks, zero failing), independently reviewed clean, merged to `main` (`f29418b`) and DEPLOYED 2026-09-17** (migration `0022` applied, level 23; api/web recreated, worker/postgres untouched); Rabbit R1 accepted on versionCode 29, built locally, the write path and both context routes live-exercised against real production data. |
+| **10.6** | Intelligence + Mobile Experience Expansion: an explainability layer (closed reason vocabulary with sources and deterministic "why"s, frozen context points, linked-task dedupe, an auditable score equation — ADR-075) and a client-composed deterministic daily briefing (academic / schedule with free blocks / sleep vs 7-day average / focus) over already-fetched read models, with one additive optional wire key (`TodayTaskItem.canvas_assignment_id`, opaque, never forwarded to a model); a motion + gesture design system on the already-installed Reanimated 4 / gesture-handler stack (`PressableScale`, `CompletionCircle`, `SwipeableRow`, `Toast`, `AnimatedNumber`, `ClampedText`, `BottomSheet` — ADR-076), Today reorganised actionable-first with a briefing hero and an explanation sheet on every Focus Now row, an in-app assignment sheet before "Open in Canvas", and every major screen polished on the design system. **Implemented, verified (6,816 tests, 23/23 tasks, zero failing), independently reviewed (safe after fixes, all closed), merged to `main` (`3a90c0c`) and DEPLOYED 2026-09-17** (api/web recreated, worker/postgres untouched, no migration); Rabbit R1: see the 10.6 entry. |
 
-**Production is at migration level 23** and serves `api`+`web` built from `f29418b` (10.5);
-`worker`/`postgres` are untouched since 10.4/2026-08-30 respectively. Google Calendar, Gmail, Health
+**Production is at migration level 23** and serves `api`+`web` built from `3a90c0c` (10.6);
+`worker`/`postgres` are untouched since 10.4/2026-08-30 respectively (10.5 and 10.6 changed nothing under `apps/worker`). Google Calendar, Gmail, Health
 and Canvas are all **active** (the Canvas PAT was rotated and reconnected by the owner on
 2026-09-17, the same connection row reactivated in place, real data flowing again — closing the
 open action carried since the 10.2 credential-in-log incident). Monitoring runs
@@ -2237,6 +2295,13 @@ context and a "related capture"/activity trail on its project context. The Rabbi
 `com.himal.personalos` versionCode 29, built locally from `f29418b`.
 
 ## Current work
+
+**Checkpoint 10.6 is implemented, verified (6,816 tests, 23/23 tasks), independently reviewed, merged
+to `main` (`3a90c0c`), and DEPLOYED.** `main` is `3a90c0c` and canonical; PR #6 merged; production
+serves `api`+`web` at that commit (`worker` still on 10.4's `965900f`, `postgres` untouched); no
+migration (level 23). Today now leads with a deterministic briefing and an explainable Focus Now;
+the mobile design system has motion, gestures, sheets and toasts on the already-installed Reanimated
+stack. Android APKs remain built locally (`eas build --local`).
 
 **Checkpoint 10.5 is implemented, verified (6,588 tests, 23/23 tasks), independently reviewed
 clean, merged to `main` (`f29418b`), and DEPLOYED.** `main` is `f29418b` and canonical; PR #5
@@ -2266,6 +2331,30 @@ removed from the primary checkout.
 ---
 
 ## Last verification
+
+**Checkpoint 10.6 gate (2026-09-17), full monorepo, integrator-run, at `3a90c0c`.** `pnpm build
+--force` 12/12 · `pnpm typecheck` 23/23 · `npx eslint apps packages` and `apps/mobile`'s own
+`eslint .` exit 0 · root `prettier --check .` clean, every mobile file that was prettier-clean at
+HEAD still clean, every new file formatted · `git diff --check` clean · `gitleaks detect --no-git`
+no leaks · `pnpm test --force` **23/23 tasks, 6,816 tests across 13 packages, zero failing** ·
+cache-cleared `expo export --platform web` clean (entry 4.50 MB, `GestureHandlerRootView` present) ·
+live browser walk of Today at 480×800 in light and dark against the real local `personalos` data
+(briefing hero, Focus Now rows, the explanation sheet with source chips and the score equation, the
+whole new order; 0 nested `<button>`s; `.dark` present) · independent adversarial review (eight
+lenses, every suite re-run by the reviewer on its own clone DB): one CONFIRMED MAJOR (recurring
+events' template instants in the briefing) and one PLAUSIBLE MINOR (a second assignment-sheet host)
+closed with regression pins; A/B/C/D/E/F/G lenses CLEAN. Full record: *Phase 10 → Checkpoint 10.6*
+above.
+
+**Checkpoint 10.6 deployment (2026-09-17 10:05–10:09Z), read directly from production.** `main`
+fast-forwarded to `3a90c0c`, PR #6 merged · `api`/`web` images tagged `rollback-pre-10.6` by id ·
+`git archive` (1,316 files, no `.env`/`google-services.json`) · new api image verified to carry the
+`canvas_assignment_id` emission and all 23 migrations (level unchanged, none applied); new web
+bundle verified to carry the 10.6 strings and the tailnet URL, never `localhost:3000` · `api` then
+`web` recreated alone, `(healthy)` in 8 s, `worker`/`postgres` untouched by their own start
+timestamps · every read route `200` locally and over Tailscale · the real account's academic
+priorities keep the pre-10.6 reason vocabulary (versionCode-29 wire-safe) · 0 warn/error and 0
+token-shaped log lines; 71 jobs completed, 0 failed. Rabbit R1: see the 10.6 entry.
 
 **Checkpoint 10.5 gate (2026-09-17), full monorepo, integrator-run.** `pnpm build --force` 12/12 ·
 `pnpm typecheck` 23/23 · `npx eslint apps packages` and `apps/mobile`'s own `eslint .` exit 0 · root
@@ -2381,12 +2470,15 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. Nothing is gating. Checkpoint 10.5 is implemented, verified, independently reviewed clean,
-   merged to `main` (`f29418b`), and **DEPLOYED** — migration `0022` applied (level 23), `api`+`web`
-   recreated in production, `worker`/`postgres` untouched, both new context routes and the write
-   path live-exercised against real data, Rabbit R1 accepted on versionCode 29. Checkpoint 10.4 is
-   likewise deployed and accepted; the Canvas PAT rotation/reconnect carried from 10.2/10.3 is done.
-   No checkpoint after 10.5 is selected.
+1. Nothing is gating. Checkpoint 10.6 is implemented, verified, independently reviewed (all
+   findings closed), merged to `main` (`3a90c0c`), and **DEPLOYED** — no migration, `api`+`web`
+   recreated in production, `worker`/`postgres` untouched; the Rabbit R1 record is in the 10.6
+   entry. Checkpoints 10.4 and 10.5 are likewise deployed and accepted. **No checkpoint after 10.6 is
+   selected; Phase 10.7 is not begun.** Two things worth watching on real use before the next
+   checkpoint: the first-ever production exercise of Reanimated worklets on the Rabbit (press
+   springs, swipe panels, the entering fades — an on-device regression is a rebuild away, never a
+   server rollback), and the briefing's free-block line once real classes are on the calendar
+   (the recurring-instance fix is pinned by a test on the real wire shape, not yet by a live day).
 
 2. **Choose the next checkpoint — a product-direction decision for the owner.** Candidates
    carried forward: widen the Canvas integration further (device-token auth on the academic routes;
