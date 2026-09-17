@@ -61,7 +61,7 @@ describe("memories api-client", () => {
     await createMemory(BASE, { kind: "preference", statement: "I work best in the evening" });
     const init = f.mock.calls[0]?.[1] as RequestInit;
     expect(init.method).toBe("POST");
-    expect(JSON.parse(String(init.body))).toEqual({
+    expect(JSON.parse(init.body as string)).toEqual({
       kind: "preference",
       statement: "I work best in the evening",
     });
@@ -87,7 +87,7 @@ describe("memories api-client", () => {
     expect(result.deleted).toBe(3);
     const init = f.mock.calls[0]?.[1] as RequestInit;
     expect(init.method).toBe("POST");
-    expect(JSON.parse(String(init.body))).toEqual({ confirm: true });
+    expect(JSON.parse(init.body as string)).toEqual({ confirm: true });
     expect(String(f.mock.calls[0]?.[0])).toContain("/memories/delete-all");
   });
 

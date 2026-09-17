@@ -41,6 +41,12 @@ R1 ACCEPTED on versionCode 31 after versionCode 30 crashed on launch and was rol
 the same hour — see the 10.6 record):
 explainable, context-aware Focus Now, a deterministic client-composed daily briefing, and a motion +
 gesture design system on the already-installed Reanimated/gesture-handler stack (ADR-075/076).
+**Checkpoint 10.7 — Personal Memory & Preference Layer — is IMPLEMENTED, VERIFIED (7,089 tests,
+23/23 tasks), LIVE-VERIFIED IN THE BROWSER against the local database, and INDEPENDENTLY REVIEWED
+(safe after fixes; every required fix closed in-checkpoint) on branch
+`claude/personal-memory-preference-layer-45c590` — NOT MERGED, NOT DEPLOYED** (ADR-077; one additive
+migration, `0023`, level 23 → 24; `apps/worker` untouched). Deployment and the Rabbit build await the
+owner's authorization — see the 10.7 entry and *Next action*.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -104,7 +110,8 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress. |
 | Backups | **None, by design** (ADR-024). |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE** (re-verified 2026-09-16). No CI, no Actions workflow, no repository secret. **`main` is the canonical branch again as of 2026-09-16** (fast-forwarded to the Phase 10 tip; PR #1 merged). |
-| Test baseline | **6,824 tests across 13 packages** at the 10.6 fix commit (`3928dd3`): api 1,515 · mobile 1,790 · core 1,111 · worker 738 · schema 563 · health-providers 332 · api-client 206 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25. Was 6,588 at 10.5. |
+| Test baseline | **7,089 tests across 13 packages** at the 10.7 branch tip (not yet deployed): api 1,568 · mobile 1,903 · core 1,172 · worker 738 · schema 574 · health-providers 332 · api-client 213 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 99 · ai-providers 25. Was 6,824 at 10.6 (`3928dd3`). |
+| Personal memory (10.7) | **Not in production yet.** Implemented on the branch: three tables (`memories`, `memory_suggestions`, `memory_settings`; migration `0023`), `GET/PATCH /memory-settings`, `GET/POST/PATCH/DELETE /memories`, `POST /memories/delete-all`, `GET /memory-suggestions`, `POST /memory-suggestions/:key/decide`, memories in `GET /export`; a Memory Center at `/memory`; Focus Now `matches_preference`/`supports_goal` (+15, capped at the pre-10.7 context ceiling of 75) and a briefing working-hours line, all client-composed by typed link; Guard 6 keeps memory out of every AI lane, the three AI route files, every other read model and the worker. |
 | pg-boss | **31 queues, 11 schedules** (worker startup log at 10.1B; `pgboss.queue` reads one more with the internal `__pgboss__send-it`). Every retrying queue has a dead-letter queue (9.0): `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues, `occurrences.generate-lazy`, `occurrences.expand-window`. `occurrences.expand-window` has a phase-2 idempotent lazy repair since 9.4. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C) · `health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now` (9.0). First scheduled run 2026-09-13T04:00Z; the job's daily runs have not been individually re-verified since the 9.0 acceptance. |
 | Alert keys | Occurrence-scoped (ADR-058). Producers: health-sync breaker (first live emission 2026-09-12T03:00:14Z), `occurrences.generate-lazy.dead:<occurrenceId>`, `occurrences.expand-window.dead:<UTC date>` (9.0; also covers a failed 9.4 phase-2 repair), `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (9.5). The three 9.x producers are unexercised in production by design. |
@@ -2021,6 +2028,198 @@ no schema involved. The Rabbit rolls back by reinstalling a pulled earlier `base
 
 ---
 
+### Checkpoint 10.7 — Personal Memory & Preference Layer: IMPLEMENTED, VERIFIED, LIVE-VERIFIED, INDEPENDENTLY REVIEWED (2026-09-17) — NOT DEPLOYED
+
+**Objective (owner-directed, 2026-09-17).** Move Personal OS from "understands today's context"
+toward "understands stable user preferences, goals and explicitly saved knowledge" — the foundation
+a future agent layer would build on — under four principles: explicit, explainable, editable,
+minimal. Forbidden by the brief: hidden behavioural tracking, automatic personality profiling,
+unrestricted AI memory, a knowledge graph, a "remember everything" system, silent extraction of
+personal facts. Decision record: **ADR-077** (Locked). One migration,
+**`0023_personal_memory_layer`** (three tables, level 23 → 24). Branch
+`claude/personal-memory-preference-layer-45c590`, three commits on `5e51606` plus the review-fix
+commit; `apps/worker` byte-untouched.
+
+**A bounded architecture review preceded any code** — four parallel read-only lanes (intelligence
+integration, data model and migration methodology, mobile UX, privacy boundary) — and its findings
+converged: the `FocusNowReason` vocabulary is core/client-only, so memory reasons cost no wire
+change and no deployed-client risk; every "preference-like" datum that already exists
+(`devices.notify_*`/`quiet_hours_*`, `ai_task_routes`, `projects.goal`, `reviews`,
+`occurrences.snoozed_until`) stays where it is; memory must be deterministic-only and structurally
+invisible to every AI lane; and every behaviour-derived suggestion ("you work best in the evening"
+from `completed_at`) is automatic profiling and out. **Four scope decisions were put to the owner
+and decided** before the contract was written: deterministic-only (no memory in any prompt);
+explicit-moment suggestions only; two narrow links (`project_id`, `canvas_course_id`); the global
+switch ships ON (nothing exists until the owner adds it; nothing leaves the machine).
+
+**Execution model.** Round 0 (integrator): the frozen contract — migration, Drizzle schema, the Zod
+wire shapes, api-client bindings, ADR-077, Guard 6, `"statement"` in the logger's forbidden-field
+list — proven on a disposable clone (`drizzle-kit migrate` 23 → 24 by row count, `db:reconcile` clean
+at 24 tracked, `posops_app` insert/delete through default privileges with no explicit GRANT) and then
+applied to the shared `personalos_test` and dev `personalos` (both 24) before any lane started (the
+10.5 lesson). Round 1: three parallel lanes with disjoint ownership — **API** (routes, read model,
+export, tests, on clone `personalos_test_api107`), **core** (`packages/core` only), **mobile Memory
+Center** (`components/memory`, `app/memory`, Settings, the project-goal moment). Round 2: one lane
+wired memory into Today (`components/today` only). Then the root gate, a live browser walk, and an
+independent adversarial review whose required fixes were closed in-checkpoint.
+
+**What shipped:**
+
+- **Schema (`0023`).** `memories` (CHECKed `kind` ∈ preference|goal|fact, `statement` ≤ 1 000,
+  `note` ≤ 2 000, CHECKed `source` ∈ user|suggestion, `suggestion_id`/`project_id`/`canvas_course_id`
+  all nullable `ON DELETE SET NULL`, `(kind, updated_at)` index), `memory_suggestions` (unique
+  deterministic `suggestion_key`, CHECKed `suggestion_kind` ∈ {project_goal}, CHECKed `status` ∈
+  accepted|dismissed|never, `ask_again_after`, **no text column**), `memory_settings` (a CHECKed
+  singleton, `enabled` default true). Typed columns, no jsonb, no edge table — ADR-074's rule
+  applied on a new table. Rollback is image-only; the migration is purely additive.
+- **API.** `read-models/memories.ts` (read-only; resolved project/course names; pending suggestions
+  computed at request time from `projects` with `goal`, minus decided keys and goal memories already
+  linked, capped at 20, `[]` when the switch is off) and three route files: settings (upsert),
+  memories (201 create with server-set `source='user'`, link existence pre-checks → `400`, PATCH can
+  never touch `source`/`suggestion_id`, 204 row delete, `POST /memories/delete-all {confirm:true}`
+  → `{deleted}` via `DELETE`, never `TRUNCATE`), suggestions (one transaction per decision;
+  `ON CONFLICT DO NOTHING` + re-read for a raced first decision; 409 `memory_disabled` /
+  `memory_suggestion_already_decided`; 201 with the memory on `remember`, `source='suggestion'`).
+  Memories join `GET /export` as the flat row (ADR-059). Guard 2 needed no change (no memory file
+  touches tasks/notes).
+- **Guard 6** (`ai-egress-guard.test.ts`): no non-test file under the four AI lane directories **or
+  the three AI route files `routes/{ask,briefs,focus}.ts`** names a memory table binding/name or
+  imports the memory read model or `@personal-os/core/memory/*`; no other read model imports,
+  re-exports or names the memory module (except `user-export.ts`, a listed body reader); no worker
+  file names the tables; the memory route/read model import no AI SDK, provider or lane and touch no
+  queue token; the read model carries no write verb; a vacuity check reads the real file. Guard 5
+  gained the same three route files. Proven to bite: an `import { memories }` in
+  `intelligence/today-context.ts` fails exactly one case naming the file (reverted).
+- **Core.** `packages/core/src/memory/match.ts` — typed-link matcher (one memory per reason per
+  row; a statement containing the row's title but no link matches nothing — pinned) and
+  `memoryWorkingHours`, a FIXED grammar (`work|working|study|studying|focus hours? H[:00]–H[:00]`,
+  0–23, start < end) documented as the only inference core performs over memory text.
+  `matches_preference`/`supports_goal` join the closed vocabulary at **+15** each, source `memory`,
+  whys `You said: <statement>` (≤ 120 chars); the academic base score stays verbatim; a merged
+  task+assignment row counts a memory reason once; **`FOCUS_NOW_CONTEXT_POINTS_CAP = 75`**, the exact
+  pre-10.7 context maximum, so the fully-stacked P1 merged row pins at `325 + 75 = 400` and sorts
+  below a bare overdue with an earlier due — 10.7 never raises a row's ceiling (equation appends
+  `, capped to 75` only when it bites). The briefing takes `memory.workingHours` into `freeBlocks`'
+  existing bounds and adds `Working hours HH:MM–HH:MM — from your preferences` (source `memory`, no
+  `ref`, inert).
+- **Mobile.** `/memory` (Concept A: a `soft`-gradient hero "Personal OS remembers N things" with
+  On/Off chip, kind counts and the byte-pinned `MEMORY_PRIVACY_LINE` — "Only what you add or accept.
+  Never sent to an AI model."; an Off notice; at most ONE "Suggested" card with Remember / Not now /
+  Never; Preferences / Goals / Facts sections of `ListRow`s with source line "Added by you · 17 Sep
+  2026" / "From a suggestion · …", one link chip, swipe-to-delete plus a long-press sheet; a
+  first-run empty state with four starter chips that only prefill the editor; an honest Export card
+  pointing at `GET /export`; "Delete all memories" through `confirmDestructive` naming the count),
+  `/memory/new` and `/memory/[id]` (kind segmented control, bounded statement/note with counters,
+  project and course `ChoiceChip`s, a "Used by" card per kind, the provenance row, Save, Delete;
+  **a warn-only credential-shape caption** over Ask's own anchored `redactSecrets` shapes that never
+  blocks a save), a `MemorySettingsCard` under Privacy & AI before Cloud Ask (toggle as a reversible
+  `Button`), and the **explicit-moment sheet** on `projects/[id]`: after a non-empty goal save the
+  client asks the API for a pending suggestion for that project and opens "Remember this?" — the
+  only place a suggestion ever surfaces besides the Memory Center; never a Today card
+  (`today-screen-order.test.ts` untouched). Today: `useMemoriesForIntelligence` + `useMemorySettings`
+  feed a pure `MemoryItem → MemoryLinkInput` adapter; Focus Now renders rows WITHOUT memory while it
+  loads and treats an error or the switch off as absent; the per-row match rides on the row into
+  every sheet ("Supports a goal — You said: … · Memory", `400 overdue + 15 goal = 415`); the
+  briefing waits for memory to settle like its other optional sources. Guards: `memory-no-linking`
+  (no `Linking` under memory files), `memory-privacy-line` (byte pin; Ask surfaces never import the
+  memory queries; Today never imports the suggestion sheet; exactly one root-mounted host; the
+  opener called only from the project goal save); `content-bounds` extended.
+
+**Verification (integrator, serial, full monorepo).** `pnpm build --force` **12/12** · `pnpm
+typecheck` **23/23** · `npx eslint apps packages` and `apps/mobile`'s own `eslint .` exit 0 · root
+`prettier --check .` clean (every new mobile file formatted; `settings.tsx` unchanged debt) ·
+`git diff --check` clean · `gitleaks detect --no-git` no leaks (a JWT-shaped test fixture was
+de-literalised after the scan flagged it; the two regenerated Expo dev logs and the copied
+`apps/mobile/.env` were deleted) · `pnpm test --force` **23/23 tasks, 7,089 tests across 13
+packages, zero failing** (api 1,568 [+53] · mobile 1,903 [+113] · core 1,172 [+61] · schema 574
+[+11] · db 99 [+20] · api-client 213 [+7]; worker 738 and the six provider packages unchanged; was
+6,824 at 10.6). Migration invariant: `0023` applied on a clone and on both local databases 23 → 24
+by row count, `db:reconcile` clean, every CHECK/FK/index verified by name in `pg_constraint` /
+`pg_indexes`.
+
+**Live browser verification (local dev API + Expo web at 480 × 800, the real local `personalos`
+database, dark and light).** Paired a throwaway web device with a single-use code (revoked
+afterwards). First-run Memory Center: hero "remembers nothing yet" + On chip + privacy line, the
+empty state, the four starters, the Export card. Tapped "Working hours 9-18" → the editor
+prefilled → Save → hero "remembers 1 thing", the row "Added by you · 17 Sep 2026", toast
+"Remembered". Seeded a project with a goal → `GET /memory-suggestions` returned the computed
+suggestion with its evidence line → the "Suggested" card rendered → **Remember** → a goal memory
+"From a suggestion" with the project chip, the card gone, toast with "View"; its detail screen showed
+the provenance row, "Project: … ›", the "Used by" copy, Save and Delete. Seeded an overdue task in
+that project → **Today**: the briefing read "Working hours 09:00–18:00 — from your preferences" with
+a *Memory* pill and the free block bounded to 18:00; Focus Now ranked the task with a "Supports a
+goal" chip (reordered within the overdue rung, still below the P1 row); its sheet read "Supports a
+goal — You said: Finish the thesis draft by December · Memory" with the equation
+`400 overdue + 15 goal = 415`. Settings: the Memory card under Privacy & AI ("On — 2 memories")
+→ **Turn off** → Today lost both the working-hours line and the chip and reverted to the 10.6
+order → turned back on. A second project, goal typed on the project screen and saved → the
+"Remember this?" sheet opened at that moment → **Never ask again** → `GET /memory-suggestions` empty,
+the decision row `project_goal:<id> · never` with no text column anywhere. Light mode: legible
+throughout. **Delete all** (web's `window.confirm`, stubbed to accept for the walk): the confirm read
+"Delete all 2 memories? This can't be undone. Export first if you want a copy.", the danger toast
+"Deleted 2 memories", the screen back to first-run. Console: only the pre-existing
+`/briefs/current` 404s; every memory request 200. Seeded tasks/projects archived and the decision
+rows removed afterwards; both previews stopped.
+
+**Independent adversarial review (a separate agent, read-only, no implementation context, nine
+lenses, every claim re-run).** Verdict **SAFE AFTER FIXES — all required fixes closed:** (1)
+**MAJOR, CONFIRMED** — drizzle-orm wraps every failed statement in a `DrizzleQueryError` whose
+message is `Failed query: <sql>\nparams: <bound values>` under the plain name `Error`, so a
+transient Postgres failure during a memory INSERT would have logged the statement verbatim through
+the generic 500 path (pre-existing for every user-authored write; 10.7 is the checkpoint that pins
+the stronger promise). Fixed in `serializeErrorForLog`: the class is detected structurally, the
+message withheld, the SQLSTATE lifted from `cause`; a serializer test and a route test that injects
+a failing driver prove the statement is absent from the captured stream — and the route test was
+shown to FAIL with the fix disabled. (2) MINOR — the three AI route files sat outside every walked
+set; Guards 5 and 6 now walk them. (3) MINOR — ADR-077 §6 promised a warn-only credential check no
+lane had built; built (`memoryCredentialWarning`) and the ADR reconciled to the code. (4) MINOR —
+two raced first decisions on one key would have surfaced a `23505` as a 500; now `ON CONFLICT DO
+NOTHING` + re-read answers 200/409 like a pre-existing row. Lenses A–I otherwise **clean**: no
+memory token in any AI lane or worker file; the four strict wire schemas byte-unchanged (the
+versionCode-31 client keeps parsing); exactly two INSERT sites, both owner-driven; deletes are row
+deletes and the decision table holds no text; the suggestion query persists nothing while pending
+and the project-screen hook fires only after a non-empty goal save; matching is by link only; the
+cap is applied on every path; SQL ↔ Drizzle parity exact; default privileges cover the runtime
+role; the named mobile guards green. Notes accepted as debt (below): #5, #6, #7.
+
+**Unchanged and reaffirmed:** ADR-018, ADR-024, ADR-029, ADR-041/043, ADR-046, ADR-050, ADR-056/
+066/067 (no new AI call site; Guards 1–5 green, Guard 6 added), ADR-058 (no new alert producer),
+ADR-059 (export widened by one user-authored entity), ADR-065 (memories are NOT in `GET /search`),
+ADR-072/075, ADR-074.
+
+**Recorded, not fixed:** an `accepted` decision silences its key for good — after the memory is
+deleted the project-goal suggestion is not re-offered and a repeat `remember` returns `memory: null`
+(no text retained; the owner re-adds through the editor); `remember` does not re-derive that the key
+is currently pending, so provenance is "the owner posted this statement against this key", not "the
+sentence the owner saw"; `content-bounds.test.ts`'s `banner` became optional for the shared form (the
+two hosting screens are pinned separately); the decide race path is covered by reasoning and the
+existing-row tests, not by a concurrency test; on web `confirmDestructive` is `window.confirm`
+(pre-existing); the 480 px starter chips sit under the floating capture band until the page scrolls
+(the band overlays every screen — a short-content artefact, not a memory-screen defect);
+`settings.tsx` remains non-prettier at HEAD; the Rabbit R1 has NOT been rebuilt.
+
+**Deployment plan (NOT executed; awaits owner authorization).** Frozen order WITH the migrate step:
+merge the branch to `main` by fast-forward (PR as the review surface); tag the serving `api`/`web`
+images `rollback-pre-10.7` by digest (`worker` untouched — no rebuild, no tag); `git archive` the
+new `main` tip to `/home/himallinux/personal-os-10.7-release`; build `api` + `web`; verify the api
+image carries 24 migration files with `0023_personal_memory_layer.sql` last, `dist/routes/memories.js`
+and `dist/read-models/memories.js`, and that production's watermark is `1789378000000` with 23 rows
+and no future-dated row; migrate from the new image with `--no-deps` and the `MIGRATIONS_DATABASE_URL`
+pass-through, asserting **23 → 24 by row count** and the three tables present; recreate `api` then
+`web` alone (`postgres` and `worker` never named); validate `GET /memory-settings` →
+`{enabled:true, memory_count:0}`, `GET /memories` empty, `GET /memory-suggestions` (real projects
+with goals will appear — that is correct), `GET /export` carries `memories`, `/today` and
+`/academic/today` unchanged, 0 warn/error and 0 statement-shaped log lines; then `eas build --local
+--profile production-internal` with the production env values passed explicitly (never from
+`apps/mobile/.env`), `strings`-check the bundle (0 `localhost:3000`, the tailnet host, "Personal OS
+remembers"), `apksigner` continuity, `adb install -r` → versionCode 32, launch with `am start` and
+sweep logcat for `FATAL EXCEPTION` — the Memory Center adds two new sheets and `enterRise` rows but
+no custom worklet (`worklet-safety.test.ts` green). **Rollback:** `docker tag
+personal-os-{api,web}:rollback-pre-10.7 personal-os-{api,web}:latest` + the frozen recreate; `0023`
+is additive-only, so the pre-10.7 images run against the post-migration schema; no schema rollback.
+
+---
+
 ## Remaining warnings / technical debt
 
 > **Open entries only.** Every entry below is verbatim from the pre-2026-09-16 ledger, in its original
@@ -2260,6 +2459,20 @@ no schema involved. The Rabbit rolls back by reinstalling a pulled earlier `base
   path anywhere hard-deletes a `canvas_assignments` row (only a full connection-row cascade, which no
   route performs), so this is believed unreachable in practice, matching the same accepted risk
   `project_id` has carried since it shipped.
+- **A memory suggestion, once accepted, is never re-offered for that key (10.7, deliberate).** The
+  `accepted` decision row survives the memory's deletion (it holds no text), so deleting a goal
+  memory does not bring the project-goal prompt back; the owner re-adds through the editor. Flip
+  by deleting the decision row alongside the memory if the product prefers.
+- **`POST /memory-suggestions/:key/decide` with `remember` does not re-derive that the key is
+  currently pending (10.7).** Any valid project id plus an owner-typed statement is stored as
+  `source='suggestion'`; provenance means "the owner posted this against this key". A re-derivation
+  inside the transaction would refuse a key that is not offered.
+- **The decide route's raced-first-decision path (`ON CONFLICT DO NOTHING` + re-read) has no
+  concurrency test (10.7).** Covered by the existing-row tests and by reading; a two-connection
+  test would need the clone-DB harness.
+- **`apps/mobile/src/__tests__/content-bounds.test.ts` made `banner` optional (10.7)** so the shared
+  `memory-form.tsx` can be listed; the two hosting screens pin their banners separately, but a future
+  entry can now omit one silently.
 
 ---
 
@@ -2299,6 +2512,11 @@ mobile linking UI live-exercised against real production data and cleaned up aft
 first checkpoint since 10.1C to need `api` and `db` touched, not just `worker`/`web`/mobile —
 production serves `api`+`web` at `f29418b`, `worker`/`postgres` untouched, Rabbit R1 versionCode 29.
 
+
+**Checkpoint 10.7 — Personal Memory & Preference Layer — is implemented, verified (7,089 tests,
+23/23 tasks), live-verified in the browser, independently reviewed (safe after fixes, all closed),
+and committed on `claude/personal-memory-preference-layer-45c590` — NOT merged, NOT deployed.** See
+the full entry above; the deployment plan there is awaiting the owner's authorization.
 
 **Checkpoint 10.6 — Intelligence + Mobile Experience Expansion — is implemented, verified (6,824
 tests, 23/23 tasks), independently reviewed (safe after fixes, all closed in-checkpoint), merged to
@@ -2365,6 +2583,13 @@ context and a "related capture"/activity trail on its project context. The Rabbi
 
 ## Current work
 
+**Checkpoint 10.7 is implemented, verified (7,089 tests, 23/23 tasks), live-verified in the browser
+against the local database, independently reviewed (one MAJOR log-path finding and three MINORs,
+all closed in-checkpoint), and committed on `claude/personal-memory-preference-layer-45c590`
+(four commits on `5e51606`). NOT merged to `main`, NOT deployed; the Rabbit R1 still runs
+versionCode 31.** Migration `0023` is applied to the local `personalos` and `personalos_test`
+databases only (both at 24); production is at 23. The next step is the owner's deploy decision.
+
 **Checkpoint 10.6 is implemented, verified (6,824 tests, 23/23 tasks), independently reviewed, merged
 to `main` (`3928dd3`), and DEPLOYED.** `main` is `3928dd3` and canonical; PR #6 merged; production
 serves `api` at `3a90c0c` (unaffected by the mobile-only fix) and `web` at `3928dd3` (`worker` still
@@ -2400,6 +2625,17 @@ removed from the primary checkout.
 ---
 
 ## Last verification
+
+**Checkpoint 10.7 gate (2026-09-17), full monorepo, integrator-run, at the branch tip.** `pnpm build
+--force` 12/12 · `pnpm typecheck` 23/23 · `npx eslint apps packages` and `apps/mobile`'s own
+`eslint .` exit 0 · root `prettier --check .` clean · `git diff --check` clean · `gitleaks detect
+--no-git` no leaks · `pnpm test --force` **23/23 tasks, 7,089 tests across 13 packages, zero
+failing** · migration `0023` proven on a clone (23 → 24 by row count; `db:reconcile` 24 tracked / 0
+discrepancies; `posops_app` write access through default privileges) and applied to both local
+databases · live browser walk at 480 × 800, dark and light, against the real local database (the
+whole create / suggest / remember / never / detail / switch-off / Focus Now + briefing / delete-all
+cycle — record in the 10.7 entry) · independent adversarial review (nine lenses): SAFE AFTER FIXES,
+all four required fixes closed and re-gated. Production not touched.
 
 **Checkpoint 10.6 gate (2026-09-17), full monorepo, integrator-run, at `3a90c0c`.** `pnpm build
 --force` 12/12 · `pnpm typecheck` 23/23 · `npx eslint apps packages` and `apps/mobile`'s own
@@ -2549,15 +2785,16 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. Nothing is gating. Checkpoint 10.6 is implemented, verified, independently reviewed (all
-   findings closed), merged to `main` (`3928dd3`), and **DEPLOYED** — no migration, `api`+`web`
-   recreated in production, `worker`/`postgres` untouched; the Rabbit R1 accepted on versionCode
-   31 after the versionCode-30 launch crash was rolled back and fixed (the 10.6 entry). Checkpoints 10.4 and 10.5 are likewise deployed and accepted. **No checkpoint after 10.6 is
-   selected; Phase 10.7 is not begun.** Two things worth watching on real use before the next
-   checkpoint: the first-ever production exercise of Reanimated worklets on the Rabbit (press
-   springs, swipe panels, the entering fades — an on-device regression is a rebuild away, never a
-   server rollback), and the briefing's free-block line once real classes are on the calendar
-   (the recurring-instance fix is pinned by a test on the real wire shape, not yet by a live day).
+1. **Checkpoint 10.7 awaits the owner's deploy decision.** It is implemented, verified (7,089
+   tests), live-verified in the browser, independently reviewed with every required fix closed,
+   and committed on `claude/personal-memory-preference-layer-45c590`. On "deploy": open the PR,
+   fast-forward `main`, and run the frozen order recorded in the 10.7 entry — this one HAS a
+   migration (`0023`, 23 → 24, additive), so the migrate step and its row-count assertion are back
+   on the path; `api` + `web` rebuilt, `worker`/`postgres` untouched; then the local Rabbit build
+   (versionCode 32) with the on-device launch sweep, since the Memory Center adds two sheets the
+   vitest mocks cannot exercise. Checkpoints 10.4–10.6 are deployed and accepted. Two things worth
+   watching on real use: the first production exercise of Reanimated worklets on the Rabbit, and
+   the briefing's free-block line once real classes are on the calendar.
 
 2. **Choose the next checkpoint — a product-direction decision for the owner.** Candidates
    carried forward: widen the Canvas integration further (device-token auth on the academic routes;

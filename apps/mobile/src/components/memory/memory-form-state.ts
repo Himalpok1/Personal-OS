@@ -5,6 +5,7 @@ import {
   type MemoryKind,
   type MemoryUpdate,
 } from "@personal-os/schema";
+import { redactSecrets } from "@personal-os/core/ask/redact-secrets";
 
 // Pure decisions behind the memory editor (Checkpoint 10.7, ADR-077): what
 // the form may submit, how an edit diffs against the loaded row, and the
@@ -104,4 +105,23 @@ export function memoryUsedByCopy(kind: MemoryKind, linked: boolean): string {
 /** The export page, on the same origin the client already talks to (ADR-077 §2). */
 export function memoryExportUrl(apiBaseUrl: string): string {
   return `${apiBaseUrl.replace(/\/+$/, "")}/export`;
+}
+
+/**
+ * ADR-077 §6's warn-only credential check. `redactSecrets` is the same
+ * anchored, client-safe shape detector Ask uses before a question leaves the
+ * device (API keys, bearer tokens, JWTs, private-key blocks). It is not a DLP
+ * system and is never a gate: a memory is stored in the owner's own database
+ * and never sent to a model, so the only honest response to a credential-
+ * shaped statement is to SAY so and let the owner decide. Returns the caption
+ * to show, or null. Counts only -- the matched text is never surfaced.
+ */
+export const MEMORY_CREDENTIAL_WARNING =
+  "This looks like it contains a credential. Memories are stored in your own database and never sent to an AI model, but a password or key is safer in a password manager.";
+
+export function memoryCredentialWarning(
+  values: Pick<MemoryFormValues, "statement" | "note">,
+): string | null {
+  const { redactions } = redactSecrets(`${values.statement}\n${values.note}`);
+  return redactions > 0 ? MEMORY_CREDENTIAL_WARNING : null;
 }

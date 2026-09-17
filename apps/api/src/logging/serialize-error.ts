@@ -75,6 +75,14 @@ const PROVIDER_ERROR_NAMES: ReadonlySet<string> = new Set([
  * structurally true for EVERY AI SDK error via `instanceof AISDKError` (see
  * the comment above `PROVIDER_ERROR_NAMES`).
  */
+function isDrizzleQueryError(err: Error): err is Error & { query: unknown; params: unknown } {
+  return (
+    Object.prototype.hasOwnProperty.call(err, "query") &&
+    Object.prototype.hasOwnProperty.call(err, "params") &&
+    err.message.startsWith("Failed query:")
+  );
+}
+
 function isProviderAuthoredError(err: Error): boolean {
   return PROVIDER_ERROR_NAMES.has(err.name || "Error") || err instanceof AISDKError;
 }
@@ -140,6 +148,32 @@ export function serializeErrorForLog(err: unknown): SerializedError {
 
   const type = err.name || "Error";
   const isProviderAuthored = isProviderAuthoredError(err);
+
+  // CHECKPOINT 10.7 (ADR-077 §6) -- A FAILED QUERY QUOTES THE ROW IT CARRIED.
+  //
+  // drizzle-orm wraps every failed statement in `DrizzleQueryError`, whose
+  // message is `Failed query: <sql>\nparams: <every bound value>` under the
+  // plain name "Error" -- so a transient pg failure (connection reset,
+  // statement timeout, deadlock) during an INSERT/UPDATE would put the user's
+  // own text (a memory statement, a note body, a task title) into the api
+  // log verbatim. The 10.7 adversarial review reproduced exactly that against
+  // this serializer. The class is detected structurally (`query` + `params`
+  // own properties) so no import from drizzle's internals is needed, the
+  // message is withheld, and the SQLSTATE is lifted from `cause` so the line
+  // stays diagnosable.
+  if (isDrizzleQueryError(err)) {
+    const causeCode: unknown = (err.cause as { code?: unknown } | undefined)?.code;
+    const sqlState =
+      typeof causeCode === "string" && /^[A-Za-z0-9_]{1,40}$/.test(causeCode)
+        ? causeCode
+        : undefined;
+    return {
+      type: "DrizzleQueryError",
+      message: "[DrizzleQueryError message withheld]",
+      stack: err.stack === undefined ? "" : framesOnly(err),
+      ...(sqlState === undefined ? {} : { code: sqlState }),
+    };
+  }
 
   // A `pg` error's `code` is a SQLSTATE; anything else shaped like a short
   // machine token is equally safe. Free text is not echoed.

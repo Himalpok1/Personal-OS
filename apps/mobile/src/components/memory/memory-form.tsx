@@ -12,7 +12,7 @@ import { courseLabel } from "@/components/academic/format";
 import { AppText, SegmentedControl } from "@/components/ui";
 import { MEMORY_PRIVACY_LINE } from "./memory-privacy";
 import { MEMORY_KIND_ORDER, MEMORY_KIND_PRESENTATION } from "./memory-row-state";
-import type { MemoryFormValues } from "./memory-form-state";
+import { memoryCredentialWarning, type MemoryFormValues } from "./memory-form-state";
 
 // The memory editor's fields (Checkpoint 10.7, ADR-077): kind, statement,
 // optional note, and the two optional typed links -- a project (the same
@@ -58,6 +58,7 @@ export function MemoryForm({
   const set = <K extends keyof MemoryFormValues>(key: K, value: MemoryFormValues[K]) =>
     onChange({ ...values, [key]: value });
   const courseOptions = courses ?? [];
+  const credentialWarning = memoryCredentialWarning(values);
   const extraCourse =
     linkedCourse && !courseOptions.some((course) => course.id === linkedCourse.id)
       ? linkedCourse
@@ -166,6 +167,21 @@ export function MemoryForm({
         ))}
       </View>
 
+      {credentialWarning ? (
+        <View
+          accessibilityLiveRegion="polite"
+          className="mb-3 rounded-inner bg-warning-container px-3 py-2 dark:bg-warning-container-dark"
+          testID="memory-form-credential-warning"
+        >
+          <AppText
+            variant="caption"
+            tone="inherit"
+            className="text-on-warning-container dark:text-on-warning-container-dark"
+          >
+            {credentialWarning}
+          </AppText>
+        </View>
+      ) : null}
       <AppText variant="caption" tone="secondary" className="mb-4" testID="memory-form-privacy">
         {MEMORY_PRIVACY_LINE}
       </AppText>

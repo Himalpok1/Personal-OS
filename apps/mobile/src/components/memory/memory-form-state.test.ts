@@ -155,3 +155,25 @@ describe("the export url", () => {
     expect(memoryExportUrl("http://localhost:3000/")).toBe("http://localhost:3000/export");
   });
 });
+
+describe("memoryCredentialWarning (ADR-077 §6, warn-only)", () => {
+  it("warns on a credential-shaped statement without ever returning the matched text", async () => {
+    const { memoryCredentialWarning, MEMORY_CREDENTIAL_WARNING } =
+      await import("./memory-form-state");
+    const token = "sk-" + "a".repeat(40);
+    const warning = memoryCredentialWarning({ statement: `My key is ${token}`, note: "" });
+    expect(warning).toBe(MEMORY_CREDENTIAL_WARNING);
+    expect(warning).not.toContain(token);
+    // The note is checked too; a JWT is one of the anchored shapes.
+    expect(
+      memoryCredentialWarning({ statement: "", note: ["eyJabc", "eyJdef", "ghi_-123"].join(".") }),
+    ).toBe(MEMORY_CREDENTIAL_WARNING);
+  });
+
+  it("stays silent for ordinary statements and never blocks a save", async () => {
+    const { memoryCredentialWarning, canSaveMemory } = await import("./memory-form-state");
+    const values = { statement: "I work best in the evening", note: "since 2024" };
+    expect(memoryCredentialWarning(values)).toBeNull();
+    expect(canSaveMemory({ statement: `sk-${"a".repeat(40)}` })).toBe(true);
+  });
+});

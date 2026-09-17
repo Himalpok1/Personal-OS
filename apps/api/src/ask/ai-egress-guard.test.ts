@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -437,6 +437,15 @@ describe("the intelligence lane is read-only and provider-free (Checkpoint 9.7, 
 const AI_LANE_DIRS = ["intelligence", "ask", "focus", "brief"].map((dir) =>
   path.join(API_SRC, dir),
 );
+// The three ROUTE files that own a model call's request-scoped inputs (the
+// Ask route assembles the `<records>` candidates it hands to buildAskContext;
+// the Brief and Focus routes call their generators). They live under routes/,
+// not under a lane directory, so a walk of the lane dirs alone leaves them
+// unguarded -- the one concrete evasion the 10.7 adversarial review found.
+// Guards 5 and 6 walk them alongside the lane files.
+const AI_ROUTE_FILES = ["routes/ask.ts", "routes/briefs.ts", "routes/focus.ts"].map((file) =>
+  path.join(API_SRC, file),
+);
 const ACADEMIC_READ_MODEL = path.join(API_SRC, "read-models/academic.ts");
 const ACADEMIC_ROUTE = path.join(API_SRC, "routes/academic.ts");
 
@@ -480,14 +489,16 @@ const FORBIDDEN_ACADEMIC_LANE_IMPORTS: readonly [string, RegExp][] = [
 ];
 
 describe("academic data never reaches an AI lane (Checkpoint 10.2, Guard 5)", () => {
-  const laneFiles = AI_LANE_DIRS.flatMap((dir) => walk(dir));
+  const laneFiles = [...AI_LANE_DIRS.flatMap((dir) => walk(dir)), ...AI_ROUTE_FILES];
 
-  it("walks every AI lane, so an empty directory cannot pass by finding nothing", () => {
+  it("walks every AI lane and the three AI route files, so an empty directory cannot pass by finding nothing", () => {
     const rels = laneFiles.map(relToRepo);
     expect(rels).toContain("apps/api/src/intelligence/today-context.ts");
     expect(rels).toContain("apps/api/src/ask/generate.ts");
     expect(rels).toContain("apps/api/src/focus/generate.ts");
     expect(rels).toContain("apps/api/src/brief/collect-input.ts");
+    expect(rels).toContain("apps/api/src/routes/ask.ts");
+    for (const file of AI_ROUTE_FILES) expect(existsSync(file)).toBe(true);
   });
 
   it("no AI-lane file imports the academic read model, core's academic helpers, or a canvas table", () => {
@@ -598,13 +609,15 @@ const FORBIDDEN_MEMORY_SPECIFIERS: readonly [string, RegExp][] = [
 const MEMORY_RELATIVE_SPECIFIER = /(?:^|\/)memories(?:\.js)?$/;
 
 describe("memory never reaches an AI lane, another read model, or the worker (Checkpoint 10.7, Guard 6)", () => {
-  const laneFiles = AI_LANE_DIRS.flatMap((dir) => walk(dir));
+  const laneFiles = [...AI_LANE_DIRS.flatMap((dir) => walk(dir)), ...AI_ROUTE_FILES];
   const workerFiles = walk(WORKER_SRC);
 
-  it("walks every AI lane and the worker, so an empty directory cannot pass by finding nothing", () => {
+  it("walks every AI lane, the three AI route files and the worker, so an empty directory cannot pass by finding nothing", () => {
     const rels = laneFiles.map(relToRepo);
     expect(rels).toContain("apps/api/src/intelligence/today-context.ts");
     expect(rels).toContain("apps/api/src/brief/collect-input.ts");
+    expect(rels).toContain("apps/api/src/routes/ask.ts");
+    expect(rels).toContain("apps/api/src/routes/focus.ts");
     expect(workerFiles.map(relToRepo)).toContain("apps/worker/src/jobs/retention-cleanup.ts");
   });
 

@@ -19,7 +19,7 @@ import type { FastifyInstance } from "fastify";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
 import type { ErrorBody } from "../test/types.js";
 
@@ -515,5 +515,48 @@ describe("memory routes never log a statement (ADR-077 §6)", () => {
     expect(logs).toContain("request completed");
     expect(logs.toLowerCase()).not.toContain("zanzibar");
     expect(JSON.stringify(coreRecords).toLowerCase()).not.toContain("zanzibar");
+  });
+
+  it("carries no memory text when the INSERT itself fails at the database (a DrizzleQueryError quotes its params)", async () => {
+    // The 10.7 adversarial review reproduced drizzle-orm wrapping a failed
+    // statement as `Failed query: <sql>\nparams: <bound values>` under the
+    // plain name "Error", which the generic 500 path logs. Simulate the
+    // transient failure at the driver boundary -- the exact error class the
+    // ORM would throw -- and prove the statement never reaches the stream.
+    const { DrizzleQueryError } = await import("drizzle-orm/errors");
+    const originalInsert = app.db.insert.bind(app.db);
+    const insertSpy = vi.spyOn(app.db, "insert").mockImplementation(((table: unknown) => {
+      const builder = originalInsert(table as never);
+      const originalValues = builder.values.bind(builder);
+      builder.values = ((rows: unknown) => {
+        const chain = originalValues(rows as never);
+        chain.returning = (() => {
+          throw new DrizzleQueryError(
+            'insert into "memories" ("kind", "statement") values ($1, $2) returning *',
+            ["fact", "Zanzibar failing insert"],
+            Object.assign(new Error("connection terminated unexpectedly"), { code: "57P01" }),
+          );
+        });
+        return chain;
+      });
+      return builder;
+    }));
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/memories",
+        payload: { kind: "fact", statement: "Zanzibar failing insert" },
+      });
+      expect(res.statusCode).toBe(500);
+      expect(res.body.toLowerCase()).not.toContain("zanzibar");
+    } finally {
+      insertSpy.mockRestore();
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+    const logs = chunks.join("");
+    expect(logs).toContain("DrizzleQueryError");
+    expect(logs).toContain("57P01");
+    expect(logs.toLowerCase()).not.toContain("zanzibar");
+    expect(logs).not.toContain("insert into");
   });
 });

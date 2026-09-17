@@ -69,6 +69,34 @@ describe("serializeErrorForLog", () => {
     expect(out.code).toBe("23505");
   });
 
+  it("withholds a DrizzleQueryError's message, which quotes every bound parameter (Checkpoint 10.7)", async () => {
+    const { DrizzleQueryError } = await import("drizzle-orm/errors");
+    const cause = Object.assign(new Error("connection terminated unexpectedly"), {
+      code: "57P01",
+    });
+    const err = new DrizzleQueryError(
+      'insert into "memories" ("kind", "statement") values ($1, $2)',
+      ["preference", "I work best in the evening SECRET-MEMORY-TEXT"],
+      cause,
+    );
+    const out = serializeErrorForLog(err);
+    const flat = flatten(out);
+    expect(flat).not.toContain("SECRET-MEMORY-TEXT");
+    expect(flat).not.toContain("evening");
+    expect(flat).not.toContain("insert into");
+    expect(out.type).toBe("DrizzleQueryError");
+    expect(out.message).toBe("[DrizzleQueryError message withheld]");
+    // The SQLSTATE is lifted from the pg cause so the line stays diagnosable.
+    expect(out.code).toBe("57P01");
+    expect(out.stack.split("\n").every((line) => line.trimStart().startsWith("at "))).toBe(true);
+  });
+
+  it("does not mistake our OWN error for a failed query just because it names a property", () => {
+    const err = Object.assign(new Error("Failed query: not really"), { query: "x" });
+    const out = serializeErrorForLog(err);
+    expect(out.message).toBe("Failed query: not really");
+  });
+
   it("keeps our OWN message — that is the point of a log line", () => {
     const out = serializeErrorForLog(new Error("upsert into calendar_connections returned no row"));
     expect(out.message).toBe("upsert into calendar_connections returned no row");

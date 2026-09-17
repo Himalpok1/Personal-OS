@@ -126,12 +126,14 @@ export default function memorySuggestionsRoutes(app: FastifyInstance): void {
           .where(eq(memorySuggestions.suggestionKey, key))
           .limit(1);
 
-        if (existing) {
-          if (decisionForStatus(existing.status) !== body.decision) {
+        const answerExisting = async (row: {
+          id: string;
+          status: string;
+        }): Promise<DecideOutcome> => {
+          if (decisionForStatus(row.status) !== body.decision) {
             return { status: 409, body: { error: "memory_suggestion_already_decided" } };
           }
-          const memory =
-            body.decision === "remember" ? await acceptedMemory(tx, existing.id) : null;
+          const memory = body.decision === "remember" ? await acceptedMemory(tx, row.id) : null;
           return {
             status: 200,
             body: MemorySuggestionDecideResponseSchema.parse({
@@ -140,7 +142,9 @@ export default function memorySuggestionsRoutes(app: FastifyInstance): void {
               memory,
             }),
           };
-        }
+        };
+
+        if (existing) return await answerExisting(existing);
 
         // The suggestion was derived from a live project row, so this is a
         // race guard against the project vanishing between the offer and the
@@ -167,8 +171,22 @@ export default function memorySuggestionsRoutes(app: FastifyInstance): void {
                 : null,
             decidedAt: now,
           })
+          .onConflictDoNothing({ target: memorySuggestions.suggestionKey })
           .returning({ id: memorySuggestions.id });
-        if (!decisionRow) throw new Error("insert into memory_suggestions returned no row");
+        if (!decisionRow) {
+          // Two first decisions on the same key raced: the unique key made the
+          // other transaction the winner (DO NOTHING waits for it to commit),
+          // so answer exactly as if its row had been there at the SELECT --
+          // 200 for the same decision, 409 for a different one -- instead of
+          // surfacing a 23505 as a 500 (10.7 adversarial review, finding #4).
+          const [winner] = await tx
+            .select({ id: memorySuggestions.id, status: memorySuggestions.status })
+            .from(memorySuggestions)
+            .where(eq(memorySuggestions.suggestionKey, key))
+            .limit(1);
+          if (!winner) throw new Error("memory_suggestions conflict without a visible row");
+          return await answerExisting(winner);
+        }
 
         if (body.decision !== "remember") {
           return {
