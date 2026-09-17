@@ -1,11 +1,12 @@
-import { canvasAssignments, canvasConnections, canvasCourses } from "@personal-os/db";
+import { canvasAssignments, canvasConnections, canvasCourses, tasks } from "@personal-os/db";
 import {
+  AcademicCourseContextResponseSchema,
   AcademicCourseDetailResponseSchema,
   AcademicCoursesResponseSchema,
   AcademicTodayResponseSchema,
 } from "@personal-os/schema";
 import type { FastifyInstance } from "fastify";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildTestApp } from "../test/build-test-app.js";
 
 // The HTTP contract of GET /academic/* (Checkpoint 10.2, ADR-070): status
@@ -199,5 +200,66 @@ describe("GET /academic/courses/:id", () => {
     expect(body.assignments.map((a) => a.id)).toEqual([assignment.id]);
     expect(body.announcements).toEqual([]);
     expect(body.events).toEqual([]);
+  });
+});
+
+describe("GET /academic/courses/:id/context (Checkpoint 10.5, ADR-074)", () => {
+  afterEach(async () => {
+    await app.db.delete(tasks);
+  });
+
+  it("404s not_found for an unknown course, same as /academic/courses/:id", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: `/academic/courses/${crypto.randomUUID()}/context`,
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "not_found" });
+  });
+
+  it("400s validation_failed for a malformed id", async () => {
+    const res = await app.inject({ method: "GET", url: "/academic/courses/not-a-uuid/context" });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: string }>().error).toBe("validation_failed");
+  });
+
+  it("200s the course detail plus related_reminders for an explicitly linked task", async () => {
+    const { course, assignment } = await seedCourseWithAssignment();
+    const [linked] = await app.db
+      .insert(tasks)
+      .values({
+        title: "test on Friday",
+        status: "active",
+        timezone: "America/Chicago",
+        canvasAssignmentId: assignment.id,
+      })
+      .returning();
+    // An unlinked task with matching TEXT -- proves the join is by id.
+    await app.db.insert(tasks).values({
+      title: "Project 2",
+      status: "active",
+      timezone: "America/Chicago",
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/academic/courses/${course.id}/context`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = AcademicCourseContextResponseSchema.parse(res.json());
+    expect(body.course.id).toBe(course.id);
+    expect(body.assignments.map((a) => a.id)).toEqual([assignment.id]);
+    expect(body.related_reminders).toEqual({
+      items: [
+        {
+          task_id: linked!.id,
+          title: "test on Friday",
+          due_at: null,
+          remind_at: null,
+          status: "active",
+        },
+      ],
+      total: 1,
+    });
   });
 });

@@ -60,6 +60,11 @@ function toTaskPayload(row: typeof tasks.$inferSelect) {
     timezone: row.timezone,
     priority: row.priority,
     project_id: row.projectId,
+    // Checkpoint 10.5 (ADR-074): the same provenance-only opaque id the
+    // project-context privacy boundary allows -- an id the OWNER set on
+    // their own task, never Canvas-authored content, so it clears the "user-
+    // authored core" scope exactly as project_id already does.
+    canvas_assignment_id: row.canvasAssignmentId,
     completed_at: row.completedAt ? row.completedAt.toISOString() : null,
     rrule: row.rrule,
     recurrence_anchor: row.recurrenceAnchor,

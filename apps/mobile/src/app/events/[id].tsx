@@ -18,6 +18,7 @@ import { FieldLengthCounter } from "@/components/field-length-counter";
 import { DateField } from "@/components/date-field";
 import { DateTimeField } from "@/components/datetime-field";
 import { CalendarTargetPicker } from "@/components/calendar/calendar-target-picker";
+import { ProjectLinkRow } from "@/components/projects/project-link-row";
 import { EventRepeatField } from "@/components/recurrence/event-repeat-field";
 import { applyEventStartChange } from "@/components/recurrence/event-repeat-state";
 import {
@@ -260,6 +261,8 @@ export interface EditEventViewProps {
   projects?: { id: string; name: string }[];
   projectId?: string;
   onProjectIdChange: (id?: string) => void;
+  /** Navigates to the linked project's own screen (Checkpoint 10.5). Omitted only by tests that predate it -- the row then stays unrendered rather than firing a no-op. */
+  onOpenProject?: () => void;
   onSubmit: () => void;
   isSubmitting?: boolean;
   onDelete?: () => void;
@@ -382,6 +385,15 @@ export function EditEventView(props: EditEventViewProps) {
               This is a modified occurrence of a recurring event.
             </AppText>
           </Card>
+        ) : null}
+
+        {props.projectId && props.onOpenProject ? (
+          <ProjectLinkRow
+            projectId={props.projectId}
+            projects={props.projects}
+            onPress={props.onOpenProject}
+            className="mb-4"
+          />
         ) : null}
 
         <FieldLabel>Title</FieldLabel>
@@ -963,6 +975,7 @@ export default function EditEventScreen() {
       projects={projects}
       projectId={projectId}
       onProjectIdChange={setProjectId}
+      onOpenProject={event.project_id ? () => router.push(`/projects/${event.project_id}`) : undefined}
       onSubmit={submit}
       isSubmitting={isSubmitting}
       onDelete={confirmDelete}

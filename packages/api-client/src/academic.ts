@@ -1,7 +1,9 @@
 import {
+  AcademicCourseContextResponseSchema,
   AcademicCourseDetailResponseSchema,
   AcademicCoursesResponseSchema,
   AcademicTodayResponseSchema,
+  type AcademicCourseContextResponse,
   type AcademicCourseDetailResponse,
   type AcademicCoursesResponse,
   type AcademicTodayResponse,
@@ -15,7 +17,12 @@ import { buildQuery, fetchJson } from "./client.js";
 // Read-only by construction, like every Canvas method in canvas.ts: there is
 // no write route this file could bind to.
 
-export type { AcademicCourseDetailResponse, AcademicCoursesResponse, AcademicTodayResponse };
+export type {
+  AcademicCourseContextResponse,
+  AcademicCourseDetailResponse,
+  AcademicCoursesResponse,
+  AcademicTodayResponse,
+};
 
 /**
  * `GET /academic/today?tz=` -- the academic Today read model: overdue,
@@ -63,5 +70,22 @@ export async function getAcademicCourse(
     baseUrl,
     `/academic/courses/${encodeURIComponent(id)}`,
     AcademicCourseDetailResponseSchema,
+  );
+}
+
+/**
+ * `GET /academic/courses/:id/context` (Checkpoint 10.5) -- a superset of
+ * `getAcademicCourse`: the same course/assignments/announcements/events/
+ * grade_summary plus `related_reminders`, the owner's own tasks explicitly
+ * linked to one of this course's assignments. Same 404 rule.
+ */
+export async function getAcademicCourseContext(
+  baseUrl: string,
+  id: string,
+): Promise<AcademicCourseContextResponse> {
+  return await fetchJson(
+    baseUrl,
+    `/academic/courses/${encodeURIComponent(id)}/context`,
+    AcademicCourseContextResponseSchema,
   );
 }

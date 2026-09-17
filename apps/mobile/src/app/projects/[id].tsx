@@ -1,5 +1,7 @@
 import { FieldLabel, textFieldClass } from "@/components/ask/text-field";
 import { confirmDestructive } from "@/components/confirm-destructive";
+import { RecentActivitySection } from "@/components/projects/recent-activity-section";
+import { RelatedCapturesSection } from "@/components/projects/related-captures-section";
 import {
   PROJECT_STALLED_PRESENTATION,
   projectStatusPresentation,
@@ -39,6 +41,7 @@ import {
   useArchiveProject,
   useCompleteProject,
   usePauseProject,
+  useProjectContext,
   useProjectDetail,
   useReopenProject,
   useResumeProject,
@@ -46,20 +49,11 @@ import {
   useUpdateProject,
 } from "@/queries/projects";
 import { useCompleteTask } from "@/queries/tasks";
+import { formatShortDateTime } from "@/utils/format-datetime";
 import { formatShortDate } from "@/utils/local-date";
 import { describeValidationError } from "@/utils/validation-error";
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-
-function formatShortDateTime(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-}
 
 function eventStartLabel(event: ProjectDetailEvent): string | null {
   if (event.all_day) return event.start_date ? formatShortDate(event.start_date) : null;
@@ -119,6 +113,11 @@ export default function ProjectDetailScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { data, isLoading, isError, error, refetch } = useProjectDetail(id);
+  // Related Captures + Recent Activity (Checkpoint 10.5, ADR-074) -- a
+  // separate query from useProjectDetail above, so a slow/failing context
+  // fetch never blanks the name/goal/tasks/notes/events this screen already
+  // edits; see queries/projects.ts's own doc comment.
+  const { data: context } = useProjectContext(id);
   const updateProject = useUpdateProject();
   const pauseProject = usePauseProject();
   const resumeProject = useResumeProject();
@@ -587,6 +586,18 @@ export default function ProjectDetailScreen() {
             ) : null}
           </Card>
         )}
+
+        {/* Captures that became one of this project's own items, and a
+            recent-activity feed (Checkpoint 10.5, ADR-074) -- both render
+            nothing while the context query is still loading, has failed, or
+            the section is genuinely empty; see each component's own header. */}
+        {context ? (
+          <RelatedCapturesSection
+            captures={context.related_captures}
+            onOpenCapture={(captureId) => router.push(`/inbox/${captureId}`)}
+          />
+        ) : null}
+        {context ? <RecentActivitySection activity={context.recent_activity} /> : null}
       </ScrollView>
     </ScreenFrame>
   );

@@ -155,6 +155,13 @@
       "when": 1789377000000,
       "tag": "0021_canvas_assignment_grades",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1789378000000,
+      "tag": "0022_task_canvas_assignment_link",
+      "breakpoints": true
     }
   ]
 }

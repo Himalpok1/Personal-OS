@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClientError } from "./client.js";
 import {
   completeProject,
+  getProjectContext,
   getProjectDetail,
   getProjectSummaries,
   pauseProject,
@@ -153,6 +154,73 @@ describe("projects summaries/detail api client", () => {
     );
 
     await expect(getProjectDetail("http://localhost:3000", projectRow.id)).rejects.toSatisfy(
+      (err: unknown) => {
+        expect(err).toBeInstanceOf(ApiClientError);
+        expect((err as ApiClientError).status).toBe(404);
+        return true;
+      },
+    );
+  });
+});
+
+// Checkpoint 10.5 (ADR-074).
+describe("project context api client", () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const contextResponse = {
+    project: projectRow,
+    tasks: {
+      items: [{ ...detailResponse.tasks.items[0], canvas_assignment_id: null }],
+      total: 1,
+    },
+    events: detailResponse.events,
+    related_captures: {
+      items: [
+        {
+          id: "55555555-5555-4555-8555-555555555555",
+          raw_text: "call the insurance guy",
+          source: "web",
+          status: "confirmed",
+          captured_at: "2026-08-17T09:00:00.000Z",
+          entity_type: "task",
+          entity_id: detailResponse.tasks.items[0]!.id,
+        },
+      ],
+      total: 1,
+    },
+    recent_activity: {
+      items: [
+        {
+          type: "task_completed",
+          description: 'Completed task "Order cabinets"',
+          at: "2026-08-20T09:00:00.000Z",
+        },
+      ],
+      total: 1,
+    },
+  };
+
+  it("gets project context from /projects/:id/context", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(contextResponse), { status: 200 }));
+    global.fetch = fetchMock;
+
+    const res = await getProjectContext("http://localhost:3000", projectRow.id);
+    expect(res).toEqual(contextResponse);
+    const [url] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe(`http://localhost:3000/projects/${projectRow.id}/context`);
+  });
+
+  it("throws ApiClientError with 404 for an unknown project", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ error: "not_found" }), { status: 404 }));
+
+    await expect(getProjectContext("http://localhost:3000", projectRow.id)).rejects.toSatisfy(
       (err: unknown) => {
         expect(err).toBeInstanceOf(ApiClientError);
         expect((err as ApiClientError).status).toBe(404);

@@ -196,6 +196,25 @@ const EXPECTED_BODY_READERS = new Set([
   // a capture's full raw text; no model ever sees it. Reviewed here rather
   // than widened silently, which is what this ratchet is for.
   "apps/worker/src/jobs/occurrences-dead-letter.ts",
+  // Checkpoint 10.5 (ADR-074): GET /academic/courses/:id/context's
+  // "related reminders" section selects the owner's own tasks whose
+  // canvas_assignment_id names one of the course's assignments. Selects only
+  // `title`/`due_at`/`remind_at`/`status` -- the same column list
+  // read-models/reminders.ts's own entry above documents -- never `body`.
+  // This file is Guard 5's own subject (academic data must never reach an AI
+  // lane); reading a handful of task columns from it does not change that,
+  // since Guard 5 checks the opposite direction -- that no AI-lane file ever
+  // imports this one, not what this one may read.
+  "apps/api/src/read-models/academic.ts",
+  // Checkpoint 10.5: GET /projects/:id/detail's own task/event section
+  // queries, extracted here so GET /projects/:id/context (also this file)
+  // reuses them instead of duplicating them. Selects
+  // `title`/`status`/`due_at`/`priority`/`rrule`/`completed_at`/
+  // `canvas_assignment_id` -- never `body` -- plus note id/title/timestamps
+  // for the recent-activity feed and note ids (never bodies) for the
+  // related-captures join. routes/projects.ts is already on this list for
+  // the identical reason.
+  "apps/api/src/read-models/project-context.ts",
 ]);
 
 const BODY_TABLE_REFERENCE = /\.from\(notes|\.from\(tasks|db\.query\.notes|db\.query\.tasks/;

@@ -38,6 +38,7 @@ function reopenedTask(): Task {
     timezone: "America/Chicago",
     priority: null,
     project_id: null,
+    canvas_assignment_id: null,
     completed_at: null,
     rrule: null,
     recurrence_anchor: null,

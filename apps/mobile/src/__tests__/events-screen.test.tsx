@@ -17,6 +17,7 @@ import {
 } from "@/app/events/[id]";
 import { NewEventView, type NewEventViewProps } from "@/app/events/new";
 import { CalendarTargetPicker } from "@/components/calendar/calendar-target-picker";
+import { ProjectLinkRow } from "@/components/projects/project-link-row";
 import { DateField } from "@/components/date-field";
 import { DateTimeField } from "@/components/datetime-field";
 import { FieldLengthCounter } from "@/components/field-length-counter";
@@ -641,6 +642,37 @@ describe("Checkpoint 9.5 -- ownership, calendar and sync on the edit screen", ()
     expect(endDate.props.value).toBe("2026-09-07");
     expect(endDate.props.clearable).toBe(false);
     expect(findByType(allDay, DateTimeField)).toEqual([]);
+  });
+
+  it("shows a tappable 'Project: {name}' row only when a project is linked and a handler is given (Checkpoint 10.5)", () => {
+    const onOpenProject = vi.fn();
+    const linked = EditEventView(
+      editProps({
+        projectId: "proj-1",
+        projects: [{ id: "proj-1", name: "Kitchen remodel" }],
+        onOpenProject,
+      }),
+    );
+    // <ProjectLinkRow> is an opaque element in this tree until called, like
+    // <CalendarTargetPicker> above (expandPicker) -- ProjectLinkRow's own
+    // rendering is covered by its dedicated test file; this proves it is
+    // wired with the right props, present only when linked.
+    const [row] = findByType(linked, ProjectLinkRow);
+    expect(row).toBeDefined();
+    expect(row.props.projectId).toBe("proj-1");
+    expect(row.props.projects).toEqual([{ id: "proj-1", name: "Kitchen remodel" }]);
+    row.props.onPress();
+    expect(onOpenProject).toHaveBeenCalledTimes(1);
+
+    // No project linked -- nothing rendered even with a handler.
+    expect(findByType(EditEventView(editProps({ onOpenProject })), ProjectLinkRow)).toEqual([]);
+    // A project linked but no handler wired (an older caller/test) -- still nothing, never a dead tap.
+    expect(
+      findByType(
+        EditEventView(editProps({ projectId: "proj-1", projects: [{ id: "proj-1", name: "X" }] })),
+        ProjectLinkRow,
+      ),
+    ).toEqual([]);
   });
 
   it("Delete goes through the screen's confirm callback, labelled as a delete", () => {

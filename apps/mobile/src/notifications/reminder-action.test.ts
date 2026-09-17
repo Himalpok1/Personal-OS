@@ -29,6 +29,7 @@ function task(overrides: Partial<Task> = {}): Task {
     timezone: TZ,
     priority: null,
     project_id: null,
+    canvas_assignment_id: null,
     completed_at: null,
     rrule: null,
     recurrence_anchor: null,

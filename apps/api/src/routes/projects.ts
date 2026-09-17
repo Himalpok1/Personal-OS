@@ -1,4 +1,4 @@
-import { events, notes, projects, tasks } from "@personal-os/db";
+import { notes, projects } from "@personal-os/db";
 import {
   ProjectCreateSchema,
   ProjectDetailResponseSchema,
@@ -7,8 +7,15 @@ import {
   ProjectSummaryListResponseSchema,
   ProjectUpdateSchema,
 } from "@personal-os/schema";
-import { and, asc, count, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import {
+  buildProjectContext,
+  fetchProjectEventSection,
+  fetchProjectTaskSection,
+  toDetailEventItem,
+  toDetailTaskItem,
+} from "../read-models/project-context.js";
 import {
   computeProjectComputed,
   computeProjectSummaries,
@@ -66,39 +73,21 @@ export default function projectsRoutes(app: FastifyInstance): void {
   // GET /projects/:id above). Series rows only: detached occurrence
   // children (parent_event_id IS NOT NULL) are excluded so an overridden
   // instance never duplicates its series in the events section.
+  //
+  // The task/event section queries live in read-models/project-context.ts
+  // (Checkpoint 10.5), reused unchanged by GET /projects/:id/context below --
+  // this handler's own response shape is byte-identical to before that
+  // extraction.
   app.get<{ Params: { id: string } }>("/projects/:id/detail", async (request, reply) => {
     const [row] = await app.db.select().from(projects).where(eq(projects.id, request.params.id));
     if (!row) return reply.code(404).send({ error: "not_found" });
 
     const computed = await computeProjectComputed(app.db, row.id);
 
-    // Open statuses first (due_at ASC NULLS LAST, then newest-created),
-    // closed statuses after by completed_at DESC NULLS LAST; id tiebreak
-    // keeps slices deterministic across identical timestamps.
-    const taskItems = await app.db
-      .select({
-        id: tasks.id,
-        title: tasks.title,
-        status: tasks.status,
-        dueAt: tasks.dueAt,
-        priority: tasks.priority,
-        rrule: tasks.rrule,
-        completedAt: tasks.completedAt,
-      })
-      .from(tasks)
-      .where(and(eq(tasks.projectId, row.id), isNull(tasks.archivedAt)))
-      .orderBy(
-        sql`case when ${tasks.status} in ('inbox','active') then 0 else 1 end`,
-        sql`case when ${tasks.status} in ('inbox','active') then ${tasks.dueAt} end asc nulls last`,
-        sql`case when ${tasks.status} in ('inbox','active') then ${tasks.createdAt} end desc`,
-        sql`case when ${tasks.status} in ('done','dropped') then ${tasks.completedAt} end desc nulls last`,
-        asc(tasks.id),
-      )
-      .limit(DETAIL_SECTION_LIMIT);
-    const [taskTotal] = await app.db
-      .select({ total: count() })
-      .from(tasks)
-      .where(and(eq(tasks.projectId, row.id), isNull(tasks.archivedAt)));
+    const [taskSection, eventSection] = await Promise.all([
+      fetchProjectTaskSection(app.db, row.id, DETAIL_SECTION_LIMIT),
+      fetchProjectEventSection(app.db, row.id, DETAIL_SECTION_LIMIT),
+    ]);
 
     const noteItems = await app.db
       .select({
@@ -116,46 +105,10 @@ export default function projectsRoutes(app: FastifyInstance): void {
       .from(notes)
       .where(and(eq(notes.projectId, row.id), isNull(notes.archivedAt)));
 
-    const eventItems = await app.db
-      .select({
-        id: events.id,
-        title: events.title,
-        startsAt: events.startsAt,
-        endsAt: events.endsAt,
-        allDay: events.allDay,
-        startDate: events.startDate,
-        endDate: events.endDate,
-        location: events.location,
-        rrule: events.rrule,
-      })
-      .from(events)
-      .where(
-        and(eq(events.projectId, row.id), isNull(events.archivedAt), isNull(events.parentEventId)),
-      )
-      .orderBy(sql`${events.startsAt} desc nulls last`, asc(events.id))
-      .limit(DETAIL_SECTION_LIMIT);
-    const [eventTotal] = await app.db
-      .select({ total: count() })
-      .from(events)
-      .where(
-        and(eq(events.projectId, row.id), isNull(events.archivedAt), isNull(events.parentEventId)),
-      );
-
     return ProjectDetailResponseSchema.parse({
       project: toProjectPayload(row),
       computed,
-      tasks: {
-        items: taskItems.map((task) => ({
-          id: task.id,
-          title: task.title,
-          status: task.status,
-          due_at: task.dueAt ? task.dueAt.toISOString() : null,
-          priority: task.priority,
-          rrule: task.rrule,
-          completed_at: task.completedAt ? task.completedAt.toISOString() : null,
-        })),
-        total: Number(taskTotal?.total ?? 0),
-      },
+      tasks: { items: taskSection.items.map(toDetailTaskItem), total: taskSection.total },
       notes: {
         items: noteItems.map((note) => ({
           id: note.id,
@@ -165,21 +118,20 @@ export default function projectsRoutes(app: FastifyInstance): void {
         })),
         total: Number(noteTotal?.total ?? 0),
       },
-      events: {
-        items: eventItems.map((event) => ({
-          id: event.id,
-          title: event.title,
-          starts_at: event.startsAt ? event.startsAt.toISOString() : null,
-          ends_at: event.endsAt ? event.endsAt.toISOString() : null,
-          all_day: event.allDay,
-          start_date: event.startDate ?? null,
-          end_date: event.endDate ?? null,
-          location: event.location,
-          rrule: event.rrule,
-        })),
-        total: Number(eventTotal?.total ?? 0),
-      },
+      events: { items: eventSection.items.map(toDetailEventItem), total: eventSection.total },
     });
+  });
+
+  // Checkpoint 10.5 (ADR-074): a superset of /detail for a future bounded-
+  // context caller -- the project's tasks (with each task's opaque Canvas
+  // link, never Canvas content) and calendar items, captures that became one
+  // of this project's items, and a small recent-activity feed. Same 404 rule
+  // as /detail: an unknown id 404s, an archived project's context is still
+  // readable.
+  app.get<{ Params: { id: string } }>("/projects/:id/context", async (request, reply) => {
+    const context = await buildProjectContext(app.db, request.params.id);
+    if (!context) return reply.code(404).send({ error: "not_found" });
+    return context;
   });
 
   app.post("/projects", async (request, reply) => {

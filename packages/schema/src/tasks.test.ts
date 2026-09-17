@@ -185,6 +185,7 @@ describe("Task schemas", () => {
         timezone: "America/Chicago",
         priority: 1,
         project_id: null,
+        canvas_assignment_id: null,
         completed_at: null,
         rrule: "FREQ=DAILY",
         recurrence_anchor: "due_date",

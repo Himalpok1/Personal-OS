@@ -12,6 +12,7 @@ const taskRow = {
   timezone: "America/Chicago",
   priority: 1,
   project_id: null,
+  canvas_assignment_id: null,
   completed_at: null,
   rrule: null,
   recurrence_anchor: null,
@@ -102,6 +103,27 @@ describe("tasks api client", () => {
   });
 
   // Checkpoint 9.3: done|dropped -> active.
+  // Checkpoint 10.5 (ADR-074): updateTask has no dedicated wrapper for this
+  // field -- it already threads any TaskUpdate body through generically, the
+  // same way project_id always has.
+  it("PATCHes canvas_assignment_id through like any other task field", async () => {
+    const assignmentId = "33333333-3333-4333-8333-333333333333";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...taskRow, canvas_assignment_id: assignmentId }), {
+        status: 200,
+      }),
+    );
+    global.fetch = fetchMock;
+
+    const res = await updateTask("http://localhost:3000", taskRow.id, {
+      canvas_assignment_id: assignmentId,
+    });
+    expect(res.canvas_assignment_id).toBe(assignmentId);
+
+    const [, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ canvas_assignment_id: assignmentId });
+  });
+
   it("POSTs /tasks/:id/reopen as a bodyless request", async () => {
     const fetchMock = vi
       .fn()

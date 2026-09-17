@@ -1,10 +1,12 @@
 import {
+  ProjectContextResponseSchema,
   ProjectCreateSchema,
   ProjectDetailResponseSchema,
   ProjectSchema,
   ProjectSummaryListResponseSchema,
   ProjectUpdateSchema,
   type Project,
+  type ProjectContextResponse,
   type ProjectCreate,
   type ProjectDetailResponse,
   type ProjectSummaryItem,
@@ -14,7 +16,12 @@ import {
 import { z } from "zod";
 import { buildQuery, fetchJson } from "./client.js";
 
-export type { ProjectDetailResponse, ProjectSummaryItem, ProjectSummaryListResponse };
+export type {
+  ProjectContextResponse,
+  ProjectDetailResponse,
+  ProjectSummaryItem,
+  ProjectSummaryListResponse,
+};
 
 // Unlike tasks/notes/inbox, GET /projects returns a plain array -- small,
 // unbounded-need table, no pagination envelope (matches the API's own
@@ -51,6 +58,20 @@ export async function getProjectDetail(
   id: string,
 ): Promise<ProjectDetailResponse> {
   return fetchJson(baseUrl, `/projects/${id}/detail`, ProjectDetailResponseSchema);
+}
+
+/**
+ * `GET /projects/:id/context` (Checkpoint 10.5) -- a superset of
+ * `getProjectDetail`: the project's tasks (each carrying its opaque
+ * `canvas_assignment_id`, never Canvas content) and calendar items, captures
+ * that became one of this project's own items, and a small recent-activity
+ * feed. Same 404 rule as `getProjectDetail`.
+ */
+export async function getProjectContext(
+  baseUrl: string,
+  id: string,
+): Promise<ProjectContextResponse> {
+  return fetchJson(baseUrl, `/projects/${id}/context`, ProjectContextResponseSchema);
 }
 
 export async function createProject(baseUrl: string, body: ProjectCreate): Promise<Project> {

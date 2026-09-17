@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getAcademicCourse, getAcademicToday, listAcademicCourses } from "./academic.js";
+import {
+  getAcademicCourse,
+  getAcademicCourseContext,
+  getAcademicToday,
+  listAcademicCourses,
+} from "./academic.js";
 
 const BASE = "http://localhost:3000";
 const originalFetch = global.fetch;
@@ -136,5 +141,38 @@ describe("getAcademicCourse", () => {
   it("surfaces a 404 as a rejection", async () => {
     stub({ error: "not_found" }, 404);
     await expect(getAcademicCourse(BASE, COURSE_SUMMARY.id)).rejects.toThrow();
+  });
+});
+
+describe("getAcademicCourseContext (Checkpoint 10.5, ADR-074)", () => {
+  it("GETs /academic/courses/:id/context with the id encoded and parses related_reminders", async () => {
+    const f = stub({
+      course: COURSE_SUMMARY,
+      assignments: [ASSIGNMENT],
+      announcements: [],
+      events: [],
+      related_reminders: {
+        items: [
+          {
+            task_id: "44444444-4444-4444-8444-444444444444",
+            title: "test on Friday",
+            due_at: null,
+            remind_at: null,
+            status: "active",
+          },
+        ],
+        total: 1,
+      },
+    });
+    const result = await getAcademicCourseContext(BASE, COURSE_SUMMARY.id);
+    expect(String(f.mock.calls[0]![0])).toBe(
+      `${BASE}/academic/courses/${COURSE_SUMMARY.id}/context`,
+    );
+    expect(result.related_reminders.items[0]?.title).toBe("test on Friday");
+  });
+
+  it("surfaces a 404 as a rejection", async () => {
+    stub({ error: "not_found" }, 404);
+    await expect(getAcademicCourseContext(BASE, COURSE_SUMMARY.id)).rejects.toThrow();
   });
 });

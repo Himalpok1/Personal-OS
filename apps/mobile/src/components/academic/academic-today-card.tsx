@@ -45,6 +45,10 @@ import { workloadStripColumns, workloadStripLabel } from "./workload-strip";
  */
 const ACADEMIC_ROUTE = "/academic" as Href;
 
+function courseRoute(id: string): Href {
+  return `/academic/${encodeURIComponent(id)}` as Href;
+}
+
 const SECTION_TONE: Record<AcademicSectionTone, "danger" | "info" | "default"> = {
   red: "danger",
   blue: "info",
@@ -219,7 +223,16 @@ export function AcademicTodayCard() {
             Focus on
           </AppText>
           {focus.chips.map((chip) => (
-            <StatusChip key={chip.courseId} tone={chip.tone} label={chip.label} />
+            <Pressable
+              key={chip.courseId}
+              onPress={() => router.push(courseRoute(chip.courseId))}
+              hitSlop={4}
+              accessibilityRole="button"
+              accessibilityLabel={`Open course: ${chip.label}`}
+              className="active:opacity-70"
+            >
+              <StatusChip tone={chip.tone} label={chip.label} />
+            </Pressable>
           ))}
           {focus.hiddenCount > 0 ? (
             <AppText variant="caption" tone="muted">

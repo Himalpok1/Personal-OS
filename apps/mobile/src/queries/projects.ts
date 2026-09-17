@@ -7,6 +7,7 @@ const projectsKey = (params: ProjectListParams = {}) => ["projects", params] as 
 const projectSummariesKey = (includeArchived: boolean) =>
   ["projects", "summaries", includeArchived] as const;
 const projectDetailKey = (id: string) => ["projects", "detail", id] as const;
+const projectContextKey = (id: string) => ["projects", "context", id] as const;
 
 // A malformed projectId query param (e.g. from a stale deep link) must never
 // reach the API as a create/update body -- only well-formed UUIDs pass.
@@ -34,6 +35,23 @@ export function useProjectDetail(id: string | undefined) {
   return useQuery({
     queryKey: projectDetailKey(id ?? ""),
     queryFn: () => api.getProjectDetail(id!),
+    enabled: id !== undefined,
+  });
+}
+
+/**
+ * `GET /projects/:id/context` (Checkpoint 10.5, ADR-074) -- adds related
+ * captures and a recent-activity feed on top of what `useProjectDetail`
+ * already carries. A separate query, not a replacement: the project screen's
+ * name/goal/tasks/notes/events editing all keep using `useProjectDetail`
+ * unchanged, and this one is fetched alongside it purely for the two new
+ * sections, so a slow or failing context fetch can never blank the rest of
+ * the screen.
+ */
+export function useProjectContext(id: string | undefined) {
+  return useQuery({
+    queryKey: projectContextKey(id ?? ""),
+    queryFn: () => api.getProjectContext(id!),
     enabled: id !== undefined,
   });
 }

@@ -2,6 +2,13 @@ import { ChoiceChip } from "@/components/ask/choice-chip";
 import { FieldLabel, textFieldClass } from "@/components/ask/text-field";
 import { confirmDestructive } from "@/components/confirm-destructive";
 import {
+  assignmentLabelQueryKey,
+  rememberAcademicAssignments,
+  type LinkedAssignmentSummary,
+} from "@/components/academic/academic-assignment-cache";
+import { TaskAssignmentPicker } from "@/components/academic/task-assignment-picker";
+import { ProjectLinkRow } from "@/components/projects/project-link-row";
+import {
   AppText,
   Button,
   ErrorState,
@@ -18,27 +25,68 @@ import { TaskRepeatField } from "@/components/recurrence/task-repeat-field";
 import { applyDueDateChange } from "@/components/recurrence/task-repeat-state";
 import { TaskActions } from "@/components/task-actions";
 import { buildTaskUpdatePatch } from "@/components/task-update-patch";
+import { useAcademicCourse, useAcademicCourses } from "@/queries/academic";
 import { useProjects } from "@/queries/projects";
 import { useArchiveTask, useTask, useUpdateTask } from "@/queries/tasks";
 import { describeValidationError } from "@/utils/validation-error";
 import { ApiClientError } from "@personal-os/api-client";
-import { ENTITY_TITLE_MAX_CHARS, TASK_BODY_MAX_CHARS, type TaskUpdate } from "@personal-os/schema";
+import {
+  ENTITY_TITLE_MAX_CHARS,
+  TASK_BODY_MAX_CHARS,
+  type AcademicAssignment,
+  type TaskUpdate,
+} from "@personal-os/schema";
 import {
   parseRRuleStringToEditorState,
   type RecurrenceEditorState,
 } from "@personal-os/core/recurrence/editor";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { ScrollView, TextInput, View } from "react-native";
 
 export default function EditTaskScreen() {
   const keyboardHeight = useKeyboardHeight();
+  const queryClient = useQueryClient();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { data: task, isLoading, isError, error, refetch } = useTask(id);
   const { data: projects } = useProjects();
   const updateTask = useUpdateTask();
   const archiveTask = useArchiveTask();
+
+  // Links this task to a Canvas assignment (Checkpoint 10.5, ADR-074): the
+  // picker's own course/assignment fetches and expand/collapse state live
+  // here, exactly how the events screen owns EditEventView's calendar-link
+  // state -- TaskAssignmentPicker stays hook-free and prop-driven.
+  const [assignmentPickerExpanded, setAssignmentPickerExpanded] = useState(false);
+  const [pickerCourseId, setPickerCourseId] = useState<string | null>(null);
+  const { data: pickerCourses } = useAcademicCourses({ includePastTerms: true });
+  const { data: pickerCourseDetail, dataUpdatedAt: pickerCourseFetchedAt } = useAcademicCourse(
+    assignmentPickerExpanded ? pickerCourseId : null,
+  );
+  // Whenever the picker loads a course's assignments, remember their
+  // titles/course labels so THIS screen (and any other open one) can show a
+  // linked assignment's text without a dedicated lookup route -- see
+  // academic-assignment-cache.ts's own header for the honest limits of this.
+  useEffect(() => {
+    if (pickerCourseDetail) rememberAcademicAssignments(queryClient, pickerCourseDetail.assignments);
+  }, [pickerCourseDetail, queryClient]);
+
+  const linkedAssignmentId = task?.canvas_assignment_id ?? null;
+  // A pure cache read, never a fetch: there is no "get one assignment by id"
+  // route, so `enabled: false` keeps this from ever calling queryFn while
+  // still subscribing to the setQueryData writes rememberAcademicAssignments
+  // makes above (and from the course screen, and from a second visit to the
+  // picker) -- see academic-assignment-cache.ts.
+  const linkedLabel = useQuery<LinkedAssignmentSummary | undefined>({
+    queryKey: linkedAssignmentId
+      ? assignmentLabelQueryKey(linkedAssignmentId)
+      : ["academic", "assignment-label", "none"],
+    queryFn: () => Promise.resolve(undefined),
+    enabled: false,
+    staleTime: Infinity,
+  }).data;
 
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -169,6 +217,27 @@ export default function EditTaskScreen() {
     );
   };
 
+  // The link picker mutates immediately on selection/clear -- it is its own
+  // action, like TaskActions' status buttons below, not a field deferred to
+  // the Save button (the server validates the id against a real
+  // canvas_assignments row; describeValidationError already knows how to
+  // turn that 400 into a line).
+  const setAssignmentLink = (assignmentId: string | null) => {
+    if (!task) return;
+    setSaveError(null);
+    updateTask.mutate(
+      { id: task.id, body: { canvas_assignment_id: assignmentId } },
+      {
+        onError: (err) =>
+          setSaveError(
+            describeValidationError(err) ?? "Couldn't update the linked assignment. Please try again.",
+          ),
+      },
+    );
+    setAssignmentPickerExpanded(false);
+    setPickerCourseId(null);
+  };
+
   return (
     <ScreenFrame>
       <ScrollView
@@ -192,6 +261,13 @@ export default function EditTaskScreen() {
             the form so the one-tap follow-through (the point of 9.3) is reachable
             without scrolling past the editor on a 480x640 screen. */}
         <TaskActions task={task} />
+
+        <ProjectLinkRow
+          projectId={task.project_id}
+          projects={projects}
+          onPress={() => router.push(`/projects/${task.project_id}`)}
+          className="mb-4"
+        />
 
         <FieldLabel>Title</FieldLabel>
         <TextInput
@@ -240,6 +316,22 @@ export default function EditTaskScreen() {
             />
           ))}
         </View>
+
+        <TaskAssignmentPicker
+          expanded={assignmentPickerExpanded}
+          onToggleExpanded={() => setAssignmentPickerExpanded((value) => !value)}
+          isLinked={linkedAssignmentId !== null}
+          linkedTitle={linkedLabel?.title ?? null}
+          linkedCourseLabel={linkedLabel?.courseLabel ?? null}
+          courses={pickerCourses?.items ?? []}
+          selectedCourseId={pickerCourseId}
+          onSelectCourse={setPickerCourseId}
+          courseAssignments={pickerCourseDetail?.assignments ?? null}
+          courseAssignmentsFetchedAt={pickerCourseFetchedAt}
+          onSelectAssignment={(assignment: AcademicAssignment) => setAssignmentLink(assignment.id)}
+          onClear={() => setAssignmentLink(null)}
+          disabled={updateTask.isPending}
+        />
 
         {saveError ? (
           <AppText variant="body" tone="danger" className="mb-2" accessibilityRole="alert">

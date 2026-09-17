@@ -1,6 +1,7 @@
 import type {
   AcademicAnnouncement,
   AcademicAssignment,
+  AcademicCourseAttention,
   AcademicCourseSummary,
   AcademicEvent,
   AcademicGradeSummary,
@@ -104,6 +105,24 @@ export function priorityItem(overrides: Partial<AcademicPriorityItem> = {}): Aca
     score: 300,
     reasons: ["due_within_24h"],
     hours_until_due: 6.5,
+    ...overrides,
+  };
+}
+
+/** One "which courses need focus" row (Checkpoint 10.3). */
+export function courseAttention(
+  overrides: Partial<AcademicCourseAttention> = {},
+): AcademicCourseAttention {
+  return {
+    course_id: "22222222-2222-4222-8222-222222222222",
+    course_name: "Advanced Web Development",
+    course_code: "INSY 4315",
+    open_total: 2,
+    overdue_total: 1,
+    due_within_24h_total: 0,
+    due_this_week_total: 1,
+    next_due_at: "2026-09-23T04:59:00Z",
+    attention: "high",
     ...overrides,
   };
 }

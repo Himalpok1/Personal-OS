@@ -32,6 +32,7 @@ import {
   SOURCE_BASE_URL,
   academicToday,
   assignment,
+  courseAttention,
   priorityItem,
   workload,
 } from "./fixtures.test-support";
@@ -395,6 +396,42 @@ describe("the Courses affordance", () => {
     expect(header.props.accessibilityRole).toBe("button");
     expect(header.props.className).toContain("min-h-[44px]");
     expect(typeof header.props.onPress).toBe("function");
+  });
+});
+
+describe("the 'Focus on' course chips (Checkpoint 10.5)", () => {
+  it("each chip is a labelled, navigable button, not an inert StatusChip", () => {
+    mockQuery({
+      data: academicToday({
+        due_today: { items: [assignment()], total: 1 },
+        course_attention: {
+          items: [courseAttention({ course_id: "course-a", course_code: "INSY 4315" })],
+          total: 1,
+        },
+      }),
+    });
+    const chip = findPressables(render()).find(
+      (p) => p.props.accessibilityLabel === "Open course: INSY 4315",
+    );
+    expect(chip).toBeDefined();
+    expect(chip.props.accessibilityRole).toBe("button");
+    expect(typeof chip.props.onPress).toBe("function");
+    // Never throws against the mocked router -- it just proves this is a
+    // real navigation call site, not a decorative StatusChip.
+    expect(() => chip.props.onPress()).not.toThrow();
+  });
+
+  it("still renders the course label as its own StatusChip inside the Pressable", () => {
+    mockQuery({
+      data: academicToday({
+        due_today: { items: [assignment()], total: 1 },
+        course_attention: {
+          items: [courseAttention({ course_id: "course-a", course_code: "INSY 4315" })],
+          total: 1,
+        },
+      }),
+    });
+    expect(getTextContent(render())).toContain("INSY 4315");
   });
 });
 

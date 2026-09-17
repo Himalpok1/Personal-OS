@@ -4,6 +4,7 @@
 import { isValidTimezone } from "@personal-os/core/timezone";
 import { z } from "zod";
 import { booleanQueryParam } from "./pagination.js";
+import { TaskStatusSchema } from "./tasks.js";
 import { boundedItemsSectionSchema } from "./today.js";
 
 // Academic Intelligence Layer wire contracts (Checkpoint 10.2, ADR-070).
@@ -640,3 +641,54 @@ export const AcademicCourseDetailResponseSchema = z.object({
   grade_summary: AcademicGradeSummarySchema.optional(),
 });
 export type AcademicCourseDetailResponse = z.infer<typeof AcademicCourseDetailResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// GET /academic/courses/:id/context (Checkpoint 10.5, ADR-074)
+// ---------------------------------------------------------------------------
+//
+// A superset of the course-detail response -- everything detail carries,
+// plus the owner's OWN tasks/reminders that were EXPLICITLY linked to one of
+// this course's assignments (`tasks.canvas_assignment_id`). A NEW, separate
+// response schema, matching how Checkpoint 10.3 added optional keys rather
+// than widen a frozen shape: the versionCode-25 client parses
+// AcademicCourseDetailResponseSchema, never this one, so this route is free
+// to be strict without a compatibility constraint.
+
+export const ACADEMIC_RELATED_REMINDERS_ITEM_CAP = 20;
+
+/**
+ * One of the owner's own tasks/reminders, projected to exactly the fields
+ * every other Today/Agenda read model already exposes for a task -- title,
+ * due_at, remind_at, status. Never a task's `body`, never a Canvas field: the
+ * link is provenance (an id the owner set on their own task), not a reason
+ * to surface Canvas content through a task.
+ */
+export const AcademicRelatedReminderSchema = z
+  .object({
+    task_id: z.string().uuid(),
+    title: z.string(),
+    due_at: z.string().datetime({ offset: true }).nullable(),
+    remind_at: z.string().datetime({ offset: true }).nullable(),
+    status: TaskStatusSchema,
+  })
+  .strict();
+export type AcademicRelatedReminder = z.infer<typeof AcademicRelatedReminderSchema>;
+
+/**
+ * `getAcademicCourseDetail`'s own response plus `related_reminders`: every
+ * unarchived task/reminder whose `canvas_assignment_id` names one of THIS
+ * course's assignments, ordered due_at asc (nulls last), then title, then
+ * `task_id`. Same 404 rule as course detail (unknown, archived-connection,
+ * or an id from another institution all answer the same way).
+ */
+export const AcademicCourseContextResponseSchema = z
+  .object({
+    course: AcademicCourseSummarySchema,
+    assignments: z.array(AcademicAssignmentSchema),
+    announcements: z.array(AcademicAnnouncementSchema),
+    events: z.array(AcademicEventSchema),
+    grade_summary: AcademicGradeSummarySchema.optional(),
+    related_reminders: boundedItemsSectionSchema(AcademicRelatedReminderSchema),
+  })
+  .strict();
+export type AcademicCourseContextResponse = z.infer<typeof AcademicCourseContextResponseSchema>;

@@ -11,6 +11,7 @@ import {
   uuid,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
+import { canvasAssignments } from "./canvas-assignments.js";
 import { projects } from "./projects.js";
 
 // A reminder is just a task with remind_at set -- no separate reminders
@@ -33,6 +34,15 @@ export const tasks = pgTable(
     timezone: text("timezone").notNull(),
     priority: smallint("priority"),
     projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
+    // Checkpoint 10.5 (ADR-074): the one narrow, explicitly-written personal
+    // context relationship -- "this task/reminder came from this Canvas
+    // assignment." Mirrors projectId exactly: nullable, set-null-on-delete so
+    // a task never disappears if its linked assignment is later removed by a
+    // Canvas resync or archive. Never inferred/auto-linked -- only an explicit
+    // write path sets this column.
+    canvasAssignmentId: uuid("canvas_assignment_id").references(() => canvasAssignments.id, {
+      onDelete: "set null",
+    }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     rrule: text("rrule"),
     recurrenceTimezone: text("recurrence_timezone"),
@@ -63,6 +73,7 @@ export const tasks = pgTable(
       .on(table.recurrenceAnchor)
       .where(sql`${table.rrule} is not null`),
     index("tasks_project_id_idx").on(table.projectId),
+    index("tasks_canvas_assignment_id_idx").on(table.canvasAssignmentId),
     // Serves the task-list's dominant query shape (open tasks ordered by due
     // date); partial on archived_at since every default list query carries
     // that predicate too.

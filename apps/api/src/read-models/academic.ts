@@ -37,6 +37,7 @@ import {
   canvasConnections,
   canvasCourses,
   canvasEvents,
+  tasks,
   type Db,
 } from "@personal-os/db";
 import {
@@ -48,7 +49,9 @@ import {
   ACADEMIC_EVENTS_ITEM_CAP,
   ACADEMIC_OVERDUE_ITEM_CAP,
   ACADEMIC_PRIORITIES_ITEM_CAP,
+  ACADEMIC_RELATED_REMINDERS_ITEM_CAP,
   ACADEMIC_UPCOMING_DAY_COUNT,
+  AcademicCourseContextResponseSchema,
   AcademicCourseDetailResponseSchema,
   AcademicCoursesResponseSchema,
   AcademicTodayResponseSchema,
@@ -56,6 +59,7 @@ import {
   type AcademicAssignment,
   type AcademicCourse,
   type AcademicCourseAttention,
+  type AcademicCourseContextResponse,
   type AcademicCourseDetailResponse,
   type AcademicCourseSummary,
   type AcademicCoursesQuery,
@@ -63,6 +67,7 @@ import {
   type AcademicEvent,
   type AcademicGradeSummary,
   type AcademicPriorityItem,
+  type AcademicRelatedReminder,
   type AcademicTodayQuery,
   type AcademicTodayResponse,
   type AcademicWorkload,
@@ -1103,5 +1108,87 @@ export async function getAcademicCourseDetail(
     // Checkpoint 10.3: over the course's graded assignments, from the
     // projected rows above.
     grade_summary: buildGradeSummary(projectedAssignments),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// GET /academic/courses/:id/context (Checkpoint 10.5, ADR-074)
+// ---------------------------------------------------------------------------
+
+/**
+ * due_at asc (nulls last), title, id -- the same total-order convention as
+ * compareAssignmentsForDetail, applied to the task rows a reminder wraps.
+ */
+function compareRelatedReminders(a: AcademicRelatedReminder, b: AcademicRelatedReminder): number {
+  return (
+    compareNullableInstants(
+      a.due_at ? new Date(a.due_at) : null,
+      b.due_at ? new Date(b.due_at) : null,
+      1,
+    ) ||
+    compareStrings(a.title, b.title) ||
+    compareIds(a.task_id, b.task_id)
+  );
+}
+
+/**
+ * The tasks/reminders a person explicitly linked to one of this course's
+ * assignments (`tasks.canvas_assignment_id`, ADR-074) -- never a guess, never
+ * a text match. Unarchived only, matching every other section's convention.
+ * Selects exactly `title`/`due_at`/`remind_at`/`status`: never `body`, so
+ * this function does not widen what a Canvas-adjacent read model may see of
+ * a task -- see EXPECTED_BODY_READERS in ai-egress-guard.test.ts, extended
+ * deliberately for this file on that same basis.
+ */
+async function fetchRelatedReminders(
+  db: Db,
+  assignmentIds: readonly string[],
+): Promise<{ items: AcademicRelatedReminder[]; total: number }> {
+  if (assignmentIds.length === 0) return { items: [], total: 0 };
+  const rows = await db
+    .select({
+      taskId: tasks.id,
+      title: tasks.title,
+      dueAt: tasks.dueAt,
+      remindAt: tasks.remindAt,
+      status: tasks.status,
+    })
+    .from(tasks)
+    .where(and(inArray(tasks.canvasAssignmentId, [...assignmentIds]), isNull(tasks.archivedAt)));
+  const items = rows.map((row): AcademicRelatedReminder => ({
+    task_id: row.taskId,
+    title: row.title,
+    due_at: iso(row.dueAt),
+    remind_at: iso(row.remindAt),
+    status: row.status as AcademicRelatedReminder["status"],
+  }));
+  items.sort(compareRelatedReminders);
+  return {
+    items: items.slice(0, ACADEMIC_RELATED_REMINDERS_ITEM_CAP),
+    total: items.length,
+  };
+}
+
+/**
+ * The course-detail response (reused verbatim -- same course/assignments/
+ * announcements/events/grade_summary, same 404 rule) plus the one thing
+ * detail does not carry: which of the owner's OWN tasks/reminders were
+ * explicitly linked to one of this course's assignments. Everything here is
+ * still a projection: no write, no canvas_providers import, no AI lane.
+ */
+export async function getAcademicCourseContext(
+  db: Db,
+  id: string,
+  options?: { now?: Date },
+): Promise<AcademicCourseContextResponse | null> {
+  const detail = await getAcademicCourseDetail(db, id, options);
+  if (!detail) return null;
+  const relatedReminders = await fetchRelatedReminders(
+    db,
+    detail.assignments.map((a) => a.id),
+  );
+  return AcademicCourseContextResponseSchema.parse({
+    ...detail,
+    related_reminders: relatedReminders,
   });
 }

@@ -1,5 +1,11 @@
 import { computeNextLazyOccurrence, wallTimeOfNaiveTimestamp } from "@personal-os/core";
-import { occurrences, tasks } from "@personal-os/db";
+import {
+  canvasAssignments,
+  canvasConnections,
+  canvasCourses,
+  occurrences,
+  tasks,
+} from "@personal-os/db";
 import {
   ENTITY_TITLE_MAX_CHARS,
   TASK_BODY_MAX_CHARS,
@@ -9,7 +15,7 @@ import {
 } from "@personal-os/schema";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
 import type { ErrorBody, Paginated } from "../test/types.js";
 
@@ -778,6 +784,116 @@ describe("tasks routes", () => {
     const body = patched.json<Task>();
     expect(body.priority).toBe(1);
     expect(body.due_at).toBe("2026-09-01T14:00:00.000Z"); // 9am CDT -> 14:00 UTC
+  });
+
+  describe("canvas_assignment_id on PATCH (Checkpoint 10.5, ADR-074)", () => {
+    // Local cleanup: truncateTestTables (beforeEach, above) doesn't clear the
+    // Canvas tables -- see academic.test.ts's own beforeEach for the same
+    // pattern. Deleting the connection cascades courses/assignments.
+    afterEach(async () => {
+      await app.db.delete(canvasConnections);
+    });
+
+    async function seedAssignment(): Promise<string> {
+      const [connection] = await app.db
+        .insert(canvasConnections)
+        .values({
+          canvasBaseUrl: `https://${crypto.randomUUID()}.instructure.com`,
+          canvasUserId: 1,
+          canvasUserName: "Test Student",
+          status: "active",
+        })
+        .returning();
+      const [course] = await app.db
+        .insert(canvasCourses)
+        .values({ connectionId: connection!.id, canvasCourseId: 4315, name: "Advanced Web Dev" })
+        .returning();
+      const [assignment] = await app.db
+        .insert(canvasAssignments)
+        .values({
+          connectionId: connection!.id,
+          courseId: course!.id,
+          canvasAssignmentId: 99001,
+          title: "Project 2",
+          submissionState: "unsubmitted",
+        })
+        .returning();
+      return assignment!.id;
+    }
+
+    it("links a task to a real assignment, and GET reflects it", async () => {
+      const assignmentId = await seedAssignment();
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "test on Friday", timezone: "America/Chicago" },
+      });
+      const id = created.json<Task>().id;
+      expect(created.json<Task>().canvas_assignment_id).toBeNull();
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { canvas_assignment_id: assignmentId },
+      });
+      expect(patched.statusCode).toBe(200);
+      expect(patched.json<Task>().canvas_assignment_id).toBe(assignmentId);
+
+      const fetched = await app.inject({ method: "GET", url: `/tasks/${id}` });
+      expect(fetched.json<Task>().canvas_assignment_id).toBe(assignmentId);
+    });
+
+    it("rejects a canvas_assignment_id that does not reference an existing assignment", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "bad link", timezone: "America/Chicago" },
+      });
+      const id = created.json<Task>().id;
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { canvas_assignment_id: crypto.randomUUID() },
+      });
+      expect(patched.statusCode).toBe(400);
+      expect(patched.json<ErrorBody>().error).toBe("validation_failed");
+
+      const fetched = await app.inject({ method: "GET", url: `/tasks/${id}` });
+      expect(fetched.json<Task>().canvas_assignment_id).toBeNull();
+    });
+
+    it("unlinks via an explicit null", async () => {
+      const assignmentId = await seedAssignment();
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "linked then unlinked", timezone: "America/Chicago" },
+      });
+      const id = created.json<Task>().id;
+      await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { canvas_assignment_id: assignmentId },
+      });
+
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${id}`,
+        payload: { canvas_assignment_id: null },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json<Task>().canvas_assignment_id).toBeNull();
+    });
+
+    it("never sets the link on its own -- creating a task never populates it", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/tasks",
+        payload: { title: "no auto-guessing", timezone: "America/Chicago" },
+      });
+      expect(created.json<Task>().canvas_assignment_id).toBeNull();
+    });
   });
 
   describe("remind_at on PATCH", () => {

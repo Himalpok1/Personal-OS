@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   buildAcademicTodayResponse,
+  getAcademicCourseContext,
   getAcademicCourseDetail,
   listAcademicCourses,
 } from "../read-models/academic.js";
@@ -45,5 +46,18 @@ export default function academicRoutes(app: FastifyInstance): void {
     const detail = await getAcademicCourseDetail(app.db, params.id);
     if (!detail) return reply.code(404).send({ error: "not_found" });
     return detail;
+  });
+
+  // Checkpoint 10.5 (ADR-074): a superset of the route above -- same
+  // existence/404 rule -- plus the owner's own tasks/reminders explicitly
+  // linked to one of this course's assignments. Registered after the plain
+  // detail route for readability; find-my-way matches by segment count, not
+  // declaration order, so both `/academic/courses/:id` and
+  // `/academic/courses/:id/context` route correctly regardless.
+  app.get<{ Params: { id: string } }>("/academic/courses/:id/context", async (request, reply) => {
+    const params = CourseIdParamsSchema.parse(request.params);
+    const context = await getAcademicCourseContext(app.db, params.id);
+    if (!context) return reply.code(404).send({ error: "not_found" });
+    return context;
   });
 }

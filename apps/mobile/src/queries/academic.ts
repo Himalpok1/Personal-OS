@@ -23,6 +23,7 @@ export const academicKeys = {
   courses: (includeArchived: boolean, includePastTerms = false) =>
     [...academicKeys.all, "courses", includeArchived, includePastTerms] as const,
   course: (id: string | null) => [...academicKeys.all, "course", id] as const,
+  courseContext: (id: string | null) => [...academicKeys.all, "course", id, "context"] as const,
 };
 
 /**
@@ -81,6 +82,24 @@ export function useAcademicCourse(id: string | null) {
   return useQuery({
     queryKey: academicKeys.course(id),
     queryFn: () => api.getAcademicCourse(id as string),
+    enabled: id !== null,
+  });
+}
+
+/**
+ * `GET /academic/courses/:id/context` (Checkpoint 10.5, ADR-074) -- the same
+ * course detail plus `related_reminders`: the owner's own tasks explicitly
+ * linked to one of this course's assignments. A SEPARATE query from
+ * `useAcademicCourse`, not a superset call site for it: the course screen's
+ * assignments/announcements/events keep coming from the plain detail query
+ * it already had, and this one is fetched alongside it purely for the new
+ * "Related Reminders" section, so a slow or failing context fetch can never
+ * blank the rest of the screen.
+ */
+export function useAcademicCourseContext(id: string | null) {
+  return useQuery({
+    queryKey: academicKeys.courseContext(id),
+    queryFn: () => api.getAcademicCourseContext(id as string),
     enabled: id !== null,
   });
 }

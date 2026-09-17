@@ -364,6 +364,9 @@ describe("GET /export", () => {
     expect(Object.keys(body.tasks[0]!).sort()).toEqual([
       "archived_at",
       "body",
+      // Checkpoint 10.5 (ADR-074): an opaque provenance id, never Canvas
+      // content -- see toTaskPayload's own comment in user-export.ts.
+      "canvas_assignment_id",
       "completed_at",
       "created_at",
       "due_at",

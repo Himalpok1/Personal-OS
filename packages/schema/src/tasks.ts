@@ -26,6 +26,10 @@ export const TaskSchema = z.object({
   timezone: z.string(),
   priority: z.number().int().nullable(),
   project_id: z.string().uuid().nullable(),
+  // Checkpoint 10.5 (ADR-074): opaque provenance only -- "this task came
+  // from this Canvas assignment." Never inferred; see TaskUpdateSchema's
+  // own field for the write-path rule.
+  canvas_assignment_id: z.string().uuid().nullable(),
   completed_at: z.string().datetime({ offset: true }).nullable(),
   rrule: z.string().nullable(),
   recurrence_anchor: z.enum(["due_date", "completion_date"]).nullable(),
@@ -154,6 +158,13 @@ export const TaskUpdateSchema = z
     remind_at: FlexibleDatetimeSchema.nullable().optional(),
     priority: z.number().int().nullable().optional(),
     project_id: z.string().uuid().nullable().optional(),
+    // Checkpoint 10.5 (ADR-074): explicit-only provenance link to a synced
+    // Canvas assignment, mirroring project_id's shape exactly. Setting this
+    // is something a person or an explicit, reviewed feature does on
+    // purpose -- never inferred by the parser, a sync job, or a heuristic
+    // (ADR-074's own write-path rule). The route validates a non-null value
+    // against a real canvas_assignments row before writing it.
+    canvas_assignment_id: z.string().uuid().nullable().optional(),
     rrule: z.string().nullable().optional(),
     recurrence_timezone: z.string().nullable().optional(),
     recurrence_anchor: z.enum(["due_date", "completion_date"]).nullable().optional(),

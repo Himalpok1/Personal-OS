@@ -15,7 +15,7 @@ import {
   type DueDateRecurrenceRule,
 } from "@personal-os/core";
 import { errorToken } from "@personal-os/core/logging/logger";
-import { occurrences, tasks, type Db } from "@personal-os/db";
+import { canvasAssignments, occurrences, tasks, type Db } from "@personal-os/db";
 import {
   TaskCreateSchema,
   TaskListQuerySchema,
@@ -41,6 +41,36 @@ const DUE_DATE_WINDOW_DAYS = 90;
 function rruleValidationIssue(err: unknown): { code: "custom"; path: ["rrule"]; message: string } {
   const message = err instanceof TaskDueDateRuleError ? err.code : "invalid_rrule";
   return { code: "custom", path: ["rrule"], message };
+}
+
+// Checkpoint 10.5 (ADR-074): the same 400 validation_failed / `code: "custom"`
+// issue shape rruleValidationIssue already uses -- there is no existing
+// project_id existence check to mirror (an unknown project_id relies on the
+// tasks_project_id_projects_id_fk constraint and would surface as a raw,
+// unhandled 500), so this is the closest reviewed convention in this file
+// rather than a new error shape.
+function canvasAssignmentValidationIssue(): {
+  code: "custom";
+  path: ["canvas_assignment_id"];
+  message: string;
+} {
+  return {
+    code: "custom",
+    path: ["canvas_assignment_id"],
+    message: "canvas_assignment_id does not reference an existing assignment",
+  };
+}
+
+// True only when `id` names a real canvas_assignments row. Read-only --
+// never touches canvas_connections/canvas_courses, never imports
+// @personal-os/canvas-providers.
+async function canvasAssignmentExists(db: Db, id: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: canvasAssignments.id })
+    .from(canvasAssignments)
+    .where(eq(canvasAssignments.id, id))
+    .limit(1);
+  return row !== undefined;
 }
 
 // min(occurs_at) over ALL of a parent's occurrence rows, any status -- the
@@ -101,6 +131,7 @@ function toTaskResponse(row: typeof tasks.$inferSelect) {
     timezone: row.timezone,
     priority: row.priority,
     project_id: row.projectId,
+    canvas_assignment_id: row.canvasAssignmentId,
     completed_at: row.completedAt ? row.completedAt.toISOString() : null,
     rrule: row.rrule,
     recurrence_anchor: row.recurrenceAnchor,
@@ -409,6 +440,20 @@ export default function tasksRoutes(app: FastifyInstance): void {
     const body = TaskUpdateSchema.parse(request.body);
     const effectiveNow = new Date();
 
+    // Checkpoint 10.5 (ADR-074): validated before the transaction opens,
+    // mirroring how the rrule shape is checked cheaply first -- a linking
+    // mistake is the client's problem to display, not a reason to touch the
+    // database transactionally.
+    if (
+      body.canvas_assignment_id !== undefined &&
+      body.canvas_assignment_id !== null &&
+      !(await canvasAssignmentExists(app.db, body.canvas_assignment_id))
+    ) {
+      return reply
+        .code(400)
+        .send({ error: "validation_failed", issues: [canvasAssignmentValidationIssue()] });
+    }
+
     let row: typeof tasks.$inferSelect | null;
     try {
       row = await runTaskUpdate(app.db, request.params.id, body, effectiveNow);
@@ -449,6 +494,12 @@ async function runTaskUpdate(
           : existing.dueAt;
       const newPriority = body.priority !== undefined ? body.priority : existing.priority;
       const newProjectId = body.project_id !== undefined ? body.project_id : existing.projectId;
+      // Checkpoint 10.5 (ADR-074): existence already validated by the route
+      // before this transaction opened.
+      const newCanvasAssignmentId =
+        body.canvas_assignment_id !== undefined
+          ? body.canvas_assignment_id
+          : existing.canvasAssignmentId;
       const newRemindAt =
         body.remind_at !== undefined
           ? body.remind_at
@@ -749,6 +800,7 @@ async function runTaskUpdate(
           remindAt: newRemindAt,
           priority: newPriority,
           projectId: newProjectId,
+          canvasAssignmentId: newCanvasAssignmentId,
           rrule: hasRecurrence ? newRrule : null,
           recurrenceTimezone: hasRecurrence ? newRecurrenceTimezone : null,
           recurrenceAnchor: hasRecurrence ? newRecurrenceAnchor : null,

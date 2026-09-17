@@ -5,9 +5,13 @@ import type {
   AcademicCourseSummary,
   AcademicEvent,
   AcademicGradeSummary,
+  AcademicRelatedReminder,
 } from "@personal-os/schema";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect } from "react";
 import { View } from "react-native";
+import { useQueryClient } from "@tanstack/react-query";
+import { rememberAcademicAssignments } from "@/components/academic/academic-assignment-cache";
 import { assignmentUrgency, urgencyContext } from "@/components/academic/assignment-urgency";
 import {
   formatDateLabel,
@@ -38,7 +42,7 @@ import {
   StatusChip,
   type SectionTone,
 } from "@/components/ui";
-import { useAcademicCourse } from "@/queries/academic";
+import { useAcademicCourse, useAcademicCourseContext } from "@/queries/academic";
 import { deviceTimezone } from "@/queries/today";
 
 // One course (Checkpoint 10.2, ADR-070; redesigned in Checkpoint 10.3): a
@@ -181,6 +185,33 @@ function EventRow({ item, last }: { item: AcademicEvent; last: boolean }) {
   );
 }
 
+// One of the owner's OWN tasks, explicitly linked to an assignment in this
+// course (Checkpoint 10.5, ADR-074) -- never a Canvas row, so it opens the
+// task screen directly rather than going through SourceLink's origin gate.
+// `onPress` is threaded from the screen rather than calling useRouter() per
+// row (up to ACADEMIC_RELATED_REMINDERS_ITEM_CAP of them).
+function RelatedReminderRow({
+  item,
+  last,
+  onPress,
+}: {
+  item: AcademicRelatedReminder;
+  last: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <ListRow
+      title={item.title}
+      meta={item.due_at ? formatDueLabel(item.due_at) : "No due date"}
+      done={item.status === "done"}
+      onPress={onPress}
+      accessibilityLabel={`Open task: ${item.title}`}
+      chevron
+      last={last}
+    />
+  );
+}
+
 function GradeSummaryBlock({ summary }: { summary: AcademicGradeSummary }) {
   const view = gradeSummaryView(summary);
   const caption = [view.gradedLine, view.averageLine, view.pointsLine]
@@ -262,10 +293,25 @@ function CourseHero({
 }
 
 export default function AcademicCourseScreen() {
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const params = useLocalSearchParams<{ id: string }>();
   const id = typeof params.id === "string" && params.id.length > 0 ? params.id : null;
   const { data, dataUpdatedAt, isLoading, isError, isRefetching, error, refetch } =
     useAcademicCourse(id);
+  // Related Reminders (Checkpoint 10.5, ADR-074) -- a separate query from
+  // the course detail above so a slow/failing context fetch never blanks
+  // the rest of the screen; see queries/academic.ts's own doc comment.
+  const { data: context } = useAcademicCourseContext(id);
+
+  // Opportunistically remembers this course's assignments for the task
+  // screen's assignment picker/display (academic-assignment-cache.ts) --
+  // this screen already has the full rows, so there is nothing extra to
+  // fetch. A no-op once nothing changes: setQueryData on an equal value
+  // still notifies, but nothing here re-renders off its own write.
+  useEffect(() => {
+    if (data) rememberAcademicAssignments(queryClient, data.assignments);
+  }, [data, queryClient]);
 
   if (id === null) {
     return (
@@ -339,6 +385,36 @@ export default function AcademicCourseScreen() {
           body="No assignments have synced for this course."
           className="mt-4"
         />
+      ) : null}
+
+      {/* The owner's OWN tasks/reminders explicitly linked to one of this
+          course's assignments (Checkpoint 10.5, ADR-074) -- render nothing
+          while the context query is still loading, has failed, or the
+          section is genuinely empty, matching this screen's Announcements/
+          Events sections just below. */}
+      {context && context.related_reminders.items.length > 0 ? (
+        <View>
+          <SectionHeader
+            title="Related Reminders"
+            count={context.related_reminders.total}
+            icon="bell-outline"
+          />
+          <Card padding="none">
+            {context.related_reminders.items.map((item, index) => (
+              <RelatedReminderRow
+                key={item.task_id}
+                item={item}
+                last={index === context.related_reminders.items.length - 1}
+                onPress={() => router.push(`/tasks/${item.task_id}`)}
+              />
+            ))}
+          </Card>
+          {context.related_reminders.total > context.related_reminders.items.length ? (
+            <AppText variant="caption" tone="muted" className="px-1 pt-1">
+              +{context.related_reminders.total - context.related_reminders.items.length} more
+            </AppText>
+          ) : null}
+        </View>
       ) : null}
 
       {data.announcements.length > 0 ? (

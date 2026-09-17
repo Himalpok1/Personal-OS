@@ -1,7 +1,21 @@
-import { events, notes, occurrences, projects, tasks } from "@personal-os/db";
-import { ProjectDetailResponseSchema, ProjectSummaryListResponseSchema } from "@personal-os/schema";
+import {
+  canvasAssignments,
+  canvasConnections,
+  canvasCourses,
+  events,
+  inboxItems,
+  notes,
+  occurrences,
+  projects,
+  tasks,
+} from "@personal-os/db";
+import {
+  ProjectContextResponseSchema,
+  ProjectDetailResponseSchema,
+  ProjectSummaryListResponseSchema,
+} from "@personal-os/schema";
 import type { FastifyInstance } from "fastify";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
 
 const DAY_MS = 86_400_000;
@@ -60,6 +74,21 @@ describe("project summaries + detail read models", () => {
     const [row] = await app.db
       .insert(events)
       .values({ title: "E", timezone: TZ, ...values })
+      .returning();
+    return row!;
+  }
+
+  async function seedInboxItem(values: Partial<typeof inboxItems.$inferInsert> = {}) {
+    const [row] = await app.db
+      .insert(inboxItems)
+      .values({
+        rawText: "raw",
+        source: "web",
+        capturedAt: new Date(),
+        timezone: TZ,
+        status: "confirmed",
+        ...values,
+      })
       .returning();
     return row!;
   }
@@ -689,6 +718,192 @@ describe("project summaries + detail read models", () => {
       expect(body.notes.total).toBe(52);
       const updates = body.notes.items.map((note) => Date.parse(note.updated_at));
       expect([...updates].sort((a, b) => b - a)).toEqual(updates);
+    });
+  });
+
+  describe("GET /projects/:id/context (Checkpoint 10.5, ADR-074)", () => {
+    // truncateTestTables (beforeEach, above) doesn't clear the Canvas
+    // tables -- the same local-cleanup pattern academic.test.ts's own
+    // beforeEach uses. Deleting the connection cascades courses/assignments.
+    afterEach(async () => {
+      await app.db.delete(canvasConnections);
+    });
+
+    async function seedAssignment() {
+      const [connection] = await app.db
+        .insert(canvasConnections)
+        .values({
+          canvasBaseUrl: `https://${crypto.randomUUID()}.instructure.com`,
+          canvasUserId: 1,
+          canvasUserName: "Test Student",
+          status: "active",
+        })
+        .returning();
+      const [course] = await app.db
+        .insert(canvasCourses)
+        .values({
+          connectionId: connection!.id,
+          canvasCourseId: 4315,
+          name: "Should never appear in a project response",
+        })
+        .returning();
+      const [assignment] = await app.db
+        .insert(canvasAssignments)
+        .values({
+          connectionId: connection!.id,
+          courseId: course!.id,
+          canvasAssignmentId: 99001,
+          title: "Should also never appear in a project response",
+          submissionState: "unsubmitted",
+        })
+        .returning();
+      return assignment!;
+    }
+
+    it("404s an unknown project, same as /detail", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/projects/00000000-0000-4000-8000-000000000001/context",
+      });
+      expect(response.statusCode).toBe(404);
+      expect(response.json<{ error: string }>().error).toBe("not_found");
+    });
+
+    it("carries the same tasks/events as /detail, plus each task's opaque canvas_assignment_id", async () => {
+      const project = await seedProject({ name: "Context" });
+      const assignment = await seedAssignment();
+      const linked = await seedTask({
+        projectId: project.id,
+        status: "active",
+        canvasAssignmentId: assignment.id,
+      });
+      const unlinked = await seedTask({ projectId: project.id, status: "active" });
+      const event = await seedEvent({ projectId: project.id, startsAt: new Date() });
+
+      const detailRes = await app.inject({ method: "GET", url: `/projects/${project.id}/detail` });
+      const detail = ProjectDetailResponseSchema.parse(detailRes.json());
+
+      const contextRes = await app.inject({
+        method: "GET",
+        url: `/projects/${project.id}/context`,
+      });
+      expect(contextRes.statusCode).toBe(200);
+      const context = ProjectContextResponseSchema.parse(contextRes.json());
+
+      expect(context.tasks.total).toBe(detail.tasks.total);
+      expect(context.tasks.items.map((t) => t.id).sort()).toEqual([linked.id, unlinked.id].sort());
+      expect(context.events.items.map((e) => e.id)).toEqual([event.id]);
+      const linkedItem = context.tasks.items.find((t) => t.id === linked.id);
+      const unlinkedItem = context.tasks.items.find((t) => t.id === unlinked.id);
+      expect(linkedItem?.canvas_assignment_id).toBe(assignment.id);
+      expect(unlinkedItem?.canvas_assignment_id).toBeNull();
+    });
+
+    it("PRIVACY BOUNDARY: never surfaces a Canvas-authored title or course name -- only the opaque id", async () => {
+      const project = await seedProject({ name: "Privacy" });
+      const assignment = await seedAssignment();
+      await seedTask({
+        projectId: project.id,
+        status: "active",
+        canvasAssignmentId: assignment.id,
+      });
+
+      const response = await app.inject({ method: "GET", url: `/projects/${project.id}/context` });
+      const raw = JSON.stringify(response.json());
+      expect(raw).not.toContain("Should never appear in a project response");
+      expect(raw).not.toContain("Should also never appear in a project response");
+      expect(raw).toContain(assignment.id); // the opaque id itself IS expected
+    });
+
+    it("related_captures: a capture that became one of this project's items, via the deterministic entity join", async () => {
+      const project = await seedProject({ name: "Captures" });
+      const other = await seedProject({ name: "Other" });
+      const task = await seedTask({ projectId: project.id, status: "active" });
+      const otherTask = await seedTask({ projectId: other.id, status: "active" });
+
+      const capture = await seedInboxItem({
+        rawText: "call the insurance guy",
+        entityType: "task",
+        entityId: task.id,
+      });
+      // Not linked to any entity yet (still pending) -- excluded.
+      await seedInboxItem({ entityType: null, entityId: null, status: "pending" });
+      // Linked, but to a DIFFERENT project's task -- excluded.
+      await seedInboxItem({ entityType: "task", entityId: otherTask.id });
+      // Linked to this project's task, but archived -- excluded.
+      await seedInboxItem({
+        entityType: "task",
+        entityId: task.id,
+        archivedAt: new Date(),
+      });
+
+      const response = await app.inject({ method: "GET", url: `/projects/${project.id}/context` });
+      const body = ProjectContextResponseSchema.parse(response.json());
+      expect(body.related_captures.total).toBe(1);
+      expect(body.related_captures.items).toEqual([
+        {
+          id: capture.id,
+          raw_text: "call the insurance guy",
+          source: "web",
+          status: "confirmed",
+          captured_at: capture.capturedAt.toISOString(),
+          entity_type: "task",
+          entity_id: task.id,
+        },
+      ]);
+    });
+
+    it("recent_activity: task completions, note writes, occurrence completions -- newest first, 30-day window", async () => {
+      const project = await seedProject({ name: "Activity" });
+      const now = Date.now();
+
+      const oldTask = await seedTask({
+        projectId: project.id,
+        status: "done",
+        title: "Ancient",
+        completedAt: new Date(now - 60 * DAY_MS), // outside the window
+      });
+      const recentTask = await seedTask({
+        projectId: project.id,
+        status: "done",
+        title: "Recent task",
+        completedAt: new Date(now - 2 * DAY_MS),
+      });
+      const note = await seedNote({
+        projectId: project.id,
+        title: "Recent note",
+        createdAt: new Date(now - 3 * DAY_MS),
+        updatedAt: new Date(now - 1 * DAY_MS), // updated after creation -> "Updated"
+      });
+      const seriesTask = await seedTask({ projectId: project.id, status: "active" });
+      const occurrence = await seedOccurrence("task", seriesTask.id, new Date(now), {
+        status: "done",
+        completedAt: new Date(now - 12 * HOUR_MS),
+      });
+
+      const response = await app.inject({ method: "GET", url: `/projects/${project.id}/context` });
+      const body = ProjectContextResponseSchema.parse(response.json());
+
+      expect(body.recent_activity.total).toBe(3); // oldTask excluded
+      // Newest first: occurrence (-12h) then note (-24h) then task (-48h).
+      expect(body.recent_activity.items).toEqual([
+        {
+          type: "occurrence_completed",
+          description: `Completed occurrence of "${seriesTask.title}"`,
+          at: occurrence.completedAt!.toISOString(),
+        },
+        {
+          type: "note_written",
+          description: 'Updated note "Recent note"',
+          at: note.updatedAt.toISOString(),
+        },
+        {
+          type: "task_completed",
+          description: 'Completed task "Recent task"',
+          at: recentTask.completedAt!.toISOString(),
+        },
+      ]);
+      expect(JSON.stringify(body.recent_activity)).not.toContain(oldTask.title);
     });
   });
 });

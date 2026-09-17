@@ -97,6 +97,7 @@ import {
   completeProject,
   createProject,
   getProject,
+  getProjectContext,
   getProjectDetail,
   getProjectSummaries,
   listProjects,
@@ -132,7 +133,12 @@ import {
 import { getAgenda } from "./agenda.js";
 import { getSearchItemContext, search } from "./search.js";
 import { getExport } from "./export.js";
-import { getAcademicCourse, getAcademicToday, listAcademicCourses } from "./academic.js";
+import {
+  getAcademicCourse,
+  getAcademicCourseContext,
+  getAcademicToday,
+  listAcademicCourses,
+} from "./academic.js";
 import { getToday } from "./today.js";
 import { transcribe } from "./transcribe.js";
 
@@ -204,6 +210,7 @@ export type {
 export type { InboxListParams } from "./inbox.js";
 export type { NoteListParams } from "./notes.js";
 export type {
+  ProjectContextResponse,
   ProjectDetailResponse,
   ProjectListParams,
   ProjectSummaryItem,
@@ -221,6 +228,7 @@ export type { BriefContent, DailyBriefRecord } from "./brief.js";
 export type { Task, TaskCreate, TaskListParams, TaskStatus, TaskUpdate } from "./tasks.js";
 export type { TodayResponse } from "./today.js";
 export type {
+  AcademicCourseContextResponse,
   AcademicCourseDetailResponse,
   AcademicCoursesResponse,
   AcademicTodayResponse,
@@ -277,6 +285,9 @@ export function createApiClient(baseUrl: string) {
     archiveProject: archiveProject.bind(null, baseUrl),
     getProjectSummaries: getProjectSummaries.bind(null, baseUrl),
     getProjectDetail: getProjectDetail.bind(null, baseUrl),
+    // Checkpoint 10.5 (ADR-074) -- a superset of getProjectDetail: adds
+    // related captures and a recent-activity feed.
+    getProjectContext: getProjectContext.bind(null, baseUrl),
     pauseProject: pauseProject.bind(null, baseUrl),
     resumeProject: resumeProject.bind(null, baseUrl),
     completeProject: completeProject.bind(null, baseUrl),
@@ -360,6 +371,9 @@ export function createApiClient(baseUrl: string) {
     getAcademicToday: getAcademicToday.bind(null, baseUrl),
     listAcademicCourses: listAcademicCourses.bind(null, baseUrl),
     getAcademicCourse: getAcademicCourse.bind(null, baseUrl),
+    // Checkpoint 10.5 (ADR-074) -- a superset of getAcademicCourse: adds the
+    // owner's own tasks/reminders explicitly linked to this course.
+    getAcademicCourseContext: getAcademicCourseContext.bind(null, baseUrl),
 
     getMonitorOverview: getMonitorOverview.bind(null, baseUrl),
     listMonitorIncidents: listMonitorIncidents.bind(null, baseUrl),

@@ -4,6 +4,7 @@ import {
   canvasConnections,
   canvasCourses,
   canvasEvents,
+  tasks,
   type Db,
 } from "@personal-os/db";
 import {
@@ -13,15 +14,17 @@ import {
   ACADEMIC_OVERDUE_ITEM_CAP,
   ACADEMIC_PRIORITIES_ITEM_CAP,
   ACADEMIC_UPCOMING_DAY_COUNT,
+  AcademicCourseContextResponseSchema,
   AcademicCourseDetailResponseSchema,
   AcademicCoursesResponseSchema,
   AcademicTodayResponseSchema,
 } from "@personal-os/schema";
 import type { FastifyInstance } from "fastify";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildTestApp } from "../test/build-test-app.js";
 import {
   buildAcademicTodayResponse,
+  getAcademicCourseContext,
   getAcademicCourseDetail,
   listAcademicCourses,
 } from "./academic.js";
@@ -1385,5 +1388,146 @@ describe("getAcademicCourseDetail -- grade summary (10.3)", () => {
       weighted_percentage: 53.6,
     });
     expect(AcademicCourseDetailResponseSchema.parse(detail)).toEqual(detail);
+  });
+});
+
+describe("getAcademicCourseContext (Checkpoint 10.5, ADR-074)", () => {
+  afterEach(async () => {
+    await app.db.delete(tasks);
+  });
+
+  async function seedTask(overrides: Partial<typeof tasks.$inferInsert> = {}) {
+    const [row] = await app.db
+      .insert(tasks)
+      .values({
+        title: "Untitled",
+        status: "active",
+        timezone: TZ,
+        ...overrides,
+      })
+      .returning();
+    return row!;
+  }
+
+  it("returns null under the exact same 404 rule as getAcademicCourseDetail", async () => {
+    const active = await seedConnection(app.db);
+    const paused = await seedConnection(app.db, { status: "disconnected" });
+    const pausedCourse = await seedCourse(app.db, paused.id);
+
+    expect(await getAcademicCourseContext(app.db, crypto.randomUUID(), { now: NOW })).toBeNull();
+    expect(await getAcademicCourseContext(app.db, pausedCourse.id, { now: NOW })).toBeNull();
+
+    const archived = await seedCourse(app.db, active.id, {
+      archivedAt: at("2026-09-01T00:00:00Z"),
+    });
+    const context = await getAcademicCourseContext(app.db, archived.id, { now: NOW });
+    expect(context?.course.status).toBe("archived");
+  });
+
+  it("carries the same course/assignments/announcements/events/grade_summary as getAcademicCourseDetail", async () => {
+    const connection = await seedConnection(app.db);
+    const course = await seedCourse(app.db, connection.id);
+    await seedAssignment(app.db, connection.id, course.id, {
+      submissionState: "graded",
+      score: 8,
+      pointsPossible: 10,
+    });
+    await seedAnnouncement(app.db, connection.id, course.id);
+    await seedEvent(app.db, connection.id, course.id);
+
+    const detail = await getAcademicCourseDetail(app.db, course.id, { now: NOW });
+    const context = await getAcademicCourseContext(app.db, course.id, { now: NOW });
+    expect(context).not.toBeNull();
+    expect({
+      course: context!.course,
+      assignments: context!.assignments,
+      announcements: context!.announcements,
+      events: context!.events,
+      grade_summary: context!.grade_summary,
+    }).toEqual(detail);
+    expect(AcademicCourseContextResponseSchema.parse(context)).toEqual(context);
+  });
+
+  it("related_reminders carries only a task EXPLICITLY linked via canvas_assignment_id -- never a guess", async () => {
+    const connection = await seedConnection(app.db);
+    const course = await seedCourse(app.db, connection.id);
+    const other = await seedCourse(app.db, connection.id);
+    const linkedAssignment = await seedAssignment(app.db, connection.id, course.id, {
+      title: "Linked assignment",
+    });
+    await seedAssignment(app.db, connection.id, course.id, { title: "Unlinked assignment" });
+    const otherCourseAssignment = await seedAssignment(app.db, connection.id, other.id);
+
+    const linked = await seedTask({
+      title: "test on Friday",
+      canvasAssignmentId: linkedAssignment.id,
+    });
+    // A task with the SAME title text as the assignment but no explicit
+    // link -- must NOT appear. This is what proves the join is by id, never
+    // a text match.
+    await seedTask({ title: "Linked assignment" });
+    // Linked to a DIFFERENT course's assignment -- must not appear here.
+    await seedTask({ canvasAssignmentId: otherCourseAssignment.id });
+    // Archived -- excluded like every other section's convention.
+    await seedTask({
+      canvasAssignmentId: linkedAssignment.id,
+      archivedAt: new Date("2026-09-01T00:00:00Z"),
+    });
+
+    const context = await getAcademicCourseContext(app.db, course.id, { now: NOW });
+    expect(context!.related_reminders.total).toBe(1);
+    expect(context!.related_reminders.items).toEqual([
+      {
+        task_id: linked.id,
+        title: "test on Friday",
+        due_at: null,
+        remind_at: null,
+        status: "active",
+      },
+    ]);
+  });
+
+  it("orders related_reminders due_at asc nulls last, then title, then id", async () => {
+    const connection = await seedConnection(app.db);
+    const course = await seedCourse(app.db, connection.id);
+    const a1 = await seedAssignment(app.db, connection.id, course.id);
+    const a2 = await seedAssignment(app.db, connection.id, course.id);
+    const a3 = await seedAssignment(app.db, connection.id, course.id);
+
+    const undated = await seedTask({ title: "Undated", canvasAssignmentId: a3.id });
+    const later = await seedTask({
+      title: "Later",
+      dueAt: plus(5 * DAY),
+      canvasAssignmentId: a1.id,
+    });
+    const sooner = await seedTask({
+      title: "Sooner",
+      dueAt: plus(1 * DAY),
+      canvasAssignmentId: a2.id,
+    });
+
+    const context = await getAcademicCourseContext(app.db, course.id, { now: NOW });
+    expect(context!.related_reminders.items.map((item) => item.task_id)).toEqual([
+      sooner.id,
+      later.id,
+      undated.id,
+    ]);
+  });
+
+  it("never reaches a canvas table through the tasks it reads -- no Canvas title/course leaks through a reminder", async () => {
+    const connection = await seedConnection(app.db);
+    const course = await seedCourse(app.db, connection.id, { name: "Should never appear" });
+    const assignment = await seedAssignment(app.db, connection.id, course.id, {
+      title: "Should also never appear",
+    });
+    await seedTask({ title: "My own title", canvasAssignmentId: assignment.id });
+
+    const context = await getAcademicCourseContext(app.db, course.id, { now: NOW });
+    const serialized = JSON.stringify(context!.related_reminders);
+    expect(serialized).not.toContain("Should never appear");
+    expect(serialized).not.toContain("Should also never appear");
+    expect(Object.keys(context!.related_reminders.items[0]!).sort()).toEqual(
+      ["due_at", "remind_at", "status", "task_id", "title"].sort(),
+    );
   });
 });

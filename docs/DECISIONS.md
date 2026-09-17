@@ -96,6 +96,7 @@ Ordering below is the original log order: amendments (`ADR-046a`, `ADR-047a`, `A
 | [ADR-071](decisions/ADR-071.md) | Checkpoint 10.3: deterministic, explainable academic intelligence sections (urgency, priorities, workload, course attention, grade summary) as optional wire keys; a token-based mobile design system with three new Expo modules | Locked |
 | [ADR-072](decisions/ADR-072.md) | Checkpoint 10.4 (Lane 1): "Focus Now" is a deterministic, client-side merge of two already-fetched read models; no new route, no new database access, no AI call | Locked |
 | [ADR-073](decisions/ADR-073.md) | Checkpoint 10.4 (Lane 4): a single, hysteresis-gated Canvas invalid-token alert, amending ADR-068 §6's "no alert" stance | Locked |
+| [ADR-074](decisions/ADR-074.md) | Checkpoint 10.5: exactly one narrow, explicit, nullable FK (tasks.canvas_assignment_id) instead of a generic entity/relationship table (migration 0022) | Locked |
 
 ## Open later-phase decisions
 
