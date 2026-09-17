@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api } from "./client";
 import { deviceTimezone } from "./today";
 
@@ -53,12 +53,20 @@ export interface AcademicCoursesOptions {
  * active connection's courses with computed counts, current term only by
  * default. Accepts the pre-10.3 boolean form (`useAcademicCourses(true)` ==
  * `includeArchived`) as well as an options object.
+ *
+ * `includePastTerms` changes the query key, so toggling "Show past terms"
+ * would otherwise drop straight to the screen's loading skeleton for a list
+ * it already has almost all of. `placeholderData: keepPreviousData` (the
+ * same idiom `useSearch` already uses for its debounced key changes) keeps
+ * the previous term's list on screen -- `isPending`/`isLoading` stay false
+ * and `isFetching` is the only signal that a new page is on its way.
  */
 export function useAcademicCourses(options: AcademicCoursesOptions = {}) {
   const { includeArchived = false, includePastTerms = false } = options;
   return useQuery({
     queryKey: academicKeys.courses(includeArchived, includePastTerms),
     queryFn: () => api.listAcademicCourses({ includeArchived, includePastTerms }),
+    placeholderData: keepPreviousData,
   });
 }
 

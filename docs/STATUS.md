@@ -23,7 +23,10 @@ so this is now also blocking the academic surfaces from showing real data. **Che
 Academic Intelligence Expansion + Mobile UX Modernization — is IMPLEMENTED, INDEPENDENTLY REVIEWED
 and DEPLOYED** (ADR-071; no migration; api/web recreated at `ba23472`, worker/postgres untouched;
 the Rabbit R1 accepted on versionCode 27, built locally). Academic data on Today/`/academic` will
-render `configured: false` until the owner reconnects Canvas.
+render `configured: false` until the owner reconnects Canvas. **Checkpoint 10.4 — "Focus Now"
+unified Today ranking (ADR-072), Canvas invalid-token alerting with two-run hysteresis (ADR-073),
+and a four-item mobile polish bundle — is IMPLEMENTED, VERIFIED (6,530 tests, 23/23 tasks) and
+INDEPENDENTLY REVIEWED clean, but NOT YET DEPLOYED**, pending owner authorization to deploy.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -1388,6 +1391,113 @@ their pre-10.3 images — no rebuild was needed); migration level 22, unchanged;
 
 ---
 
+### Checkpoint 10.4 — Focus Now + Canvas alert hysteresis + mobile polish: IMPLEMENTED, VERIFIED — NOT DEPLOYED (2026-09-16/17)
+
+**Objective (owner-directed, 2026-09-16).** Not a new product surface from scratch: make Personal OS
+better at answering "what should I focus on right now" — deterministic first, explainable, privacy
+preserving, minimal AI calls — plus continue the mobile UX polish pass Checkpoint 10.3 started, plus
+close the one concrete reliability gap that let the 10.2 `invalid_token` incident go unnoticed. A
+bounded architecture review (three parallel read-only lanes over Today/intelligence, integrations
+reliability, and mobile UX) preceded any code; its findings are what selected this scope. **No new
+AI surface was built** — Cloud Ask/Suggested Focus/Daily Brief are unchanged, deliberately, per the
+owner's own "deterministic first... no unnecessary AI calls" framing and because widening either
+would mean touching the Guard 5 privacy wall, which this checkpoint does not do.
+
+**Lane 1 — "Focus Now" (ADR-072).** The Today screen already showed two independently-ranked lists —
+personal overdue/due-today items and (Checkpoint 10.3's) academic priorities — that never spoke to
+each other; a critical Canvas assignment due in 2 hours and an overdue personal task each looked
+"most urgent" in their own card with no way to tell which mattered more. Guard 5
+(`apps/api/src/ask/ai-egress-guard.test.ts`) structurally forbids `read-models/today.ts` from
+importing academic data at all, so the merge is **client-side only**: a new pure scoring module,
+`packages/core/src/focus-now/score.ts` (new `./focus-now/*` subpath export, mirroring `./academic/*`),
+scores a personal task on the SAME urgency ladder `packages/core/src/academic/urgency.ts` already
+uses (critical/high/medium/low by the identical boundaries) and wraps an already-scored academic
+priority item verbatim rather than re-deriving it, then ranks both onto one total order (score DESC,
+due-at ASC nulls-last, title ASC, id ASC — ending in `id`, this codebase's standing tie-break rule).
+No new API route, no new database access, no AI call, no migration — the card
+(`apps/mobile/src/components/today/focus-now-card.tsx`) composes the Today screen's two ALREADY-
+FETCHED queries and renders nothing while either is loading, erroring, or both are empty, matching
+the Academics card's own discipline. This extends ADR-071's "one permitted client derivation"
+precedent to a second, narrowly-scoped case.
+
+**Lane 4 — Canvas invalid-token alerting, with two-run hysteresis (ADR-073, amending ADR-068 §6).**
+Every OTHER integration (Gmail, Health, Calendar) fires a deduped push alert the instant its
+connection breaks; Canvas was the only one that didn't (`apps/worker/src/canvas/orchestrate.ts`'s
+own header comment said so). That gap is exactly what let the real 2026-09-16 `invalid_token`
+incident go unnoticed until the academic UI went blank. Because the cron enqueuer only selects
+`status = 'active'` connections, the PREVIOUS single-failure flip meant "two consecutive failed
+runs" could never occur naturally — sync stopped after the first failure. The fix changes the flip
+itself: on a connection-level `auth_failed`, the pass now looks up the immediately preceding
+`canvas_sync_runs` row for that connection (no migration — existing table); only if THAT row was
+also a connection-level `auth_failed` does it flip to `invalid_token` and fire the new alert
+(`apps/worker/src/canvas/alerts.ts`, a direct structural mirror of `mail/alerts.ts`: closed one-
+member alert-copy taxonomy, no institution name/base URL/course content in the body, dedupe key
+`canvas-invalid-token:<connectionId>:<last_sync_error_at ISO>` under ADR-058's episode-scoped
+contract). A single transient permission blip is absorbed (`recordConnectionError` only, status
+stays `active`, retried next cron tick); two in a row is treated as real. This also closes the
+already-recorded Checkpoint 10.2 debt entry ("a two-consecutive-runs hysteresis is recorded... not
+built"). `apps/api`, `packages/schema`, `packages/db` and the credential columns are untouched.
+
+**Lane 2 — mobile polish bundle**, all four items from Checkpoint 10.3's own "Recorded, not fixed"
+list, zero new dependencies: (1) `SegmentedControl` promoted from `components/calendar/` into
+`components/ui/` — it had already gained a second, unrelated consumer (`app/tasks/index.tsx`),
+tripping the design system's own documented promotion rule; both call sites updated, pure
+relocation, no behavior change. (2) `apps/academic/index.tsx`'s "Show past terms" toggle no longer
+flashes an empty skeleton — `useAcademicCourses` now carries `placeholderData: keepPreviousData`
+(TanStack Query), matching the one existing precedent for this pattern (`useSearch`). (3) Five
+"Loading…" strings in `settings.tsx` that had no accessible live-region behavior: two whole-section
+loading states became `SkeletonList` (already `accessibilityRole="progressbar"`), three inline
+single-label states gained `accessibilityLiveRegion="polite"`/`accessibilityRole="text"` so a screen
+reader announces the transition instead of silence-then-value. (4) `confirm-destructive.ts` — the
+single shared helper every destructive confirmation in the app already goes through — now fires a
+warning haptic before the dialog shows, on native only (`triggerHaptic` already no-ops on web/test
+environments, so no extra guard was needed).
+
+**Verification (integrator, serial, on the full monorepo).** `pnpm build --force` **12/12** ·
+`pnpm typecheck` **23/23** · `npx eslint apps packages` and `apps/mobile`'s own `npx eslint .` both
+exit 0 · root `npx prettier --check .` clean · `git diff --check` clean · `gitleaks detect --no-git`
+no leaks · `pnpm test --force` **23/23 tasks, 6,530 tests across 13 packages, zero failing** (core
+1,031 [+17 focus-now] · mobile 1,600 [+26: 24 focus-now + 2 haptic] · worker 738 [+10 canvas
+hysteresis/alerts]; api 1,496, schema 563, db 79, canvas-providers 79, health-providers 332,
+ai-providers 25, api-client 201, monitoring 151, calendar-providers 119, mail-providers 116 all
+unchanged — neither `apps/api` nor `packages/schema`/`packages/db` was touched this checkpoint, as
+scoped). `git status` confirms the three lanes' file sets never overlapped.
+
+**Independent adversarial review — CLEAN, zero CONFIRMED or PLAUSIBLE findings.** Six lenses, run by
+an agent with no implementation context, each verified against code and by actually running the
+relevant suites rather than trusting comments: **A (AI data leakage)** — neither `focus-now` nor the
+new mobile components import anything AI/intelligence-related; `apps/api/src/ask/ai-egress-guard.test.ts`
+(including Guard 5) re-run directly, 23/23 passed; the one Canvas-content link an academic row can
+reach still routes through the existing same-origin-gated `SourceLink`, not a new call site;
+`mobile-inert-rendering.test.ts`'s `Linking` allowlist guard, 4/4 passed. **B (credential exposure)**
+— the new hysteresis query and alert producer each select only `{status, failureClass}`/
+`{status, lastSyncErrorAt}`, never the credential triple; the alert body is a fixed literal carrying
+only a connection UUID, verified against the actual test asserting the payload contains no base URL/
+user name/token. **C (new egress)** — the alert producer's only outbound path is the existing
+`pg-boss` → `NOTIFICATIONS_DISPATCH_QUEUE` route Gmail/Health/Calendar already use; Focus Now adds no
+network call beyond the two already-fetched queries. **D (dedupe-key/hysteresis correctness)** — hand
+-verified against a first-ever-sync (no crash, correctly absorbed), two interleaved connections
+(query structurally scoped to one `connectionId`), and episode-key uniqueness across a reconnect
+(`keyB !== keyA`, proven by an existing test); 30/30 canvas tests re-run on an isolated clone DB.
+**E (mobile regressions)** — `triggerHaptic` cannot throw synchronously (async + `.catch(() => {})`),
+so the new haptic call cannot block a destructive dialog from showing; the `SegmentedControl`
+relocation left no stale import anywhere (`grep` confirmed empty); 35/35 targeted mobile tests
+re-run. **F (scope discipline)** — `git diff --stat` confirms the touched set is exactly
+`apps/mobile/**`, `apps/worker/src/canvas/*`, `packages/core/focus-now/**` and the two new ADR
+files plus their two-line `docs/DECISIONS.md` index addition (the one file outside the three lanes'
+stated scope, and that addition is this project's own required ADR-indexing step per `CLAUDE.md`,
+not a defect); nothing under `apps/api`, `packages/schema`, `packages/db`, or any migration.
+
+**New ADRs:** `docs/decisions/ADR-072.md` (Focus Now — Locked), `docs/decisions/ADR-073.md`
+(Canvas alert hysteresis, amending ADR-068 §6 — Locked); both indexed in `docs/DECISIONS.md`.
+
+**NOT YET DEPLOYED.** Code is implemented, fully verified, and independently reviewed clean.
+Per this project's own scope-control rule, production deployment, the Canvas alert's live behavior
+against the owner's real (currently `invalid_token`) connection, and any Rabbit R1 rebuild are
+owner-gated actions this checkpoint stops short of — see *Next action*.
+
+---
+
 ## Remaining warnings / technical debt
 
 > **Open entries only.** Every entry below is verbatim from the pre-2026-09-16 ledger, in its original
@@ -1622,6 +1732,13 @@ PR #3 merged. The one gap: the academic surfaces answer `configured: false` in p
 the real Canvas connection independently went `invalid_token` hours before this deploy — see
 *Next action*.
 
+**Checkpoint 10.4 — "Focus Now" + Canvas alert hysteresis + mobile polish — is implemented and
+verified in this worktree (uncommitted) but NOT YET DEPLOYED.** See the full entry above. It
+requires no migration and touches `packages/core`, `apps/worker/src/canvas`, and `apps/mobile`
+only — `apps/api`, `packages/schema` and `packages/db` are untouched. Deployment is gated on the
+independent adversarial review completing and explicit owner authorization, per this project's own
+scope-control and destructive-action rules.
+
 ---
 
 ## Completed
@@ -1654,6 +1771,7 @@ phase is in `docs/history/`; the one-line summary is:
 | **10.1C** | Canvas reconnect lifecycle fix: `connectCanvasConnection` SELECTs any prior row by `canvas_base_url` first and reactivates a non-active row in place (same `id`/`created_at`, FK-linked history preserved), refuses an active row (`409 canvas_already_connected`) and a different `canvas_user_id` (`409 canvas_account_mismatch`); route returns 200 on reactivation, 201 on creation. **Deployed (api only, no migration) and live-validated against the owner's real UTA account 2026-09-16** — reconnect `200` on the same row with history preserved, cron succeeding since. |
 | **10.2** | Academic Intelligence Layer: a provider-agnostic academic read model computed over the Canvas tables (`GET /academic/today`, `/academic/courses`, `/academic/courses/:id`; ADR-070), `score`/`grade` synced under ADR-068a (migration `0021`), a deterministic Today card (Overdue / Due today / Due this week / unread announcements) and `/academic` course screens, the single same-origin-gated "open in Canvas" call site, `invalid_token` wired into the worker's auth-failure path, an egress guard keeping academic data out of every AI lane. **Deployed (api/worker/web, level 22) and production-validated against the owner's real UTA account 2026-09-16** (ADR-070/068a); Rabbit R1 accepted on versionCode 25, built locally after the EAS quota refused the cloud build. |
 | **10.3** | Academic Intelligence Expansion + Mobile UX Modernization: deterministic urgency / explainable priority scoring / workload status / course attention / grade summary as optional keys on the academic read model (ADR-071, no migration), a token-based mobile design system (`components/ui/`, three new Expo modules, web dark mode fixed) and every screen restyled on it. **Implemented, verified (6,477 tests), independently reviewed (twice — the full adversarial pass and a four-lane final release gate), merged to `main` (`ba23472`) and DEPLOYED 2026-09-16/17** (api/web recreated, worker/postgres untouched); Rabbit R1 accepted on versionCode 27, built locally after catching and fixing a wrong-API-URL build before it ever reached the device. |
+| **10.4** | "Focus Now" — a deterministic, client-side-only unified ranking merging personal urgent items and academic priorities on Today (`packages/core/src/focus-now`, ADR-072, no new route/migration/AI call); Canvas invalid-token alerting gated on two consecutive connection-level auth failures, mirroring Gmail/Health/Calendar's existing alert producers (`apps/worker/src/canvas/alerts.ts`, ADR-073 amending ADR-068 §6); a four-item mobile polish bundle (`SegmentedControl` promoted to the design system, courses-screen skeleton flash fixed, accessible Settings loading states, haptic on destructive confirms). **Implemented, verified (6,530 tests, 23/23 tasks, zero failing) and independently reviewed clean — NOT YET DEPLOYED**, pending owner authorization. |
 
 **Production is at migration level 22** and serves api and web built from `ba23472` (10.3); worker
 and postgres are untouched since 10.2 (no rebuild needed — 10.3 shipped no worker code). Google
@@ -1674,14 +1792,20 @@ versionCode 27, built locally from `ba23472`.
 
 ## Current work
 
+**Checkpoint 10.4 is implemented, verified, and independently reviewed clean in this worktree,
+uncommitted, NOT deployed.** Deployment follows the frozen order for the touched services
+(`apps/worker`'s canvas job needs no migration; Focus Now and the mobile polish bundle are
+`apps/mobile`-only and need a client rebuild) — both are owner-gated steps this session stops
+short of.
+
 **Checkpoint 10.3 is deployed and accepted.** `main` is `ba23472` and canonical; PR #3 merged;
 production serves api/web at that commit (worker/postgres untouched); the Rabbit R1 runs
 versionCode 27. The one open owner action carried over from 10.2 — rotate the Canvas PAT — is now
-also what's needed to bring the new academic surfaces to life with real data: the connection
-independently went `invalid_token` hours before this deploy, unrelated to anything 10.3 touched.
-Android APKs are built locally (see the 10.2 entry's *Device build* paragraph, and the 10.3
-deployment record's build-verification gotcha); the EAS build service is no longer on the release
-path.
+also what's needed to bring the new academic surfaces to life with real data, AND to exercise
+10.4's new Canvas alert path for real: the connection independently went `invalid_token` hours
+before the 10.3 deploy, unrelated to anything 10.3 or 10.4 touched. Android APKs are built locally
+(see the 10.2 entry's *Device build* paragraph, and the 10.3 deployment record's build-verification
+gotcha); the EAS build service is no longer on the release path.
 
 **Repository housekeeping done 2026-09-16 (this reconciliation, no product change):** `main`
 fast-forwarded to the Phase 10 tip and made canonical again (PR #1 merged); the decision log split
@@ -1783,18 +1907,27 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. **Rotate the Canvas PAT and reconnect** (owner) — now the single action that closes two open
-   items at once: the credential that reached the api log and this chat during the 10.2 incident,
-   and the connection's independent `invalid_token` flip on 2026-09-16 that is currently the ONLY
-   reason the deployed 10.3 academic surfaces show `configured: false` in production. Revoke the
-   token in Canvas → Account → Settings → Approved Integrations, mint a fresh one, and reconnect
-   from Settings (the app trims a pasted line break and refuses any other whitespace before
-   touching Canvas). Then re-read Today on the Rabbit (versionCode 27, already installed) — the
-   Academics card, "Do next", workload status and course-attention chips should all appear with
-   real Fall 2026 data with no rebuild needed.
+1. **Authorize Checkpoint 10.4 for deployment** (owner) — the code is implemented, fully verified
+   (build/typecheck/lint/prettier/gitleaks/6,530 tests, all green), and independently reviewed
+   clean (zero findings across AI-leakage, credential-exposure, new-egress, dedupe-key-correctness,
+   mobile-regression and scope-discipline lenses), but sits uncommitted in this worktree pending
+   explicit go-ahead to deploy. Deploying the worker half (Canvas alerting) needs no migration and
+   follows the usual `apps/worker`-only frozen-order recreate; the "Focus Now" card and mobile
+   polish bundle are `apps/mobile`-only and need a client rebuild (`eas build --local`) to reach the
+   Rabbit R1 — neither has been deployed or built yet.
 
-2. Nothing else is gating. Checkpoint 10.3 is deployed and accepted; no checkpoint after it is
-   selected.
+2. **Rotate the Canvas PAT and reconnect** (owner) — closes three things at once now: the
+   credential that reached the api log and this chat during the 10.2 incident; the connection's
+   independent `invalid_token` flip on 2026-09-16 that is the ONLY reason the deployed 10.3
+   academic surfaces show `configured: false` in production; and it is the natural way to verify
+   10.4's new Canvas alert path live (a deliberate SECOND connection-level auth failure would also
+   exercise it, but reconnecting with a good token is the actual goal). Revoke the token in
+   Canvas → Account → Settings → Approved Integrations, mint a fresh one, and reconnect from
+   Settings (the app trims a pasted line break and refuses any other whitespace before touching
+   Canvas). Then re-read Today on the Rabbit (versionCode 27, already installed) — the Academics
+   card, "Do next", workload status and course-attention chips should all appear with real Fall
+   2026 data with no rebuild needed (though the NEW Focus Now card will not appear until 10.4 is
+   deployed and a new client is built and installed).
 
 3. **Then choose the next checkpoint — a product-direction decision for the owner.** Candidates
    carried from the 9.8 and 10.0/10.1 closeouts: widen the Canvas integration further (device-token

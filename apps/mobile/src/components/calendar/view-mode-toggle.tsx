@@ -1,4 +1,4 @@
-import { SegmentedControl, type SegmentedOption } from "./segmented-control";
+import { SegmentedControl, type SegmentedOption } from "@/components/ui";
 
 export type CalendarViewMode = "month" | "week" | "agenda";
 

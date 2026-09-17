@@ -18,6 +18,7 @@
     "./mail/*": "./dist/mail/*.js",
     "./canvas/*": "./dist/canvas/*.js",
     "./academic/*": "./dist/academic/*.js",
+    "./focus-now/*": "./dist/focus-now/*.js",
     "./ai/*": "./dist/ai/*.js",
     "./search/*": "./dist/search/*.js",
     "./logging/*": "./dist/logging/*.js",

@@ -44,6 +44,7 @@ import {
   ListRow,
   ScreenFrame,
   SectionHeader,
+  SkeletonList,
   StatusChip,
 } from "@/components/ui";
 import { ApiClientError } from "@personal-os/api-client";
@@ -877,11 +878,7 @@ function ConnectedCalendarsCard() {
     <Card className="mb-4">
       <ListRow icon="calendar-month" iconTone="info" title="Connected Calendars" inset last />
 
-      {isLoading ? (
-        <AppText variant="body" tone="muted" className="py-2">
-          Loading…
-        </AppText>
-      ) : null}
+      {isLoading ? <SkeletonList rows={2} /> : null}
       {isError ? (
         <InlineRetry
           message="Couldn't load calendar connections."
@@ -1210,7 +1207,13 @@ function ConnectedMailCard() {
         last
       />
 
-      <AppText variant="body" tone="secondary" className="min-h-[20px]">
+      <AppText
+        variant="body"
+        tone="secondary"
+        className="min-h-[20px]"
+        accessibilityLiveRegion="polite"
+        accessibilityRole="text"
+      >
         {connectionsQuery.isLoading ? "Loading…" : MAIL_STATUS_TEXT[overallState]}
       </AppText>
 
@@ -1488,7 +1491,13 @@ function ConnectedCanvasCard() {
         last
       />
 
-      <AppText variant="body" tone="secondary" className="min-h-[20px]">
+      <AppText
+        variant="body"
+        tone="secondary"
+        className="min-h-[20px]"
+        accessibilityLiveRegion="polite"
+        accessibilityRole="text"
+      >
         {connectionsQuery.isLoading ? "Loading…" : CANVAS_STATUS_TEXT[overallState]}
       </AppText>
 
@@ -1630,7 +1639,13 @@ function MonitoringCard() {
         inset
         last
       />
-      <AppText variant="body" tone={tone} className="min-h-[20px]">
+      <AppText
+        variant="body"
+        tone={tone}
+        className="min-h-[20px]"
+        accessibilityLiveRegion="polite"
+        accessibilityRole="text"
+      >
         {summary}
       </AppText>
       <AppText variant="caption" tone="muted" className="min-h-[16px]">
@@ -1742,7 +1757,13 @@ function ConnectedHealthCard() {
         last
       />
 
-      <AppText variant="body" tone="secondary" className="min-h-[20px]">
+      <AppText
+        variant="body"
+        tone="secondary"
+        className="min-h-[20px]"
+        accessibilityLiveRegion="polite"
+        accessibilityRole="text"
+      >
         {state === null ? "Loading…" : HEALTH_STATUS_TEXT[state]}
       </AppText>
 
@@ -1856,11 +1877,7 @@ export default function SettingsScreen() {
 
           <SectionHeader title="Devices" icon="cellphone" />
 
-          {isLoading ? (
-            <AppText variant="body" tone="muted" className="mb-4">
-              Loading…
-            </AppText>
-          ) : null}
+          {isLoading ? <SkeletonList rows={2} className="mb-4" /> : null}
           {isError ? (
             isRevokedSession ? (
               <Card className="mb-4" accessibilityRole="alert">

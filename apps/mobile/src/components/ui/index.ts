@@ -13,6 +13,7 @@ export * from "./navigation-theme";
 export * from "./progress-bar";
 export * from "./screen";
 export * from "./section-header";
+export * from "./segmented-control";
 export * from "./status-chip";
 export * from "./text";
 export * from "./theme";

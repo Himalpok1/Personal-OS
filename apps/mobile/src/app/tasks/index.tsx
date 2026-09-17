@@ -12,7 +12,6 @@ import {
   useTasks,
 } from "@/queries/tasks";
 import { FLOATING_CLEARANCE, FLOATING_CTA_CLEARANCE_NO_TABBAR } from "@/components/floating-layout";
-import { SegmentedControl, type SegmentedOption } from "@/components/calendar/segmented-control";
 import {
   AppText,
   Button,
@@ -20,6 +19,8 @@ import {
   EmptyState,
   ErrorState,
   ScreenFrame,
+  SegmentedControl,
+  type SegmentedOption,
   SkeletonList,
   useTheme,
 } from "@/components/ui";

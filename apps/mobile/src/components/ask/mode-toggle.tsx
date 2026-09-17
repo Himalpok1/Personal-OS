@@ -1,5 +1,5 @@
 import { View } from "react-native";
-import { SegmentedControl, type SegmentedOption } from "@/components/calendar/segmented-control";
+import { SegmentedControl, type SegmentedOption } from "@/components/ui";
 
 // The two-way "Search" / "Ask" switch shown above the search screen's input
 // whenever Cloud Ask is enabled (Checkpoint 8.6B). Rendered by the screen's

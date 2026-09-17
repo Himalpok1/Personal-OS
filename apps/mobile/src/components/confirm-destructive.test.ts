@@ -1,5 +1,6 @@
 import { Alert, Platform } from "react-native";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as Haptics from "expo-haptics";
 import { confirmDestructive } from "./confirm-destructive";
 
 // The defect this helper exists for: react-native-web's Alert is
@@ -65,6 +66,14 @@ describe("web", () => {
     confirmDestructive({ ...OPTIONS, onConfirm: vi.fn() });
     expect(alert).not.toHaveBeenCalled();
   });
+
+  it("does not fire a haptic on web -- triggerHaptic's own Platform.OS guard no-ops there", () => {
+    setPlatform("web");
+    (globalThis as { confirm?: unknown }).confirm = vi.fn().mockReturnValue(true);
+    const notify = vi.spyOn(Haptics, "notificationAsync");
+    expect(() => confirmDestructive({ ...OPTIONS, onConfirm: vi.fn() })).not.toThrow();
+    expect(notify).not.toHaveBeenCalled();
+  });
 });
 
 describe("native", () => {
@@ -94,5 +103,18 @@ describe("native", () => {
     (globalThis as { confirm?: unknown }).confirm = ask;
     confirmDestructive({ ...OPTIONS, onConfirm: vi.fn() });
     expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("fires a warning haptic as the dialog is about to be shown, not on confirm", () => {
+    setPlatform("android");
+    const alert = vi.spyOn(Alert, "alert").mockImplementation(() => undefined);
+    const notify = vi.spyOn(Haptics, "notificationAsync");
+
+    confirmDestructive({ ...OPTIONS, onConfirm: vi.fn() });
+
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith(Haptics.NotificationFeedbackType.Warning);
+    // Fired before the platform dialog, not after a confirm tap.
+    expect(notify.mock.invocationCallOrder[0]!).toBeLessThan(alert.mock.invocationCallOrder[0]!);
   });
 });

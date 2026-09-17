@@ -14,6 +14,7 @@ import { BriefCard } from "@/components/brief/brief-card";
 import { HealthTodayCard } from "@/components/health/health-today-card";
 import { MailDigestCard } from "@/components/mail/digest-today-card";
 import { ReminderNoticeCard } from "@/components/reminder-notice-card";
+import { FocusNowCard } from "@/components/today/focus-now-card";
 import {
   SuggestedFocusCard,
   type SuggestedFocusState,
@@ -825,6 +826,17 @@ export default function TodayScreen() {
             points at the screen that can fix it. Placed above the Brief because
             "your reminders are not running" outranks anything below it. */}
         <ReminderNoticeCard />
+
+        {/* Checkpoint 10.4 (ADR-072): the one merged, ranked "what should I
+            focus on right now" card, over Today's own overdue/due-today
+            tasks and the Academics card's own ranked "Do next" candidates.
+            Placed above the Brief because a deterministic, cited ranking of
+            what to do next outranks a generated summary; below the reminder
+            banner for the same reason that banner outranks everything else.
+            Owns its own two queries (already fetched for this screen and the
+            Academics card below) and derives nothing server-side -- see
+            components/today/focus-now-card.tsx. */}
+        <FocusNowCard />
 
         {/* Checkpoint 5.5: manual/on-demand Daily Brief (ADR-041). The card
             owns its own GET /briefs/current query -- Today only carries brief

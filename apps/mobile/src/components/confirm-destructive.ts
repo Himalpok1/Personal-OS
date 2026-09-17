@@ -1,4 +1,5 @@
 import { Alert, Platform } from "react-native";
+import { triggerHaptic } from "@/components/ui/haptics";
 
 // A confirmation that actually asks on every platform this app ships to.
 //
@@ -56,6 +57,11 @@ export interface ConfirmDestructiveOptions {
  */
 export function confirmDestructive(options: ConfirmDestructiveOptions): void {
   const { title, message, confirmLabel, cancelLabel = "Cancel", onConfirm } = options;
+
+  // Fired as the prompt is about to be shown, not on confirm -- `triggerHaptic`
+  // already no-ops on web and swallows a rejected promise, so this needs no
+  // platform guard of its own beyond the one it already has.
+  triggerHaptic("warning");
 
   if (Platform.OS === "web") {
     // `globalThis.confirm` rather than a bare `confirm`, so this module does not

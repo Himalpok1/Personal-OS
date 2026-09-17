@@ -1,4 +1,4 @@
-import { canvasConnections, type Db } from "@personal-os/db";
+import { canvasConnections, canvasSyncRuns, type Db } from "@personal-os/db";
 import { decryptSecret, type EncryptedSecret } from "@personal-os/ai-providers";
 import {
   classifyCanvasFault,
@@ -11,10 +11,11 @@ import {
   type CanvasCalendarEventRow,
   type CanvasClient,
 } from "@personal-os/canvas-providers";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 import { env } from "../env.js";
 import { errorToken, log } from "../logger.js";
+import { enqueueCanvasInvalidTokenAlert } from "./alerts.js";
 import {
   archiveMissingCanvasAnnouncements,
   archiveMissingCanvasAssignments,
@@ -51,13 +52,15 @@ import { closeCanvasSyncRun, openCanvasSyncRun, type CanvasSyncRunKind } from ".
 //      are left untouched -- neither upserted nor archived -- and the pass
 //      moves on to the next course. A single provider hiccup on one class
 //      must never abort the whole institution's sync.
-//   4. NO EGRESS BEYOND THIS PACKAGE'S OWN SIX TABLES. No AI, no
-//      notification, no alert. ADR-068 §6 is explicit that this checkpoint
-//      adds none. Checkpoint 10.2 keeps that: a dead PAT flips the row to
-//      `invalid_token` (see `markConnectionInvalidToken`) but, unlike mail's
-//      `needs_reauth`, enqueues no alert -- the Settings screen's own
-//      status rendering is the surface, and an alert producer would need
-//      its own occurrence-scoped dedupe key under ADR-058 first.
+//   4. NO AI, EVER. Checkpoint 10.4 (ADR-073) adds exactly ONE narrow
+//      exception to "no egress": a dead PAT that survives TWO CONSECUTIVE
+//      connection-level auth failures flips the row to `invalid_token` (see
+//      `markConnectionInvalidToken`) and enqueues one deduped push alert (see
+//      `isSecondConsecutiveAuthFailure` and ./alerts.ts). This amends ADR-068
+//      §6's original "no alert" stance for this one condition only -- it is
+//      not a Canvas observability subsystem, matching Gmail's own single-
+//      condition restraint (apps/worker/src/mail/alerts.ts). No model call
+//      and no other egress surface exists anywhere in this file.
 
 export interface CanvasSyncJobData {
   connectionId: string;
@@ -67,8 +70,9 @@ export interface CanvasSyncJobData {
 export interface CanvasSyncDeps {
   db: Db;
   client: CanvasClient;
-  /** Unused today -- reserved the same way `MailSyncDeps.boss` was in 7.3, in
-   *  case a future checkpoint adds an alert producer here. */
+  /** Used since Checkpoint 10.4 (ADR-073) to enqueue the invalid-token alert
+   *  -- see `enqueueCanvasInvalidTokenAlert` in ./alerts.ts. Reserved for
+   *  exactly this since 10.1, the same way `MailSyncDeps.boss` was in 7.3. */
   boss?: PgBoss | null;
   now?: () => Date;
 }
@@ -186,6 +190,53 @@ async function markConnectionInvalidToken(
     .where(and(eq(canvasConnections.id, connectionId), eq(canvasConnections.status, "active")));
 }
 
+/**
+ * Two-consecutive-failure hysteresis for the `invalid_token` flip
+ * (Checkpoint 10.4, ADR-073).
+ *
+ * A single connection-level `auth_failed` is absorbed by `recordConnectionError`
+ * rather than flipping status -- this is the fix for the 10.2 "recorded, not
+ * fixed" debt: "a non-rate-limit 403 on the account's own course list
+ * classifies as `auth_failed` and flips `invalid_token` on a single run (no
+ * hysteresis); a Canvas permission blip would force a re-paste." Only a
+ * SECOND CONSECUTIVE connection-level `auth_failed` -- the run immediately
+ * before the one that just failed was ALSO a connection-level `auth_failed`
+ * -- is treated as the PAT genuinely being dead.
+ *
+ * "Immediately preceding" is read from durable state, never a counter: the
+ * most recent OTHER `canvas_sync_runs` row for this connection, ordered by
+ * `started_at` desc with `created_at` desc as a tiebreaker (a test-injected
+ * clock can hand two passes the identical instant; production's default
+ * `now = new Date()` cannot). The caller always excludes the run it just
+ * closed by id, since that row already carries this pass's own
+ * `failed`/`auth_failed`, which must never be compared against itself.
+ *
+ * This is also why two-in-a-row can occur naturally under an unattended
+ * cron at all: the connection stays `active` -- and therefore still
+ * selected by `enqueueCanvasSyncForAllActiveConnections` -- after the FIRST
+ * failure, precisely because that first failure only records an error
+ * rather than flipping status. The second tick is the second attempt.
+ *
+ * A course-level `auth_failed` never reaches this function or the run it
+ * would compare against: it is contained inside the per-course loop below,
+ * never throws out of `listActiveCourses`, and so never produces a
+ * connection-level failed run at all -- it cannot start or continue a
+ * streak either way.
+ */
+async function isSecondConsecutiveAuthFailure(
+  db: Db,
+  connectionId: string,
+  currentRunId: string,
+): Promise<boolean> {
+  const [prior] = await db
+    .select({ status: canvasSyncRuns.status, failureClass: canvasSyncRuns.failureClass })
+    .from(canvasSyncRuns)
+    .where(and(eq(canvasSyncRuns.connectionId, connectionId), ne(canvasSyncRuns.id, currentRunId)))
+    .orderBy(desc(canvasSyncRuns.startedAt), desc(canvasSyncRuns.createdAt))
+    .limit(1);
+  return prior?.status === "failed" && prior?.failureClass === "auth_failed";
+}
+
 async function clearConnectionError(db: Db, connectionId: string, now: Date): Promise<void> {
   await db
     .update(canvasConnections)
@@ -278,20 +329,28 @@ export async function runCanvasConnectionSync(
     });
     // CONNECTION-LEVEL `auth_failed` -- Canvas rejected the PAT on the one
     // request that carries no course id -- is the token itself being dead
-    // (a 401, or a non-rate-limit 403 on the account's own course list), and
-    // no cron tick will change that. It flips the row to `invalid_token` so
-    // the owner sees it and can reconnect. Every OTHER class (rate limit,
-    // 5xx, network) is transient and only records `last_sync_error`, exactly
-    // as before. A PER-COURSE `auth_failed` (a 403 on one course the token
-    // lacks access to) is contained by the course loop below and never
+    // (a 401, or a non-rate-limit 403 on the account's own course list). A
+    // SINGLE such failure only records `last_sync_error`, exactly like every
+    // other transient class (rate limit, 5xx, network) -- Checkpoint 10.4's
+    // two-consecutive-failure hysteresis (ADR-073) absorbs a live permission
+    // blip rather than forcing a reconnect for it. Only when the run
+    // IMMEDIATELY BEFORE this one was ALSO a connection-level `auth_failed`
+    // (see `isSecondConsecutiveAuthFailure`) does the row flip to
+    // `invalid_token` and fire one deduped alert, so the owner sees it and
+    // can reconnect. A PER-COURSE `auth_failed` (a 403 on one course the
+    // token lacks access to) is contained by the course loop below and never
     // reaches this branch, so one unenrolled course cannot invalidate the
-    // whole connection.
-    if (fault.failureClass === "auth_failed") {
+    // whole connection, and cannot contribute to the streak either.
+    if (
+      fault.failureClass === "auth_failed" &&
+      (await isSecondConsecutiveAuthFailure(deps.db, connection.id, runId))
+    ) {
       await markConnectionInvalidToken(deps.db, connection.id, fault.failureClass, now);
       log.warn("canvas.sync.connection_invalidated", {
         connectionId: connection.id,
         failureClass: fault.failureClass,
       });
+      await enqueueCanvasInvalidTokenAlert(deps.db, deps.boss, connection.id, now);
     } else {
       await recordConnectionError(deps.db, connection.id, fault.failureClass, now);
     }

@@ -4,6 +4,7 @@ import {
   canvasConnections,
   canvasCourses,
   canvasSyncRuns,
+  devices,
   type Db,
 } from "@personal-os/db";
 import {
@@ -14,9 +15,11 @@ import {
 } from "@personal-os/canvas-providers";
 import { CanvasSyncTokenSchema } from "@personal-os/schema";
 import { asc, eq } from "drizzle-orm";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { PgBoss } from "pg-boss";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "../env.js";
 import { setLogSink } from "../logger.js";
+import { NOTIFICATIONS_DISPATCH_QUEUE } from "../queue-names.js";
 import { buildTestDb } from "../test/build-test-db.js";
 import { runCanvasConnectionSync } from "./orchestrate.js";
 import {
@@ -30,8 +33,29 @@ let client: FakeCanvasClient;
 
 const NOW = new Date("2026-09-16T12:00:00.000Z");
 
-function deps(override?: Partial<{ client: CanvasClient; now: () => Date }>) {
+function deps(override?: Partial<{ client: CanvasClient; now: () => Date; boss: PgBoss | null }>) {
   return { db, client, now: () => NOW, ...override };
+}
+
+/** A fake pg-boss whose `send` calls can be asserted on. */
+function fakeBoss() {
+  return { send: vi.fn() };
+}
+
+/** A device eligible for an `alert`-category push, for the tests that assert
+ *  on `enqueueCanvasInvalidTokenAlert`'s actual fan-out. */
+async function insertEligibleDevice(suffix = "1"): Promise<void> {
+  await db.insert(devices).values({
+    name: `Device ${suffix}`,
+    platform: "android",
+    tokenHash: `canvas-orchestrate-alert-hash-${suffix}`,
+    notifyAlerts: true,
+    notificationsEnabled: true,
+  });
+}
+
+function alertCallsOf(boss: ReturnType<typeof fakeBoss>) {
+  return boss.send.mock.calls.filter((call) => call[0] === NOTIFICATIONS_DISPATCH_QUEUE);
 }
 
 async function connectionRow(id: string) {
@@ -89,6 +113,7 @@ async function runsFor(connectionId: string) {
 
 beforeEach(async () => {
   await truncateCanvasTestTables(db);
+  await db.delete(devices);
   client = createFakeCanvasClient();
 });
 
@@ -433,25 +458,79 @@ describe("runCanvasConnectionSync", () => {
 // explicit disconnect first. The mail precedent is `markMailConnectionNeedsReauth`
 // (apps/worker/src/mail/token.ts): status + error columns in ONE update,
 // conditional on `status = 'active'`.
-describe("runCanvasConnectionSync -- invalid_token on a connection-level auth failure", () => {
-  it("flips status to invalid_token on a 401, records a token-shaped error, and leaves the credential triple untouched", async () => {
+//
+// Checkpoint 10.4 (ADR-073) adds two-consecutive-failure hysteresis on top of
+// that flip, plus the one deduped push alert it gates: a single connection-
+// level auth_failed is absorbed (10.2's own recorded debt -- see
+// `isSecondConsecutiveAuthFailure`'s doc comment in orchestrate.ts); only a
+// SECOND CONSECUTIVE one flips status and alerts.
+describe("runCanvasConnectionSync -- invalid_token hysteresis on a connection-level auth failure (Checkpoint 10.4, ADR-073)", () => {
+  it("a single connection-level auth_failed records the error but does NOT flip status or alert", async () => {
     const connection = await seedCanvasConnection(db);
-    const before = await connectionRow(connection.id);
-    expect(before.status).toBe("active");
+    const boss = fakeBoss();
 
     client.queueActiveCourses(new CanvasApiError(401, "auth_failed"));
-    const result = await runCanvasConnectionSync(deps(), {
+    const result = await runCanvasConnectionSync(deps({ boss: boss as unknown as PgBoss }), {
       connectionId: connection.id,
       kind: "cron",
     });
     expect(result.failureClass).toBe("auth_failed");
 
     const after = await connectionRow(connection.id);
-    expect(after.status).toBe("invalid_token");
+    // Absorbed as a blip: still active, only the error columns record it.
+    expect(after.status).toBe("active");
     expect(after.lastSyncError).toBe("auth_failed");
     expect(() => CanvasSyncTokenSchema.parse(after.lastSyncError)).not.toThrow();
     expect(after.lastSyncErrorAt?.toISOString()).toBe(NOW.toISOString());
-    expect(after.updatedAt.toISOString()).toBe(NOW.toISOString());
+    expect(after.accessTokenCiphertext).not.toBeNull();
+
+    const runs = await runsFor(connection.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ status: "failed", failureClass: "auth_failed" });
+    expect(alertCallsOf(boss)).toHaveLength(0);
+  });
+
+  it("also does NOT flip on a single non-rate-limit 403 on the course list (classified auth_failed by the client)", async () => {
+    const connection = await seedCanvasConnection(db);
+    client.queueActiveCourses(new CanvasApiError(403, "auth_failed"));
+    await runCanvasConnectionSync(deps(), { connectionId: connection.id, kind: "cron" });
+    const after = await connectionRow(connection.id);
+    expect(after.status).toBe("active");
+    expect(after.lastSyncError).toBe("auth_failed");
+  });
+
+  it("a SECOND CONSECUTIVE connection-level auth_failed flips status to invalid_token, leaves the credential triple untouched, and enqueues exactly one alert", async () => {
+    const connection = await seedCanvasConnection(db);
+    const before = await connectionRow(connection.id);
+    const boss = fakeBoss();
+    await insertEligibleDevice();
+
+    // First failure -- absorbed.
+    client.queueActiveCourses(new CanvasApiError(401, "auth_failed"));
+    await runCanvasConnectionSync(deps({ boss: boss as unknown as PgBoss }), {
+      connectionId: connection.id,
+      kind: "cron",
+    });
+    expect((await connectionRow(connection.id)).status).toBe("active");
+    expect(alertCallsOf(boss)).toHaveLength(0);
+
+    // Second, CONSECUTIVE failure, one minute later -- so the two run rows
+    // order deterministically by started_at (the 10.2 reactivation test's
+    // own convention for avoiding a tie).
+    const LATER = new Date(NOW.getTime() + 60_000);
+    client.queueActiveCourses(new CanvasApiError(401, "auth_failed"));
+    const result = await runCanvasConnectionSync(
+      deps({ now: () => LATER, boss: boss as unknown as PgBoss }),
+      { connectionId: connection.id, kind: "cron" },
+    );
+    expect(result.failureClass).toBe("auth_failed");
+
+    const after = await connectionRow(connection.id);
+    expect(after.status).toBe("invalid_token");
+    expect(after.lastSyncError).toBe("auth_failed");
+    expect(() => CanvasSyncTokenSchema.parse(after.lastSyncError)).not.toThrow();
+    expect(after.lastSyncErrorAt?.toISOString()).toBe(LATER.toISOString());
+    expect(after.updatedAt.toISOString()).toBe(LATER.toISOString());
 
     // NOT disconnect's job: the ciphertext/iv/auth-tag are byte-identical
     // (bytea columns, so compared by value). Nulling them belongs to the
@@ -462,17 +541,52 @@ describe("runCanvasConnectionSync -- invalid_token on a connection-level auth fa
     expect(after.accessTokenAuthTag).toStrictEqual(before.accessTokenAuthTag);
     expect(after.accessTokenCiphertext).not.toBeNull();
 
-    // The run row still tells the truth about the attempt.
+    // Both run rows tell the truth about both attempts.
     const runs = await runsFor(connection.id);
-    expect(runs).toHaveLength(1);
-    expect(runs[0]).toMatchObject({ status: "failed", failureClass: "auth_failed" });
+    expect(runs).toHaveLength(2);
+    expect(runs.every((r) => r.status === "failed" && r.failureClass === "auth_failed")).toBe(true);
+
+    // Exactly one alert, deduped on the episode THIS second failure opened.
+    const alerts = alertCallsOf(boss);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]![1]).toMatchObject({
+      category: "alert",
+      title: "Canvas needs reconnecting",
+      body: "Assignment sync has stopped. Reconnect it in Settings.",
+      dedupeKey: `canvas-invalid-token:${connection.id}:${LATER.toISOString()}`,
+      data: { canvasConnectionId: connection.id },
+    });
   });
 
-  it("also flips on a non-rate-limit 403 on the course list (classified auth_failed by the client)", async () => {
+  it("a non-auth_failed failure in between resets the streak -- two auth_failed runs separated by a provider_error do not flip status", async () => {
     const connection = await seedCanvasConnection(db);
-    client.queueActiveCourses(new CanvasApiError(403, "auth_failed"));
+
+    client.queueActiveCourses(new CanvasApiError(401, "auth_failed"));
     await runCanvasConnectionSync(deps(), { connectionId: connection.id, kind: "cron" });
-    expect((await connectionRow(connection.id)).status).toBe("invalid_token");
+
+    const MID = new Date(NOW.getTime() + 60_000);
+    client.queueActiveCourses(new CanvasApiError(503, "provider_error"));
+    await runCanvasConnectionSync(deps({ now: () => MID }), {
+      connectionId: connection.id,
+      kind: "cron",
+    });
+    expect((await connectionRow(connection.id)).lastSyncError).toBe("provider_error");
+
+    const LATER = new Date(NOW.getTime() + 120_000);
+    client.queueActiveCourses(new CanvasApiError(401, "auth_failed"));
+    await runCanvasConnectionSync(deps({ now: () => LATER }), {
+      connectionId: connection.id,
+      kind: "cron",
+    });
+
+    // The run immediately preceding this one was provider_error, not
+    // auth_failed, so this third failure is treated as a FIRST occurrence
+    // again -- the streak did not carry across the intervening failure.
+    const after = await connectionRow(connection.id);
+    expect(after.status).toBe("active");
+    expect(after.lastSyncError).toBe("auth_failed");
+
+    expect(await runsFor(connection.id)).toHaveLength(3);
   });
 
   it("does NOT flip status on a transient provider_error (5xx) -- only last_sync_error is recorded", async () => {
@@ -532,26 +646,38 @@ describe("runCanvasConnectionSync -- invalid_token on a connection-level auth fa
     const connection = await seedCanvasConnection(db);
     client.queueActiveCourses(new CanvasApiError(401, "auth_failed"));
     await runCanvasConnectionSync(deps(), { connectionId: connection.id, kind: "cron" });
+    const SECOND = new Date(NOW.getTime() + 60_000);
+    client.queueActiveCourses(new CanvasApiError(401, "auth_failed"));
+    await runCanvasConnectionSync(deps({ now: () => SECOND }), {
+      connectionId: connection.id,
+      kind: "cron",
+    });
     expect((await connectionRow(connection.id)).status).toBe("invalid_token");
 
     // A job that was already queued when the status flipped (or a manual
     // trigger racing the cron) must no-op, never throw, and never make a
-    // provider call with the dead token -- nothing is queued on the fake, so
-    // any call would fail loudly.
-    const second = await runCanvasConnectionSync(deps(), {
+    // provider call with the dead token -- nothing further is queued on the
+    // fake, so any call would fail loudly.
+    const third = await runCanvasConnectionSync(deps({ now: () => SECOND }), {
       connectionId: connection.id,
       kind: "manual",
     });
-    expect(second.skipped).toBe("connection_not_active");
-    expect(second.runWritten).toBe(false);
-    expect(await runsFor(connection.id)).toHaveLength(1);
-    expect(client.callsFor("listActiveCourses")).toHaveLength(1);
+    expect(third.skipped).toBe("connection_not_active");
+    expect(third.runWritten).toBe(false);
+    expect(await runsFor(connection.id)).toHaveLength(2);
+    expect(client.callsFor("listActiveCourses")).toHaveLength(2);
   });
 
   it("a successful sync after the API reactivates the row leaves status active and clears the error", async () => {
     const connection = await seedCanvasConnection(db);
     client.queueActiveCourses(new CanvasApiError(401, "auth_failed"));
     await runCanvasConnectionSync(deps(), { connectionId: connection.id, kind: "cron" });
+    const SECOND = new Date(NOW.getTime() + 60_000);
+    client.queueActiveCourses(new CanvasApiError(401, "auth_failed"));
+    await runCanvasConnectionSync(deps({ now: () => SECOND }), {
+      connectionId: connection.id,
+      kind: "cron",
+    });
     expect((await connectionRow(connection.id)).status).toBe("invalid_token");
 
     // What apps/api/src/services/canvas-connection.ts's reconnect path writes
@@ -571,14 +697,14 @@ describe("runCanvasConnectionSync -- invalid_token on a connection-level auth fa
       })
       .where(eq(canvasConnections.id, connection.id));
 
-    // One minute later, so the two run rows order deterministically by
-    // `started_at` (a shared instant would fall back to uuid order).
-    const LATER = new Date(NOW.getTime() + 60_000);
+    // A third, later instant, so all three run rows order deterministically
+    // by `started_at` (a shared instant would fall back to uuid order).
+    const THIRD = new Date(NOW.getTime() + 120_000);
     client.queueActiveCourses([course(701, "Back Online")]);
     client.queueAssignments([gradedAssignmentPayload({ id: 71 })]);
     client.queueAnnouncements([]);
     client.queueCalendarEvents([]);
-    const result = await runCanvasConnectionSync(deps({ now: () => LATER }), {
+    const result = await runCanvasConnectionSync(deps({ now: () => THIRD }), {
       connectionId: connection.id,
       kind: "manual",
     });
@@ -589,19 +715,29 @@ describe("runCanvasConnectionSync -- invalid_token on a connection-level auth fa
     expect(after.status).toBe("active");
     expect(after.lastSyncError).toBeNull();
     expect(after.lastSyncErrorAt).toBeNull();
-    expect(after.lastSyncAt?.toISOString()).toBe(LATER.toISOString());
+    expect(after.lastSyncAt?.toISOString()).toBe(THIRD.toISOString());
     // The fresh PAT is what was sent, not the stale one.
     expect(client.callsFor("listActiveCourses").at(-1)?.token).toBe("fresh-canvas-pat");
 
     const runs = await runsFor(connection.id);
-    expect(runs.map((r) => r.status)).toEqual(["failed", "succeeded"]);
+    expect(runs.map((r) => r.status)).toEqual(["failed", "failed", "succeeded"]);
   });
 
-  it("does NOT resurrect a row a concurrent disconnect just set to disconnected (the status = 'active' predicate)", async () => {
+  it("does NOT resurrect a row a concurrent disconnect just set to disconnected (the status = 'active' predicate), and does not alert an episode that never took", async () => {
     const connection = await seedCanvasConnection(db);
+    const boss = fakeBoss();
 
-    // Simulate the race: the owner disconnects between the pass's re-read of
-    // the row (status active) and the provider rejecting the token.
+    // First failure, ordinary -- establishes the streak the race then rides.
+    client.queueActiveCourses(new CanvasApiError(401, "auth_failed"));
+    await runCanvasConnectionSync(deps({ boss: boss as unknown as PgBoss }), {
+      connectionId: connection.id,
+      kind: "cron",
+    });
+    expect((await connectionRow(connection.id)).status).toBe("active");
+
+    // Simulate the race on the SECOND, consecutive attempt: the owner
+    // disconnects between the pass's re-read of the row (status active) and
+    // the provider rejecting the token.
     const racing: CanvasClient = {
       ...client,
       listActiveCourses: async (baseUrl, token) => {
@@ -617,19 +753,30 @@ describe("runCanvasConnectionSync -- invalid_token on a connection-level auth fa
         return client.listActiveCourses(baseUrl, token);
       },
     };
+    const LATER = new Date(NOW.getTime() + 60_000);
     client.queueActiveCourses(new CanvasApiError(401, "auth_failed"));
 
-    const result = await runCanvasConnectionSync(deps({ client: racing }), {
-      connectionId: connection.id,
-      kind: "cron",
-    });
+    const result = await runCanvasConnectionSync(
+      deps({ client: racing, now: () => LATER, boss: boss as unknown as PgBoss }),
+      { connectionId: connection.id, kind: "cron" },
+    );
     expect(result.failureClass).toBe("auth_failed");
 
     const after = await connectionRow(connection.id);
-    // Still disconnected -- NOT flipped to invalid_token, and NOT re-stamped.
+    // Still disconnected -- NOT flipped to invalid_token. This IS the second
+    // consecutive auth_failed, so `markConnectionInvalidToken` is the only
+    // write attempted (not `recordConnectionError`) -- and its `status =
+    // 'active'` predicate matches zero rows against the now-disconnected row,
+    // so `last_sync_error`/`last_sync_error_at` are left exactly as the FIRST
+    // failure wrote them, never re-stamped with LATER.
     expect(after.status).toBe("disconnected");
-    expect(after.lastSyncError).toBeNull();
     expect(after.accessTokenCiphertext).toBeNull();
+    expect(after.lastSyncError).toBe("auth_failed");
+    expect(after.lastSyncErrorAt?.toISOString()).toBe(NOW.toISOString());
+
+    // The alert producer re-selects the connection fresh and finds it is not
+    // invalid_token -- no episode to alert about.
+    expect(alertCallsOf(boss)).toHaveLength(0);
   });
 });
 
@@ -695,18 +842,29 @@ describe("runCanvasConnectionSync -- log lines carry no academic content", () =>
     expect(finished).toMatchObject({ coursesSeen: 1, assignmentsSynced: 1 });
   });
 
-  it("an invalidated connection logs the classification token and the connection id only", async () => {
+  it("an invalidated connection logs the classification token and the connection id only, and only on the SECOND consecutive failure", async () => {
     const connection = await seedCanvasConnection(db);
     client.queueActiveCourses(new CanvasApiError(401, "auth_failed"));
-
     await runCanvasConnectionSync(deps(), { connectionId: connection.id, kind: "cron" });
 
-    expect(records.map((r) => r["event"])).toEqual([
+    // First failure: absorbed, no invalidation event yet.
+    expect(records.map((r) => r["event"])).toEqual(["canvas.sync.started", "canvas.sync.failed"]);
+    const countAfterFirst = records.length;
+
+    const LATER = new Date(NOW.getTime() + 60_000);
+    client.queueActiveCourses(new CanvasApiError(401, "auth_failed"));
+    await runCanvasConnectionSync(deps({ now: () => LATER }), {
+      connectionId: connection.id,
+      kind: "cron",
+    });
+
+    const secondPass = records.slice(countAfterFirst);
+    expect(secondPass.map((r) => r["event"])).toEqual([
       "canvas.sync.started",
       "canvas.sync.connection_invalidated",
       "canvas.sync.failed",
     ]);
-    const invalidated = records[1]!;
+    const invalidated = secondPass[1]!;
     expect(Object.keys(invalidated).sort()).toEqual(
       ["connectionId", "event", "failureClass", "level", "ts"].sort(),
     );

@@ -94,6 +94,8 @@ Ordering below is the original log order: amendments (`ADR-046a`, `ADR-047a`, `A
 | [ADR-070](decisions/ADR-070.md) | Checkpoint 10.2: the Academic Intelligence Layer is a computed read model over the Canvas tables, structurally outside the AI lanes | Locked |
 | [ADR-070a](decisions/ADR-070a.md) | Amendment to ADR-070: academic surfaces show the current term only, selected by date (most recently started term), never by name | Locked |
 | [ADR-071](decisions/ADR-071.md) | Checkpoint 10.3: deterministic, explainable academic intelligence sections (urgency, priorities, workload, course attention, grade summary) as optional wire keys; a token-based mobile design system with three new Expo modules | Locked |
+| [ADR-072](decisions/ADR-072.md) | Checkpoint 10.4 (Lane 1): "Focus Now" is a deterministic, client-side merge of two already-fetched read models; no new route, no new database access, no AI call | Locked |
+| [ADR-073](decisions/ADR-073.md) | Checkpoint 10.4 (Lane 4): a single, hysteresis-gated Canvas invalid-token alert, amending ADR-068 §6's "no alert" stance | Locked |
 
 ## Open later-phase decisions
 

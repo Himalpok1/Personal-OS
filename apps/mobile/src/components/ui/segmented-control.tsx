@@ -1,15 +1,15 @@
 // A segmented control (Checkpoint 10.3): two or three labelled segments on a
 // `surface-container` well, the active one lifted onto a `surface-raised`
-// pill. Composed here rather than in components/ui/ because the design
-// system shipped without one; the calendar's Month / Week / Agenda toggle
-// and the search screen's Search / Ask toggle are its two consumers. Pure
-// Views and AppText, no state of its own -- the caller owns `value`.
+// pill. Promoted into the design system at Checkpoint 10.4 once it picked up
+// a third consumer (task filters) beyond the calendar's Month / Week / Agenda
+// toggle and the search screen's Search / Ask toggle. Pure Views and AppText,
+// no state of its own -- the caller owns `value`.
 //
-// Every segment keeps the `selected` accessibility state the two toggles it
-// replaces already exposed (the ask mode-toggle test pins it byte-for-byte:
+// Every segment keeps the `selected` accessibility state the toggles it
+// replaced already exposed (the ask mode-toggle test pins it byte-for-byte:
 // `accessibilityState` is exactly `{ selected }`, nothing else).
 import { Pressable, View } from "react-native";
-import { AppText } from "@/components/ui";
+import { AppText } from "./text";
 
 export interface SegmentedOption<T extends string> {
   value: T;
