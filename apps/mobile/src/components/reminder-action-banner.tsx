@@ -45,8 +45,8 @@ export function ReminderActionBanner({ taskId }: { taskId: string }) {
       accessibilityRole={failed ? "alert" : "text"}
       className={
         failed
-          ? "mb-2 text-sm text-red-600"
-          : "mb-2 text-sm text-green-700 dark:text-green-300"
+          ? "mb-2 text-sm text-danger dark:text-danger-dark"
+          : "mb-2 text-sm text-success dark:text-success-dark"
       }
     >
       {reminderActionBannerText(outcome)}

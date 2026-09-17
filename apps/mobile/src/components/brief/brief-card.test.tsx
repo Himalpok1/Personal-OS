@@ -240,8 +240,10 @@ describe("<BriefCard />", () => {
     expect(buttons).toHaveLength(1);
     expect(getTextContent(buttons[0])).toBe("Generating…");
     // Assert the actual prop/accessibilityState, not just the visible label.
+    // (Checkpoint 10.3: the design-system Button also reports `busy`, so the
+    // state is matched on `disabled` rather than as an exact object.)
     expect(buttons[0].props.disabled).toBe(true);
-    expect(buttons[0].props.accessibilityState).toEqual({ disabled: true });
+    expect(buttons[0].props.accessibilityState).toMatchObject({ disabled: true });
   });
 
   it("EMPTY: renders Generate Daily Brief with no cached brief and no error", () => {

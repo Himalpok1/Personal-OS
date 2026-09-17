@@ -5,7 +5,7 @@ import {
   skippedReasonText,
   describeMonitorSummary,
   monitorStateText,
-  monitorStateToneClass,
+  monitorStateTone,
   resolveMonitorTargetState,
 } from "./target-state";
 
@@ -105,7 +105,7 @@ describe("resolveMonitorTargetState", () => {
       resolveMonitorTargetState(
         status({ target: target({ muted_until: past }), latest_check: check() }),
         NOW,
-    ).state,
+      ).state,
     ).toBe("up");
   });
 
@@ -122,7 +122,10 @@ describe("resolveMonitorTargetState", () => {
     const view = resolveMonitorTargetState(
       status({
         latest_check: check({ status: "down" }),
-        active_incident: incident({ status: "acknowledged", acknowledged_at: "2026-09-01T11:30:00.000Z" }),
+        active_incident: incident({
+          status: "acknowledged",
+          acknowledged_at: "2026-09-01T11:30:00.000Z",
+        }),
       }),
       NOW,
     );
@@ -141,7 +144,10 @@ describe("resolveMonitorTargetState", () => {
 
   it("reports a bare down with NO incident id", () => {
     // Below the failure threshold: failing, but nothing to acknowledge yet.
-    const view = resolveMonitorTargetState(status({ latest_check: check({ status: "down" }) }), NOW);
+    const view = resolveMonitorTargetState(
+      status({ latest_check: check({ status: "down" }) }),
+      NOW,
+    );
     expect(view.state).toBe("down");
     expect(view.incidentId).toBeNull();
   });
@@ -208,7 +214,17 @@ describe("monitorStateText — the heartbeat wording is not interchangeable", ()
       for (const kind of ["http", "worker_heartbeat"] as const) {
         expect(monitorStateText(state, kind).length, `${state}/${kind}`).toBeGreaterThan(5);
       }
-      expect(monitorStateToneClass(state)).toContain("text-");
+      expect(["neutral", "success", "warning", "danger"]).toContain(monitorStateTone(state));
+    }
+  });
+
+  it("tones an open incident danger, a failure warning, a pass success, and never not_checked as success (10.3)", () => {
+    expect(monitorStateTone("incident_open")).toBe("danger");
+    expect(monitorStateTone("incident_acknowledged")).toBe("warning");
+    expect(monitorStateTone("down")).toBe("warning");
+    expect(monitorStateTone("up")).toBe("success");
+    for (const state of ["not_checked", "disabled", "muted", "skipped"] as const) {
+      expect(monitorStateTone(state)).toBe("neutral");
     }
   });
 

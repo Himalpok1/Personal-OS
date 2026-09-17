@@ -22,11 +22,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAcademicToday } from "@/queries/academic";
 import { AcademicTodayCard } from "./academic-today-card";
 import {
+  MAX_PRIORITY_ROWS,
   MAX_ROWS_PER_SECTION,
   shouldRenderAcademicCard,
   visibleAcademicSections,
+  visiblePriorities,
 } from "./academic-today-card-state";
-import { SOURCE_BASE_URL, academicToday, assignment } from "./fixtures.test-support";
+import {
+  SOURCE_BASE_URL,
+  academicToday,
+  assignment,
+  priorityItem,
+  workload,
+} from "./fixtures.test-support";
 
 vi.mock("@/queries/academic", () => ({ useAcademicToday: vi.fn() }));
 
@@ -414,5 +422,295 @@ describe("state helpers", () => {
     expect(section!.rows).toHaveLength(MAX_ROWS_PER_SECTION);
     expect(section!.total).toBe(9);
     expect(section!.hiddenCount).toBe(9 - MAX_ROWS_PER_SECTION);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Checkpoint 10.3: the intelligence keys (all OPTIONAL on the wire)
+// ---------------------------------------------------------------------------
+
+describe("the current term line", () => {
+  it("names the term under the header when the server echoes one", () => {
+    mockQuery({
+      data: academicToday({
+        current_term: { name: "2026 Fall", starts_at: "2026-08-24T05:00:00Z" },
+        due_today: { items: [assignment()], total: 1 },
+      }),
+    });
+    expect(getTextContent(render())).toContain("2026 Fall");
+  });
+
+  it("says nothing about the term when the key is absent or null", () => {
+    mockQuery({ data: academicToday({ due_today: { items: [assignment()], total: 1 } }) });
+    expect(getTextContent(render())).not.toContain("Fall");
+    mockQuery({
+      data: academicToday({ current_term: null, due_today: { items: [assignment()], total: 1 } }),
+    });
+    expect(getTextContent(render())).not.toContain("Fall");
+  });
+});
+
+describe("the workload status line", () => {
+  it("renders Behind with the counts behind it, and is enough on its own to show the card", () => {
+    mockQuery({
+      data: academicToday({
+        workload: workload({ status: "behind", overdue_total: 2, missing_total: 1 }),
+      }),
+    });
+    const tree = render();
+    expect(tree).not.toBeNull();
+    const text = getTextContent(tree);
+    expect(text).toContain("Behind");
+    expect(text).toContain("2 overdue · 1 missing");
+    expect(findRows(tree)).toHaveLength(0);
+  });
+
+  it("renders At risk with the 24h count, and is enough on its own", () => {
+    mockQuery({
+      data: academicToday({ workload: workload({ status: "at_risk", due_within_24h_total: 1 }) }),
+    });
+    const text = getTextContent(render());
+    expect(text).toContain("At risk");
+    expect(text).toContain("1 due in 24h");
+  });
+
+  it("an on_track workload alone is NOT enough to render the card", () => {
+    mockQuery({ data: academicToday({ workload: workload({ status: "on_track" }) }) });
+    expect(AcademicTodayCard()).toBeNull();
+  });
+
+  it("renders On track alongside a section when there is one", () => {
+    mockQuery({
+      data: academicToday({
+        due_today: { items: [assignment()], total: 1 },
+        workload: workload({ status: "on_track", due_this_week_total: 3 }),
+      }),
+    });
+    const text = getTextContent(render());
+    expect(text).toContain("On track");
+    expect(text).toContain("3 due this week");
+  });
+});
+
+describe("the Do next block", () => {
+  it("renders the top ranked candidates in server order with an urgency chip each", () => {
+    const items = [
+      priorityItem({
+        assignment: assignment({ id: "p1", title: "Priority one" }),
+        urgency: "critical",
+        score: 450,
+        reasons: ["overdue", "marked_missing"],
+        hours_until_due: -3,
+      }),
+      priorityItem({
+        assignment: assignment({ id: "p2", title: "Priority two" }),
+        urgency: "high",
+      }),
+      priorityItem({
+        assignment: assignment({ id: "p3", title: "Priority three" }),
+        urgency: "medium",
+        score: 200,
+        reasons: ["due_this_week"],
+      }),
+    ];
+    mockQuery({ data: academicToday({ priorities: { items, total: 3 } }) });
+    const tree = render();
+    const text = getTextContent(tree);
+    expect(text).toContain("Do next");
+    const one = text.indexOf("Priority one");
+    const two = text.indexOf("Priority two");
+    const three = text.indexOf("Priority three");
+    expect(one).toBeGreaterThan(-1);
+    expect(two).toBeGreaterThan(one);
+    expect(three).toBeGreaterThan(two);
+    const rows = findRows(tree);
+    expect(rows).toHaveLength(3);
+    expect(getTextContent(rows[0])).toContain("Overdue");
+    expect(getTextContent(rows[1])).toContain("Due <24h");
+    expect(getTextContent(rows[2])).toContain("This week");
+    expect(text).not.toContain("more");
+  });
+
+  it("caps the rows and says how many more the total holds", () => {
+    const items = [1, 2, 3, 4, 5].map((n) =>
+      priorityItem({ assignment: assignment({ id: `p${n}`, title: `Priority ${n}` }) }),
+    );
+    mockQuery({ data: academicToday({ priorities: { items, total: 6 } }) });
+    const tree = render();
+    expect(findRows(tree)).toHaveLength(MAX_PRIORITY_ROWS);
+    expect(getTextContent(tree)).toContain(`+${6 - MAX_PRIORITY_ROWS} more`);
+  });
+
+  it("is enough on its own to render the card, and sits before the sections", () => {
+    mockQuery({
+      data: academicToday({
+        priorities: {
+          items: [priorityItem({ assignment: assignment({ id: "p1", title: "Priority one" }) })],
+          total: 1,
+        },
+        due_this_week: { items: [assignment({ id: "w1", title: "Week one" })], total: 1 },
+      }),
+    });
+    const text = getTextContent(render());
+    expect(text.indexOf("Do next")).toBeLessThan(text.indexOf("Due this week · 1"));
+    expect(text.indexOf("Priority one")).toBeLessThan(text.indexOf("Week one"));
+  });
+
+  it("renders a priority row through the same same-origin gate as every other row", () => {
+    mockQuery({
+      data: academicToday({
+        priorities: {
+          items: [
+            priorityItem({
+              assignment: assignment({
+                id: "ok",
+                html_url: `${SOURCE_BASE_URL}/courses/1/assignments/1`,
+              }),
+            }),
+            priorityItem({
+              assignment: assignment({ id: "bad", html_url: "https://evil.example.com/x" }),
+            }),
+          ],
+          total: 2,
+        },
+      }),
+    });
+    const [ok, bad] = findRows(render());
+    expect(ok.props.accessibilityRole).toBe("link");
+    expect(typeof ok.props.onPress).toBe("function");
+    expect(bad.props.accessibilityRole).toBeUndefined();
+    expect(bad.props.onPress).toBeUndefined();
+  });
+
+  it("is absent when the key is absent or empty", () => {
+    mockQuery({ data: academicToday({ due_today: { items: [assignment()], total: 1 } }) });
+    expect(getTextContent(render())).not.toContain("Do next");
+    mockQuery({
+      data: academicToday({
+        priorities: { items: [], total: 0 },
+        due_today: { items: [assignment()], total: 1 },
+      }),
+    });
+    expect(getTextContent(render())).not.toContain("Do next");
+  });
+});
+
+describe("the workload strip", () => {
+  it("draws one column per day, labelled for assistive tech, when a workload is present", () => {
+    const days = workload().days.map((day, index) => ({ ...day, due_total: index === 2 ? 4 : 0 }));
+    mockQuery({
+      data: academicToday({
+        due_today: { items: [assignment()], total: 1 },
+        workload: workload({ days }),
+      }),
+    });
+    const tree = render();
+    const strip = findAll(
+      tree,
+      (n) =>
+        typeof n.props?.accessibilityLabel === "string" &&
+        n.props.accessibilityLabel.startsWith("This week:"),
+    )[0];
+    expect(strip).toBeDefined();
+    expect(strip.props.accessibilityLabel).toContain("4 due");
+    // Eight bars: the styled Views carrying a height.
+    const bars = findAll(
+      strip,
+      (n) => n.type === View && typeof n.props?.style?.height === "number",
+    );
+    expect(bars).toHaveLength(8);
+    expect(Math.max(...bars.map((b) => b.props.style.height))).toBeGreaterThan(
+      Math.min(...bars.map((b) => b.props.style.height)),
+    );
+  });
+
+  it("is absent when the workload key is absent", () => {
+    mockQuery({ data: academicToday({ due_today: { items: [assignment()], total: 1 } }) });
+    expect(getTextContent(render())).not.toContain("This week");
+  });
+});
+
+describe("state helpers (10.3)", () => {
+  it("visiblePriorities is null for an absent or empty key and capped otherwise", () => {
+    expect(visiblePriorities(academicToday())).toBeNull();
+    expect(visiblePriorities(academicToday({ priorities: { items: [], total: 0 } }))).toBeNull();
+    const items = [1, 2, 3, 4].map((n) =>
+      priorityItem({ assignment: assignment({ id: `p${n}` }) }),
+    );
+    expect(visiblePriorities(academicToday({ priorities: { items, total: 9 } }))).toMatchObject({
+      total: 9,
+      hiddenCount: 9 - MAX_PRIORITY_ROWS,
+    });
+  });
+
+  it("visibleAcademicSections skips rows already listed under Do next, keeps the honest total, and drops a section shown in full above", () => {
+    const a = assignment({ id: "a" });
+    const b = assignment({ id: "b" });
+    const c = assignment({ id: "c" });
+    const data = academicToday({
+      overdue: { items: [a, b], total: 2 },
+      due_today: { items: [c], total: 1 },
+      due_this_week: { items: [], total: 0 },
+    });
+    // Nothing shown above: the sections are exactly as before.
+    expect(visibleAcademicSections(data).map((s) => [s.key, s.rows.length, s.hiddenCount])).toEqual(
+      [
+        ["overdue", 2, 0],
+        ["due_today", 1, 0],
+      ],
+    );
+    // "Do next" already lists a and c: overdue keeps b only (total still 2,
+    // nothing hidden), due_today disappears rather than render a bare header.
+    const shown = new Set(["a", "c"]);
+    expect(
+      visibleAcademicSections(data, shown).map((s) => [
+        s.key,
+        s.total,
+        s.rows.map((r) => r.id),
+        s.hiddenCount,
+      ]),
+    ).toEqual([["overdue", 2, ["b"], 0]]);
+    // A capped section counts only rows on neither list as hidden.
+    const many = academicToday({
+      overdue: { items: [a, b, c, assignment({ id: "d" }), assignment({ id: "e" })], total: 7 },
+    });
+    expect(visibleAcademicSections(many, new Set(["a"]))[0]).toMatchObject({
+      rows: [b, c, assignment({ id: "d" })],
+      hiddenCount: 7 - 1 - 3,
+    });
+  });
+
+  it("the card renders an assignment once: Do next wins, the bucket row is skipped", () => {
+    const only = assignment({ id: "only-one", title: "Only once" });
+    mockQuery({
+      data: academicToday({
+        overdue: { items: [only], total: 1 },
+        priorities: { items: [priorityItem({ assignment: only, urgency: "critical" })], total: 1 },
+      }),
+    });
+    const tree = render();
+    const rows = findRows(tree).filter((p) =>
+      String(p.props.accessibilityLabel).startsWith("Only once"),
+    );
+    expect(rows).toHaveLength(1);
+  });
+
+  it("shouldRenderAcademicCard honours the new keys without touching the old rules", () => {
+    expect(
+      shouldRenderAcademicCard(academicToday({ workload: workload({ status: "behind" }) })),
+    ).toBe(true);
+    expect(
+      shouldRenderAcademicCard(academicToday({ workload: workload({ status: "on_track" }) })),
+    ).toBe(false);
+    expect(
+      shouldRenderAcademicCard(
+        academicToday({ configured: false, workload: workload({ status: "behind" }) }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldRenderAcademicCard(
+        academicToday({ priorities: { items: [priorityItem()], total: 1 } }),
+      ),
+    ).toBe(true);
   });
 });

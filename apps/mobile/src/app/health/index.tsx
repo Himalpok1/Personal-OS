@@ -3,14 +3,28 @@ import type {
   HealthMetricTile,
   HealthSummaryResponse,
 } from "@personal-os/schema";
-import { Link, useRouter, type Href } from "expo-router";
-import { useEffect, useState, type ReactNode } from "react";
-import { Pressable, ScrollView, Text, useWindowDimensions, View } from "react-native";
-import { FLOATING_CLEARANCE } from "@/components/floating-layout";
+import { useRouter, type Href } from "expo-router";
+import { useEffect, useState } from "react";
+import { useWindowDimensions, View } from "react-native";
 import { HealthConnectionCard } from "@/components/health/connection-card";
 import { resolveHealthConnectionState } from "@/components/health/connection-state";
+import { metricShortLabel } from "@/components/health/format";
+import { pickHeadlineMetrics } from "@/components/health/headline-metrics";
 import { MetricTile } from "@/components/health/metric-tile";
 import { SleepSummaryCard, WorkoutSessionRow } from "@/components/health/session-cards";
+import {
+  AppText,
+  Card,
+  EmptyState,
+  ErrorState,
+  GradientCard,
+  Screen,
+  ScreenCentered,
+  ScreenFrame,
+  ScreenHeader,
+  SectionHeader,
+  SkeletonScreen,
+} from "@/components/ui";
 import { useHealthAutoRefresh, useHealthSummary, useSyncHealthNow } from "@/queries/health";
 import { formatHeaderDate } from "@/utils/local-date";
 
@@ -71,6 +85,12 @@ const GROUPED_METRICS: ReadonlySet<string> = new Set(
 /** How long the post-request confirmation stays on the card. */
 const NOTICE_VISIBLE_MS = 8_000;
 
+// Typed through `Href` for the reason health-today-card.tsx records: the
+// route union is a generated artifact that may predate a route.
+const SLEEP_ROUTE = "/health/sleep" as Href;
+const WORKOUTS_ROUTE = "/health/workouts" as Href;
+const SETTINGS_ROUTE = "/settings" as Href;
+
 interface TileGroup {
   title: string;
   tiles: HealthMetricTile[];
@@ -102,32 +122,6 @@ function groupMetricTiles(tiles: readonly HealthMetricTile[]): TileGroup[] {
   return groups;
 }
 
-function SectionHeader({ title, action }: { title: string; action?: ReactNode }) {
-  return (
-    <View className="flex-row items-center justify-between px-4 pb-2 pt-5">
-      <Text className="text-sm font-semibold uppercase text-neutral-500 dark:text-neutral-400">
-        {title}
-      </Text>
-      {action ?? null}
-    </View>
-  );
-}
-
-function SeeAllLink({ href, label }: { href: Href; label: string }) {
-  return (
-    <Link href={href} asChild>
-      <Pressable
-        hitSlop={8}
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        className="min-h-[44px] items-center justify-center"
-      >
-        <Text className="text-sm text-blue-600 dark:text-blue-400">See all</Text>
-      </Pressable>
-    </Link>
-  );
-}
-
 function MetricGrid({
   group,
   capabilities,
@@ -148,7 +142,7 @@ function MetricGrid({
   const columnClass = compact ? "w-1/2" : "w-1/3";
 
   return (
-    <View className="flex-row flex-wrap px-3">
+    <View className="-mx-1 flex-row flex-wrap">
       {group.tiles.map((tile) => {
         const capability = capabilities.get(tile.metric);
         // A tile with no matching capability record cannot be explained
@@ -175,13 +169,70 @@ function MetricGrid({
   );
 }
 
-function EmptyLine({ children }: { children: string }) {
+/**
+ * The gradient block that leads the screen: today's date and the handful of
+ * metrics that actually carry a value today, under the same precedence and
+ * formatting the grid tiles use (headline-metrics.ts). Every number here
+ * also appears in the grid below with its full label -- this is the glance,
+ * the grid is the record.
+ */
+function TodaySummary({ data }: { data: HealthSummaryResponse }) {
+  const headlines = pickHeadlineMetrics(data.today, data.capabilities, data.local_date);
+  const spoken =
+    headlines.length === 0
+      ? `Today, ${formatHeaderDate(data.local_date)}. Nothing recorded for today yet.`
+      : `Today, ${formatHeaderDate(data.local_date)}. ${headlines
+          .map(
+            (h) => `${metricShortLabel(h.metric)} ${h.text}${h.unitLabel ? ` ${h.unitLabel}` : ""}`,
+          )
+          .join(", ")}.`;
+
   return (
-    <Text className="px-4 pb-1 text-sm text-neutral-500 dark:text-neutral-400">{children}</Text>
+    <GradientCard gradient="health" className="mt-4" accessibilityLabel={spoken}>
+      <AppText variant="overline" tone="on-gradient-muted">
+        Today
+      </AppText>
+      <AppText variant="title" tone="on-gradient" className="mt-0.5">
+        {formatHeaderDate(data.local_date)}
+      </AppText>
+      {headlines.length === 0 ? (
+        <AppText variant="body" tone="on-gradient-muted" className="mt-3">
+          Nothing recorded for today yet.
+        </AppText>
+      ) : (
+        <View className="mt-3 flex-row flex-wrap gap-x-6 gap-y-3">
+          {headlines.map((headline) => (
+            <View key={headline.metric}>
+              <AppText variant="overline" tone="on-gradient-muted" numberOfLines={1}>
+                {metricShortLabel(headline.metric)}
+              </AppText>
+              <View className="flex-row items-baseline gap-1">
+                <AppText variant="headline" tone="on-gradient">
+                  {headline.text}
+                </AppText>
+                {headline.unitLabel ? (
+                  <AppText variant="caption" tone="on-gradient-muted">
+                    {headline.unitLabel}
+                  </AppText>
+                ) : null}
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+    </GradientCard>
   );
 }
 
-function HealthDashboard({ data }: { data: HealthSummaryResponse }) {
+function HealthDashboard({
+  data,
+  refreshing,
+  onRefresh,
+}: {
+  data: HealthSummaryResponse;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
   const router = useRouter();
   const { width } = useWindowDimensions();
   // One threshold, defined once. 520 rather than the Rabbit's exact 480 so a
@@ -225,19 +276,13 @@ function HealthDashboard({ data }: { data: HealthSummaryResponse }) {
   const connectionId = data.connection?.id ?? null;
 
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      contentContainerClassName={FLOATING_CLEARANCE}
-      keyboardShouldPersistTaps="handled"
-    >
-      <View className="px-4 pt-4">
-        <Text className="text-2xl font-bold text-black dark:text-white">Health</Text>
-        <Text className="text-sm text-neutral-500 dark:text-neutral-400">
-          {formatHeaderDate(data.local_date)}
-        </Text>
-      </View>
+    <Screen refreshing={refreshing} onRefresh={onRefresh}>
+      {/* Compact: the navigator bar says "Health" and the hero carries the date. */}
+      <ScreenHeader variant="compact" title="Health" />
 
-      <View className="px-4 pt-4">
+      <TodaySummary data={data} />
+
+      <View className="mt-4">
         <HealthConnectionCard
           state={state}
           connection={data.connection}
@@ -260,21 +305,25 @@ function HealthDashboard({ data }: { data: HealthSummaryResponse }) {
           // of the last request. Cleared automatically when the user taps
           // Sync again (TanStack resets isError on mutate).
           errorNotice={
-            sync.isError ? "Couldn't request a sync — check your connection and try again." : undefined
+            sync.isError
+              ? "Couldn't request a sync — check your connection and try again."
+              : undefined
           }
           // Navigates to Settings rather than starting OAuth here. The consent
           // flow and the connect mutation live on that screen; running a second
           // copy of a credential-handling path from the dashboard would mean two
           // places where a grant can be minted, and only one of them reviewed as
           // such. The card's own copy already says what needs to happen.
-          onReconnect={() => router.push("/settings")}
+          onReconnect={() => router.push(SETTINGS_ROUTE)}
         />
       </View>
 
       {groups.length === 0 ? (
         <>
-          <SectionHeader title="Today" />
-          <EmptyLine>No metrics are being synced yet.</EmptyLine>
+          <SectionHeader title="Today" icon="chart-line" />
+          <Card>
+            <EmptyState icon="chart-line" title="No metrics are being synced yet." />
+          </Card>
         </>
       ) : (
         groups.map((group) => (
@@ -286,52 +335,84 @@ function HealthDashboard({ data }: { data: HealthSummaryResponse }) {
               latest={latest}
               todayLocalDate={data.local_date}
               compact={compact}
-              onOpenTrend={(metric) => router.push(`/health/trends/${encodeURIComponent(metric)}`)}
+              onOpenTrend={(metric) =>
+                router.push(`/health/trends/${encodeURIComponent(metric)}` as Href)
+              }
             />
           </View>
         ))
       )}
 
-      <SectionHeader title="Sleep" action={<SeeAllLink href="/health/sleep" label="All sleep" />} />
+      <SectionHeader
+        title="Sleep"
+        icon="sleep"
+        action={{
+          label: "See all",
+          onPress: () => router.push(SLEEP_ROUTE),
+          accessibilityLabel: "All sleep",
+        }}
+      />
       {data.latest_sleep === null ? (
-        <EmptyLine>
-          No sleep sessions yet. One has to reach Google Health before Personal OS can read it.
-        </EmptyLine>
-      ) : (
-        <View className="px-4">
-          <SleepSummaryCard
-            session={data.latest_sleep}
-            averageSeconds={data.sleep_7d_average_seconds}
-            compact={compact}
+        <Card>
+          <EmptyState
+            icon="sleep"
+            title="No sleep sessions yet."
+            body="One has to reach Google Health before Personal OS can read it."
           />
-        </View>
+        </Card>
+      ) : (
+        <SleepSummaryCard
+          session={data.latest_sleep}
+          averageSeconds={data.sleep_7d_average_seconds}
+          compact={compact}
+        />
       )}
 
       <SectionHeader
         title="Workouts"
-        action={<SeeAllLink href="/health/workouts" label="All workouts" />}
+        icon="run"
+        action={{
+          label: "See all",
+          onPress: () => router.push(WORKOUTS_ROUTE),
+          accessibilityLabel: "All workouts",
+        }}
       />
       {data.latest_workout === null ? (
-        <EmptyLine>
-          No workouts yet. One has to reach Google Health before Personal OS can read it.
-        </EmptyLine>
+        <Card>
+          <EmptyState
+            icon="run"
+            title="No workouts yet."
+            body="One has to reach Google Health before Personal OS can read it."
+          />
+        </Card>
       ) : (
-        <WorkoutSessionRow session={data.latest_workout} />
+        <Card padding="none" className="px-4">
+          <WorkoutSessionRow session={data.latest_workout} last />
+        </Card>
       )}
-    </ScrollView>
+    </Screen>
   );
 }
 
 export default function HealthScreen() {
   const { data, isLoading, isError, refetch } = useHealthSummary();
+  // Pull-to-refresh state of its own rather than the query's `isRefetching`:
+  // the summary query polls every few seconds while a sync runs
+  // (queries/health.ts), and each of those background reads would otherwise
+  // spin the refresh control as if the user had pulled.
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = () => {
+    setRefreshing(true);
+    void refetch().finally(() => setRefreshing(false));
+  };
 
   if (isLoading) {
-    // Reserves the full height rather than collapsing, so the connection card
-    // and the first metric group do not jump into place on arrival.
+    // A skeleton where the header, the summary and the first metric group
+    // WILL appear, so nothing jumps into place on arrival.
     return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <Text className="text-neutral-500">Loading…</Text>
-      </View>
+      <ScreenFrame>
+        <SkeletonScreen />
+      </ScreenFrame>
     );
   }
 
@@ -341,20 +422,16 @@ export default function HealthScreen() {
     // their Google Health link is gone would invite them to mint a new grant to
     // fix a network problem (connection-state.ts's first rule, same reasoning).
     return (
-      <View className="flex-1 items-center justify-center gap-3 bg-white dark:bg-black px-6">
-        <Text className="text-center text-red-600">Couldn&apos;t load health data.</Text>
-        <Pressable
-          onPress={() => void refetch()}
-          hitSlop={8}
-          accessibilityRole="button"
-          accessibilityLabel="Retry loading health data"
-          className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-        >
-          <Text className="font-semibold text-white">Retry</Text>
-        </Pressable>
-      </View>
+      <ScreenCentered>
+        <ErrorState
+          message="Couldn't load health data."
+          onRetry={() => void refetch()}
+          retryAccessibilityLabel="Retry loading health data"
+          size="screen"
+        />
+      </ScreenCentered>
     );
   }
 
-  return <HealthDashboard data={data} />;
+  return <HealthDashboard data={data} refreshing={refreshing} onRefresh={onRefresh} />;
 }

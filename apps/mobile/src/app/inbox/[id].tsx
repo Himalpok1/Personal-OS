@@ -1,4 +1,5 @@
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import { ErrorState, ScreenCentered, ScreenFrame, SkeletonCard } from "@/components/ui";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import {
   EMPTY_FILE_AS_DRAFT,
@@ -20,7 +21,7 @@ import { ApiClientError } from "@personal-os/api-client";
 import type { ParserToolCall } from "@personal-os/schema";
 import { useLocalSearchParams, useRouter, type Href } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
+import { ScrollView, View } from "react-native";
 
 // /inbox/[id] -- one captured item (Checkpoint 9.3, D1).
 //
@@ -80,44 +81,32 @@ export default function InboxItemScreen() {
     setAwaitingCommit(true);
   };
 
-  if (isLoading) {
+  if (isLoading || (!isError && !item)) {
     return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <ActivityIndicator />
-      </View>
+      <ScreenFrame>
+        <View className="px-4 pt-4">
+          <SkeletonCard lines={4} />
+        </View>
+      </ScreenFrame>
     );
   }
 
-  if (isError) {
+  if (isError || !item) {
     const status = error instanceof ApiClientError ? error.status : null;
     return (
-      <View className="flex-1 items-center justify-center gap-3 bg-white px-4 dark:bg-black">
-        <Text className="text-red-600">
-          {status === 404 ? "This capture couldn't be found." : "Couldn't load this capture."}
-        </Text>
-        {/* A 404 is terminal -- refetching the same id repeats the same
-            answer -- so the affordance appears only for a failure that could
-            actually clear. */}
-        {status === 404 ? null : (
-          <Pressable
-            onPress={() => void refetch()}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading this capture"
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="font-semibold text-white">Retry</Text>
-          </Pressable>
-        )}
-      </View>
-    );
-  }
-
-  if (!item) {
-    return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <ActivityIndicator />
-      </View>
+      <ScreenCentered>
+        <ErrorState
+          title={status === 404 ? "Not found" : "Something went wrong"}
+          message={
+            status === 404 ? "This capture couldn't be found." : "Couldn't load this capture."
+          }
+          // A 404 is terminal -- refetching the same id repeats the same
+          // answer -- so the affordance appears only for a failure that could
+          // actually clear.
+          onRetry={status === 404 ? undefined : () => void refetch()}
+          retryAccessibilityLabel="Retry loading this capture"
+        />
+      </ScreenCentered>
     );
   }
 
@@ -132,7 +121,8 @@ export default function InboxItemScreen() {
       // Re-seed the title only when it is untouched or was the previous
       // kind's seed, so an edit survives switching between task and event.
       title:
-        current.kind === null || current.title === defaultTitleFor(current.kind, item.raw_text ?? "")
+        current.kind === null ||
+        current.title === defaultTitleFor(current.kind, item.raw_text ?? "")
           ? defaultTitleFor(kind, item.raw_text ?? "")
           : current.title,
     }));
@@ -151,38 +141,43 @@ export default function InboxItemScreen() {
   };
 
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      // Padding lives entirely in contentContainerStyle (no
-      // contentContainerClassName) -- see FLOATING_CLEARANCE_PX for why.
-      contentContainerStyle={{ padding: 16, paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
-      keyboardShouldPersistTaps="handled"
-    >
-      <InboxDetailView
-        item={item}
-        draft={draft}
-        onDraftChange={(patch) => setDraft((current) => ({ ...current, ...patch }))}
-        onChooseKind={chooseKind}
-        confirm={{ isPending: confirm.isPending, isError: confirm.isError, error: confirm.error }}
-        awaitingCommit={awaitingCommit}
-        commitPollExhausted={commitPollExhausted}
-        dismiss={{ isPending: archive.isPending, isError: archive.isError }}
-        onConfirmStored={() => submitConfirm({})}
-        onFile={(toolCall) => submitConfirm({ corrected_tool_call: toolCall })}
-        onDismiss={() =>
-          archive.mutate(item.id, {
-            // Reached from a push (which dismissAll()s first) there may be
-            // nothing to go back to; the Inbox tab is where the row was.
-            onSuccess: () =>
-              router.canGoBack() ? router.back() : router.replace("/(tabs)/inbox" as Href),
-          })
-        }
-        // `as Href` for the reason use-notification-lifecycle.ts records: the
-        // typed-route union is generated into .expo/types and may predate
-        // this changeset. The value itself comes only from entityRoute.
-        onOpenEntity={(route) => router.push(route as Href)}
-        timezone={deviceTimezone()}
-      />
-    </ScrollView>
+    <ScreenFrame>
+      <ScrollView
+        className="flex-1"
+        // Padding lives entirely in contentContainerStyle (no
+        // contentContainerClassName) -- see FLOATING_CLEARANCE_PX for why.
+        contentContainerStyle={{
+          padding: 16,
+          paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight,
+        }}
+        keyboardShouldPersistTaps="handled"
+      >
+        <InboxDetailView
+          item={item}
+          draft={draft}
+          onDraftChange={(patch) => setDraft((current) => ({ ...current, ...patch }))}
+          onChooseKind={chooseKind}
+          confirm={{ isPending: confirm.isPending, isError: confirm.isError, error: confirm.error }}
+          awaitingCommit={awaitingCommit}
+          commitPollExhausted={commitPollExhausted}
+          dismiss={{ isPending: archive.isPending, isError: archive.isError }}
+          onConfirmStored={() => submitConfirm({})}
+          onFile={(toolCall) => submitConfirm({ corrected_tool_call: toolCall })}
+          onDismiss={() =>
+            archive.mutate(item.id, {
+              // Reached from a push (which dismissAll()s first) there may be
+              // nothing to go back to; the Inbox tab is where the row was.
+              onSuccess: () =>
+                router.canGoBack() ? router.back() : router.replace("/(tabs)/inbox" as Href),
+            })
+          }
+          // `as Href` for the reason use-notification-lifecycle.ts records: the
+          // typed-route union is generated into .expo/types and may predate
+          // this changeset. The value itself comes only from entityRoute.
+          onOpenEntity={(route) => router.push(route as Href)}
+          timezone={deviceTimezone()}
+        />
+      </ScrollView>
+    </ScreenFrame>
   );
 }

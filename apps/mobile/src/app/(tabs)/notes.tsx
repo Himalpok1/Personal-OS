@@ -1,78 +1,110 @@
 import type { Note } from "@personal-os/schema";
 import { FLOATING_CLEARANCE, FLOATING_CTA_CLEARANCE } from "@/components/floating-layout";
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  IconButton,
+  ListRow,
+  ScreenFrame,
+  SkeletonList,
+  useTheme,
+} from "@/components/ui";
 import { useArchiveNote, useNotes } from "@/queries/notes";
-import { Link, useRouter } from "expo-router";
-import { FlatList, Pressable, SafeAreaView, Text, View } from "react-native";
+import { useRouter } from "expo-router";
+import { FlatList, RefreshControl, View } from "react-native";
 
 function NoteRow({ note }: { note: Note }) {
   const router = useRouter();
   const archive = useArchiveNote();
 
+  // The row and its Archive control are SIBLINGS on an inert card, side by
+  // side, not nested pressables: the pre-10.3 row stopped the archive tap's
+  // propagation by hand, and siblings need no such guard (same reasoning as
+  // the project rows). Behaviour is unchanged -- the row opens the note, the
+  // button archives it.
   return (
-    <Pressable
-      onPress={() => router.push(`/notes/${note.id}`)}
-      className="flex-row items-center justify-between border-b border-neutral-200 px-4 py-3 dark:border-neutral-800"
-    >
-      <View className="flex-1 pr-2">
-        <Text className="text-base text-black dark:text-white" numberOfLines={2}>
-          {note.title}
-        </Text>
-        <Text className="text-xs text-neutral-500" numberOfLines={1}>
-          {note.body}
-        </Text>
-      </View>
-      <Pressable
-        onPress={(e) => {
-          // Stop the tap from also triggering the row's onPress (navigate
-          // to the note) -- both handlers are on nested Pressables, same
-          // precedent as components/calendar/day-cell.tsx.
-          e.stopPropagation();
-          archive.mutate(note.id);
+    <Card padding="none" className="mb-3 flex-row items-center pr-1">
+      <ListRow
+        icon="note-text-outline"
+        title={note.title}
+        // `meta`, not `subtitle`: the body preview stays the one line it has
+        // always been (a subtitle would give it two).
+        meta={note.body}
+        onPress={() => router.push(`/notes/${note.id}`)}
+        accessibilityLabel={`Open note: ${note.title}`}
+        last
+        className="flex-1"
+      />
+      <IconButton
+        icon="archive-arrow-down-outline"
+        // IconButton has no `disabled`; the guard keeps the pre-10.3 rule
+        // that a pending archive is never re-fired.
+        onPress={() => {
+          if (!archive.isPending) archive.mutate(note.id);
         }}
-        hitSlop={8}
-        disabled={archive.isPending}
-        className="min-h-[44px] min-w-[44px] items-center justify-center rounded bg-neutral-100 px-2 disabled:opacity-50 dark:bg-neutral-800"
-      >
-        <Text className="text-xs text-neutral-600 dark:text-neutral-300">Archive</Text>
-      </Pressable>
-    </Pressable>
+        accessibilityLabel={`Archive note: ${note.title}`}
+        tone="on-surface-variant"
+        className={archive.isPending ? "opacity-50" : ""}
+      />
+    </Card>
   );
 }
 
 export default function NotesScreen() {
-  const { data, isLoading, isError, refetch } = useNotes();
+  const router = useRouter();
+  const { data, isLoading, isError, isRefetching, refetch } = useNotes();
+  const { colors } = useTheme();
 
   return (
-    <SafeAreaView className="flex-1 bg-white dark:bg-black">
+    <ScreenFrame>
       {isLoading ? (
-        <Text className="p-4 text-neutral-500">Loading...</Text>
+        <SkeletonList className="px-4 pt-2" />
       ) : isError ? (
-        <View className="flex-1 items-center justify-center gap-3 p-4">
-          <Text className="text-red-600">Couldn&apos;t load notes.</Text>
-          <Pressable
-            onPress={() => void refetch()}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading notes"
-            hitSlop={8}
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="font-semibold text-white">Retry</Text>
-          </Pressable>
-        </View>
+        <ErrorState
+          size="screen"
+          message="Couldn't load notes."
+          onRetry={() => void refetch()}
+          retryAccessibilityLabel="Retry loading notes"
+        />
       ) : (
         <FlatList
           data={data?.items ?? []}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => <NoteRow note={item} />}
-          contentContainerClassName={FLOATING_CLEARANCE}
-          ListEmptyComponent={<Text className="p-4 text-neutral-500">No notes yet.</Text>}
+          contentContainerClassName={`${FLOATING_CLEARANCE} flex-grow px-4 pt-4`}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefetching}
+              onRefresh={() => void refetch()}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+              progressBackgroundColor={colors.surface}
+            />
+          }
+          ListEmptyComponent={
+            <EmptyState
+              size="screen"
+              icon="note-text-outline"
+              title="No notes yet"
+              body="Capture a thought or write one here."
+            />
+          }
         />
       )}
-      <Link href="/notes/new" asChild>
-        <Pressable className={`mx-4 mt-4 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700 ${FLOATING_CTA_CLEARANCE}`}>
-          <Text className="font-semibold text-white">New note</Text>
-        </Pressable>
-      </Link>
-    </SafeAreaView>
+      <View className={`mx-4 mt-4 ${FLOATING_CTA_CLEARANCE}`}>
+        <Button
+          label="New note"
+          onPress={() => router.push("/notes/new")}
+          variant="primary"
+          // Navigation, not an action: no haptic (components/ui/haptics.ts).
+          haptic={false}
+          icon="plus"
+          block
+          accessibilityLabel="New note"
+        />
+      </View>
+    </ScreenFrame>
   );
 }

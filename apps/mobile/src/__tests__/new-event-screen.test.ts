@@ -164,7 +164,13 @@ describe("Today (Checkpoint 9.5)", () => {
     expect(today).not.toMatch(/router\.push\(`\/events\/\$\{event\.id\}`\)/);
   });
 
-  it("offers a '+ Event' header action beside 'All tasks'", () => {
-    expect(today).toMatch(/<Link href="\/events\/new" asChild>[\s\S]*?\+ Event/);
+  it("keeps a new-event entry point on Today (Checkpoint 10.3: the events section's action)", () => {
+    // Checkpoint 9.5 put "+ Event" in the header; 10.3 moved it to the
+    // "Today's events" section header, labelled "New event". What the guard
+    // protects is the entry point itself: a real Link to /events/new.
+    expect(today).toMatch(
+      /<Link href="\/events\/new" asChild>[\s\S]*?accessibilityLabel="New event"/,
+    );
+    expect(today).toMatch(/label: "All tasks"/);
   });
 });

@@ -1,6 +1,7 @@
 import type { ComponentProps } from "react";
 import { Component } from "react";
 import { Pressable, Text, View } from "react-native";
+import { AppText, Button, Card, SectionHeader, SkeletonCard, textClass } from "@/components/ui";
 import { useCurrentMailDigest, useGenerateMailDigest } from "@/queries/mail";
 import {
   canGenerateDigest,
@@ -8,14 +9,9 @@ import {
   resolveDigestCardState,
 } from "./digest-card-state";
 
-// THE ONE new Today card (Checkpoint 7.6).
-//
-// Card chrome copies the same inline NativeWind string BriefCard and
-// HealthTodayCard each declare. There is no shared UI kit in this app and
-// brief-card.tsx records the duplication as a deliberate convention, so this
-// matches the string rather than extracting an export -- which would pull three
-// existing card files into a UI checkpoint's diff.
-const CARD_CLASS = "mx-4 mb-3 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800";
+// THE ONE new Today card (Checkpoint 7.6). Checkpoint 10.3 moved its chrome
+// onto the design system (Card, SectionHeader, Button, AppText); every
+// state, label and behaviour is unchanged.
 
 // ===========================================================================
 // THE VERTICAL CAP
@@ -102,9 +98,9 @@ export class ClampedDigestText extends Component<ClampedDigestTextProps, Clamped
             hitSlop={8}
             className="mt-1 min-h-[44px] items-center justify-start"
           >
-            <Text className="text-sm font-medium text-blue-600 dark:text-blue-400">
+            <AppText variant="label" tone="primary">
               {expanded ? "Show less" : "Show more"}
-            </Text>
+            </AppText>
           </Pressable>
         ) : null}
       </View>
@@ -119,37 +115,18 @@ function ActionButton({
 }: {
   label: string;
   onPress: () => void;
+  /** BOUND, not merely used to draw an indicator (Checkpoint 6.7A finding A1): rapid taps must not fire concurrent mutations. */
   disabled?: boolean;
 }) {
-  return (
-    <Pressable
-      onPress={onPress}
-      // BOUND, not merely used to draw an indicator. Checkpoint 6.7A finding A1:
-      // without this, rapid taps fire concurrent mutations.
-      disabled={disabled}
-      accessibilityRole="button"
-      accessibilityState={{ disabled: !!disabled }}
-      hitSlop={8}
-      className={`min-h-[44px] items-center justify-center rounded-lg px-4 py-2 active:opacity-70 ${
-        disabled ? "bg-neutral-200 dark:bg-neutral-800" : "bg-blue-600"
-      }`}
-    >
-      <Text
-        className={`text-sm font-semibold ${
-          disabled ? "text-neutral-500 dark:text-neutral-400" : "text-white"
-        }`}
-      >
-        {label}
-      </Text>
-    </Pressable>
-  );
+  return <Button label={label} onPress={onPress} disabled={disabled} size="sm" />;
 }
 
 function Title() {
-  return <Text className="mb-2 text-base font-medium text-black dark:text-white">Mail digest</Text>;
+  return <SectionHeader title="Mail digest" icon="email-outline" spacing="card" />;
 }
 
-const PROSE_CLASS = "text-sm leading-5 text-neutral-700 dark:text-neutral-300";
+/** The digest's prose class: body size on the secondary tone, so the clamp component can measure it. */
+const PROSE_CLASS = textClass("body", "secondary");
 
 /**
  * The Today mail-digest card.
@@ -193,61 +170,57 @@ export function MailDigestCard() {
   const showAction = canGenerateDigest(state);
 
   if (state.kind === "loading") {
-    return (
-      <View className={CARD_CLASS}>
-        <Text className="text-sm text-neutral-500 dark:text-neutral-400">Loading mail digest…</Text>
-      </View>
-    );
+    return <SkeletonCard lines={3} className="mb-3" />;
   }
 
   if (state.kind === "unavailable") {
     return (
-      <View className={CARD_CLASS}>
+      <Card className="mb-3">
         <Title />
         {/* We could not read it, so we claim nothing about the mail itself. */}
-        <Text className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+        <AppText variant="body" tone="secondary" className="mb-3">
           {"Can't reach Personal OS, so the mail digest is unavailable."}
-        </Text>
+        </AppText>
         {/* RETRY, NOT GENERATE. Generating is the wrong action when the problem
             is that we could not read -- but offering nothing at all would make
             this a dead end, the P1 class Checkpoint 6.5 fixed on three detail
             screens. */}
         <ActionButton label="Retry" onPress={onRetry} />
-      </View>
+      </Card>
     );
   }
 
   if (state.kind === "not_configured" || state.kind === "no_mailbox") {
     return (
-      <View className={CARD_CLASS}>
+      <Card className="mb-3">
         <Title />
         {/* Two different sentences, because they are two different situations.
             Telling someone to connect a mailbox when the server has no Gmail
             credentials at all would send them somewhere that cannot help. */}
-        <Text className="text-sm text-neutral-500 dark:text-neutral-400">
+        <AppText variant="body" tone="secondary">
           {state.kind === "not_configured"
             ? "Gmail isn't set up on this server."
             : "Connect a mailbox in Settings to start getting daily mail digests."}
-        </Text>
-      </View>
+        </AppText>
+      </Card>
     );
   }
 
   if (state.kind === "empty") {
     return (
-      <View className={CARD_CLASS}>
+      <Card className="mb-3">
         <Title />
-        <Text className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+        <AppText variant="body" tone="secondary" className="mb-3">
           {"No digest yet. One is generated automatically each day."}
-        </Text>
+        </AppText>
         {showAction ? <ActionButton label="Generate now" onPress={onGenerate} /> : null}
-      </View>
+      </Card>
     );
   }
 
   if (state.kind === "requested") {
     return (
-      <View className={CARD_CLASS}>
+      <Card className="mb-3">
         <Title />
         {state.previousText ? (
           <ClampedDigestText
@@ -258,17 +231,17 @@ export function MailDigestCard() {
         ) : null}
         {/* Persists until a digest newer than the request lands. Says plainly
             that the work is queued, and never that a digest is ready. */}
-        <Text className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
+        <AppText variant="caption" tone="muted" className="mb-3">
           {"Requested. Personal OS is preparing it, and it'll appear here when it's ready."}
-        </Text>
+        </AppText>
         <ActionButton label="Requested" onPress={onGenerate} disabled />
-      </View>
+      </Card>
     );
   }
 
   if (state.kind === "generating") {
     return (
-      <View className={CARD_CLASS}>
+      <Card className="mb-3">
         <Title />
         {state.previousText ? (
           <ClampedDigestText
@@ -279,17 +252,17 @@ export function MailDigestCard() {
         ) : null}
         {/* Honest about what a 202 means: the request was accepted, and a digest
             does not exist yet. This never claims one is ready. */}
-        <Text className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
+        <AppText variant="caption" tone="muted" className="mb-3">
           {"Personal OS is preparing a digest. It'll appear here when it's ready."}
-        </Text>
+        </AppText>
         <ActionButton label="Working…" onPress={onGenerate} disabled />
-      </View>
+      </Card>
     );
   }
 
   if (state.kind === "failed") {
     return (
-      <View className={CARD_CLASS}>
+      <Card className="mb-3">
         <Title />
         {/* A failed request never destroys the cached digest. */}
         {state.previousText ? (
@@ -300,16 +273,16 @@ export function MailDigestCard() {
           />
         ) : null}
         {/* Fixed copy per reason -- no provider text, no raw code. */}
-        <Text className="mb-3 text-sm text-amber-700 dark:text-amber-300">
+        <AppText variant="body" tone="warning" className="mb-3">
           {digestFailureText(state.reason)}
-        </Text>
+        </AppText>
         {showAction ? <ActionButton label="Try again" onPress={onGenerate} /> : null}
-      </View>
+      </Card>
     );
   }
 
   return (
-    <View className={CARD_CLASS}>
+    <Card className="mb-3">
       <Title />
       {/* Only `content.text` is ever rendered. `MailDigestContentSchema` is
           `.passthrough()`, so iterating its keys would put unvalidated model
@@ -318,10 +291,10 @@ export function MailDigestCard() {
       {/* Says WHICH day and WHICH zone the digest covers. The zone is server
           configuration and can legitimately differ from this device's, so
           labelling it "today" without qualification could be wrong. */}
-      <Text className="mb-3 mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+      <AppText variant="caption" tone="muted" className="mb-3 mt-2">
         {`Covers ${state.digestDate} · ${state.timezone}`}
-      </Text>
+      </AppText>
       {showAction ? <ActionButton label="Regenerate" onPress={onGenerate} /> : null}
-    </View>
+    </Card>
   );
 }

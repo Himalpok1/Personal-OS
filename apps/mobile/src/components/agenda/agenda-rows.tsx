@@ -1,19 +1,39 @@
 // Row-level presentational pieces for the Agenda screen. Mirrors the row
 // conventions established in (tabs)/index.tsx (the Today command center)
-// exactly -- same padding, same tone classes, same completion-circle
-// pattern -- but is its own file (index.tsx is owned by another agent) so
-// small duplications of tiny formatting helpers below are deliberate, not
-// missed reuse.
+// exactly -- same completion-circle pattern, same two-line title, same
+// one-line time column -- but is its own file (index.tsx is owned by another
+// agent) so small duplications of tiny formatting helpers below are
+// deliberate, not missed reuse.
+//
+// Checkpoint 10.3: rows compose the design system's ListRow, Button and Icon.
+// The three controls of a task row (complete, open, skip / +1 day) stay
+// SIBLINGS rather than nesting inside one pressable: under react-native-web
+// a nested Pressable's tap bubbles to the row's own onPress, which is the
+// rule every list row in this app records.
 import { ApiClientError } from "@personal-os/api-client";
 import type { AgendaItem, AgendaTaskItem, AgendaOccurrenceItem, AgendaEventItem } from "@personal-os/schema";
 import { useRouter, type Href } from "expo-router";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, View } from "react-native";
+import {
+  AppText,
+  Button,
+  Icon,
+  ListRow,
+  SectionHeader as UiSectionHeader,
+  type SectionTone,
+} from "@/components/ui";
 import { eventDetailHref } from "@/utils/event-navigation";
 import { eventTimeLabel } from "@/utils/event-time-label";
 import { useCompleteOccurrence, useSkipOccurrence } from "@/queries/occurrences";
 import { useCompleteTask, useUpdateTask } from "@/queries/tasks";
 import { useInvalidateAgenda } from "@/queries/agenda";
 import { addOneDayPreservingWallClock } from "./agenda-grouping";
+
+const SECTION_TONE: Record<"red" | "blue" | "neutral", SectionTone> = {
+  red: "danger",
+  blue: "info",
+  neutral: "default",
+};
 
 export function SectionHeader({
   title,
@@ -22,16 +42,12 @@ export function SectionHeader({
   title: string;
   tone: "red" | "blue" | "neutral";
 }) {
-  const toneClass =
-    tone === "red"
-      ? "text-red-600 dark:text-red-400"
-      : tone === "blue"
-        ? "text-blue-600 dark:text-blue-400"
-        : "text-neutral-500 dark:text-neutral-400";
-  return (
-    <Text className={`px-4 pb-2 pt-5 text-sm font-semibold uppercase ${toneClass}`}>{title}</Text>
-  );
+  return <UiSectionHeader title={title} tone={SECTION_TONE[tone]} />;
 }
+
+// The hairline between rows on one card, the same one ListRow draws; the
+// task row is three sibling controls in a View, so it draws its own.
+const ROW_DIVIDER_CLASS = "border-b border-outline/70 dark:border-outline-dark";
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, {
@@ -55,7 +71,13 @@ export function agendaItemKey(item: AgendaItem): string {
 // occurrence on the recurring-task 409 (ApiClientError.body.occurrence_id).
 // An item that already arrived as kind "occurrence" completes/skips
 // directly -- it IS the actionable representation (frozen dedupe rule).
-export function AgendaTaskRow({ item }: { item: AgendaTaskItem | AgendaOccurrenceItem }) {
+export function AgendaTaskRow({
+  item,
+  last = false,
+}: {
+  item: AgendaTaskItem | AgendaOccurrenceItem;
+  last?: boolean;
+}) {
   const router = useRouter();
   const completeTask = useCompleteTask();
   const completeOccurrence = useCompleteOccurrence();
@@ -104,8 +126,19 @@ export function AgendaTaskRow({ item }: { item: AgendaTaskItem | AgendaOccurrenc
     );
   };
 
+  // One muted line under the title: the due time, the project, and whether
+  // it repeats -- the same three facts the pre-10.3 row showed as separate
+  // fragments, as a single one-line `meta` so the row height stays put.
+  const meta = [
+    item.due_at ? formatTime(item.due_at) : null,
+    item.project_name,
+    isRecurring ? "Repeats" : null,
+  ]
+    .filter((part): part is string => typeof part === "string" && part.length > 0)
+    .join(" · ");
+
   return (
-    <View className="min-h-[40px] flex-row items-center gap-2 px-4 py-3">
+    <View className={`flex-row items-center gap-1 pl-3 pr-2 ${last ? "" : ROW_DIVIDER_CLASS}`}>
       <Pressable
         onPress={onComplete}
         hitSlop={8}
@@ -114,66 +147,47 @@ export function AgendaTaskRow({ item }: { item: AgendaTaskItem | AgendaOccurrenc
         // `pending` previously only drew the indicator dot; all three action
         // controls in this row stayed tappable mid-flight (6.7A, A2).
         disabled={pending}
-        className="h-8 w-8 items-center justify-center rounded-full border-2 border-neutral-400 dark:border-neutral-600"
+        className="h-11 w-11 items-center justify-center active:opacity-70"
       >
-        {pending ? <View className="h-2 w-2 rounded-full bg-neutral-400" /> : null}
+        <Icon
+          name={pending ? "progress-clock" : "checkbox-blank-circle-outline"}
+          size="lg"
+          tone={pending ? "on-surface-muted" : "on-surface-variant"}
+        />
       </Pressable>
-      <Pressable
+      <ListRow
+        title={item.title}
+        meta={meta.length > 0 ? meta : undefined}
         onPress={() => router.push(`/tasks/${item.id}`)}
-        hitSlop={4}
+        accessibilityLabel={`Open task: ${item.title}`}
+        inset
+        last
         className="flex-1"
-        accessibilityRole="button"
-      >
-        <Text className="text-base text-black dark:text-white" numberOfLines={2}>
-          {item.title}
-        </Text>
-        <View className="mt-0.5 flex-row items-center gap-2">
-          {item.due_at ? (
-            <Text className="text-xs text-neutral-500 dark:text-neutral-400">
-              {formatTime(item.due_at)}
-            </Text>
-          ) : null}
-          {item.project_name ? (
-            <View className="flex-row items-center gap-1">
-              <View className="h-2 w-2 rounded-full bg-neutral-400 dark:bg-neutral-500" />
-              <Text className="text-xs text-neutral-500 dark:text-neutral-400">
-                {item.project_name}
-              </Text>
-            </View>
-          ) : null}
-          {isRecurring ? (
-            <Text className="text-xs text-neutral-500 dark:text-neutral-400">⟲</Text>
-          ) : null}
-        </View>
-      </Pressable>
+      />
       {isOccurrence ? (
-        <Pressable
+        <Button
+          label="Skip"
           onPress={onSkip}
-          hitSlop={8}
+          variant="ghost"
+          size="sm"
+          disabled={pending}
           accessibilityLabel={`Skip ${item.title}`}
-          accessibilityRole="button"
-          disabled={pending}
-          className="min-h-[40px] items-center justify-center px-2"
-        >
-          <Text className="text-xs text-neutral-500 dark:text-neutral-400">Skip</Text>
-        </Pressable>
+        />
       ) : item.due_at ? (
-        <Pressable
+        <Button
+          label="+1 day"
           onPress={onPlusOneDay}
-          hitSlop={8}
-          accessibilityLabel={`Move ${item.title} to tomorrow`}
-          accessibilityRole="button"
+          variant="ghost"
+          size="sm"
           disabled={pending}
-          className="min-h-[40px] items-center justify-center px-2"
-        >
-          <Text className="text-xs text-blue-600 dark:text-blue-400">+1 day</Text>
-        </Pressable>
+          accessibilityLabel={`Move ${item.title} to tomorrow`}
+        />
       ) : null}
     </View>
   );
 }
 
-export function AgendaEventRow({ item }: { item: AgendaEventItem }) {
+export function AgendaEventRow({ item, last = false }: { item: AgendaEventItem; last?: boolean }) {
   const router = useRouter();
   // One href rule shared with Today (utils/event-navigation.ts).
   const onPress = () => router.push(eventDetailHref(item.id, item.occurs_at) as Href);
@@ -183,33 +197,28 @@ export function AgendaEventRow({ item }: { item: AgendaEventItem }) {
   // correct; sharing keeps it that way.
   const timeLabel = eventTimeLabel(item, "ALL-DAY");
   return (
-    <Pressable
+    <ListRow
+      leading={
+        // w-24, matching (tabs)/index.tsx: the widest real value is a range
+        // like "14:30–15:00" (11 chars at caption size, ~80px), so 96px leaves
+        // margin. Narrower risks a two-line wrap here, which would misalign
+        // the row.
+        <AppText variant="caption" tone="muted" numberOfLines={1} className="w-24 shrink-0">
+          {timeLabel}
+        </AppText>
+      }
+      title={item.title}
+      // `meta`, not `subtitle`: the location stays the one line it has
+      // always been.
+      meta={item.location ?? undefined}
       onPress={onPress}
-      hitSlop={4}
-      className="min-h-[40px] flex-row items-baseline gap-3 px-4 py-3"
-      accessibilityRole="button"
-    >
-      <Text
-        className="w-24 shrink-0 text-xs text-neutral-500 dark:text-neutral-400"
-        numberOfLines={1}
-      >
-        {timeLabel}
-      </Text>
-      <View className="flex-1">
-        <Text className="text-base text-black dark:text-white" numberOfLines={2}>
-          {item.title}
-        </Text>
-        {item.location ? (
-          <Text className="text-xs text-neutral-500 dark:text-neutral-400" numberOfLines={1}>
-            {item.location}
-          </Text>
-        ) : null}
-      </View>
-    </Pressable>
+      accessibilityLabel={`Open event: ${item.title}`}
+      last={last}
+    />
   );
 }
 
-export function AgendaItemRow({ item }: { item: AgendaItem }) {
-  if (isTaskOrOccurrence(item)) return <AgendaTaskRow item={item} />;
-  return <AgendaEventRow item={item} />;
+export function AgendaItemRow({ item, last = false }: { item: AgendaItem; last?: boolean }) {
+  if (isTaskOrOccurrence(item)) return <AgendaTaskRow item={item} last={last} />;
+  return <AgendaEventRow item={item} last={last} />;
 }

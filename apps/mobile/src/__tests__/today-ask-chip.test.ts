@@ -25,15 +25,21 @@ describe("Today's 'Ask about today' chip (Checkpoint 9.7)", () => {
     expect(today).toMatch(/testID="today-ask-chip"[\s\S]*?router\.push\(ASK_ABOUT_TODAY_HREF\)/);
   });
 
-  it("sits in the existing summary chip row and never calls the Ask API itself", () => {
-    const chipRow = today.slice(
-      today.indexOf('<Chip label="Overdue"'),
-      today.indexOf('testID="today-ask-chip"'),
+  it("sits inside the day-at-a-glance hero, under its counts, and never calls the Ask API itself", () => {
+    // Checkpoint 10.3 moved the chip from the summary-chip row into the ONE
+    // hero card, right under the same overdue / due-today counts: still no
+    // new section, no header icon, no sixth tab.
+    const heroStart = today.indexOf('<GradientCard gradient="hero"');
+    const heroEnd = today.indexOf("</GradientCard>");
+    expect(heroStart).toBeGreaterThan(-1);
+    expect(heroEnd).toBeGreaterThan(heroStart);
+    const hero = today.slice(heroStart, heroEnd);
+    expect(hero).toContain('testID="today-ask-chip"');
+    expect(hero).toContain("data.summary.overdue_total");
+    expect(hero).toContain("data.summary.due_today_total");
+    expect(hero.indexOf("data.summary.due_today_total")).toBeLessThan(
+      hero.indexOf('testID="today-ask-chip"'),
     );
-    // Same flex-wrap row as the four summary chips: no new section, no
-    // header icon, no sixth tab.
-    expect(chipRow).toContain('label="Projects"');
-    expect(chipRow).not.toContain("</View>");
     expect(today).not.toContain("askCloud");
     expect(today).not.toContain("useAskCloud");
   });

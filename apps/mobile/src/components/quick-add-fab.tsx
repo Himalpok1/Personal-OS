@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { randomUUID } from "expo-crypto";
-import { Alert, Modal, Pressable, Text, TextInput, View } from "react-native";
+import { Alert, Modal, Pressable, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { getOutboxStats } from "@/outbox/queue";
 import { usePlaceholderColor } from "@/components/placeholder-color";
 import { FieldLengthCounter } from "@/components/field-length-counter";
+import { AppText, Button, Card, Icon, triggerHaptic } from "@/components/ui";
 import { describeValidationError } from "@/utils/validation-error";
 import { CAPTURE_TEXT_MAX_LENGTH } from "@personal-os/schema";
 import { useCapture } from "@/queries/capture";
@@ -133,6 +134,9 @@ export function QuickAddFab() {
       },
       {
         onSuccess: (result) => {
+          // A completion, so it earns the success haptic (never on failure,
+          // where the inline error is the feedback).
+          triggerHaptic("success");
           setText("");
           setOpen(false);
           setShareId(null);
@@ -163,11 +167,11 @@ export function QuickAddFab() {
         // and size come from components/floating-layout.ts, shared with
         // PttButton and with every scroll container's bottom padding -- see
         // that file for why the old bottom-40 was wrong.
-        className={`absolute ${FLOATING_BUTTON_BOTTOM} right-6 ${FLOATING_BUTTON_SIZE} items-center justify-center rounded-full bg-blue-600 shadow-lg active:bg-blue-700`}
+        className={`absolute ${FLOATING_BUTTON_BOTTOM} right-6 ${FLOATING_BUTTON_SIZE} items-center justify-center rounded-full bg-primary shadow-fab active:opacity-90 dark:bg-primary-dark`}
         accessibilityRole="button"
         accessibilityLabel={fabAccessibilityLabel}
       >
-        <Text className="text-2xl font-bold text-white">+</Text>
+        <Icon name="plus" size="lg" tone="on-primary" />
       </Pressable>
 
       {/* Amber for a retryable backlog, red once something has permanently
@@ -195,7 +199,7 @@ export function QuickAddFab() {
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
           className={`absolute h-6 min-w-[24px] items-center justify-center rounded-full px-1 ${
-            outbox.failed > 0 ? "bg-red-600" : "bg-amber-500"
+            outbox.failed > 0 ? "bg-danger dark:bg-danger-dark" : "bg-warning dark:bg-warning-dark"
           }`}
           // Pinned to the button's top-right corner, computed from the shared
           // geometry rather than a hand-tuned offset.
@@ -204,9 +208,13 @@ export function QuickAddFab() {
             right: FLOATING_BUTTON_SIDE_INSET_PX - 6,
           }}
         >
-          <Text className="text-xs font-bold text-white">
+          <AppText
+            variant="caption"
+            tone="inherit"
+            className="font-bold text-on-primary dark:text-on-primary-dark"
+          >
             {outbox.failed > 0 ? outbox.failed : outbox.pending}
-          </Text>
+          </AppText>
         </View>
       ) : null}
 
@@ -227,12 +235,25 @@ export function QuickAddFab() {
               down; with it up, the keyboard already occupies that space. */}
           <SafeAreaView
             edges={keyboardHeight > 0 ? [] : ["bottom"]}
-            className="rounded-t-2xl bg-white dark:bg-neutral-900"
+            className="rounded-t-card bg-surface dark:bg-surface-dark"
           >
-            <View className="p-4">
-              <Text className="mb-2 text-lg font-semibold text-black dark:text-white">
-                Quick capture
-              </Text>
+            <View className="px-4 pb-4 pt-2">
+              {/* The sheet's drag handle: a visual cue that this is a bottom
+                  sheet, decorative only (swipe-to-dismiss is not wired). */}
+              <View className="mb-3 h-1 w-10 self-center rounded-full bg-outline-strong dark:bg-outline-strong-dark" />
+              <View className="mb-2 flex-row items-center justify-between">
+                <AppText variant="title" accessibilityRole="header">
+                  Quick capture
+                </AppText>
+                <Button
+                  label="Cancel"
+                  onPress={closeSheet}
+                  accessibilityLabel="Cancel this capture"
+                  disabled={capture.isPending}
+                  variant="ghost"
+                  size="sm"
+                />
+              </View>
               <TextInput
                 value={text}
                 onChangeText={setText}
@@ -244,44 +265,31 @@ export function QuickAddFab() {
                 // constant the share-intent normaliser truncates at -- so a
                 // paste is stopped here rather than refused as a 400.
                 maxLength={CAPTURE_TEXT_MAX_LENGTH}
-                className="min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+                className="min-h-[96px] rounded-inner bg-surface-container p-3 text-body text-on-surface dark:bg-surface-container-dark dark:text-on-surface-dark"
               />
               <FieldLengthCounter
                 length={text.length}
                 maxLength={CAPTURE_TEXT_MAX_LENGTH}
-                className="mt-1 text-right text-xs text-neutral-500 dark:text-neutral-400"
+                className="mt-1 text-right text-caption text-on-surface-muted dark:text-on-surface-muted-dark"
               />
               {capture.isError ? (
-                <Text className="mt-2 text-red-600" accessibilityRole="alert">
+                <AppText variant="body" tone="danger" className="mt-2" accessibilityRole="alert">
                   {/* A refused field (the api-client's pre-request parse or a
                       server 400) names the field and its bound; anything else
                       is a delivery failure the outbox could not classify. */}
                   {describeValidationError(capture.error) ??
                     "Couldn't save that -- check your connection and try again."}
-                </Text>
+                </AppText>
               ) : null}
-              <View className="mt-3 flex-row justify-end gap-2">
-                <Pressable
-                  onPress={closeSheet}
-                  className="min-h-[44px] justify-center rounded-lg px-4 py-2"
-                  accessibilityRole="button"
-                  accessibilityLabel="Cancel this capture"
-                  disabled={capture.isPending}
-                >
-                  <Text className="text-neutral-500">Cancel</Text>
-                </Pressable>
-                <Pressable
-                  onPress={submit}
-                  className="min-h-[44px] justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-                  accessibilityRole="button"
-                  accessibilityLabel="Capture this note"
-                  disabled={capture.isPending || text.trim().length === 0}
-                >
-                  <Text className="font-semibold text-white">
-                    {capture.isPending ? "Saving..." : "Capture"}
-                  </Text>
-                </Pressable>
-              </View>
+              <Button
+                label="Capture"
+                onPress={submit}
+                accessibilityLabel="Capture this note"
+                busy={capture.isPending}
+                disabled={text.trim().length === 0}
+                block
+                className="mt-3"
+              />
             </View>
           </SafeAreaView>
         </View>
@@ -307,21 +315,28 @@ function FollowThroughBanner({
   const route = state.phase === "settled" ? followThroughRoute(state.outcome) : null;
   if (label === null) return null;
   return (
-    <Pressable
+    <Card
       testID="capture-follow-through"
       onPress={() => (route !== null ? onOpen(route) : onDismiss())}
-      accessibilityRole="button"
       accessibilityLabel={route !== null ? `${label}. Open` : label}
-      className="absolute min-h-[44px] justify-center rounded-lg bg-neutral-900 px-4 py-2 dark:bg-neutral-100"
+      padding="sm"
+      elevation="raised"
+      className="absolute min-h-[44px] flex-row items-center gap-3"
       style={{
         bottom: FLOATING_BUTTON_BOTTOM_PX + FLOATING_BUTTON_SIZE_PX + 12,
         left: FLOATING_BUTTON_SIDE_INSET_PX,
         right: FLOATING_BUTTON_SIDE_INSET_PX,
       }}
     >
-      <Text className="text-sm text-white dark:text-black" numberOfLines={2}>
+      <Icon
+        name={state.phase === "filing" ? "timer-sand" : "check"}
+        size="md"
+        tone={state.phase === "filing" ? "on-surface-variant" : "success"}
+      />
+      <AppText variant="label" className="flex-1" numberOfLines={2}>
         {label}
-      </Text>
-    </Pressable>
+      </AppText>
+      {route !== null ? <Icon name="chevron-right" size="md" tone="on-surface-muted" /> : null}
+    </Card>
   );
 }

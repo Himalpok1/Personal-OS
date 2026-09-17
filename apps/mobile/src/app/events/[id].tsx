@@ -1,4 +1,16 @@
+import { ChoiceChip } from "@/components/ask/choice-chip";
+import { FieldLabel, textFieldClass } from "@/components/ask/text-field";
 import { confirmDestructive } from "@/components/confirm-destructive";
+import {
+  AppText,
+  Button,
+  Card,
+  ErrorState,
+  Icon,
+  ScreenCentered,
+  ScreenFrame,
+  SkeletonCard,
+} from "@/components/ui";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { PLACEHOLDER_LIGHT, usePlaceholderColor } from "@/components/placeholder-color";
@@ -51,16 +63,7 @@ import {
 } from "@personal-os/core/recurrence/editor";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import {
-  ActivityIndicator,
-  Modal,
-  Pressable,
-  ScrollView,
-  Switch,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { Modal, ScrollView, Switch, TextInput, View } from "react-native";
 
 export type EditMode = "standard" | "occurrence";
 
@@ -169,40 +172,54 @@ export interface ExternalEventViewProps {
  */
 export function ExternalEventView(props: ExternalEventViewProps) {
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      contentContainerStyle={CONTENT_STYLE(props.keyboardHeight ?? 0)}
-      testID="external-event-view"
-    >
-      <View
-        testID="external-event-banner"
-        className="mb-4 rounded-lg border border-neutral-300 bg-neutral-50 p-3 dark:border-neutral-700 dark:bg-neutral-900"
+    <ScreenFrame>
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={CONTENT_STYLE(props.keyboardHeight ?? 0)}
+        testID="external-event-view"
       >
-        <Text className="text-sm text-neutral-600 dark:text-neutral-300">{props.calendarLine}</Text>
-      </View>
+        <Card
+          padding="sm"
+          className="mb-4 flex-row items-center gap-2"
+          testID="external-event-banner"
+        >
+          <Icon name="calendar-lock-outline" size="md" tone="on-surface-variant" />
+          <AppText variant="label" tone="secondary" className="flex-1 font-normal">
+            {props.calendarLine}
+          </AppText>
+        </Card>
 
-      <Text className="mb-1 text-xl font-semibold text-black dark:text-white">{props.title}</Text>
-      <Text testID="external-event-when" className="mb-4 text-base text-black dark:text-white">
-        {props.whenLabel}
-      </Text>
+        <AppText variant="headline" className="mb-1">
+          {props.title}
+        </AppText>
+        <AppText testID="external-event-when" variant="body" className="mb-4">
+          {props.whenLabel}
+        </AppText>
 
-      {props.location ? (
-        <>
-          <Text className="mb-1 text-sm text-neutral-500">Location</Text>
-          <Text className="mb-4 text-black dark:text-white">{props.location}</Text>
-        </>
-      ) : null}
+        {props.location ? (
+          <>
+            <FieldLabel>Location</FieldLabel>
+            <AppText variant="body" className="mb-4">
+              {props.location}
+            </AppText>
+          </>
+        ) : null}
 
-      {props.description ? (
-        <>
-          <Text className="mb-1 text-sm text-neutral-500">Description</Text>
-          <Text className="mb-4 text-black dark:text-white">{props.description}</Text>
-        </>
-      ) : null}
+        {props.description ? (
+          <>
+            <FieldLabel>Description</FieldLabel>
+            <AppText variant="body" className="mb-4">
+              {props.description}
+            </AppText>
+          </>
+        ) : null}
 
-      <Text className="mb-1 text-sm text-neutral-500">Timezone</Text>
-      <Text className="mb-4 text-black dark:text-white">{props.timezone}</Text>
-    </ScrollView>
+        <FieldLabel>Timezone</FieldLabel>
+        <AppText variant="body" className="mb-4">
+          {props.timezone}
+        </AppText>
+      </ScrollView>
+    </ScreenFrame>
   );
 }
 
@@ -280,287 +297,305 @@ export function EditEventView(props: EditEventViewProps) {
   const canEditOccurrence = props.sync === null;
 
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      // Padding lives entirely in contentContainerStyle (no
-      // contentContainerClassName) because NativeWind remaps that class onto
-      // this same prop -- see FLOATING_CLEARANCE_PX. The clearance keeps the
-      // globally-mounted QuickAdd/PTT buttons off this form's Save/Delete
-      // control; the keyboard height gives room to scroll it clear of the IME.
-      contentContainerStyle={CONTENT_STYLE(keyboardHeight)}
-      // Without this the first tap on a submit button below a focused field
-      // only dismisses the keyboard instead of submitting.
-      keyboardShouldPersistTaps="handled"
-    >
-      <Modal
-        visible={props.modalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={props.onDismissModal}
-        testID="recurring-action-modal"
+    <ScreenFrame>
+      <ScrollView
+        className="flex-1"
+        // Padding lives entirely in contentContainerStyle (no
+        // contentContainerClassName) because NativeWind remaps that class onto
+        // this same prop -- see FLOATING_CLEARANCE_PX. The clearance keeps the
+        // globally-mounted QuickAdd/PTT buttons off this form's Save/Delete
+        // control; the keyboard height gives room to scroll it clear of the IME.
+        contentContainerStyle={CONTENT_STYLE(keyboardHeight)}
+        // Without this the first tap on a submit button below a focused field
+        // only dismisses the keyboard instead of submitting.
+        keyboardShouldPersistTaps="handled"
       >
-        <View className="flex-1 items-center justify-center bg-black/50 p-4">
-          <View className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-lg dark:bg-neutral-900">
-            <Text className="mb-2 text-lg font-semibold text-black dark:text-white">
-              Recurring Event
-            </Text>
-            <Text className="mb-5 text-sm text-neutral-600 dark:text-neutral-400">
-              {canEditOccurrence
-                ? "Would you like to edit only this occurrence or the entire recurring series?"
-                : "This series is synced to a calendar, so single occurrences can't be edited yet. Edit the whole series or cancel this occurrence."}
-            </Text>
+        <Modal
+          visible={props.modalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={props.onDismissModal}
+          testID="recurring-action-modal"
+        >
+          {/* The scrim is the one colour here that is not a token: a modal
+              backdrop is the same translucent black in both schemes. */}
+          <View className="flex-1 items-center justify-center bg-black/50 p-4">
+            <Card padding="lg" elevation="raised" className="w-full max-w-sm">
+              <AppText variant="title" className="mb-2">
+                Recurring Event
+              </AppText>
+              <AppText variant="body" tone="secondary" className="mb-5">
+                {canEditOccurrence
+                  ? "Would you like to edit only this occurrence or the entire recurring series?"
+                  : "This series is synced to a calendar, so single occurrences can't be edited yet. Edit the whole series or cancel this occurrence."}
+              </AppText>
 
-            {canEditOccurrence ? (
-              <Pressable
-                testID="edit-occurrence-button"
-                onPress={props.onSelectEditOccurrence}
-                className="mb-2.5 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700"
-              >
-                <Text className="font-semibold text-white">Edit this occurrence</Text>
-              </Pressable>
-            ) : null}
+              {canEditOccurrence ? (
+                <Button
+                  testID="edit-occurrence-button"
+                  label="Edit this occurrence"
+                  onPress={props.onSelectEditOccurrence}
+                  variant="primary"
+                  block
+                  className="mb-2.5"
+                />
+              ) : null}
 
-            <Pressable
-              testID="edit-series-button"
-              onPress={props.onSelectEditSeries}
-              className="mb-2.5 items-center rounded-lg bg-neutral-100 py-3 active:bg-neutral-200 dark:bg-neutral-800 dark:active:bg-neutral-700"
-            >
-              <Text className="font-semibold text-black dark:text-white">Edit entire series</Text>
-            </Pressable>
+              <Button
+                testID="edit-series-button"
+                label="Edit entire series"
+                onPress={props.onSelectEditSeries}
+                variant="tonal"
+                block
+                className="mb-2.5"
+              />
 
-            <Pressable
-              testID="cancel-occurrence-button"
-              onPress={props.onCancelOccurrence}
-              disabled={props.isCanceling}
-              className="mb-2.5 items-center rounded-lg bg-red-50 py-3 active:bg-red-100 dark:bg-red-950/40 dark:active:bg-red-900/60"
-            >
-              <Text className="font-semibold text-red-600 dark:text-red-400">
-                {props.isCanceling ? "Canceling..." : "Cancel this occurrence"}
-              </Text>
-            </Pressable>
+              <Button
+                testID="cancel-occurrence-button"
+                label={props.isCanceling ? "Canceling..." : "Cancel this occurrence"}
+                onPress={props.onCancelOccurrence}
+                disabled={props.isCanceling}
+                variant="danger"
+                block
+                className="mb-2.5"
+              />
 
-            <Pressable
-              testID="dismiss-modal-button"
-              onPress={props.onDismissModal}
-              className="items-center py-2"
-            >
-              <Text className="text-sm text-neutral-500">Dismiss</Text>
-            </Pressable>
+              <Button
+                testID="dismiss-modal-button"
+                label="Dismiss"
+                onPress={props.onDismissModal}
+                variant="ghost"
+                block
+              />
+            </Card>
           </View>
-        </View>
-      </Modal>
+        </Modal>
 
-      {props.isDetached ? (
-        <View
-          testID="detached-event-banner"
-          className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950/40"
-        >
-          <Text className="text-sm font-medium text-amber-800 dark:text-amber-200">
-            This is a modified occurrence of a recurring event.
-          </Text>
-        </View>
-      ) : null}
-
-      <Text className="mb-1 text-sm text-neutral-500">Title</Text>
-      <TextInput
-        value={props.title}
-        onChangeText={props.onTitleChange}
-        placeholderTextColor={placeholderColor}
-        // The server's own bound (packages/schema/src/text-bounds.ts), so an
-        // over-long paste is stopped here rather than refused as a 400.
-        maxLength={ENTITY_TITLE_MAX_CHARS}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-      <FieldLengthCounter length={props.title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
-
-      {/* The calendar is create-only (PATCH rejects `calendar`), so a linked
-          event shows where it goes and a status line; an unlinked one may
-          still be linked once, through the same targets list the create
-          screen offers. */}
-      <View className="mb-4" testID="event-calendar-section">
-        <Text className="mb-1 text-sm text-neutral-500">Calendar</Text>
-        <Text testID="event-calendar-label" className="text-black dark:text-white">
-          {calendarLabel(props.sync, props.calendarTargets)}
-        </Text>
-        {statusLine ? (
-          <Text
-            testID="event-sync-status"
-            className="mt-1 text-xs text-amber-700 dark:text-amber-500"
+        {props.isDetached ? (
+          <Card
+            padding="sm"
+            className="mb-4 flex-row items-center gap-2"
+            testID="detached-event-banner"
           >
-            {statusLine}
-          </Text>
+            <Icon name="calendar-edit-outline" size="md" tone="warning" />
+            <AppText variant="label" tone="warning" className="flex-1">
+              This is a modified occurrence of a recurring event.
+            </AppText>
+          </Card>
         ) : null}
-      </View>
 
-      {props.sync === null ? (
-        <>
-          <CalendarTargetPicker
-            label="Link to a calendar (optional)"
-            targets={props.calendarTargets}
-            selected={props.linkTarget}
-            onChange={props.onLinkTargetChange}
-          />
-          {props.linkTarget ? (
-            <Pressable
-              testID="link-calendar-button"
-              onPress={props.onLink}
-              disabled={props.isLinking}
-              className="mb-4 rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"
-            >
-              <Text className="text-center font-semibold text-black dark:text-white">
-                {props.isLinking ? "Linking…" : "Link to calendar"}
-              </Text>
-            </Pressable>
+        <FieldLabel>Title</FieldLabel>
+        <TextInput
+          value={props.title}
+          onChangeText={props.onTitleChange}
+          placeholderTextColor={placeholderColor}
+          // The server's own bound (packages/schema/src/text-bounds.ts), so an
+          // over-long paste is stopped here rather than refused as a 400.
+          maxLength={ENTITY_TITLE_MAX_CHARS}
+          accessibilityLabel="Title"
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+        <FieldLengthCounter length={props.title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
+
+        {/* The calendar is create-only (PATCH rejects `calendar`), so a linked
+            event shows where it goes and a status line; an unlinked one may
+            still be linked once, through the same targets list the create
+            screen offers. */}
+        <View className="mb-4" testID="event-calendar-section">
+          <FieldLabel>Calendar</FieldLabel>
+          <AppText testID="event-calendar-label" variant="body">
+            {calendarLabel(props.sync, props.calendarTargets)}
+          </AppText>
+          {statusLine ? (
+            <AppText testID="event-sync-status" variant="caption" tone="warning" className="mt-1">
+              {statusLine}
+            </AppText>
           ) : null}
-          {props.linkNote ? (
-            <Text testID="link-calendar-note" className="-mt-2 mb-4 text-xs text-neutral-500">
-              {props.linkNote}
-            </Text>
-          ) : null}
-          {props.calendarTargetsError && props.calendarTargets.length === 0 ? (
-            <Text testID="calendar-targets-error" className="mb-4 text-xs text-neutral-500">
-              {"Couldn't load calendars — this event will stay in Personal OS only"}
-            </Text>
-          ) : null}
-        </>
-      ) : null}
+        </View>
 
-      <View className="mb-4 flex-row items-center justify-between">
-        <Text className="text-black dark:text-white">All-day</Text>
-        <Switch value={props.allDay} onValueChange={props.onAllDayChange} />
-      </View>
+        {props.sync === null ? (
+          <>
+            <CalendarTargetPicker
+              label="Link to a calendar (optional)"
+              targets={props.calendarTargets}
+              selected={props.linkTarget}
+              onChange={props.onLinkTargetChange}
+            />
+            {props.linkTarget ? (
+              <Button
+                testID="link-calendar-button"
+                label={props.isLinking ? "Linking…" : "Link to calendar"}
+                onPress={props.onLink}
+                disabled={props.isLinking}
+                variant="tonal"
+                icon="link-variant"
+                block
+                className="mb-4"
+              />
+            ) : null}
+            {props.linkNote ? (
+              <AppText
+                testID="link-calendar-note"
+                variant="caption"
+                tone="muted"
+                className="-mt-2 mb-4"
+              >
+                {props.linkNote}
+              </AppText>
+            ) : null}
+            {props.calendarTargetsError && props.calendarTargets.length === 0 ? (
+              <AppText
+                testID="calendar-targets-error"
+                variant="caption"
+                tone="muted"
+                className="mb-4"
+              >
+                {"Couldn't load calendars — this event will stay in Personal OS only"}
+              </AppText>
+            ) : null}
+          </>
+        ) : null}
 
-      {props.allDay ? (
-        <>
-          <DateField
-            testID="event-start-date"
-            label="Start date"
-            value={props.allDayRange.startDate}
-            onChange={props.onStartDateChange}
-          />
-          <DateField
-            testID="event-end-date"
-            label="End date"
-            value={props.allDayRange.endDate}
-            onChange={props.onEndDateChange}
-            clearable={false}
-          />
-        </>
-      ) : (
-        <>
-          <DateTimeField
-            testID="event-starts-at"
-            label="Starts"
-            value={props.timed.startsAt}
-            onChange={props.onStartsAtChange}
-          />
-          <DateTimeField
-            testID="event-ends-at"
-            label="Ends"
-            value={props.timed.endsAt}
-            onChange={props.onEndsAtChange}
-          />
-        </>
-      )}
-
-      {showRecurrenceEditor ? (
-        <View testID="recurrence-section">
-          <EventRepeatField
-            value={props.recurrence}
-            onChange={props.onRecurrenceChange}
-            start={{
-              allDay: props.allDay,
-              startDate: props.allDayRange.startDate,
-              startsAt: props.timed.startsAt,
-            }}
-            timezone={props.timezone}
+        <View className="mb-4 flex-row items-center justify-between gap-3">
+          <AppText variant="body" className="flex-1">
+            All-day
+          </AppText>
+          <Switch
+            value={props.allDay}
+            onValueChange={props.onAllDayChange}
+            accessibilityLabel="All-day"
           />
         </View>
-      ) : null}
 
-      <Text className="mb-1 text-sm text-neutral-500">Location</Text>
-      <TextInput
-        value={props.location}
-        onChangeText={props.onLocationChange}
-        maxLength={EVENT_LOCATION_MAX_CHARS}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-      <FieldLengthCounter length={props.location.length} maxLength={EVENT_LOCATION_MAX_CHARS} />
+        {props.allDay ? (
+          <>
+            <DateField
+              testID="event-start-date"
+              label="Start date"
+              value={props.allDayRange.startDate}
+              onChange={props.onStartDateChange}
+            />
+            <DateField
+              testID="event-end-date"
+              label="End date"
+              value={props.allDayRange.endDate}
+              onChange={props.onEndDateChange}
+              clearable={false}
+            />
+          </>
+        ) : (
+          <>
+            <DateTimeField
+              testID="event-starts-at"
+              label="Starts"
+              value={props.timed.startsAt}
+              onChange={props.onStartsAtChange}
+            />
+            <DateTimeField
+              testID="event-ends-at"
+              label="Ends"
+              value={props.timed.endsAt}
+              onChange={props.onEndsAtChange}
+            />
+          </>
+        )}
 
-      <Text className="mb-1 text-sm text-neutral-500">Notes</Text>
-      <TextInput
-        value={props.description}
-        onChangeText={props.onDescriptionChange}
-        multiline
-        maxLength={EVENT_DESCRIPTION_MAX_CHARS}
-        className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-      <FieldLengthCounter
-        length={props.description.length}
-        maxLength={EVENT_DESCRIPTION_MAX_CHARS}
-      />
+        {showRecurrenceEditor ? (
+          <View testID="recurrence-section">
+            <EventRepeatField
+              value={props.recurrence}
+              onChange={props.onRecurrenceChange}
+              start={{
+                allDay: props.allDay,
+                startDate: props.allDayRange.startDate,
+                startsAt: props.timed.startsAt,
+              }}
+              timezone={props.timezone}
+            />
+          </View>
+        ) : null}
 
-      <Text className="mb-1 text-sm text-neutral-500">Timezone</Text>
-      <Text className="mb-4 text-black dark:text-white">{props.timezone}</Text>
+        <FieldLabel>Location</FieldLabel>
+        <TextInput
+          value={props.location}
+          onChangeText={props.onLocationChange}
+          maxLength={EVENT_LOCATION_MAX_CHARS}
+          accessibilityLabel="Location"
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+        <FieldLengthCounter length={props.location.length} maxLength={EVENT_LOCATION_MAX_CHARS} />
 
-      <Text className="mb-1 text-sm text-neutral-500">Project</Text>
-      <View className="mb-4 flex-row flex-wrap gap-2">
-        {(props.projects ?? []).map((project) => (
-          <Pressable
-            key={project.id}
-            onPress={() =>
-              props.onProjectIdChange(props.projectId === project.id ? undefined : project.id)
-            }
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityState={{ selected: props.projectId === project.id }}
-            className={
-              props.projectId === project.id
-                ? "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
-                : "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
-            }
-          >
-            <Text
-              className={
-                props.projectId === project.id ? "text-white" : "text-black dark:text-white"
+        <FieldLabel>Notes</FieldLabel>
+        <TextInput
+          value={props.description}
+          onChangeText={props.onDescriptionChange}
+          multiline
+          textAlignVertical="top"
+          maxLength={EVENT_DESCRIPTION_MAX_CHARS}
+          accessibilityLabel="Notes"
+          className={textFieldClass({ multiline: true, extra: "mb-4 min-h-[80px]" })}
+        />
+        <FieldLengthCounter
+          length={props.description.length}
+          maxLength={EVENT_DESCRIPTION_MAX_CHARS}
+        />
+
+        <FieldLabel>Timezone</FieldLabel>
+        <AppText variant="body" className="mb-4">
+          {props.timezone}
+        </AppText>
+
+        <FieldLabel>Project</FieldLabel>
+        <View className="mb-4 flex-row flex-wrap gap-2">
+          {(props.projects ?? []).map((project) => (
+            <ChoiceChip
+              key={project.id}
+              label={project.name}
+              selected={props.projectId === project.id}
+              onPress={() =>
+                props.onProjectIdChange(props.projectId === project.id ? undefined : project.id)
               }
-            >
-              {project.name}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+              accessibilityLabel={`Project: ${project.name}`}
+            />
+          ))}
+        </View>
 
-      {props.errorMessage ? (
-        <Text testID="event-error" className="mb-2 text-red-600" accessibilityRole="alert">
-          {props.errorMessage}
-        </Text>
-      ) : null}
+        {props.errorMessage ? (
+          <AppText
+            testID="event-error"
+            variant="caption"
+            tone="danger"
+            className="mb-2"
+            accessibilityRole="alert"
+          >
+            {props.errorMessage}
+          </AppText>
+        ) : null}
 
-      <Pressable
-        testID="save-event-button"
-        onPress={props.onSubmit}
-        disabled={props.isSubmitting}
-        className="mb-3 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700"
-      >
-        <Text className="font-semibold text-white">
-          {props.isSubmitting ? "Saving..." : "Save changes"}
-        </Text>
-      </Pressable>
+        <Button
+          testID="save-event-button"
+          label={props.isSubmitting ? "Saving..." : "Save changes"}
+          onPress={props.onSubmit}
+          disabled={props.isSubmitting}
+          variant="primary"
+          icon="content-save-outline"
+          block
+          className="mb-3"
+        />
 
-      {props.onDelete ? (
-        <Pressable
-          testID="archive-event-button"
-          onPress={props.onDelete}
-          disabled={props.isDeleting}
-          className="items-center rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"
-        >
-          <Text className="font-semibold text-neutral-600 dark:text-neutral-300">
-            {props.isDeleting ? "Deleting..." : "Delete event"}
-          </Text>
-        </Pressable>
-      ) : null}
-    </ScrollView>
+        {props.onDelete ? (
+          <Button
+            testID="archive-event-button"
+            label={props.isDeleting ? "Deleting..." : "Delete event"}
+            onPress={props.onDelete}
+            disabled={props.isDeleting}
+            variant="danger"
+            icon="trash-can-outline"
+            block
+          />
+        ) : null}
+      </ScrollView>
+    </ScreenFrame>
   );
 }
 
@@ -648,44 +683,30 @@ export default function EditEventScreen() {
     );
   }, [event]);
 
-  if (isLoading) {
+  if (isLoading || (!isError && !event)) {
     return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <ActivityIndicator />
-      </View>
+      <ScreenFrame>
+        <View className="px-4 pt-4">
+          <SkeletonCard lines={6} />
+        </View>
+      </ScreenFrame>
     );
   }
 
-  if (isError) {
+  if (isError || !event) {
     const status = error instanceof ApiClientError ? error.status : null;
     return (
-      <View className="flex-1 items-center justify-center gap-3 bg-white px-4 dark:bg-black">
-        <Text className="text-red-600">
-          {status === 404 ? "This event couldn't be found." : "Couldn't load this event."}
-        </Text>
-        {/* A 404 is terminal -- refetching the same id repeats the same
-            answer -- so the affordance appears only for a failure that could
-            actually clear. */}
-        {status === 404 ? null : (
-          <Pressable
-            onPress={() => void refetch()}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading this event"
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="font-semibold text-white">Retry</Text>
-          </Pressable>
-        )}
-      </View>
-    );
-  }
-
-  if (!event) {
-    return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <ActivityIndicator />
-      </View>
+      <ScreenCentered>
+        <ErrorState
+          title={status === 404 ? "Not found" : "Something went wrong"}
+          message={status === 404 ? "This event couldn't be found." : "Couldn't load this event."}
+          // A 404 is terminal -- refetching the same id repeats the same
+          // answer -- so the affordance appears only for a failure that could
+          // actually clear.
+          onRetry={status === 404 ? undefined : () => void refetch()}
+          retryAccessibilityLabel="Retry loading this event"
+        />
+      </ScreenCentered>
     );
   }
 

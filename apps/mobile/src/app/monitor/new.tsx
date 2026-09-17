@@ -1,8 +1,11 @@
 import type { MonitorTargetCreate, MonitorTargetKind } from "@personal-os/schema";
 import { useRouter, type Href } from "expo-router";
 import { useState } from "react";
-import { Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import { ScrollView, Switch, TextInput, View } from "react-native";
+import { ChoiceChip } from "@/components/ask/choice-chip";
+import { FieldLabel, textFieldClass } from "@/components/ask/text-field";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import { AppText, Button, ScreenFrame, useTheme } from "@/components/ui";
 import {
   describeMonitorTargetMutationFailure,
   isHttpsUrl,
@@ -34,6 +37,7 @@ const KIND_OPTIONS: { value: MonitorTargetKind; label: string }[] = [
 export default function NewMonitorTargetScreen() {
   const keyboardHeight = useKeyboardHeight();
   const placeholderColor = usePlaceholderColor();
+  const { colors } = useTheme();
   const router = useRouter();
   const createTarget = useCreateMonitorTarget();
 
@@ -82,163 +86,165 @@ export default function NewMonitorTargetScreen() {
   };
 
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      contentContainerStyle={{ padding: 16, paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
-      keyboardShouldPersistTaps="handled"
-    >
-      <Text className="mb-1 text-sm text-neutral-500">Name</Text>
-      <TextInput
-        value={name}
-        onChangeText={setName}
-        placeholder="e.g. API health"
-        placeholderTextColor={placeholderColor}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-
-      <Text className="mb-1 text-sm text-neutral-500">Type</Text>
-      <View className="mb-4 flex-row flex-wrap gap-2">
-        {KIND_OPTIONS.map((option) => (
-          <Pressable
-            key={option.value}
-            onPress={() => setKind(option.value)}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityState={{ selected: kind === option.value }}
-            className={
-              kind === option.value
-                ? "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
-                : "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
-            }
-          >
-            <Text className={kind === option.value ? "text-white" : "text-black dark:text-white"}>
-              {option.label}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-
-      {isHttp ? (
-        <>
-          <Text className="mb-1 text-sm text-neutral-500">URL</Text>
-          <TextInput
-            value={url}
-            onChangeText={setUrl}
-            placeholder="https://example.com/health"
-            placeholderTextColor={placeholderColor}
-            autoCapitalize="none"
-            autoCorrect={false}
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-          />
-
-          <Text className="mb-1 text-sm text-neutral-500">Expected status (optional)</Text>
-          <TextInput
-            value={expectedStatus}
-            onChangeText={(text) => setExpectedStatus(onlyDigits(text))}
-            keyboardType="number-pad"
-            placeholder="200"
-            placeholderTextColor={placeholderColor}
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-          />
-
-          <View className="mb-4 flex-row items-center justify-between">
-            <Text className="text-black dark:text-white">Also check the health payload</Text>
-            <Switch
-              value={expectHealthyPayload}
-              onValueChange={setExpectHealthyPayload}
-              accessibilityLabel="Also check the health payload"
-            />
-          </View>
-
-          {isHttpsUrl(url) ? (
-            <>
-              <Text className="mb-1 text-sm text-neutral-500">
-                Warn before certificate expiry, in days (optional)
-              </Text>
-              <TextInput
-                value={tlsWarnDays}
-                onChangeText={(text) => setTlsWarnDays(onlyDigits(text))}
-                keyboardType="number-pad"
-                placeholder="e.g. 14"
-                placeholderTextColor={placeholderColor}
-                className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-              />
-            </>
-          ) : null}
-        </>
-      ) : (
-        <>
-          <Text className="mb-1 text-sm text-neutral-500">
-            Max heartbeat age, in seconds (optional)
-          </Text>
-          <TextInput
-            value={heartbeatMaxAgeSeconds}
-            onChangeText={(text) => setHeartbeatMaxAgeSeconds(onlyDigits(text))}
-            keyboardType="number-pad"
-            placeholder="e.g. 3600"
-            placeholderTextColor={placeholderColor}
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-          />
-        </>
-      )}
-
-      <Text className="mb-1 text-sm text-neutral-500">Timeout, in ms (optional)</Text>
-      <TextInput
-        value={timeoutMs}
-        onChangeText={(text) => setTimeoutMs(onlyDigits(text))}
-        keyboardType="number-pad"
-        placeholder="10000"
-        placeholderTextColor={placeholderColor}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-
-      <Text className="mb-1 text-sm text-neutral-500">Check interval, in seconds (optional)</Text>
-      <TextInput
-        value={intervalSeconds}
-        onChangeText={(text) => setIntervalSeconds(onlyDigits(text))}
-        keyboardType="number-pad"
-        placeholder="300"
-        placeholderTextColor={placeholderColor}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-
-      <Text className="mb-1 text-sm text-neutral-500">
-        Consecutive failures to open an incident (optional)
-      </Text>
-      <TextInput
-        value={failureThreshold}
-        onChangeText={(text) => setFailureThreshold(onlyDigits(text))}
-        keyboardType="number-pad"
-        placeholder="3"
-        placeholderTextColor={placeholderColor}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-
-      <Text className="mb-1 text-sm text-neutral-500">
-        Consecutive successes to resolve one (optional)
-      </Text>
-      <TextInput
-        value={recoveryThreshold}
-        onChangeText={(text) => setRecoveryThreshold(onlyDigits(text))}
-        keyboardType="number-pad"
-        placeholder="2"
-        placeholderTextColor={placeholderColor}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-
-      {submitError ? <Text className="mb-2 text-red-600">{submitError}</Text> : null}
-
-      <Pressable
-        onPress={submit}
-        disabled={createTarget.isPending || !canSubmit}
-        accessibilityRole="button"
-        accessibilityLabel="Create monitor target"
-        className="items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700"
+    <ScreenFrame>
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={{
+          padding: 16,
+          paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight,
+        }}
+        keyboardShouldPersistTaps="handled"
       >
-        <Text className="font-semibold text-white">
-          {createTarget.isPending ? "Creating…" : "Create monitor"}
-        </Text>
-      </Pressable>
-    </ScrollView>
+        <FieldLabel>Name</FieldLabel>
+        <TextInput
+          accessibilityLabel="Name"
+          value={name}
+          onChangeText={setName}
+          placeholder="e.g. API health"
+          placeholderTextColor={placeholderColor}
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+
+        <FieldLabel>Type</FieldLabel>
+        <View className="mb-4 flex-row flex-wrap gap-2">
+          {KIND_OPTIONS.map((option) => (
+            <ChoiceChip
+              key={option.value}
+              label={option.label}
+              selected={kind === option.value}
+              onPress={() => setKind(option.value)}
+              accessibilityLabel={`Type: ${option.label}`}
+            />
+          ))}
+        </View>
+
+        {isHttp ? (
+          <>
+            <FieldLabel>URL</FieldLabel>
+            <TextInput
+              accessibilityLabel="URL"
+              value={url}
+              onChangeText={setUrl}
+              placeholder="https://example.com/health"
+              placeholderTextColor={placeholderColor}
+              autoCapitalize="none"
+              autoCorrect={false}
+              className={textFieldClass({ extra: "mb-4" })}
+            />
+
+            <FieldLabel>Expected status (optional)</FieldLabel>
+            <TextInput
+              accessibilityLabel="Expected status"
+              value={expectedStatus}
+              onChangeText={(text) => setExpectedStatus(onlyDigits(text))}
+              keyboardType="number-pad"
+              placeholder="200"
+              placeholderTextColor={placeholderColor}
+              className={textFieldClass({ extra: "mb-4" })}
+            />
+
+            <View className="mb-4 flex-row items-center justify-between gap-3">
+              <AppText variant="body" className="flex-1">
+                Also check the health payload
+              </AppText>
+              <Switch
+                value={expectHealthyPayload}
+                onValueChange={setExpectHealthyPayload}
+                accessibilityLabel="Also check the health payload"
+                trackColor={{ true: colors.primary }}
+              />
+            </View>
+
+            {isHttpsUrl(url) ? (
+              <>
+                <FieldLabel>Warn before certificate expiry, in days (optional)</FieldLabel>
+                <TextInput
+                  accessibilityLabel="Warn before certificate expiry, in days"
+                  value={tlsWarnDays}
+                  onChangeText={(text) => setTlsWarnDays(onlyDigits(text))}
+                  keyboardType="number-pad"
+                  placeholder="e.g. 14"
+                  placeholderTextColor={placeholderColor}
+                  className={textFieldClass({ extra: "mb-4" })}
+                />
+              </>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <FieldLabel>Max heartbeat age, in seconds (optional)</FieldLabel>
+            <TextInput
+              accessibilityLabel="Max heartbeat age, in seconds"
+              value={heartbeatMaxAgeSeconds}
+              onChangeText={(text) => setHeartbeatMaxAgeSeconds(onlyDigits(text))}
+              keyboardType="number-pad"
+              placeholder="e.g. 3600"
+              placeholderTextColor={placeholderColor}
+              className={textFieldClass({ extra: "mb-4" })}
+            />
+          </>
+        )}
+
+        <FieldLabel>Timeout, in ms (optional)</FieldLabel>
+        <TextInput
+          accessibilityLabel="Timeout, in ms"
+          value={timeoutMs}
+          onChangeText={(text) => setTimeoutMs(onlyDigits(text))}
+          keyboardType="number-pad"
+          placeholder="10000"
+          placeholderTextColor={placeholderColor}
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+
+        <FieldLabel>Check interval, in seconds (optional)</FieldLabel>
+        <TextInput
+          accessibilityLabel="Check interval, in seconds"
+          value={intervalSeconds}
+          onChangeText={(text) => setIntervalSeconds(onlyDigits(text))}
+          keyboardType="number-pad"
+          placeholder="300"
+          placeholderTextColor={placeholderColor}
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+
+        <FieldLabel>Consecutive failures to open an incident (optional)</FieldLabel>
+        <TextInput
+          accessibilityLabel="Consecutive failures to open an incident"
+          value={failureThreshold}
+          onChangeText={(text) => setFailureThreshold(onlyDigits(text))}
+          keyboardType="number-pad"
+          placeholder="3"
+          placeholderTextColor={placeholderColor}
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+
+        <FieldLabel>Consecutive successes to resolve one (optional)</FieldLabel>
+        <TextInput
+          accessibilityLabel="Consecutive successes to resolve one"
+          value={recoveryThreshold}
+          onChangeText={(text) => setRecoveryThreshold(onlyDigits(text))}
+          keyboardType="number-pad"
+          placeholder="2"
+          placeholderTextColor={placeholderColor}
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+
+        {submitError ? (
+          <AppText variant="caption" tone="danger" className="mb-2" accessibilityRole="alert">
+            {submitError}
+          </AppText>
+        ) : null}
+
+        <Button
+          label={createTarget.isPending ? "Creating…" : "Create monitor"}
+          onPress={submit}
+          disabled={createTarget.isPending || !canSubmit}
+          accessibilityLabel="Create monitor target"
+          variant="primary"
+          icon="plus"
+          block
+        />
+      </ScrollView>
+    </ScreenFrame>
   );
 }

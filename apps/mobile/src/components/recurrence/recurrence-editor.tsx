@@ -297,21 +297,21 @@ export function RecurrenceEditor({
   return (
     <View
       testID="recurrence-editor"
-      className={`gap-4 rounded-xl border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-800 dark:bg-neutral-900 ${
+      className={`gap-4 rounded-card border border-outline bg-surface-container p-4 dark:border-outline-dark dark:bg-surface-container-dark ${
         disabled ? "opacity-50" : ""
       }`}
     >
       {/* Live Summary Card */}
       <View
         testID="recurrence-summary-card"
-        className="rounded-lg border border-neutral-200 bg-white p-3 dark:border-neutral-700 dark:bg-black"
+        className="rounded-inner border border-outline bg-surface-container p-3 dark:border-outline-dark dark:bg-surface-container-dark"
       >
-        <Text className="text-xs font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+        <Text className="text-xs font-semibold uppercase tracking-wider text-on-surface-muted dark:text-on-surface-muted-dark">
           Recurrence Summary
         </Text>
         <Text
           testID="recurrence-summary"
-          className="mt-1 text-base font-medium text-black dark:text-white"
+          className="mt-1 text-base font-medium text-on-surface dark:text-on-surface-dark"
         >
           {liveSummary}
         </Text>
@@ -319,7 +319,7 @@ export function RecurrenceEditor({
 
       {/* Preset Chips */}
       <View>
-        <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+        <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-on-surface-muted dark:text-on-surface-muted-dark">
           Presets
         </Text>
         <View className="flex-row flex-wrap gap-2">
@@ -331,13 +331,13 @@ export function RecurrenceEditor({
             accessibilityState={{ selected: activePreset === "none" }}
             className={`min-h-[44px] justify-center rounded-full px-3 py-1.5 ${
               activePreset === "none"
-                ? "bg-blue-600"
-                : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
+                ? "bg-primary dark:bg-primary-dark"
+                : "bg-surface border border-outline-strong dark:border-outline-strong-dark dark:bg-surface-container-dark"
             }`}
           >
             <Text
               className={`text-sm font-medium ${
-                activePreset === "none" ? "text-white" : "text-black dark:text-white"
+                activePreset === "none" ? "text-on-primary dark:text-on-primary-dark" : "text-on-surface dark:text-on-surface-dark"
               }`}
             >
               Does not repeat
@@ -352,13 +352,13 @@ export function RecurrenceEditor({
             accessibilityState={{ selected: activePreset === "daily" }}
             className={`min-h-[44px] justify-center rounded-full px-3 py-1.5 ${
               activePreset === "daily"
-                ? "bg-blue-600"
-                : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
+                ? "bg-primary dark:bg-primary-dark"
+                : "bg-surface border border-outline-strong dark:border-outline-strong-dark dark:bg-surface-container-dark"
             }`}
           >
             <Text
               className={`text-sm font-medium ${
-                activePreset === "daily" ? "text-white" : "text-black dark:text-white"
+                activePreset === "daily" ? "text-on-primary dark:text-on-primary-dark" : "text-on-surface dark:text-on-surface-dark"
               }`}
             >
               Daily
@@ -373,13 +373,13 @@ export function RecurrenceEditor({
             accessibilityState={{ selected: activePreset === "weekly" }}
             className={`min-h-[44px] justify-center rounded-full px-3 py-1.5 ${
               activePreset === "weekly"
-                ? "bg-blue-600"
-                : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
+                ? "bg-primary dark:bg-primary-dark"
+                : "bg-surface border border-outline-strong dark:border-outline-strong-dark dark:bg-surface-container-dark"
             }`}
           >
             <Text
               className={`text-sm font-medium ${
-                activePreset === "weekly" ? "text-white" : "text-black dark:text-white"
+                activePreset === "weekly" ? "text-on-primary dark:text-on-primary-dark" : "text-on-surface dark:text-on-surface-dark"
               }`}
             >
               Weekly
@@ -394,13 +394,13 @@ export function RecurrenceEditor({
             accessibilityState={{ selected: activePreset === "monthly" }}
             className={`min-h-[44px] justify-center rounded-full px-3 py-1.5 ${
               activePreset === "monthly"
-                ? "bg-blue-600"
-                : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
+                ? "bg-primary dark:bg-primary-dark"
+                : "bg-surface border border-outline-strong dark:border-outline-strong-dark dark:bg-surface-container-dark"
             }`}
           >
             <Text
               className={`text-sm font-medium ${
-                activePreset === "monthly" ? "text-white" : "text-black dark:text-white"
+                activePreset === "monthly" ? "text-on-primary dark:text-on-primary-dark" : "text-on-surface dark:text-on-surface-dark"
               }`}
             >
               Monthly
@@ -415,13 +415,13 @@ export function RecurrenceEditor({
             accessibilityState={{ selected: activePreset === "custom" }}
             className={`min-h-[44px] justify-center rounded-full px-3 py-1.5 ${
               activePreset === "custom"
-                ? "bg-blue-600"
-                : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
+                ? "bg-primary dark:bg-primary-dark"
+                : "bg-surface border border-outline-strong dark:border-outline-strong-dark dark:bg-surface-container-dark"
             }`}
           >
             <Text
               className={`text-sm font-medium ${
-                activePreset === "custom" ? "text-white" : "text-black dark:text-white"
+                activePreset === "custom" ? "text-on-primary dark:text-on-primary-dark" : "text-on-surface dark:text-on-surface-dark"
               }`}
             >
               Custom
@@ -434,12 +434,12 @@ export function RecurrenceEditor({
       {value.isCustom ? (
         <View
           testID="custom-rule-notice"
-          className="gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950"
+          className="gap-2 rounded-inner border border-warning/40 bg-warning-container p-3 dark:border-warning-dark/40 dark:bg-warning-container-dark"
         >
-          <Text className="text-sm font-medium text-amber-900 dark:text-amber-200">
+          <Text className="text-sm font-medium text-on-warning-container dark:text-on-warning-container-dark">
             Custom recurrence rule: {value.rawRrule ?? "Custom rule"}
           </Text>
-          <Text className="text-xs text-amber-700 dark:text-amber-300">
+          <Text className="text-xs text-on-warning-container dark:text-on-warning-container-dark">
             This recurrence pattern contains custom rules not fully editable via standard controls.
           </Text>
           <Pressable
@@ -447,9 +447,9 @@ export function RecurrenceEditor({
             disabled={disabled}
             onPress={handleReplaceCustomRule}
             accessibilityRole="button"
-            className="mt-1 min-h-[44px] justify-center self-start rounded-md bg-amber-600 px-3 py-1.5 active:bg-amber-700"
+            className="mt-1 min-h-[44px] justify-center self-start rounded-inner bg-warning px-3 py-1.5 active:opacity-80 dark:bg-warning-dark"
           >
-            <Text className="text-xs font-semibold text-white">
+            <Text className="text-xs font-semibold text-on-primary dark:text-on-primary-dark">
               Replace with standard recurrence
             </Text>
           </Pressable>
@@ -462,7 +462,7 @@ export function RecurrenceEditor({
           {/* Task Anchor Toggle (if isTask === true) */}
           {isTask ? (
             <View>
-              <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+              <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-on-surface-muted dark:text-on-surface-muted-dark">
                 Task Recurrence Anchor
               </Text>
               <View className="flex-row gap-2">
@@ -474,13 +474,13 @@ export function RecurrenceEditor({
                   accessibilityState={{ selected: value.anchor === "due_date" }}
                   className={`min-h-[44px] flex-1 items-center justify-center rounded-lg p-2.5 ${
                     value.anchor === "due_date"
-                      ? "bg-blue-600"
-                      : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
+                      ? "bg-primary dark:bg-primary-dark"
+                      : "bg-surface border border-outline-strong dark:border-outline-strong-dark dark:bg-surface-container-dark"
                   }`}
                 >
                   <Text
                     className={`text-sm font-medium ${
-                      value.anchor === "due_date" ? "text-white" : "text-black dark:text-white"
+                      value.anchor === "due_date" ? "text-on-primary dark:text-on-primary-dark" : "text-on-surface dark:text-on-surface-dark"
                     }`}
                   >
                     On due date
@@ -495,15 +495,15 @@ export function RecurrenceEditor({
                   accessibilityState={{ selected: value.anchor === "completion_date" }}
                   className={`min-h-[44px] flex-1 items-center justify-center rounded-lg p-2.5 ${
                     value.anchor === "completion_date"
-                      ? "bg-blue-600"
-                      : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
+                      ? "bg-primary dark:bg-primary-dark"
+                      : "bg-surface border border-outline-strong dark:border-outline-strong-dark dark:bg-surface-container-dark"
                   }`}
                 >
                   <Text
                     className={`text-sm font-medium ${
                       value.anchor === "completion_date"
-                        ? "text-white"
-                        : "text-black dark:text-white"
+                        ? "text-on-primary dark:text-on-primary-dark"
+                        : "text-on-surface dark:text-on-surface-dark"
                     }`}
                   >
                     After completion
@@ -511,7 +511,7 @@ export function RecurrenceEditor({
                 </Pressable>
               </View>
               {isCompletionAnchored ? (
-                <Text className="mt-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+                <Text className="mt-1.5 text-xs text-on-surface-muted dark:text-on-surface-muted-dark">
                   Repeats after task is completed. Completion-anchored tasks are open-ended and do not have weekday, month-day, or end conditions.
                 </Text>
               ) : null}
@@ -520,7 +520,7 @@ export function RecurrenceEditor({
 
           {/* Frequency Selector */}
           <View>
-            <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+            <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-on-surface-muted dark:text-on-surface-muted-dark">
               Frequency
             </Text>
             <View className="flex-row gap-2">
@@ -536,13 +536,13 @@ export function RecurrenceEditor({
                     accessibilityState={{ selected: isSelected }}
                     className={`min-h-[44px] flex-1 items-center justify-center rounded-lg p-2.5 ${
                       isSelected
-                        ? "bg-blue-600"
-                        : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
+                        ? "bg-primary dark:bg-primary-dark"
+                        : "bg-surface border border-outline-strong dark:border-outline-strong-dark dark:bg-surface-container-dark"
                     }`}
                   >
                     <Text
                       className={`text-sm font-medium ${
-                        isSelected ? "text-white" : "text-black dark:text-white"
+                        isSelected ? "text-on-primary dark:text-on-primary-dark" : "text-on-surface dark:text-on-surface-dark"
                       }`}
                     >
                       {FREQUENCY_LABELS[freq]}
@@ -555,20 +555,20 @@ export function RecurrenceEditor({
 
           {/* Interval Input */}
           <View>
-            <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+            <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-on-surface-muted dark:text-on-surface-muted-dark">
               Repeat Every
             </Text>
             <View className="flex-row items-center gap-3">
-              <Text className="text-sm text-neutral-600 dark:text-neutral-300">Every</Text>
+              <Text className="text-sm text-on-surface-variant dark:text-on-surface-variant-dark">Every</Text>
               <TextInput
                 testID="interval-input"
                 editable={!disabled}
                 keyboardType="number-pad"
                 value={String(value.interval || 1)}
                 onChangeText={handleIntervalChange}
-                className="w-16 rounded-lg border border-neutral-300 bg-white p-2 text-center text-sm font-semibold text-black dark:border-neutral-700 dark:bg-black dark:text-white"
+                className="w-16 rounded-lg border border-outline-strong bg-surface p-2 text-center text-sm font-semibold text-on-surface dark:border-outline-strong-dark dark:bg-surface-dark dark:text-on-surface-dark"
               />
-              <Text className="text-sm font-medium text-black dark:text-white">
+              <Text className="text-sm font-medium text-on-surface dark:text-on-surface-dark">
                 {intervalUnit}
               </Text>
             </View>
@@ -577,7 +577,7 @@ export function RecurrenceEditor({
           {/* Weekday Selection (Weekly & Due-Date Anchored) */}
           {!isCompletionAnchored && value.frequency === "WEEKLY" ? (
             <View>
-              <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+              <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-on-surface-muted dark:text-on-surface-muted-dark">
                 Repeat on
               </Text>
               <View className="flex-row flex-wrap gap-2">
@@ -594,13 +594,13 @@ export function RecurrenceEditor({
                       accessibilityLabel={WEEKDAY_FULL_LABELS[day]}
                       className={`h-11 w-11 items-center justify-center rounded-full ${
                         isSelected
-                          ? "bg-blue-600"
-                          : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
+                          ? "bg-primary dark:bg-primary-dark"
+                          : "bg-surface border border-outline-strong dark:border-outline-strong-dark dark:bg-surface-container-dark"
                       }`}
                     >
                       <Text
                         className={`text-xs font-semibold ${
-                          isSelected ? "text-white" : "text-black dark:text-white"
+                          isSelected ? "text-on-primary dark:text-on-primary-dark" : "text-on-surface dark:text-on-surface-dark"
                         }`}
                       >
                         {WEEKDAY_LABELS[day]}
@@ -615,11 +615,11 @@ export function RecurrenceEditor({
           {/* Month Day Input (Monthly & Due-Date Anchored) */}
           {!isCompletionAnchored && value.frequency === "MONTHLY" ? (
             <View>
-              <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+              <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-on-surface-muted dark:text-on-surface-muted-dark">
                 Day of Month
               </Text>
               <View className="flex-row items-center gap-3">
-                <Text className="text-sm text-neutral-600 dark:text-neutral-300">On day</Text>
+                <Text className="text-sm text-on-surface-variant dark:text-on-surface-variant-dark">On day</Text>
                 <TextInput
                   testID="month-day-input"
                   editable={!disabled}
@@ -628,9 +628,9 @@ export function RecurrenceEditor({
                   placeholderTextColor={placeholderColor}
                   value={value.monthDay != null ? String(value.monthDay) : ""}
                   onChangeText={handleMonthDayChange}
-                  className="w-20 rounded-lg border border-neutral-300 bg-white p-2 text-center text-sm font-semibold text-black dark:border-neutral-700 dark:bg-black dark:text-white"
+                  className="w-20 rounded-lg border border-outline-strong bg-surface p-2 text-center text-sm font-semibold text-on-surface dark:border-outline-strong-dark dark:bg-surface-dark dark:text-on-surface-dark"
                 />
-                <Text className="text-xs text-neutral-500 dark:text-neutral-400">
+                <Text className="text-xs text-on-surface-muted dark:text-on-surface-muted-dark">
                   (Leave empty for default monthly)
                 </Text>
               </View>
@@ -640,7 +640,7 @@ export function RecurrenceEditor({
           {/* End Condition Selector (Due-Date Anchored only) */}
           {!isCompletionAnchored ? (
             <View>
-              <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+              <Text className="mb-2 text-xs font-semibold uppercase tracking-wider text-on-surface-muted dark:text-on-surface-muted-dark">
                 Ends
               </Text>
               <View className="flex-row gap-2">
@@ -652,13 +652,13 @@ export function RecurrenceEditor({
                   accessibilityState={{ selected: value.endMode === "never" }}
                   className={`min-h-[44px] flex-1 items-center justify-center rounded-lg p-2.5 ${
                     value.endMode === "never"
-                      ? "bg-blue-600"
-                      : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
+                      ? "bg-primary dark:bg-primary-dark"
+                      : "bg-surface border border-outline-strong dark:border-outline-strong-dark dark:bg-surface-container-dark"
                   }`}
                 >
                   <Text
                     className={`text-sm font-medium ${
-                      value.endMode === "never" ? "text-white" : "text-black dark:text-white"
+                      value.endMode === "never" ? "text-on-primary dark:text-on-primary-dark" : "text-on-surface dark:text-on-surface-dark"
                     }`}
                   >
                     Never
@@ -673,13 +673,13 @@ export function RecurrenceEditor({
                   accessibilityState={{ selected: value.endMode === "until" }}
                   className={`min-h-[44px] flex-1 items-center justify-center rounded-lg p-2.5 ${
                     value.endMode === "until"
-                      ? "bg-blue-600"
-                      : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
+                      ? "bg-primary dark:bg-primary-dark"
+                      : "bg-surface border border-outline-strong dark:border-outline-strong-dark dark:bg-surface-container-dark"
                   }`}
                 >
                   <Text
                     className={`text-sm font-medium ${
-                      value.endMode === "until" ? "text-white" : "text-black dark:text-white"
+                      value.endMode === "until" ? "text-on-primary dark:text-on-primary-dark" : "text-on-surface dark:text-on-surface-dark"
                     }`}
                   >
                     On date
@@ -694,13 +694,13 @@ export function RecurrenceEditor({
                   accessibilityState={{ selected: value.endMode === "count" }}
                   className={`min-h-[44px] flex-1 items-center justify-center rounded-lg p-2.5 ${
                     value.endMode === "count"
-                      ? "bg-blue-600"
-                      : "bg-white border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-800"
+                      ? "bg-primary dark:bg-primary-dark"
+                      : "bg-surface border border-outline-strong dark:border-outline-strong-dark dark:bg-surface-container-dark"
                   }`}
                 >
                   <Text
                     className={`text-sm font-medium ${
-                      value.endMode === "count" ? "text-white" : "text-black dark:text-white"
+                      value.endMode === "count" ? "text-on-primary dark:text-on-primary-dark" : "text-on-surface dark:text-on-surface-dark"
                     }`}
                   >
                     After
@@ -711,7 +711,7 @@ export function RecurrenceEditor({
               {/* End Details */}
               {value.endMode === "until" ? (
                 <View className="mt-3 flex-row items-center gap-3">
-                  <Text className="text-sm text-neutral-600 dark:text-neutral-300">Until date:</Text>
+                  <Text className="text-sm text-on-surface-variant dark:text-on-surface-variant-dark">Until date:</Text>
                   <TextInput
                     testID="until-date-input"
                     editable={!disabled}
@@ -719,14 +719,14 @@ export function RecurrenceEditor({
                     placeholderTextColor={placeholderColor}
                     value={value.untilDate ?? ""}
                     onChangeText={handleUntilDateChange}
-                    className="flex-1 rounded-lg border border-neutral-300 bg-white p-2 text-sm text-black dark:border-neutral-700 dark:bg-black dark:text-white"
+                    className="flex-1 rounded-inner border border-outline-strong bg-surface p-2 text-sm text-on-surface dark:border-outline-strong-dark dark:bg-surface-dark dark:text-on-surface-dark"
                   />
                 </View>
               ) : null}
 
               {value.endMode === "count" ? (
                 <View className="mt-3 flex-row items-center gap-3">
-                  <Text className="text-sm text-neutral-600 dark:text-neutral-300">End after:</Text>
+                  <Text className="text-sm text-on-surface-variant dark:text-on-surface-variant-dark">End after:</Text>
                   <TextInput
                     testID="count-input"
                     editable={!disabled}
@@ -735,9 +735,9 @@ export function RecurrenceEditor({
                     placeholderTextColor={placeholderColor}
                     value={value.count != null ? String(value.count) : "1"}
                     onChangeText={handleCountChange}
-                    className="w-20 rounded-lg border border-neutral-300 bg-white p-2 text-center text-sm font-semibold text-black dark:border-neutral-700 dark:bg-black dark:text-white"
+                    className="w-20 rounded-lg border border-outline-strong bg-surface p-2 text-center text-sm font-semibold text-on-surface dark:border-outline-strong-dark dark:bg-surface-dark dark:text-on-surface-dark"
                   />
-                  <Text className="text-sm text-neutral-600 dark:text-neutral-300">
+                  <Text className="text-sm text-on-surface-variant dark:text-on-surface-variant-dark">
                     {value.count === 1 ? "occurrence" : "occurrences"}
                   </Text>
                 </View>

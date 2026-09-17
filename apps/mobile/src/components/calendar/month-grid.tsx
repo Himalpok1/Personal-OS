@@ -1,5 +1,6 @@
 import type { EventRangeItem } from "@personal-os/schema";
-import { Text, View } from "react-native";
+import { View } from "react-native";
+import { AppText } from "@/components/ui";
 import { DayCell } from "./day-cell";
 import { dayKey, getMonthGridDays, groupEntriesByDay } from "./grid-math";
 
@@ -11,7 +12,8 @@ import { dayKey, getMonthGridDays, groupEntriesByDay } from "./grid-math";
 // calendar library, per docs/ARCHITECTURE.md's locked "Charts and dense
 // tables are the weak spot ... pick cross-platform-capable libraries" /
 // "no CSS grid on RN Web" guidance -- built with plain View + NativeWind
-// flexbox instead.
+// flexbox instead. Checkpoint 10.3: the weekday strip and the cells (see
+// day-cell.tsx) draw from the design tokens; the grid math is untouched.
 export interface MonthGridProps {
   month: Date;
   entries: EventRangeItem[];
@@ -39,12 +41,12 @@ export function MonthGrid({ month, entries, onDayPress, onEntryPress }: MonthGri
 
   return (
     <View className="flex-1">
-      <View className="flex-row border-b border-neutral-200 dark:border-neutral-800">
+      <View className="flex-row border-b border-outline dark:border-outline-dark">
         {WEEKDAY_LABELS.map((label) => (
           <View key={label} className="flex-1 items-center py-1">
-            <Text className="text-[10px] font-medium text-neutral-500 dark:text-neutral-400">
+            <AppText variant="overline" tone="muted" className="text-[10px]">
               {label}
-            </Text>
+            </AppText>
           </View>
         ))}
       </View>

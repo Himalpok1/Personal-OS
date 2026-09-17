@@ -647,7 +647,9 @@ describe("Checkpoint 9.5 -- ownership, calendar and sync on the edit screen", ()
     const onDelete = vi.fn();
     const tree = EditEventView(editProps({ onDelete }));
     const button = findByTestId(tree, "archive-event-button");
-    expect(getTextContent(button)).toBe("Delete event");
+    // Since Checkpoint 10.3 the control is the design system's Button, whose
+    // text is its `label` prop rather than a child Text.
+    expect(button.props.label).toBe("Delete event");
     button.props.onPress();
     expect(onDelete).toHaveBeenCalled();
   });

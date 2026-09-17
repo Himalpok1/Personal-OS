@@ -1,4 +1,4 @@
-import { Text } from "react-native";
+import { AppText } from "@/components/ui";
 
 // A live "3,900 / 4,000" under a bounded TextInput (Checkpoint 9.6).
 //
@@ -36,8 +36,7 @@ export function fieldLengthCounterLabel(length: number, maxLength: number): stri
  * is pulled up into that gap and reads as part of the field, not a new row.
  * A caller whose input has no bottom margin passes its own `className`.
  */
-export const FIELD_LENGTH_COUNTER_CLASS =
-  "-mt-3 mb-4 text-right text-xs text-neutral-500 dark:text-neutral-400";
+export const FIELD_LENGTH_COUNTER_CLASS = "-mt-3 mb-4 text-right";
 
 export function FieldLengthCounter(props: {
   length: number;
@@ -48,8 +47,13 @@ export function FieldLengthCounter(props: {
   const label = fieldLengthCounterLabel(props.length, props.maxLength);
   if (label === null) return null;
   return (
-    <Text testID={props.testID} className={props.className ?? FIELD_LENGTH_COUNTER_CLASS}>
+    <AppText
+      testID={props.testID}
+      variant="caption"
+      tone="muted"
+      className={props.className ?? FIELD_LENGTH_COUNTER_CLASS}
+    >
       {label}
-    </Text>
+    </AppText>
   );
 }

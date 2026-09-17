@@ -1,13 +1,14 @@
 import type { ComponentProps } from "react";
 import { Component } from "react";
 import { Pressable, Text, View } from "react-native";
+import { AppText, Button, Card, SectionHeader, SkeletonCard, textClass } from "@/components/ui";
 import { useCurrentBrief, useGenerateBrief } from "@/queries/brief";
 import { resolveBriefCardState } from "./brief-card-state";
 
-// Card chrome mirrors ProjectCard/ReviewBanner in (tabs)/index.tsx --
-// no shared UI kit exists in this app, so every card copies the same
-// inline NativeWind conventions rather than inventing a new one.
-const CARD_CLASS = "mx-4 mb-3 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800";
+// Checkpoint 10.3: the card composes the design system (Card, SectionHeader,
+// Button, AppText) instead of the inline NativeWind string it shared with
+// every other Today card before there was a UI kit. Every state, label and
+// behaviour below is unchanged; only the chrome is.
 
 // The Brief card is mounted on the Today screen above the Overdue section
 // (Checkpoint 5.1), and the model's prose is unbounded -- a long, multi-
@@ -100,9 +101,9 @@ export class ClampedBriefText extends Component<ClampedBriefTextProps, ClampedBr
             hitSlop={8}
             className="mt-1 min-h-[44px] items-center justify-start"
           >
-            <Text className="text-sm font-medium text-blue-600 dark:text-blue-400">
+            <AppText variant="label" tone="primary">
               {expanded ? "Show less" : "Show more"}
-            </Text>
+            </AppText>
           </Pressable>
         ) : null}
       </View>
@@ -117,6 +118,13 @@ function formatGeneratedAt(iso: string): string {
   });
 }
 
+/** The brief's prose class: body size on the secondary tone, so the clamp component can measure it. */
+const PROSE_CLASS = textClass("body", "secondary");
+
+function Title() {
+  return <SectionHeader title="Daily Brief" icon="text-box-outline" spacing="card" />;
+}
+
 function ActionButton({
   label,
   onPress,
@@ -125,32 +133,18 @@ function ActionButton({
 }: {
   label: string;
   onPress: () => void;
+  /** Bound to the press, not just drawn: a pending generation must not be re-fired by a second tap. */
   disabled?: boolean;
   tone?: "default" | "danger";
 }) {
   return (
-    <Pressable
+    <Button
+      label={label}
       onPress={onPress}
       disabled={disabled}
-      accessibilityRole="button"
-      accessibilityState={{ disabled: !!disabled }}
-      hitSlop={8}
-      className={`min-h-[44px] items-center justify-center rounded-lg px-4 py-2 active:opacity-70 ${
-        disabled
-          ? "bg-neutral-200 dark:bg-neutral-800"
-          : tone === "danger"
-            ? "bg-red-600"
-            : "bg-blue-600"
-      }`}
-    >
-      <Text
-        className={`text-sm font-semibold ${
-          disabled ? "text-neutral-500 dark:text-neutral-400" : "text-white"
-        }`}
-      >
-        {label}
-      </Text>
-    </Pressable>
+      variant={tone === "danger" ? "danger" : "primary"}
+      size="sm"
+    />
   );
 }
 
@@ -170,94 +164,90 @@ export function BriefCard() {
   const onGenerate = () => generateMutation.mutate();
 
   if (state.kind === "loading") {
-    return (
-      <View className={CARD_CLASS}>
-        <Text className="text-sm text-neutral-500 dark:text-neutral-400">
-          Loading daily brief…
-        </Text>
-      </View>
-    );
+    // A skeleton, not nothing: unlike the optional Health/Academics cards,
+    // the Brief card is always on Today, so its place is reserved.
+    return <SkeletonCard lines={3} className="mb-3" />;
   }
 
   if (state.kind === "empty") {
     return (
-      <View className={CARD_CLASS}>
-        <Text className="mb-3 text-base font-medium text-black dark:text-white">Daily Brief</Text>
+      <Card className="mb-3">
+        <Title />
+        <AppText variant="body" tone="secondary" className="mb-3">
+          A one-tap summary of today, generated on demand.
+        </AppText>
         <ActionButton label="Generate Daily Brief" onPress={onGenerate} />
-      </View>
+      </Card>
     );
   }
 
   if (state.kind === "present") {
     return (
-      <View className={CARD_CLASS}>
-        <Text className="mb-2 text-base font-medium text-black dark:text-white">Daily Brief</Text>
-        <ClampedBriefText
-          text={state.text}
-          textClassName="text-sm leading-5 text-neutral-700 dark:text-neutral-300"
-        />
-        <Text className="mb-3 mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+      <Card className="mb-3">
+        <Title />
+        <ClampedBriefText text={state.text} textClassName={PROSE_CLASS} />
+        <AppText variant="caption" tone="muted" className="mb-3 mt-2">
           Generated {formatGeneratedAt(state.generatedAt)}
-        </Text>
+        </AppText>
         <ActionButton label="Regenerate" onPress={onGenerate} />
-      </View>
+      </Card>
     );
   }
 
   if (state.kind === "generating") {
     return (
-      <View className={CARD_CLASS}>
-        <Text className="mb-2 text-base font-medium text-black dark:text-white">Daily Brief</Text>
+      <Card className="mb-3">
+        <Title />
         {state.previousText ? (
           <ClampedBriefText
             text={state.previousText}
-            textClassName="text-sm leading-5 text-neutral-700 dark:text-neutral-300"
+            textClassName={PROSE_CLASS}
             containerClassName="mb-3"
           />
         ) : null}
         <ActionButton label="Generating…" onPress={onGenerate} disabled />
-      </View>
+      </Card>
     );
   }
 
   if (state.kind === "no_provider") {
     return (
-      <View className={CARD_CLASS}>
-        <Text className="mb-2 text-base font-medium text-black dark:text-white">Daily Brief</Text>
+      <Card className="mb-3">
+        <Title />
         {state.previousText ? (
           <ClampedBriefText
             text={state.previousText}
-            textClassName="text-sm leading-5 text-neutral-700 dark:text-neutral-300"
+            textClassName={PROSE_CLASS}
             containerClassName="mb-3"
           />
         ) : null}
-        <Text className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+        <AppText variant="body" tone="secondary" className="mb-3">
           No AI provider is configured for daily briefs.
-        </Text>
+        </AppText>
         {/* Still offer the action: the user may have just configured a
             provider in Settings, and without this the card is a dead end
             until the whole app is reloaded. Calm default tone, not danger --
             an unconfigured provider is a non-fatal state, not a failure. */}
         <ActionButton label="Try again" onPress={onGenerate} />
-      </View>
+      </Card>
     );
   }
 
   // state.kind === "error"
   return (
-    <View className={CARD_CLASS}>
-      <Text className="mb-2 text-base font-medium text-black dark:text-white">Daily Brief</Text>
+    <Card className="mb-3">
+      <Title />
       {state.previousText ? (
         <ClampedBriefText
           text={state.previousText}
-          textClassName="text-sm leading-5 text-neutral-700 dark:text-neutral-300"
+          textClassName={PROSE_CLASS}
           containerClassName="mb-3"
         />
       ) : null}
-      <Text className="mb-3 text-sm text-red-600 dark:text-red-400">
+      <AppText variant="body" tone="danger" className="mb-3">
         {"Couldn't generate the daily brief."}
-      </Text>
+      </AppText>
       <ActionButton label="Retry" onPress={onGenerate} tone="danger" />
-    </View>
+    </Card>
   );
 }

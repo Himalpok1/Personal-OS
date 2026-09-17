@@ -536,7 +536,10 @@ describe("<HealthConnectionCard />", () => {
     }
     expect(button).toBeDefined();
     expect(button!.props?.disabled).toBe(true);
-    expect(button!.props?.accessibilityState).toEqual({ disabled: true });
+    // `toMatchObject`, not `toEqual`: since Checkpoint 10.3 the control is the
+    // design system's Button, whose accessibilityState also announces `busy`.
+    // The claim under test -- the DISABLED flag is spoken -- is unchanged.
+    expect(button!.props?.accessibilityState).toMatchObject({ disabled: true });
   });
 
   it("covers every blocked state, and no state is both blocked and enabled", () => {
@@ -556,7 +559,7 @@ describe("<HealthConnectionCard />", () => {
       const button = syncButton(renderConnectionCard(state));
       expect(button).toBeDefined();
       expect(button!.props?.disabled).toBe(false);
-      expect(button!.props?.accessibilityState).toEqual({ disabled: false });
+      expect(button!.props?.accessibilityState).toMatchObject({ disabled: false });
     },
   );
 
@@ -575,7 +578,7 @@ describe("<HealthConnectionCard />", () => {
     // The prop and the a11y state, not the label -- a relabelled but still
     // pressable button is exactly what fires a second sync on a double tap.
     expect(button!.props?.disabled).toBe(true);
-    expect(button!.props?.accessibilityState).toEqual({ disabled: true });
+    expect(button!.props?.accessibilityState).toMatchObject({ disabled: true });
   });
 
   it("not_configured offers no Connect control, because there is nothing to connect to", () => {

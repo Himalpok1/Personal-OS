@@ -1,12 +1,23 @@
 import type { AskPreset, AskResponse, AskSource, AskSourceSection } from "@personal-os/schema";
 import type { ReactNode } from "react";
-import { Pressable, ScrollView, SafeAreaView, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, TextInput, View } from "react-native";
 import { ASK_PRESETS, type AskPresetDefinition } from "@/components/ask/ask-presets";
+import { ChoiceChip } from "@/components/ask/choice-chip";
+import { textFieldClass } from "@/components/ask/text-field";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import {
+  AppText,
+  Button,
+  Card,
+  Icon,
+  ScreenFrame,
+  SectionHeader,
+  type IconName,
+} from "@/components/ui";
 
 // Cloud Ask's question/answer surface (Checkpoint 8.6B) -- a MODE inside the
 // search screen, never a sixth tab or a third header icon: the search screen
-// already carries the header 🔍/⚙️ actions this app's narrowest target (the
+// already carries the Search/Settings header actions this app's narrowest target (the
 // Rabbit R1's 480px bar) has room for. See `mode-toggle.tsx` for the control
 // that switches into this mode.
 //
@@ -31,7 +42,9 @@ import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 //
 // Hookless and props-driven, same convention as `SearchView`: that is what
 // makes it testable by calling it as a plain function (there is no render
-// library in this app's dependencies).
+// library in this app's dependencies). Checkpoint 10.3 composed it on the
+// design system's hookless primitives (Card, Button, AppText, Icon); every
+// testID, label and state is unchanged.
 
 export type AskState =
   | { kind: "idle" }
@@ -151,9 +164,23 @@ export function askSourceRowText(source: AskSource): string {
 export interface AskSourceRowProps {
   source: AskSource;
   onSelect: (source: AskSource) => void;
+  /** The last row on its card draws no divider. */
+  last?: boolean;
 }
 
-export function AskSourceRow({ source, onSelect }: AskSourceRowProps) {
+const SOURCE_TYPE_ICON: Record<AskSource["type"], IconName> = {
+  task: "checkbox-marked-circle-outline",
+  note: "note-text-outline",
+  event: "calendar",
+  inbox_item: "inbox-outline",
+  project: "folder-outline",
+};
+
+// The hairline ListRow draws between rows on a card; this row is composed by
+// hand because its two text lines carry testIDs the primitive cannot take.
+const ROW_DIVIDER_CLASS = "border-b border-outline/70 dark:border-outline-dark";
+
+export function AskSourceRow({ source, onSelect, last = false }: AskSourceRowProps) {
   return (
     <Pressable
       testID={`ask-source-${source.ref}`}
@@ -161,26 +188,29 @@ export function AskSourceRow({ source, onSelect }: AskSourceRowProps) {
       accessibilityRole="button"
       accessibilityLabel={`Open ${SOURCE_TYPE_LABEL[source.type].toLowerCase()}: ${source.title}`}
       hitSlop={8}
-      className="min-h-[44px] border-b border-neutral-200 px-4 py-3 active:opacity-70 dark:border-neutral-800"
+      className={`min-h-[52px] flex-row items-center gap-3 px-4 py-2.5 active:opacity-70 ${
+        last ? "" : ROW_DIVIDER_CLASS
+      }`}
     >
-      {/* Header and title on separate lines (9.7 review): at 480px a single
-          two-line Text cut the TITLE -- the one part the owner needs to
-          recognise the item -- behind the server's section and detail. The
-          accessibility label above still carries the full title. */}
-      <Text
-        testID={`ask-source-${source.ref}-header`}
-        className="text-xs text-neutral-500 dark:text-neutral-400"
-        numberOfLines={1}
-      >
-        {askSourceHeaderText(source)}
-      </Text>
-      <Text
-        testID={`ask-source-${source.ref}-title`}
-        className="text-sm text-black dark:text-white"
-        numberOfLines={2}
-      >
-        {source.title}
-      </Text>
+      <Icon name={SOURCE_TYPE_ICON[source.type]} size="md" tone="primary" />
+      <View className="flex-1">
+        {/* Header and title on separate lines (9.7 review): at 480px a single
+            two-line Text cut the TITLE -- the one part the owner needs to
+            recognise the item -- behind the server's section and detail. The
+            accessibility label above still carries the full title. */}
+        <AppText
+          testID={`ask-source-${source.ref}-header`}
+          variant="caption"
+          tone="muted"
+          numberOfLines={1}
+        >
+          {askSourceHeaderText(source)}
+        </AppText>
+        <AppText testID={`ask-source-${source.ref}-title`} variant="body-strong" numberOfLines={2}>
+          {source.title}
+        </AppText>
+      </View>
+      <Icon name="chevron-right" size="md" tone="on-surface-muted" />
     </Pressable>
   );
 }
@@ -200,36 +230,17 @@ export interface AskPresetChipsProps {
 export function AskPresetChips({ selected, disabled, onSelect }: AskPresetChipsProps) {
   return (
     <View testID="ask-presets" className="flex-row flex-wrap gap-2 px-4 pb-2">
-      {ASK_PRESETS.map((preset) => {
-        const isSelected = preset.key === selected;
-        return (
-          <Pressable
-            key={preset.key}
-            testID={`ask-preset-${preset.key}`}
-            onPress={() => onSelect(preset)}
-            disabled={disabled}
-            accessibilityRole="button"
-            accessibilityState={{ selected: isSelected, disabled }}
-            accessibilityLabel={`Ask: ${preset.label}`}
-            hitSlop={8}
-            className={`min-h-[44px] justify-center rounded-full border px-3 py-2 active:opacity-70 ${
-              isSelected
-                ? "border-blue-600 bg-blue-50 dark:border-blue-400 dark:bg-blue-950"
-                : "border-neutral-300 bg-white dark:border-neutral-700 dark:bg-neutral-900"
-            }`}
-          >
-            <Text
-              className={`text-sm ${
-                isSelected
-                  ? "font-semibold text-blue-700 dark:text-blue-300"
-                  : "text-black dark:text-white"
-              }`}
-            >
-              {preset.label}
-            </Text>
-          </Pressable>
-        );
-      })}
+      {ASK_PRESETS.map((preset) => (
+        <ChoiceChip
+          key={preset.key}
+          testID={`ask-preset-${preset.key}`}
+          label={preset.label}
+          selected={preset.key === selected}
+          disabled={disabled}
+          onPress={() => onSelect(preset)}
+          accessibilityLabel={`Ask: ${preset.label}`}
+        />
+      ))}
     </View>
   );
 }
@@ -253,7 +264,7 @@ export function AskView({
   const submitDisabled = !canSubmit || submitting;
 
   return (
-    <SafeAreaView className="flex-1 bg-white dark:bg-black">
+    <ScreenFrame>
       {modeToggle ?? null}
 
       {/* Chips, input, button and footer all live INSIDE the ScrollView
@@ -268,103 +279,115 @@ export function AskView({
         <AskPresetChips selected={selectedPreset} disabled={submitting} onSelect={onSelectPreset} />
 
         <View className="px-4 pb-2 pt-1">
-          <TextInput
-            testID="ask-input"
-            value={question}
-            onChangeText={onQuestionChange}
-            placeholder="Ask about today, your notes and tasks"
-            placeholderTextColor={placeholderColor}
-            autoFocus={autoFocus}
-            autoCorrect={false}
-            returnKeyType="send"
-            onSubmitEditing={onSubmit}
-            accessibilityLabel="Ask a question"
-            className="rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-          />
-          <Pressable
-            testID="ask-submit"
-            onPress={onSubmit}
-            disabled={submitDisabled}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: submitDisabled }}
-            accessibilityLabel="Ask"
-            hitSlop={8}
-            className={`mt-2 min-h-[44px] items-center justify-center rounded-lg px-4 py-2 active:opacity-70 ${
-              submitDisabled ? "bg-neutral-200 dark:bg-neutral-800" : "bg-blue-600"
-            }`}
-          >
-            <Text
-              className={`text-sm font-semibold ${
-                submitDisabled ? "text-neutral-500 dark:text-neutral-400" : "text-white"
-              }`}
-            >
-              {submitting ? "Asking…" : "Ask"}
-            </Text>
-          </Pressable>
+          <Card>
+            <TextInput
+              testID="ask-input"
+              value={question}
+              onChangeText={onQuestionChange}
+              placeholder="Ask about today, your notes and tasks"
+              placeholderTextColor={placeholderColor}
+              autoFocus={autoFocus}
+              autoCorrect={false}
+              returnKeyType="send"
+              onSubmitEditing={onSubmit}
+              accessibilityLabel="Ask a question"
+              className={textFieldClass()}
+            />
+            {/* `disabled`, not `busy`: the label while in flight has always
+                read "Asking…", which `busy` would render as "Ask…". */}
+            <Button
+              testID="ask-submit"
+              label={submitting ? "Asking…" : "Ask"}
+              onPress={onSubmit}
+              disabled={submitDisabled}
+              accessibilityLabel="Ask"
+              variant="primary"
+              block
+              className="mt-3"
+            />
 
-          {/* A passive reminder, always visible in Ask mode regardless of
-            state -- not a dialog, and not repeated per question. The one-time
-            enable disclosure in Settings already covers consent. */}
-          <Text testID="ask-footer" className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
-            {`Sends your question, today's schedule and matching notes/tasks to ${connectionName}`}
-          </Text>
+            {/* A passive reminder, always visible in Ask mode regardless of
+              state -- not a dialog, and not repeated per question. The one-time
+              enable disclosure in Settings already covers consent. */}
+            <AppText testID="ask-footer" variant="caption" tone="muted" className="mt-2">
+              {`Sends your question, today's schedule and matching notes/tasks to ${connectionName}`}
+            </AppText>
+          </Card>
         </View>
 
         {state.kind === "idle" ? (
-          <Text testID="ask-idle" className="p-4 text-neutral-500">
+          <AppText testID="ask-idle" variant="body" tone="secondary" className="px-4 py-4">
             Ask about today, or about your notes and tasks.
-          </Text>
+          </AppText>
         ) : state.kind === "nothing_today" ? (
-          <Text testID="ask-nothing-today" className="p-4 text-neutral-500">
-            {askNothingCopyFor(state.preset)}
-          </Text>
+          <View className="px-4 pt-2">
+            <Card className="flex-row items-center gap-3">
+              <Icon name="check-circle-outline" size="lg" tone="success" />
+              <AppText testID="ask-nothing-today" variant="body" className="flex-1">
+                {askNothingCopyFor(state.preset)}
+              </AppText>
+            </Card>
+          </View>
         ) : state.kind === "submitting" ? (
-          <Text testID="ask-loading" className="p-4 text-neutral-500">
-            Asking…
-          </Text>
+          <View className="px-4 pt-2">
+            <Card className="flex-row items-center gap-3">
+              <Icon name="progress-clock" size="lg" tone="primary" />
+              <AppText testID="ask-loading" variant="body" tone="secondary" className="flex-1">
+                Asking…
+              </AppText>
+            </Card>
+          </View>
         ) : state.kind === "error" ? (
-          <Text testID="ask-error" className="p-4 text-red-600">
-            {state.message}
-          </Text>
+          <View className="px-4 pt-2">
+            <Card className="flex-row items-center gap-3">
+              <Icon name="alert-circle-outline" size="lg" tone="danger" />
+              <AppText testID="ask-error" variant="body" tone="danger" className="flex-1">
+                {state.message}
+              </AppText>
+            </Card>
+          </View>
         ) : (
-          <View testID="ask-answer-container">
-            {state.response.citations_present === false ? (
-              <Text
-                testID="ask-no-citations"
-                className="px-4 pb-2 text-xs text-amber-700 dark:text-amber-300"
-              >
-                {ASK_NO_CITATIONS_COPY}
-              </Text>
-            ) : null}
-            <Text
-              testID="ask-answer"
-              className="px-4 pb-2 text-base leading-6 text-black dark:text-white"
-            >
-              {state.response.answer}
-            </Text>
-            {state.response.redactions > 0 ? (
-              <Text
-                testID="ask-redactions"
-                className="px-4 pb-2 text-xs text-amber-700 dark:text-amber-300"
-              >
-                {`${state.response.redactions} secret-looking string${
-                  state.response.redactions === 1 ? "" : "s"
-                } removed before sending.`}
-              </Text>
-            ) : null}
+          <View testID="ask-answer-container" className="px-4 pt-2">
+            <Card>
+              {state.response.citations_present === false ? (
+                <AppText
+                  testID="ask-no-citations"
+                  variant="caption"
+                  tone="warning"
+                  className="pb-2"
+                >
+                  {ASK_NO_CITATIONS_COPY}
+                </AppText>
+              ) : null}
+              <AppText testID="ask-answer" variant="body" className="leading-6">
+                {state.response.answer}
+              </AppText>
+              {state.response.redactions > 0 ? (
+                <AppText testID="ask-redactions" variant="caption" tone="warning" className="pt-2">
+                  {`${state.response.redactions} secret-looking string${
+                    state.response.redactions === 1 ? "" : "s"
+                  } removed before sending.`}
+                </AppText>
+              ) : null}
+            </Card>
             {state.response.sources.length > 0 ? (
               <View testID="ask-sources">
-                <Text className="px-4 pb-1 text-xs font-semibold uppercase text-neutral-500 dark:text-neutral-400">
-                  Sources
-                </Text>
-                {state.response.sources.map((source) => (
-                  <AskSourceRow key={source.ref} source={source} onSelect={onSelectSource} />
-                ))}
+                <SectionHeader title="Sources" count={state.response.sources.length} />
+                <Card padding="none">
+                  {state.response.sources.map((source, index) => (
+                    <AskSourceRow
+                      key={source.ref}
+                      source={source}
+                      onSelect={onSelectSource}
+                      last={index === state.response.sources.length - 1}
+                    />
+                  ))}
+                </Card>
               </View>
             ) : null}
           </View>
         )}
       </ScrollView>
-    </SafeAreaView>
+    </ScreenFrame>
   );
 }

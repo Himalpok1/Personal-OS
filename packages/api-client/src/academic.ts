@@ -35,14 +35,21 @@ export async function getAcademicToday(
   );
 }
 
-/** `GET /academic/courses?include_archived=` -- every active connection's courses with computed counts. */
+/**
+ * `GET /academic/courses?include_archived=&include_past_terms=` -- every
+ * active connection's courses with computed counts. Current term only by
+ * default (ADR-070a); `includePastTerms` widens the list to every term.
+ */
 export async function listAcademicCourses(
   baseUrl: string,
-  options: { includeArchived?: boolean } = {},
+  options: { includeArchived?: boolean; includePastTerms?: boolean } = {},
 ): Promise<AcademicCoursesResponse> {
   return await fetchJson(
     baseUrl,
-    `/academic/courses${buildQuery({ include_archived: options.includeArchived })}`,
+    `/academic/courses${buildQuery({
+      include_archived: options.includeArchived,
+      include_past_terms: options.includePastTerms,
+    })}`,
     AcademicCoursesResponseSchema,
   );
 }

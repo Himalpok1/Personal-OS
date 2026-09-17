@@ -10,13 +10,21 @@
 // context, not something to act on. Anything beyond a few numbers and a way
 // through to the full view belongs on /health.
 import { useRouter, type Href } from "expo-router";
-import { Pressable, Text, View } from "react-native";
+import { View } from "react-native";
 import type { HealthMetricCapability, HealthMetricTile } from "@personal-os/schema";
+import { AppText, Card, ListRow } from "@/components/ui";
 import { useHealthSummary } from "@/queries/health";
 import { formatHealthValue, metricShortLabel } from "./format";
 import { resolveMetricDisplay } from "./metric-state";
 
-const CARD_CLASS = "mx-4 mb-3 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800";
+// Checkpoint 10.3: composed from the design system. The card stays ONE
+// pressable (a `Card` with `onPress`); its header is an INERT ListRow (no
+// onPress, so no nested pressable) for the heart-pulse icon disc and the
+// chevron, and the headline metrics are an inline stat row -- MetricCard is
+// a Card itself, so nesting it inside a pressable card would nest
+// pressables; the row is composed here instead. Every rule below (nothing
+// while loading, nothing when unconfigured, values only, the cap) is
+// unchanged.
 
 /**
  * At most this many numbers on Today.
@@ -113,40 +121,35 @@ export function HealthTodayCard() {
           .join(", ")}. Opens the health screen.`;
 
   return (
-    <Pressable
+    <Card
       onPress={() => router.push(HEALTH_ROUTE)}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
-      hitSlop={4}
-      className={`${CARD_CLASS} min-h-[44px] active:opacity-70`}
+      className="mb-3 min-h-[44px]"
     >
-      <Text className="text-base font-medium text-black dark:text-white">Health</Text>
+      <ListRow title="Health" icon="heart-pulse" iconTone="success" chevron inset last />
 
       {headlines.length === 0 ? (
-        <Text className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+        <AppText variant="body" tone="secondary" className="mt-2">
           Nothing recorded for today yet.
-        </Text>
+        </AppText>
       ) : (
-        <View className="mt-2 flex-row flex-wrap gap-x-6 gap-y-2">
+        <View className="mt-3 flex-row flex-wrap gap-x-6 gap-y-3">
           {headlines.map((headline) => (
             <View key={headline.metric}>
-              <Text className="text-xs font-semibold uppercase text-neutral-500 dark:text-neutral-400">
+              <AppText variant="overline" tone="muted" numberOfLines={1}>
                 {metricShortLabel(headline.metric)}
-              </Text>
-              <View className="flex-row items-baseline gap-1">
-                <Text className="text-xl font-semibold text-black dark:text-white">
-                  {headline.text}
-                </Text>
+              </AppText>
+              <AppText variant="headline" numberOfLines={1} className="mt-0.5">
+                {headline.text}
                 {headline.unitLabel ? (
-                  <Text className="text-xs text-neutral-500 dark:text-neutral-400">
-                    {headline.unitLabel}
-                  </Text>
+                  <AppText variant="label" tone="muted">{` ${headline.unitLabel}`}</AppText>
                 ) : null}
-              </View>
+              </AppText>
             </View>
           ))}
         </View>
       )}
-    </Pressable>
+    </Card>
   );
 }

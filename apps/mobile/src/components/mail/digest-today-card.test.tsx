@@ -58,7 +58,6 @@ function deepRender(node: unknown): unknown {
   return el;
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 function findAll(node: unknown, predicate: (n: any) => boolean, acc: any[] = []): any[] {
   if (!node) return acc;
   if (Array.isArray(node)) {
@@ -87,7 +86,6 @@ function getTextContent(node: unknown): string {
 function findButtons(node: unknown): any[] {
   return findAll(node, (n) => n.type === Pressable);
 }
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 function render(): unknown {
   return deepRender(MailDigestCard());
@@ -187,7 +185,9 @@ describe("generating", () => {
     const buttons = findButtons(render());
     expect(buttons).toHaveLength(1);
     expect(buttons[0].props.disabled).toBe(true);
-    expect(buttons[0].props.accessibilityState).toEqual({ disabled: true });
+    // Checkpoint 10.3: the design-system Button also reports `busy`, so the
+    // state is matched on `disabled` rather than as an exact object.
+    expect(buttons[0].props.accessibilityState).toMatchObject({ disabled: true });
   });
 
   it("does not claim a digest is ready", () => {
@@ -258,14 +258,14 @@ describe("ClampedDigestText", () => {
   it("clamps to the cap when collapsed and lifts it when expanded", () => {
     const instance = new ClampedDigestText({ text: "long", textClassName: "" });
     instance.state = { expanded: false, isClamped: true };
-    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+
     const collapsed = findAll(deepRender(instance.render()), (n: any) => n.type === Text);
     // The visible copy carries the cap; the hidden measurement copy must not.
     expect(collapsed.some((t) => t.props.numberOfLines === DIGEST_COLLAPSED_LINES)).toBe(true);
     expect(collapsed.some((t) => t.props.numberOfLines === undefined)).toBe(true);
 
     instance.state = { expanded: true, isClamped: true };
-    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+
     const expanded = findAll(deepRender(instance.render()), (n: any) => n.type === Text);
     expect(expanded.every((t) => t.props.numberOfLines === undefined)).toBe(true);
   });
@@ -274,7 +274,7 @@ describe("ClampedDigestText", () => {
     const instance = new ClampedDigestText({ text: "old", textClassName: "" });
     instance.state = { expanded: true, isClamped: true };
     const applied: unknown[] = [];
-    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+
     (instance as any).setState = (next: unknown) => applied.push(next);
     instance.componentDidUpdate({ text: "different", textClassName: "" });
     expect(applied).toEqual([{ expanded: false, isClamped: false }]);

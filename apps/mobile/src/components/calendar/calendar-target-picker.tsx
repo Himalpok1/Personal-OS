@@ -1,5 +1,7 @@
 import type { CalendarTarget } from "@personal-os/schema";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, View } from "react-native";
+import { FieldLabel } from "@/components/ask/text-field";
+import { AppText, buttonClasses } from "@/components/ui";
 
 /**
  * The calendar chip row on the event screens (Checkpoint 9.5), fed by
@@ -12,7 +14,9 @@ import { Pressable, Text, View } from "react-native";
  *
  * Hook-free and props-fed (the targets come from useCalendarTargets in the
  * screen) so the hook-free EditEventView/NewEventView can hold it and the
- * tree-walk tests can read it.
+ * tree-walk tests can read it. Checkpoint 10.3: each chip is a small tonal /
+ * outline Button by class (`buttonClasses`), rendered as a plain Pressable
+ * because the walk tests read the chip's text as children.
  */
 export interface CalendarTargetPickerProps {
   targets: readonly CalendarTarget[];
@@ -26,10 +30,6 @@ export function calendarTargetKey(target: CalendarTarget): string {
   return `${target.connection_id}:${target.google_calendar_id ?? target.caldav_calendar_url ?? ""}`;
 }
 
-const CHIP_ON = "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1";
-const CHIP_OFF =
-  "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800";
-
 function chip(props: {
   testID: string;
   label: string;
@@ -37,6 +37,7 @@ function chip(props: {
   disabled: boolean;
   onPress: () => void;
 }) {
+  const classes = buttonClasses(props.selected ? "tonal" : "outline", "sm", false);
   return (
     <Pressable
       key={props.testID}
@@ -45,12 +46,18 @@ function chip(props: {
       disabled={props.disabled}
       hitSlop={8}
       accessibilityRole="button"
+      accessibilityLabel={props.label}
       accessibilityState={{ selected: props.selected, disabled: props.disabled }}
-      className={`${props.selected ? CHIP_ON : CHIP_OFF} disabled:opacity-50`}
+      className={`${classes.container} ${props.disabled ? "opacity-60" : ""}`}
     >
-      <Text className={props.selected ? "text-white" : "text-black dark:text-white"}>
+      <AppText
+        variant="label"
+        tone="inherit"
+        className={`${classes.label} font-semibold`}
+        numberOfLines={1}
+      >
         {props.label}
-      </Text>
+      </AppText>
     </Pressable>
   );
 }
@@ -67,7 +74,7 @@ export function CalendarTargetPicker({
 
   return (
     <View className="mb-4" testID="calendar-target-picker">
-      <Text className="mb-1 text-sm text-neutral-500">{label}</Text>
+      <FieldLabel>{label}</FieldLabel>
       <View className="flex-row flex-wrap gap-2">
         {chip({
           testID: "calendar-target-none",

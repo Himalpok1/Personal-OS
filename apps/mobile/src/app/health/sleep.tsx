@@ -1,9 +1,22 @@
 import type { HealthSleepSession } from "@personal-os/schema";
 import { useState } from "react";
-import { Pressable, ScrollView, Text, useWindowDimensions, View } from "react-native";
-import { FLOATING_CLEARANCE } from "@/components/floating-layout";
+import { View } from "react-native";
 import { formatDuration } from "@/components/health/format";
 import { SleepSessionRow } from "@/components/health/session-cards";
+import {
+  AppText,
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  MetricCard,
+  Screen,
+  ScreenCentered,
+  ScreenFrame,
+  ScreenHeader,
+  SectionHeader,
+  SkeletonScreen,
+} from "@/components/ui";
 import { useHealthSleepSessions, useHealthSummary } from "@/queries/health";
 import { addLocalDays, formatHeaderDate, todayLocalDate } from "@/utils/local-date";
 
@@ -41,8 +54,6 @@ function groupByWakeDate(sessions: readonly HealthSleepSession[]): DateGroup[] {
 }
 
 export default function HealthSleepScreen() {
-  const { width } = useWindowDimensions();
-  const compact = width < 520;
   const [limit, setLimit] = useState(PAGE_SIZE);
 
   // Same anchor rule as the trend screen: the server's civil date for the
@@ -56,26 +67,22 @@ export default function HealthSleepScreen() {
 
   if (sleep.isLoading) {
     return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <Text className="text-neutral-500">Loading…</Text>
-      </View>
+      <ScreenFrame>
+        <SkeletonScreen />
+      </ScreenFrame>
     );
   }
 
   if (sleep.isError || sleep.data === undefined) {
     return (
-      <View className="flex-1 items-center justify-center gap-3 bg-white px-6 dark:bg-black">
-        <Text className="text-center text-red-600">Couldn&apos;t load sleep sessions.</Text>
-        <Pressable
-          onPress={() => void sleep.refetch()}
-          hitSlop={8}
-          accessibilityRole="button"
-          accessibilityLabel="Retry loading sleep sessions"
-          className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-        >
-          <Text className="font-semibold text-white">Retry</Text>
-        </Pressable>
-      </View>
+      <ScreenCentered>
+        <ErrorState
+          message="Couldn't load sleep sessions."
+          onRetry={() => void sleep.refetch()}
+          retryAccessibilityLabel="Retry loading sleep sessions"
+          size="screen"
+        />
+      </ScreenCentered>
     );
   }
 
@@ -86,75 +93,66 @@ export default function HealthSleepScreen() {
   const average = summary.data?.sleep_7d_average_seconds ?? null;
 
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      contentContainerClassName={FLOATING_CLEARANCE}
-      keyboardShouldPersistTaps="handled"
-    >
-      <View className="px-4 pt-4">
-        <Text className="text-2xl font-bold text-black dark:text-white">Sleep</Text>
-        <Text className="text-sm text-neutral-500 dark:text-neutral-400">
-          Last {RANGE_DAYS} days, by wake date
-        </Text>
-      </View>
+    <Screen refreshing={sleep.isRefetching} onRefresh={() => void sleep.refetch()}>
+      <ScreenHeader
+        variant="compact"
+        title="Sleep"
+        subtitle={`Last ${RANGE_DAYS} days, by wake date`}
+      />
 
       {/* Null means no session landed in the trailing 7 wake-dates. Rendered as
           words, never as "0h 0m", which would read as seven sleepless nights. */}
       {average === null ? null : (
-        <View className="mx-4 mt-4 rounded-xl border border-neutral-200 px-4 py-3 dark:border-neutral-800">
-          <Text className="text-xs uppercase text-neutral-500 dark:text-neutral-400">
-            7-day average
-          </Text>
-          <Text
-            className={`font-semibold text-black dark:text-white ${compact ? "text-xl" : "text-2xl"}`}
-          >
-            {formatDuration(average)}
-          </Text>
+        <View className="mt-4 flex-row">
+          <MetricCard label="7-day average" value={formatDuration(average)} icon="sleep" />
         </View>
       )}
 
       {groups.length === 0 ? (
-        <Text className="px-4 pt-6 text-sm text-neutral-500 dark:text-neutral-400">
-          No sleep sessions in the last {RANGE_DAYS} days. A session has to reach Google Health
-          before Personal OS can read it.
-        </Text>
+        <Card className="mt-4">
+          <EmptyState
+            icon="sleep"
+            title={`No sleep sessions in the last ${RANGE_DAYS} days.`}
+            body="A session has to reach Google Health before Personal OS can read it."
+          />
+        </Card>
       ) : (
         groups.map((group) => (
           <View key={group.date}>
-            <Text className="px-4 pb-1 pt-5 text-sm font-semibold uppercase text-neutral-500 dark:text-neutral-400">
-              {formatHeaderDate(group.date)}
-            </Text>
-            {group.sessions.map((session) => (
-              <SleepSessionRow key={session.id} session={session} />
-            ))}
+            <SectionHeader title={formatHeaderDate(group.date)} />
+            <Card padding="none" className="px-4">
+              {group.sessions.map((session, index) => (
+                <SleepSessionRow
+                  key={session.id}
+                  session={session}
+                  last={index === group.sessions.length - 1}
+                />
+              ))}
+            </Card>
           </View>
         ))
       )}
 
       {hasMore ? (
-        <View className="px-4 pt-5">
+        <View className="pt-5">
           {atCap ? (
             // Honest rather than a button that cannot do anything: the schema
             // caps `limit` at 200, so beyond that this screen genuinely cannot
             // show more within its 30-day window.
-            <Text className="text-sm text-neutral-500 dark:text-neutral-400">
+            <AppText variant="label" tone="secondary" className="font-normal">
               Showing the first {items.length} of {total} sessions.
-            </Text>
+            </AppText>
           ) : (
-            <Pressable
+            <Button
+              label={`Load more (${items.length} of ${total})`}
               onPress={() => setLimit((current) => Math.min(MAX_LIMIT, current + PAGE_SIZE))}
-              hitSlop={8}
-              accessibilityRole="button"
               accessibilityLabel="Load more sleep sessions"
-              className="min-h-[44px] items-center justify-center rounded-lg border border-neutral-300 px-4 active:bg-neutral-100 dark:border-neutral-700 dark:active:bg-neutral-900"
-            >
-              <Text className="font-medium text-blue-600 dark:text-blue-400">
-                Load more ({items.length} of {total})
-              </Text>
-            </Pressable>
+              variant="outline"
+              block
+            />
           )}
         </View>
       ) : null}
-    </ScrollView>
+    </Screen>
   );
 }

@@ -29,25 +29,33 @@ import {
   type FreshnessDescription,
   type HealthConnectionDisplayState,
 } from "@/components/health/connection-state";
+import {
+  calendarConnectionChipLabel,
+  calendarConnectionChipTone,
+  canvasConnectionChipTone,
+  healthConnectionChipTone,
+  mailConnectionChipTone,
+  monitorSummaryTone,
+} from "@/components/settings/status-tone";
+import {
+  AppText,
+  Button,
+  Card,
+  ListRow,
+  ScreenFrame,
+  SectionHeader,
+  StatusChip,
+} from "@/components/ui";
 import { ApiClientError } from "@personal-os/api-client";
 import type { CalendarConnection, CanvasConnection, Device, MailConnection } from "@personal-os/schema";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useRouter, type Href } from "expo-router";
+import { useRouter, type Href } from "expo-router";
 import * as Linking from "expo-linking";
 import ExactAlarmStatus from "../../modules/exact-alarm-status";
 import GoogleCalendarAuth from "../../modules/google-calendar-auth";
 import * as Notifications from "expo-notifications";
 import { useState } from "react";
-import {
-  Platform,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  Switch,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { Platform, SafeAreaView, ScrollView, Switch, TextInput, View } from "react-native";
 import { mergeAvailableCalendars } from "@/calendar-connections/merge-available-calendars";
 import { useDeviceIdentity } from "@/device-identity/provider";
 import { REMINDERS_CHANNEL_ID, ensureNotificationPermission, ensureReminderChannel } from "@/notifications/channel";
@@ -89,6 +97,13 @@ import {
 } from "@/queries/mail";
 import { useMonitorOverview } from "@/queries/monitor";
 import { formatShortDate } from "@/utils/local-date";
+
+// The one text-input style on this screen (Checkpoint 10.3): an inset well
+// on the card, in the design system's surface-container role, so every form
+// field -- CalDAV, Canvas -- reads the same. Layout-only classes plus the
+// token roles; no palette of its own.
+const INPUT_CLASS =
+  "mb-2 rounded-inner bg-surface-container px-3 py-2.5 text-body text-on-surface dark:bg-surface-container-dark dark:text-on-surface-dark";
 
 // The exact scope set the backend's token exchange expects -- see
 // Checkpoint 4.5 Stage A / apps/api's calendar-connections route. Kept as a
@@ -149,6 +164,28 @@ function describeActionFailure(err: unknown): string {
   return "Something went wrong. Try again.";
 }
 
+// A load failure inside a card: the sentence, and a Retry. Kept as a section
+// block (not the full-screen ErrorState) because the card around it is still
+// live -- its other queries and actions keep working.
+function InlineRetry({
+  message,
+  onRetry,
+  accessibilityLabel,
+}: {
+  message: string;
+  onRetry: () => void;
+  accessibilityLabel: string;
+}) {
+  return (
+    <View className="mb-2 items-start gap-2" accessibilityRole="alert">
+      <AppText variant="body" tone="danger">
+        {message}
+      </AppText>
+      <Button label="Retry" onPress={onRetry} accessibilityLabel={accessibilityLabel} size="sm" />
+    </View>
+  );
+}
+
 function OutboxDiagnostics() {
   const queryClient = useQueryClient();
   const { data: stats } = useQuery({
@@ -170,23 +207,25 @@ function OutboxDiagnostics() {
   });
 
   return (
-    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
-      <Text className="mb-2 text-base font-bold text-black dark:text-white">Offline outbox</Text>
-      <Text className="mb-2 text-sm text-black dark:text-white">
+    <Card className="mb-4">
+      <ListRow icon="tray-arrow-up" title="Offline outbox" inset last />
+      <AppText variant="body" className="mb-3">
         Pending captures: {stats?.pending ?? "…"}
         {stats?.failed ? ` · Needs attention: ${stats.failed}` : ""}
-      </Text>
-      <Pressable
+      </AppText>
+      <Button
+        label={flush.busy ? "Flushing" : "Flush now"}
         onPress={flush.onPress}
-        disabled={flush.busy}
-        className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 disabled:opacity-50 dark:bg-neutral-800"
-      >
-        <Text className="text-center text-sm text-black dark:text-white">
-          {flush.busy ? "Flushing…" : "Flush now"}
-        </Text>
-      </Pressable>
-      {flushResult ? <Text className="mt-1 text-xs text-neutral-500">{flushResult}</Text> : null}
-    </View>
+        busy={flush.busy}
+        variant="tonal"
+        block
+      />
+      {flushResult ? (
+        <AppText variant="caption" tone="muted" className="mt-2">
+          {flushResult}
+        </AppText>
+      ) : null}
+    </Card>
   );
 }
 
@@ -272,76 +311,75 @@ function NotificationDiagnostics() {
   });
 
   return (
-    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
-      <Text className="mb-2 text-base font-bold text-black dark:text-white">
-        Notification diagnostics
-      </Text>
+    <Card className="mb-4">
+      <ListRow icon="bell-cog-outline" title="Notification diagnostics" inset last />
 
-      <Pressable
-        onPress={() => setExactAlarmOk(ExactAlarmStatus.canScheduleExactAlarms())}
-        className="mb-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
-      >
-        <Text className="text-center text-sm text-black dark:text-white">
-          Check exact-alarm permission
-          {exactAlarmOk === null ? "" : exactAlarmOk ? ": granted" : ": NOT granted"}
-        </Text>
-      </Pressable>
-      {exactAlarmOk === false ? (
-        <Pressable
-          onPress={() => ExactAlarmStatus.openExactAlarmSettings()}
-          className="mb-2 min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
-        >
-          <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
-            Open exact-alarm settings
-          </Text>
-        </Pressable>
-      ) : null}
+      <View className="gap-2">
+        <Button
+          label={`Check exact-alarm permission${
+            exactAlarmOk === null ? "" : exactAlarmOk ? ": granted" : ": NOT granted"
+          }`}
+          onPress={() => setExactAlarmOk(ExactAlarmStatus.canScheduleExactAlarms())}
+          variant="outline"
+          block
+        />
+        {exactAlarmOk === false ? (
+          <Button
+            label="Open exact-alarm settings"
+            onPress={() => ExactAlarmStatus.openExactAlarmSettings()}
+            variant="tonal"
+            block
+          />
+        ) : null}
 
-      <Pressable
-        onPress={registerPush.onPress}
-        disabled={registerPush.busy}
-        className="mb-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 disabled:opacity-50 dark:bg-neutral-800"
-      >
-        <Text className="text-center text-sm text-black dark:text-white">
-          Register for push notifications
-        </Text>
-      </Pressable>
-      {pushResult ? <Text className="mb-2 text-xs text-neutral-500">{pushResult}</Text> : null}
+        <Button
+          label="Register for push notifications"
+          onPress={registerPush.onPress}
+          disabled={registerPush.busy}
+          variant="outline"
+          block
+        />
+        {pushResult ? (
+          <AppText variant="caption" tone="muted">
+            {pushResult}
+          </AppText>
+        ) : null}
 
-      <Pressable
-        onPress={remoteTest.onPress}
-        disabled={remoteTest.busy}
-        className="mb-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 disabled:opacity-50 dark:bg-neutral-800"
-      >
-        <Text className="text-center text-sm text-black dark:text-white">
-          Send remote test notification
-        </Text>
-      </Pressable>
-      {remoteTestResult ? (
-        <Text className="mb-2 text-xs text-neutral-500">{remoteTestResult}</Text>
-      ) : null}
+        <Button
+          label="Send remote test notification"
+          onPress={remoteTest.onPress}
+          disabled={remoteTest.busy}
+          variant="outline"
+          block
+        />
+        {remoteTestResult ? (
+          <AppText variant="caption" tone="muted">
+            {remoteTestResult}
+          </AppText>
+        ) : null}
 
-      <Pressable
-        onPress={scheduleTest.onPress}
-        disabled={scheduleTest.busy}
-        className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 disabled:opacity-50 dark:bg-neutral-800"
-      >
-        <Text className="text-center text-sm text-black dark:text-white">
-          Schedule test reminder (10s)
-        </Text>
-      </Pressable>
-      {testScheduled ? <Text className="mt-1 text-xs text-neutral-500">{testScheduled}</Text> : null}
+        <Button
+          label="Schedule test reminder (10s)"
+          onPress={scheduleTest.onPress}
+          disabled={scheduleTest.busy}
+          variant="outline"
+          block
+        />
+        {testScheduled ? (
+          <AppText variant="caption" tone="muted">
+            {testScheduled}
+          </AppText>
+        ) : null}
 
-      <Pressable
-        onPress={scheduleRebootTest.onPress}
-        disabled={scheduleRebootTest.busy}
-        className="mt-1 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 disabled:opacity-50 dark:bg-neutral-800"
-      >
-        <Text className="text-center text-sm text-black dark:text-white">
-          Schedule reboot test (2m)
-        </Text>
-      </Pressable>
-    </View>
+        <Button
+          label="Schedule reboot test (2m)"
+          onPress={scheduleRebootTest.onPress}
+          disabled={scheduleRebootTest.busy}
+          variant="outline"
+          block
+        />
+      </View>
+    </Card>
   );
 }
 
@@ -355,10 +393,11 @@ function NotifyToggle({
   onChange: (next: boolean) => void;
 }) {
   return (
-    <View className="flex-row items-center justify-between py-2">
-      <Text className="text-black dark:text-white">{label}</Text>
-      <Switch value={value} onValueChange={onChange} accessibilityLabel={label} />
-    </View>
+    <ListRow
+      title={label}
+      trailing={<Switch value={value} onValueChange={onChange} accessibilityLabel={label} />}
+      inset
+    />
   );
 }
 
@@ -376,27 +415,29 @@ function DeviceCard({
   const revokeDevice = useRevokeDevice();
 
   return (
-    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
-      <View className="flex-row items-center justify-between">
-        <Text className="text-base font-bold text-black dark:text-white">
-          {device.name} {isThisDevice ? "(this device)" : ""}
-        </Text>
-        {device.is_primary_reminder_device ? (
-          <Text className="text-xs font-bold text-blue-600">PRIMARY</Text>
-        ) : null}
-      </View>
-      <Text className="mb-2 text-xs text-neutral-500">{device.platform}</Text>
+    <Card className="mb-4">
+      <ListRow
+        icon={device.platform === "web" ? "monitor-dashboard" : "cellphone"}
+        iconTone={device.is_primary_reminder_device ? "primary" : "neutral"}
+        title={`${device.name} ${isThisDevice ? "(this device)" : ""}`}
+        subtitle={device.platform}
+        trailing={
+          device.is_primary_reminder_device ? (
+            <StatusChip label="PRIMARY" tone="primary" icon="bell-ring-outline" />
+          ) : undefined
+        }
+        inset
+      />
 
       {!device.is_primary_reminder_device ? (
-        <Pressable
+        <Button
+          label={setPrimary.isPending ? "Setting" : "Set as primary reminder device"}
           onPress={() => setPrimary.mutate(device.id)}
-          disabled={setPrimary.isPending}
-          className="mb-2 min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
-        >
-          <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
-            {setPrimary.isPending ? "Setting…" : "Set as primary reminder device"}
-          </Text>
-        </Pressable>
+          busy={setPrimary.isPending}
+          variant="tonal"
+          block
+          className="mt-3"
+        />
       ) : null}
 
       <NotifyToggle
@@ -417,30 +458,30 @@ function DeviceCard({
         onChange={(next) => updateDevice.mutate({ id: device.id, body: { notify_digests: next } })}
       />
 
-      <Pressable
+      <Button
+        label={device.revoked_at ? "Revoked" : revokeDevice.isPending ? "Revoking" : "Revoke"}
         onPress={() =>
           confirmDestructive({
-        title: "Revoke this device?",
-        message: device.is_primary_reminder_device
+            title: "Revoke this device?",
+            message: device.is_primary_reminder_device
               ? `${device.name} is the PRIMARY reminder device -- revoking it stops local reminders from firing on any device until you choose a new primary.`
               : `${device.name} will lose access immediately and will need to be paired again to reconnect.`,
-        confirmLabel: "Revoke",
-        onConfirm: () =>
-                  revokeDevice.mutate(device.id, {
-                    onSuccess: () => {
-                      if (isThisDevice) void onThisDeviceRevoked();
-                    },
-                  }),
-      })
+            confirmLabel: "Revoke",
+            onConfirm: () =>
+              revokeDevice.mutate(device.id, {
+                onSuccess: () => {
+                  if (isThisDevice) void onThisDeviceRevoked();
+                },
+              }),
+          })
         }
-        disabled={revokeDevice.isPending || Boolean(device.revoked_at)}
-        className="mt-2 min-h-[44px] justify-center rounded bg-red-100 px-3 py-2 dark:bg-red-950"
-      >
-        <Text className="text-center text-sm text-red-700 dark:text-red-300">
-          {device.revoked_at ? "Revoked" : revokeDevice.isPending ? "Revoking…" : "Revoke"}
-        </Text>
-      </Pressable>
-    </View>
+        busy={revokeDevice.isPending}
+        disabled={Boolean(device.revoked_at)}
+        variant="danger"
+        block
+        className="mt-3"
+      />
+    </Card>
   );
 }
 
@@ -454,20 +495,21 @@ function ReminderEligibilityBanner({ device }: { device: Device | undefined }) {
   if (warning === null) return null;
 
   return (
-    <View className="mb-4 rounded border border-amber-500 bg-amber-50 p-3 dark:bg-amber-950">
-      <Text className="mb-1 text-sm font-bold text-amber-900 dark:text-amber-200">{title}</Text>
-      <Text className="text-xs text-amber-900 dark:text-amber-200">{warning}</Text>
+    <Card className="mb-4" accessibilityRole="alert">
+      <ListRow icon="alert" iconTone="warning" title={title ?? ""} titleTone="warning" inset last />
+      <AppText variant="body" tone="secondary">
+        {warning}
+      </AppText>
       {kind === "degraded" ? (
-        <Pressable
+        <Button
+          label="Open exact-alarm settings"
           onPress={() => ExactAlarmStatus.openExactAlarmSettings()}
-          className="mt-2 min-h-[44px] justify-center rounded bg-amber-200 px-3 py-2 dark:bg-amber-900"
-        >
-          <Text className="text-center text-sm text-amber-900 dark:text-amber-100">
-            Open exact-alarm settings
-          </Text>
-        </Pressable>
+          variant="tonal"
+          block
+          className="mt-3"
+        />
       ) : null}
-    </View>
+    </Card>
   );
 }
 
@@ -481,25 +523,23 @@ function GoogleCalendarRow({
   onToggle: (next: boolean) => void;
 }) {
   return (
-    <View className="flex-row items-center justify-between py-2">
-      <View className="mr-2 flex-1">
-        <Text className="text-black dark:text-white">
-          {calendar.summary}
-          {calendar.primary ? " (primary)" : ""}
-        </Text>
-        {calendar.last_successful_sync_at ? (
-          <Text className="text-xs text-neutral-500">
-            Last synced {new Date(calendar.last_successful_sync_at).toLocaleString()}
-          </Text>
-        ) : null}
-      </View>
-      <Switch
-        value={calendar.sync_enabled}
-        onValueChange={onToggle}
-        disabled={disabled}
-        accessibilityLabel={`Sync ${calendar.summary}${calendar.primary ? " (primary)" : ""}`}
-      />
-    </View>
+    <ListRow
+      title={`${calendar.summary}${calendar.primary ? " (primary)" : ""}`}
+      meta={
+        calendar.last_successful_sync_at
+          ? `Last synced ${new Date(calendar.last_successful_sync_at).toLocaleString()}`
+          : undefined
+      }
+      trailing={
+        <Switch
+          value={calendar.sync_enabled}
+          onValueChange={onToggle}
+          disabled={disabled}
+          accessibilityLabel={`Sync ${calendar.summary}${calendar.primary ? " (primary)" : ""}`}
+        />
+      }
+      inset
+    />
   );
 }
 
@@ -544,28 +584,32 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
   };
 
   return (
-    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
-      <Text className="mb-1 text-base font-bold text-black dark:text-white">
-        {connection.google_account_email}
-      </Text>
-      <Text className="mb-2 text-xs text-neutral-500">Google Calendar · connected</Text>
+    <Card className="mb-4">
+      <ListRow
+        icon="google"
+        iconTone="success"
+        title={connection.google_account_email ?? ""}
+        subtitle="Google Calendar"
+        trailing={
+          <StatusChip
+            label={calendarConnectionChipLabel(connection.status)}
+            tone={calendarConnectionChipTone(connection.status)}
+          />
+        }
+        inset
+      />
 
       {isLoading || isPersistedLoading ? (
-        <Text className="text-neutral-500">Loading calendars…</Text>
+        <AppText variant="body" tone="muted" className="py-2">
+          Loading calendars…
+        </AppText>
       ) : null}
       {isError ? (
-        <View className="mb-2 items-start gap-2">
-          <Text className="text-red-600">Couldn&apos;t load Google calendars.</Text>
-          <Pressable
-            onPress={() => void refetch()}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading Google calendars"
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="text-sm font-medium text-white">Retry</Text>
-          </Pressable>
-        </View>
+        <InlineRetry
+          message="Couldn't load Google calendars."
+          onRetry={() => void refetch()}
+          accessibilityLabel="Retry loading Google calendars"
+        />
       ) : null}
 
       {/* A failed persisted-state fetch must NOT fall through to rendering
@@ -576,20 +620,11 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
           failure instead of a hardcoded stub. Suppress the (misleading)
           toggle list and show a distinct retry affordance instead. */}
       {isPersistedError ? (
-        <View className="mb-2 items-start gap-2">
-          <Text className="text-red-600">
-            Couldn&apos;t load your saved sync settings -- toggles below may not reflect reality.
-          </Text>
-          <Pressable
-            onPress={() => void refetchPersisted()}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading saved sync settings"
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="text-sm font-medium text-white">Retry</Text>
-          </Pressable>
-        </View>
+        <InlineRetry
+          message="Couldn't load your saved sync settings -- toggles below may not reflect reality."
+          onRetry={() => void refetchPersisted()}
+          accessibilityLabel="Retry loading saved sync settings"
+        />
       ) : null}
 
       {/* Suppressed for the WHOLE window the persisted query is not yet
@@ -613,42 +648,41 @@ function GoogleCalendarConnectionCard({ connection }: { connection: CalendarConn
             />
           ))}
 
-      <Pressable
-        onPress={async () => {
-          setSyncResult("Syncing…");
-          try {
-            const result = await syncNow.mutateAsync(connection.id);
-            setSyncResult(`Queued ${result.queued} calendar${result.queued === 1 ? "" : "s"}.`);
-          } catch (err) {
-            setSyncResult(`Failed: ${describeActionFailure(err)}`);
+      <View className="mt-3 flex-row flex-wrap gap-2">
+        <Button
+          label={syncNow.isPending ? "Syncing" : "Sync now"}
+          onPress={async () => {
+            setSyncResult("Syncing…");
+            try {
+              const result = await syncNow.mutateAsync(connection.id);
+              setSyncResult(`Queued ${result.queued} calendar${result.queued === 1 ? "" : "s"}.`);
+            } catch (err) {
+              setSyncResult(`Failed: ${describeActionFailure(err)}`);
+            }
+          }}
+          busy={syncNow.isPending}
+          variant="tonal"
+        />
+        <Button
+          label={disconnect.isPending ? "Disconnecting" : "Disconnect"}
+          onPress={() =>
+            confirmDestructive({
+              title: "Disconnect Google Calendar?",
+              message: `Personal OS will stop syncing with ${connection.google_account_email}. Events already synced stay in Personal OS, but new changes on either side won't be shared until you reconnect.`,
+              confirmLabel: "Disconnect",
+              onConfirm: () => disconnect.mutate(connection.id),
+            })
           }
-        }}
-        disabled={syncNow.isPending}
-        className="mt-2 min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
-      >
-        <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
-          {syncNow.isPending ? "Syncing…" : "Sync now"}
-        </Text>
-      </Pressable>
-      {syncResult ? <Text className="mt-1 text-xs text-neutral-500">{syncResult}</Text> : null}
-
-      <Pressable
-        onPress={() =>
-          confirmDestructive({
-        title: "Disconnect Google Calendar?",
-        message: `Personal OS will stop syncing with ${connection.google_account_email}. Events already synced stay in Personal OS, but new changes on either side won't be shared until you reconnect.`,
-        confirmLabel: "Disconnect",
-        onConfirm: () => disconnect.mutate(connection.id),
-      })
-        }
-        disabled={disconnect.isPending}
-        className="mt-2 min-h-[44px] justify-center rounded bg-red-100 px-3 py-2 dark:bg-red-950"
-      >
-        <Text className="text-center text-sm text-red-700 dark:text-red-300">
-          {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
-        </Text>
-      </Pressable>
-    </View>
+          busy={disconnect.isPending}
+          variant="danger"
+        />
+      </View>
+      {syncResult ? (
+        <AppText variant="caption" tone="muted" className="mt-2">
+          {syncResult}
+        </AppText>
+      ) : null}
+    </Card>
   );
 }
 
@@ -680,111 +714,107 @@ function CaldavCalendarConnectionCard({ connection }: { connection: CalendarConn
   };
 
   return (
-    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
-      <Text className="mb-1 text-base font-bold text-black dark:text-white">
-        {connection.username} ({connection.server_url})
-      </Text>
-      <Text className="mb-2 text-xs text-neutral-500">CalDAV · connected</Text>
+    <Card className="mb-4">
+      <ListRow
+        icon="calendar-sync"
+        iconTone="success"
+        title={`${connection.username} (${connection.server_url})`}
+        subtitle="CalDAV"
+        trailing={
+          <StatusChip
+            label={calendarConnectionChipLabel(connection.status)}
+            tone={calendarConnectionChipTone(connection.status)}
+          />
+        }
+        inset
+      />
 
       {isLoading || isPersistedLoading ? (
-        <Text className="text-neutral-500">Loading calendars…</Text>
+        <AppText variant="body" tone="muted" className="py-2">
+          Loading calendars…
+        </AppText>
       ) : null}
       {isError ? (
-        <View className="mb-2 items-start gap-2">
-          <Text className="text-red-600">Couldn&apos;t load CalDAV calendars.</Text>
-          <Pressable
-            onPress={() => void refetch()}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading CalDAV calendars"
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="text-sm font-medium text-white">Retry</Text>
-          </Pressable>
-        </View>
+        <InlineRetry
+          message="Couldn't load CalDAV calendars."
+          onRetry={() => void refetch()}
+          accessibilityLabel="Retry loading CalDAV calendars"
+        />
       ) : null}
 
       {/* See the identical guard in GoogleCalendarConnectionCard: a failed
           persisted-state fetch must not fall through to rendering every
           toggle as OFF. */}
       {isPersistedError ? (
-        <View className="mb-2 items-start gap-2">
-          <Text className="text-red-600">
-            Couldn&apos;t load your saved sync settings -- toggles below may not reflect reality.
-          </Text>
-          <Pressable
-            onPress={() => void refetchPersisted()}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading saved sync settings"
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="text-sm font-medium text-white">Retry</Text>
-          </Pressable>
-        </View>
+        <InlineRetry
+          message="Couldn't load your saved sync settings -- toggles below may not reflect reality."
+          onRetry={() => void refetchPersisted()}
+          accessibilityLabel="Retry loading saved sync settings"
+        />
       ) : null}
 
       {persistedNotYetReady
         ? null
         : merged.map((cal) => (
-            <View key={cal.key} className="flex-row items-center justify-between py-2">
-              <View className="mr-2 flex-1">
-                <Text className="text-black dark:text-white">{cal.summary}</Text>
-                {cal.last_successful_sync_at ? (
-                  <Text className="text-xs text-neutral-500">
-                    Last synced {new Date(cal.last_successful_sync_at).toLocaleString()}
-                  </Text>
-                ) : null}
-              </View>
-              <Switch
-                value={cal.sync_enabled}
-                onValueChange={(next) => {
-                  if (cal.caldav_calendar_url) {
-                    toggle(cal.caldav_calendar_url, next);
-                  }
-                }}
-                disabled={updateCalendars.isPending}
-                accessibilityLabel={`Sync ${cal.summary}`}
-              />
-            </View>
+            <ListRow
+              key={cal.key}
+              title={cal.summary}
+              meta={
+                cal.last_successful_sync_at
+                  ? `Last synced ${new Date(cal.last_successful_sync_at).toLocaleString()}`
+                  : undefined
+              }
+              trailing={
+                <Switch
+                  value={cal.sync_enabled}
+                  onValueChange={(next) => {
+                    if (cal.caldav_calendar_url) {
+                      toggle(cal.caldav_calendar_url, next);
+                    }
+                  }}
+                  disabled={updateCalendars.isPending}
+                  accessibilityLabel={`Sync ${cal.summary}`}
+                />
+              }
+              inset
+            />
           ))}
 
-      <Pressable
-        onPress={async () => {
-          setSyncResult("Syncing…");
-          try {
-            const result = await syncNow.mutateAsync(connection.id);
-            setSyncResult(`Queued ${result.queued} calendar${result.queued === 1 ? "" : "s"}.`);
-          } catch (err) {
-            setSyncResult(`Failed: ${describeActionFailure(err)}`);
+      <View className="mt-3 flex-row flex-wrap gap-2">
+        <Button
+          label={syncNow.isPending ? "Syncing" : "Sync now"}
+          onPress={async () => {
+            setSyncResult("Syncing…");
+            try {
+              const result = await syncNow.mutateAsync(connection.id);
+              setSyncResult(`Queued ${result.queued} calendar${result.queued === 1 ? "" : "s"}.`);
+            } catch (err) {
+              setSyncResult(`Failed: ${describeActionFailure(err)}`);
+            }
+          }}
+          busy={syncNow.isPending}
+          variant="tonal"
+        />
+        <Button
+          label={disconnect.isPending ? "Disconnecting" : "Disconnect"}
+          onPress={() =>
+            confirmDestructive({
+              title: "Disconnect CalDAV?",
+              message: `Personal OS will stop syncing with ${connection.username} (${connection.server_url}). Events already synced stay in Personal OS, but new changes on either side won't be shared until you reconnect.`,
+              confirmLabel: "Disconnect",
+              onConfirm: () => disconnect.mutate(connection.id),
+            })
           }
-        }}
-        disabled={syncNow.isPending}
-        className="mt-2 min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
-      >
-        <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
-          {syncNow.isPending ? "Syncing…" : "Sync now"}
-        </Text>
-      </Pressable>
-      {syncResult ? <Text className="mt-1 text-xs text-neutral-500">{syncResult}</Text> : null}
-
-      <Pressable
-        onPress={() =>
-          confirmDestructive({
-        title: "Disconnect CalDAV?",
-        message: `Personal OS will stop syncing with ${connection.username} (${connection.server_url}). Events already synced stay in Personal OS, but new changes on either side won't be shared until you reconnect.`,
-        confirmLabel: "Disconnect",
-        onConfirm: () => disconnect.mutate(connection.id),
-      })
-        }
-        disabled={disconnect.isPending}
-        className="mt-2 min-h-[44px] justify-center rounded bg-red-100 px-3 py-2 dark:bg-red-950"
-      >
-        <Text className="text-center text-sm text-red-700 dark:text-red-300">
-          {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
-        </Text>
-      </Pressable>
-    </View>
+          busy={disconnect.isPending}
+          variant="danger"
+        />
+      </View>
+      {syncResult ? (
+        <AppText variant="caption" tone="muted" className="mt-2">
+          {syncResult}
+        </AppText>
+      ) : null}
+    </Card>
   );
 }
 
@@ -844,25 +874,20 @@ function ConnectedCalendarsCard() {
   const connectingGoogle = isAuthorizing || connectGoogle.isPending;
 
   return (
-    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
-      <Text className="mb-2 text-base font-bold text-black dark:text-white">
-        Connected Calendars
-      </Text>
+    <Card className="mb-4">
+      <ListRow icon="calendar-month" iconTone="info" title="Connected Calendars" inset last />
 
-      {isLoading ? <Text className="text-neutral-500">Loading…</Text> : null}
+      {isLoading ? (
+        <AppText variant="body" tone="muted" className="py-2">
+          Loading…
+        </AppText>
+      ) : null}
       {isError ? (
-        <View className="mb-2 items-start gap-2">
-          <Text className="text-red-600">Couldn&apos;t load calendar connections.</Text>
-          <Pressable
-            onPress={() => void refetch()}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading calendar connections"
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="text-sm font-medium text-white">Retry</Text>
-          </Pressable>
-        </View>
+        <InlineRetry
+          message="Couldn't load calendar connections."
+          onRetry={() => void refetch()}
+          accessibilityLabel="Retry loading calendar connections"
+        />
       ) : null}
 
       {/* Google Connections (Android only) */}
@@ -875,68 +900,82 @@ function ConnectedCalendarsCard() {
 
             if (connection.status === "needs_reauth") {
               return (
-                <View
-                  key={connection.id}
-                  className="mb-4 rounded border border-amber-500 bg-amber-50 p-3 dark:bg-amber-950"
-                >
-                  <Text className="mb-1 text-sm font-bold text-amber-900 dark:text-amber-200">
-                    Reconnect Google Calendar
-                  </Text>
-                  <Text className="mb-2 text-xs text-amber-900 dark:text-amber-200">
+                <Card key={connection.id} elevation="flat" className="mb-4">
+                  <ListRow
+                    icon="google"
+                    iconTone="warning"
+                    title="Reconnect Google Calendar"
+                    titleTone="warning"
+                    trailing={
+                      <StatusChip
+                        label={calendarConnectionChipLabel(connection.status)}
+                        tone={calendarConnectionChipTone(connection.status)}
+                      />
+                    }
+                    inset
+                    last
+                  />
+                  <AppText variant="body" tone="secondary">
                     {connection.google_account_email} needs to be reconnected before syncing can
                     continue.
-                  </Text>
+                  </AppText>
                   {calendarSyncErrorCopy(connection.last_sync_error) ? (
-                    <Text className="mb-2 text-xs text-amber-900 dark:text-amber-200">
+                    <AppText variant="label" tone="warning" className="mt-2 font-normal">
                       {calendarSyncErrorCopy(connection.last_sync_error)}
-                    </Text>
+                    </AppText>
                   ) : null}
-                  <Pressable
+                  <Button
+                    label={connectingGoogle ? "Reconnecting" : "Reconnect"}
                     onPress={runGoogleConnect}
-                    disabled={connectingGoogle}
-                    className="min-h-[44px] justify-center rounded bg-amber-200 px-3 py-2 dark:bg-amber-900"
-                  >
-                    <Text className="text-center text-sm text-amber-900 dark:text-amber-100">
-                      {connectingGoogle ? "Reconnecting…" : "Reconnect"}
-                    </Text>
-                  </Pressable>
-                </View>
+                    busy={connectingGoogle}
+                    block
+                    className="mt-3"
+                  />
+                </Card>
               );
             }
 
             return (
-              <View
-                key={connection.id}
-                className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700"
-              >
-                <Text className="mb-2 text-sm text-black dark:text-white">
-                  {connection.google_account_email} — not connected
-                </Text>
-                <Pressable
+              <Card key={connection.id} elevation="flat" className="mb-4">
+                <ListRow
+                  icon="google"
+                  title={connection.google_account_email ?? ""}
+                  trailing={
+                    <StatusChip
+                      label="not connected"
+                      tone={calendarConnectionChipTone(connection.status)}
+                    />
+                  }
+                  inset
+                  last
+                />
+                <Button
+                  label={connectingGoogle ? "Reconnecting" : "Reconnect"}
                   onPress={runGoogleConnect}
-                  disabled={connectingGoogle}
-                  className="min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
-                >
-                  <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
-                    {connectingGoogle ? "Reconnecting…" : "Reconnect"}
-                  </Text>
-                </Pressable>
-              </View>
+                  busy={connectingGoogle}
+                  variant="tonal"
+                  block
+                  className="mt-1"
+                />
+              </Card>
             );
           })}
 
           {googleConnections.length === 0 ? (
-            <Pressable
+            <Button
+              label={connectingGoogle ? "Connecting" : "Connect Google Calendar"}
               onPress={runGoogleConnect}
-              disabled={connectingGoogle}
-              className="mb-3 min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
-            >
-              <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
-                {connectingGoogle ? "Connecting…" : "Connect Google Calendar"}
-              </Text>
-            </Pressable>
+              busy={connectingGoogle}
+              icon="google"
+              block
+              className="mb-3"
+            />
           ) : null}
-          {googleError ? <Text className="mb-3 text-xs text-red-600">{googleError}</Text> : null}
+          {googleError ? (
+            <AppText variant="label" tone="danger" className="mb-3 font-normal">
+              {googleError}
+            </AppText>
+          ) : null}
         </>
       ) : null}
 
@@ -946,37 +985,46 @@ function ConnectedCalendarsCard() {
           return <CaldavCalendarConnectionCard key={connection.id} connection={connection} />;
         }
         return (
-          <View
-            key={connection.id}
-            className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700"
-          >
-            <Text className="mb-2 text-sm text-black dark:text-white">
-              CalDAV ({connection.username}) — disconnected
-            </Text>
+          <Card key={connection.id} elevation="flat" className="mb-4">
+            <ListRow
+              icon="calendar-sync"
+              title={`CalDAV (${connection.username})`}
+              trailing={
+                <StatusChip
+                  label="disconnected"
+                  tone={calendarConnectionChipTone(connection.status)}
+                />
+              }
+              inset
+              last
+            />
             {calendarSyncErrorCopy(connection.last_sync_error) ? (
-              <Text className="mb-2 text-xs text-neutral-500">
+              <AppText variant="label" tone="secondary" className="mb-2 font-normal">
                 {calendarSyncErrorCopy(connection.last_sync_error)}
-              </Text>
+              </AppText>
             ) : null}
-            <Pressable
+            <Button
+              label="Reconnect CalDAV"
               onPress={() => setShowCaldavForm(true)}
-              className="min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
-            >
-              <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
-                Reconnect CalDAV
-              </Text>
-            </Pressable>
-          </View>
+              variant="tonal"
+              block
+              className="mt-1"
+            />
+          </Card>
         );
       })}
 
       {/* CalDAV Connect Button / Form */}
       {caldavConnections.length === 0 || showCaldavForm ? (
         showCaldavForm ? (
-          <View className="mt-2 rounded border border-neutral-200 p-3 dark:border-neutral-800">
-            <Text className="mb-2 font-bold text-black dark:text-white">Connect CalDAV Server</Text>
+          <Card elevation="flat" className="mt-2">
+            <AppText variant="title" className="mb-3">
+              Connect CalDAV Server
+            </AppText>
 
-            <Text className="mb-1 text-xs text-neutral-500">Server URL</Text>
+            <AppText variant="overline" tone="muted" className="mb-1">
+              Server URL
+            </AppText>
             <TextInput
               value={caldavServerUrl}
               onChangeText={setCaldavServerUrl}
@@ -984,10 +1032,12 @@ function ConnectedCalendarsCard() {
               autoCorrect={false}
               placeholder="https://caldav.example.com"
               placeholderTextColor={placeholderColor}
-              className="mb-2 rounded border border-neutral-300 px-2 py-1 text-sm text-black dark:border-neutral-700 dark:text-white"
+              className={INPUT_CLASS}
             />
 
-            <Text className="mb-1 text-xs text-neutral-500">Username / Email</Text>
+            <AppText variant="overline" tone="muted" className="mb-1">
+              Username / Email
+            </AppText>
             <TextInput
               value={caldavUsername}
               onChangeText={setCaldavUsername}
@@ -995,10 +1045,12 @@ function ConnectedCalendarsCard() {
               autoCorrect={false}
               placeholder="username"
               placeholderTextColor={placeholderColor}
-              className="mb-2 rounded border border-neutral-300 px-2 py-1 text-sm text-black dark:border-neutral-700 dark:text-white"
+              className={INPUT_CLASS}
             />
 
-            <Text className="mb-1 text-xs text-neutral-500">App Password / Token</Text>
+            <AppText variant="overline" tone="muted" className="mb-1">
+              App Password / Token
+            </AppText>
             <TextInput
               value={caldavPassword}
               onChangeText={setCaldavPassword}
@@ -1006,44 +1058,42 @@ function ConnectedCalendarsCard() {
               autoCapitalize="none"
               placeholder="password"
               placeholderTextColor={placeholderColor}
-              className="mb-2 rounded border border-neutral-300 px-2 py-1 text-sm text-black dark:border-neutral-700 dark:text-white"
+              className={INPUT_CLASS}
             />
 
-            {caldavError ? <Text className="mb-2 text-xs text-red-600">{caldavError}</Text> : null}
+            {caldavError ? (
+              <AppText variant="label" tone="danger" className="mb-2 font-normal">
+                {caldavError}
+              </AppText>
+            ) : null}
 
             <View className="flex-row gap-2">
-              <Pressable
+              <Button
+                label={connectCaldav.isPending ? "Connecting" : "Connect"}
                 onPress={runCaldavConnect}
-                disabled={connectCaldav.isPending}
-                className="flex-1 min-h-[44px] justify-center rounded bg-blue-600 px-3 py-2"
-              >
-                <Text className="text-center text-sm font-bold text-white">
-                  {connectCaldav.isPending ? "Connecting…" : "Connect"}
-                </Text>
-              </Pressable>
-              <Pressable
+                busy={connectCaldav.isPending}
+                className="flex-1"
+              />
+              <Button
+                label="Cancel"
                 onPress={() => {
                   setShowCaldavForm(false);
                   setCaldavError(null);
                 }}
-                className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
-              >
-                <Text className="text-center text-sm text-black dark:text-white">Cancel</Text>
-              </Pressable>
+                variant="ghost"
+              />
             </View>
-          </View>
+          </Card>
         ) : (
-          <Pressable
+          <Button
+            label="Connect CalDAV Calendar"
             onPress={() => setShowCaldavForm(true)}
-            className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
-          >
-            <Text className="text-center text-sm text-black dark:text-white">
-              Connect CalDAV Calendar
-            </Text>
-          </Pressable>
+            variant="outline"
+            block
+          />
         )
       ) : null}
-    </View>
+    </Card>
   );
 }
 
@@ -1074,20 +1124,8 @@ const MAIL_STATUS_TEXT: Record<MailConnectionDisplayState, string> = {
   connected: "Connected to Gmail.",
 };
 
-function mailStatusToneClass(state: MailConnectionDisplayState): string {
-  switch (state) {
-    case "unavailable":
-      return "text-red-600 dark:text-red-400";
-    case "needs_reconnect":
-    case "error":
-      return "text-amber-700 dark:text-amber-300";
-    case "not_configured":
-    case "not_connected":
-    case "disconnected":
-    case "connected":
-      return "text-black dark:text-white";
-  }
-}
+// The status chip's tone per state lives in components/settings/status-tone.ts
+// (Checkpoint 10.3), a pure map with its own test.
 
 function ConnectedMailCard() {
   const connectionsQuery = useMailConnections();
@@ -1155,16 +1193,26 @@ function ConnectedMailCard() {
   };
 
   return (
-    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
-      <Text className="mb-2 text-base font-bold text-black dark:text-white">Mail</Text>
+    <Card className="mb-4">
+      <ListRow
+        icon="email-outline"
+        iconTone={connectionsQuery.isLoading ? "neutral" : mailConnectionChipTone(overallState)}
+        title="Mail"
+        trailing={
+          connectionsQuery.isLoading ? undefined : (
+            <StatusChip
+              label={overallState.replace(/_/g, " ")}
+              tone={mailConnectionChipTone(overallState)}
+            />
+          )
+        }
+        inset
+        last
+      />
 
-      <Text
-        className={`min-h-[20px] text-sm ${
-          connectionsQuery.isLoading ? "text-neutral-500" : mailStatusToneClass(overallState)
-        }`}
-      >
+      <AppText variant="body" tone="secondary" className="min-h-[20px]">
         {connectionsQuery.isLoading ? "Loading…" : MAIL_STATUS_TEXT[overallState]}
-      </Text>
+      </AppText>
 
       {connections.map((connection) => {
         const state = resolveMailConnectionState({ configured, connection, isLoadError });
@@ -1173,35 +1221,34 @@ function ConnectedMailCard() {
         // an address in a push body, a log line, a commit message or a status
         // document -- none of which this is.
         return (
-          <View key={connection.id} className="mt-3 border-t border-neutral-200 pt-3 dark:border-neutral-800">
-            <Text className="text-sm text-black dark:text-white">
-              {connection.external_account_id}
-            </Text>
-            <Text className={`mt-1 text-xs ${mailStatusToneClass(state)}`}>
-              {MAIL_STATUS_TEXT[state]}
-            </Text>
+          <View key={connection.id} className="mt-3">
+            <ListRow
+              title={connection.external_account_id}
+              subtitle={MAIL_STATUS_TEXT[state]}
+              trailing={
+                <StatusChip label={state.replace(/_/g, " ")} tone={mailConnectionChipTone(state)} />
+              }
+              inset
+              last
+            />
             {/* A CODE from a closed enum reaches this component, never provider
                 prose -- and it is mapped to words here rather than printed, so a
                 bare token like `cursor_expired` never faces the user. */}
             {mailSyncErrorCopy(connection.last_sync_error) === null ? null : (
-              <Text className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+              <AppText variant="label" tone="warning" className="mt-1 font-normal">
                 {mailSyncErrorCopy(connection.last_sync_error)}
-              </Text>
+              </AppText>
             )}
             {canDisconnectMail(state, connection) ? (
-              <Pressable
+              <Button
+                label={disconnectingId === connection.id ? "Disconnecting" : "Disconnect"}
                 onPress={() => confirmDisconnect(connection)}
+                busy={disconnectingId === connection.id}
                 disabled={disconnectingId !== null}
-                accessibilityRole="button"
-                accessibilityState={{ disabled: disconnectingId !== null }}
                 accessibilityLabel={`Disconnect ${connection.external_account_id}`}
-                hitSlop={8}
-                className="mt-2 min-h-[44px] justify-center self-start rounded bg-red-600 px-3 py-2 active:opacity-70"
-              >
-                <Text className="text-sm font-medium text-white">
-                  {disconnectingId === connection.id ? "Disconnecting…" : "Disconnect"}
-                </Text>
-              </Pressable>
+                variant="danger"
+                className="mt-2"
+              />
             ) : null}
           </View>
         );
@@ -1209,41 +1256,36 @@ function ConnectedMailCard() {
 
       <View className="mt-3 flex-row flex-wrap gap-2">
         {canConnectMail(overallState) ? (
-          <Pressable
-            onPress={connectPress.onPress}
-            disabled={connectPress.busy || authorizeUrl.isPending}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: connectPress.busy || authorizeUrl.isPending }}
-            hitSlop={8}
-            className="min-h-[44px] justify-center rounded bg-blue-600 px-3 py-2 active:opacity-70"
-          >
-            <Text className="text-sm font-medium text-white">
-              {connectPress.busy
-                ? "Opening…"
+          <Button
+            label={
+              connectPress.busy
+                ? "Opening"
                 : connections.length === 0
                   ? "Connect Gmail"
-                  : "Reconnect Gmail"}
-            </Text>
-          </Pressable>
+                  : "Reconnect Gmail"
+            }
+            onPress={connectPress.onPress}
+            busy={connectPress.busy}
+            disabled={authorizeUrl.isPending}
+          />
         ) : null}
 
-        <Pressable
+        <Button
+          label="Refresh"
           onPress={() => void connectionsQuery.refetch()}
-          accessibilityRole="button"
           accessibilityLabel="Refresh mail connection status"
-          hitSlop={8}
-          className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 active:opacity-70 dark:bg-neutral-800"
-        >
-          <Text className="text-sm font-medium text-black dark:text-white">Refresh</Text>
-        </Pressable>
+          variant="outline"
+        />
       </View>
 
       {/* `useBusyPress` swallows rejections, so the action itself writes this
           line -- without it a failure would be completely silent. */}
       {notice === null ? null : (
-        <Text className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">{notice}</Text>
+        <AppText variant="caption" tone="secondary" className="mt-2">
+          {notice}
+        </AppText>
       )}
-    </View>
+    </Card>
   );
 }
 
@@ -1263,21 +1305,6 @@ function ConnectedMailCard() {
 // Typed through `Href` for the reason health-today-card.tsx records: the
 // route union is a generated artifact that may predate this route.
 const ACADEMIC_ROUTE = "/academic" as Href;
-
-function canvasStatusToneClass(state: CanvasConnectionDisplayState): string {
-  switch (state) {
-    case "unavailable":
-      return "text-red-600 dark:text-red-400";
-    case "needs_reconnect":
-    case "error":
-      return "text-amber-700 dark:text-amber-300";
-    case "not_configured":
-    case "not_connected":
-    case "disconnected":
-    case "connected":
-      return "text-black dark:text-white";
-  }
-}
 
 const CANVAS_STATUS_TEXT: Record<CanvasConnectionDisplayState, string> = {
   // We could not read it, so we assert nothing. Saying "not connected" here
@@ -1350,73 +1377,64 @@ function CanvasConnectionRow({ connection }: { connection: CanvasConnection }) {
   };
 
   return (
-    <View className="mt-3 border-t border-neutral-200 pt-3 dark:border-neutral-800">
-      <Text className="text-sm text-black dark:text-white">{connection.canvas_base_url}</Text>
-      {connection.canvas_user_name ? (
-        <Text className="text-xs text-neutral-500 dark:text-neutral-400">
-          {connection.canvas_user_name}
-        </Text>
-      ) : null}
-      <Text className={`mt-1 text-xs ${canvasStatusToneClass(state)}`}>
-        {CANVAS_STATUS_TEXT[state]}
-      </Text>
+    <View className="mt-3">
+      <ListRow
+        title={connection.canvas_base_url}
+        subtitle={connection.canvas_user_name ?? undefined}
+        meta={CANVAS_STATUS_TEXT[state]}
+        trailing={
+          <StatusChip label={state.replace(/_/g, " ")} tone={canvasConnectionChipTone(state)} />
+        }
+        inset
+        last
+      />
 
       {/* A CODE from a closed vocabulary reaches this component, never
           provider prose -- mapped to words here so a bare token like
           `auth_failed` never faces the owner. */}
       {canvasSyncErrorCopy(connection.last_sync_error) === null ? null : (
-        <Text className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+        <AppText variant="label" tone="warning" className="mt-1 font-normal">
           {canvasSyncErrorCopy(connection.last_sync_error)}
-        </Text>
+        </AppText>
       )}
 
-      <Text className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+      <AppText variant="caption" tone="muted" className="mt-1">
         {connection.last_sync_at
           ? `Last synced ${new Date(connection.last_sync_at).toLocaleString()}`
           : "Never synced"}
-      </Text>
+      </AppText>
       {syncCounts.length > 0 ? (
-        <Text className="text-xs text-neutral-500 dark:text-neutral-400">
+        <AppText variant="caption" tone="muted">
           {syncCounts.join(" · ")}
-        </Text>
+        </AppText>
       ) : null}
 
-      <View className="mt-2 flex-row flex-wrap gap-2">
+      <View className="mt-3 flex-row flex-wrap gap-2">
         {state === "connected" || state === "error" ? (
-          <Pressable
+          <Button
+            label={triggerSync.isPending ? "Requesting" : "Sync now"}
             onPress={onSync}
-            disabled={triggerSync.isPending}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: triggerSync.isPending }}
+            busy={triggerSync.isPending}
             accessibilityLabel={`Sync ${connection.canvas_base_url} now`}
-            hitSlop={8}
-            className="min-h-[44px] justify-center rounded bg-blue-100 px-3 py-2 dark:bg-blue-950"
-          >
-            <Text className="text-sm font-medium text-blue-700 dark:text-blue-300">
-              {triggerSync.isPending ? "Requesting…" : "Sync now"}
-            </Text>
-          </Pressable>
+            variant="tonal"
+          />
         ) : null}
 
         {canDisconnectCanvas(state, connection) ? (
-          <Pressable
+          <Button
+            label={disconnect.isPending ? "Disconnecting" : "Disconnect"}
             onPress={confirmDisconnect}
-            disabled={disconnect.isPending}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: disconnect.isPending }}
+            busy={disconnect.isPending}
             accessibilityLabel={`Disconnect ${connection.canvas_base_url}`}
-            hitSlop={8}
-            className="min-h-[44px] justify-center rounded bg-red-600 px-3 py-2 active:opacity-70"
-          >
-            <Text className="text-sm font-medium text-white">
-              {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
-            </Text>
-          </Pressable>
+            variant="danger"
+          />
         ) : null}
       </View>
 
       {notice === null ? null : (
-        <Text className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">{notice}</Text>
+        <AppText variant="caption" tone="secondary" className="mt-2">
+          {notice}
+        </AppText>
       )}
     </View>
   );
@@ -1453,44 +1471,40 @@ function ConnectedCanvasCard() {
   };
 
   return (
-    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
-      <Text className="mb-2 text-base font-bold text-black dark:text-white">Canvas</Text>
+    <Card className="mb-4">
+      <ListRow
+        icon="school"
+        iconTone={connectionsQuery.isLoading ? "neutral" : canvasConnectionChipTone(overallState)}
+        title="Canvas"
+        trailing={
+          connectionsQuery.isLoading ? undefined : (
+            <StatusChip
+              label={overallState.replace(/_/g, " ")}
+              tone={canvasConnectionChipTone(overallState)}
+            />
+          )
+        }
+        inset
+        last
+      />
 
-      <Text
-        className={`min-h-[20px] text-sm ${
-          connectionsQuery.isLoading ? "text-neutral-500" : canvasStatusToneClass(overallState)
-        }`}
-      >
+      <AppText variant="body" tone="secondary" className="min-h-[20px]">
         {connectionsQuery.isLoading ? "Loading…" : CANVAS_STATUS_TEXT[overallState]}
-      </Text>
+      </AppText>
 
       {connections.map((connection) => (
         <CanvasConnectionRow key={connection.id} connection={connection} />
       ))}
 
-      {/* Checkpoint 10.2: the way through to the synced courses, offered only
-          while something is actually syncing -- the same gate the Health card
-          applies to "View health data" below. */}
-      {connections.some((connection) => connection.status === "active") ? (
-        <Link href={ACADEMIC_ROUTE} asChild>
-          <Pressable
-            hitSlop={8}
-            accessibilityRole="link"
-            accessibilityLabel="View courses"
-            className="mt-3 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
-          >
-            <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
-              View courses
-            </Text>
-          </Pressable>
-        </Link>
-      ) : null}
-
       {showForm ? (
-        <View className="mt-3 rounded border border-neutral-200 p-3 dark:border-neutral-800">
-          <Text className="mb-2 font-bold text-black dark:text-white">Connect Canvas</Text>
+        <Card elevation="flat" className="mt-3">
+          <AppText variant="title" className="mb-3">
+            Connect Canvas
+          </AppText>
 
-          <Text className="mb-1 text-xs text-neutral-500">Canvas instance URL</Text>
+          <AppText variant="overline" tone="muted" className="mb-1">
+            Canvas instance URL
+          </AppText>
           <TextInput
             value={canvasUrl}
             onChangeText={setCanvasUrl}
@@ -1499,12 +1513,14 @@ function ConnectedCanvasCard() {
             keyboardType="url"
             placeholder="https://yourschool.instructure.com"
             placeholderTextColor={placeholderColor}
-            className="mb-2 rounded border border-neutral-300 px-2 py-1 text-sm text-black dark:border-neutral-700 dark:text-white"
+            className={INPUT_CLASS}
           />
 
           {/* A live credential typed in, so it is masked like the one other
               secret field in this screen (CalDAV's App Password / Token). */}
-          <Text className="mb-1 text-xs text-neutral-500">Personal access token</Text>
+          <AppText variant="overline" tone="muted" className="mb-1">
+            Personal access token
+          </AppText>
           <TextInput
             value={canvasToken}
             onChangeText={setCanvasToken}
@@ -1512,48 +1528,73 @@ function ConnectedCanvasCard() {
             autoCapitalize="none"
             placeholder="access token"
             placeholderTextColor={placeholderColor}
-            className="mb-2 rounded border border-neutral-300 px-2 py-1 text-sm text-black dark:border-neutral-700 dark:text-white"
+            className={INPUT_CLASS}
           />
 
-          {formError ? <Text className="mb-2 text-xs text-red-600">{formError}</Text> : null}
+          {formError ? (
+            <AppText variant="label" tone="danger" className="mb-2 font-normal">
+              {formError}
+            </AppText>
+          ) : null}
 
           <View className="flex-row gap-2">
-            <Pressable
+            <Button
+              label={connectCanvas.isPending ? "Connecting" : "Connect"}
               onPress={() => void runConnect()}
-              disabled={connectCanvas.isPending}
-              accessibilityRole="button"
-              accessibilityState={{ disabled: connectCanvas.isPending }}
-              className="min-h-[44px] flex-1 justify-center rounded bg-blue-600 px-3 py-2"
-            >
-              <Text className="text-center text-sm font-bold text-white">
-                {connectCanvas.isPending ? "Connecting…" : "Connect"}
-              </Text>
-            </Pressable>
-            <Pressable
+              busy={connectCanvas.isPending}
+              className="flex-1"
+            />
+            <Button
+              label="Cancel"
               onPress={() => {
                 setShowForm(false);
                 setFormError(null);
               }}
-              accessibilityRole="button"
-              className="min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
-            >
-              <Text className="text-center text-sm text-black dark:text-white">Cancel</Text>
-            </Pressable>
+              variant="ghost"
+            />
           </View>
-        </View>
+        </Card>
       ) : canConnectCanvas(overallState) ? (
-        <Pressable
+        <Button
+          label={connections.length === 0 ? "Connect Canvas" : "Connect another Canvas account"}
           onPress={() => setShowForm(true)}
-          accessibilityRole="button"
-          hitSlop={8}
-          className="mt-3 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
-        >
-          <Text className="text-center text-sm text-black dark:text-white">
-            {connections.length === 0 ? "Connect Canvas" : "Connect another Canvas account"}
-          </Text>
-        </Pressable>
+          variant="outline"
+          block
+          className="mt-3"
+        />
       ) : null}
-    </View>
+    </Card>
+  );
+}
+
+// Checkpoint 10.2's way through to the synced courses, now its own section
+// (Checkpoint 10.3) rather than a button inside the Canvas card. The gate is
+// unchanged: offered only while a Canvas connection is actually syncing --
+// the same gate the Health card applies to "View health data". The query is
+// the one the Canvas card already holds; TanStack dedupes the subscription.
+function AcademicsSection() {
+  const router = useRouter();
+  const connectionsQuery = useCanvasConnections();
+  const connections = connectionsQuery.data?.items ?? [];
+  if (!connections.some((connection) => connection.status === "active")) return null;
+
+  return (
+    <>
+      <SectionHeader title="Academics" icon="school" />
+      <Card padding="none" className="mb-4 px-4">
+        <ListRow
+          icon="book-open-variant"
+          iconTone="info"
+          title="View courses"
+          chevron
+          onPress={() => router.push(ACADEMIC_ROUTE)}
+          accessibilityRole="link"
+          accessibilityLabel="View courses"
+          inset
+          last
+        />
+      </Card>
+    </>
   );
 }
 
@@ -1578,31 +1619,35 @@ function MonitoringCard() {
       ? describeMonitorSummary(overview.data.configured, overview.data.active_incident_count)
       : "Loading…";
 
-  const tone = overview.isError
-    ? "text-red-600 dark:text-red-400"
-    : (overview.data?.active_incident_count ?? 0) > 0
-      ? "text-red-600 dark:text-red-400"
-      : "text-black dark:text-white";
+  const tone = monitorSummaryTone(overview.isError, overview.data?.active_incident_count ?? 0);
 
   return (
-    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
-      <Text className="mb-2 text-base font-bold text-black dark:text-white">Service monitoring</Text>
-      <Text className={`min-h-[20px] text-sm ${tone}`}>{summary}</Text>
-      <Text className="min-h-[16px] text-xs text-neutral-500">
+    <Card className="mb-4">
+      <ListRow
+        icon="monitor-dashboard"
+        iconTone={tone === "danger" ? "danger" : "neutral"}
+        title="Service monitoring"
+        inset
+        last
+      />
+      <AppText variant="body" tone={tone} className="min-h-[20px]">
+        {summary}
+      </AppText>
+      <AppText variant="caption" tone="muted" className="min-h-[16px]">
         {overview.data && overview.data.configured
           ? `${overview.data.items.length} target${overview.data.items.length === 1 ? "" : "s"}`
           : ""}
-      </Text>
-      <Pressable
+      </AppText>
+      <ListRow
+        title="View monitoring"
+        chevron
         onPress={() => router.push(MONITOR_ROUTE)}
-        accessibilityRole="button"
         accessibilityLabel="View service monitoring"
-        hitSlop={8}
-        className="mt-2 min-h-[44px] justify-center self-start rounded bg-neutral-200 px-3 py-2 active:opacity-70 dark:bg-neutral-800"
-      >
-        <Text className="text-sm font-medium text-black dark:text-white">View monitoring</Text>
-      </Pressable>
-    </View>
+        inset
+        last
+        className="mt-1"
+      />
+    </Card>
   );
 }
 
@@ -1640,25 +1685,6 @@ const HEALTH_STATUS_TEXT: Record<HealthConnectionDisplayState, string> = {
   current: "Connected to Google Health.",
 };
 
-/** Neutral for the healthy and in-flight states; amber for degraded-but-live. */
-function healthStatusToneClass(state: HealthConnectionDisplayState): string {
-  switch (state) {
-    case "unavailable":
-      return "text-red-600 dark:text-red-400";
-    case "needs_reconnect":
-    case "no_streams_enabled":
-    case "partial_scope":
-    case "stale":
-    case "error":
-      return "text-amber-700 dark:text-amber-300";
-    case "not_configured":
-    case "not_connected":
-    case "syncing":
-    case "current":
-      return "text-black dark:text-white";
-  }
-}
-
 /**
  * "Data through Aug 23 · 2 days behind."
  *
@@ -1676,7 +1702,11 @@ function healthFreshnessLine(description: FreshnessDescription): string {
   return `${through} · ${days} day${days === 1 ? "" : "s"} behind.`;
 }
 
+// Typed through `Href` for the reason health-today-card.tsx records.
+const HEALTH_ROUTE = "/health" as Href;
+
 function ConnectedHealthCard() {
+  const router = useRouter();
   const { data, isError } = useHealthSummary();
 
   // A null state means the first load is still in flight. Every line below
@@ -1698,56 +1728,63 @@ function ConnectedHealthCard() {
       : null;
 
   return (
-    <View className="mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
-      <Text className="mb-2 text-base font-bold text-black dark:text-white">Health</Text>
+    <Card className="mb-4">
+      <ListRow
+        icon="heart-pulse"
+        iconTone={state === null ? "neutral" : healthConnectionChipTone(state)}
+        title="Health"
+        trailing={
+          state === null ? undefined : (
+            <StatusChip label={state.replace(/_/g, " ")} tone={healthConnectionChipTone(state)} />
+          )
+        }
+        inset
+        last
+      />
 
-      <Text
-        className={`min-h-[20px] text-sm ${state === null ? "text-neutral-500" : healthStatusToneClass(state)}`}
-      >
+      <AppText variant="body" tone="secondary" className="min-h-[20px]">
         {state === null ? "Loading…" : HEALTH_STATUS_TEXT[state]}
-      </Text>
+      </AppText>
 
-      <Text className="min-h-[16px] text-xs text-neutral-500">
+      <AppText variant="caption" tone="muted" className="min-h-[16px]">
         {freshness === null ? "" : healthFreshnessLine(freshness)}
-      </Text>
+      </AppText>
 
       {state === "partial_scope" ? (
         // Deliberately no scope URLs on screen -- they are implementation
         // detail and read as noise. Which streams are affected is visible on
         // the /health screen, per metric, where it is actionable.
-        <Text className="mt-1 text-xs text-neutral-500">
+        <AppText variant="caption" tone="muted" className="mt-1">
           Some data types weren&apos;t granted permission, so those stay empty here.
-        </Text>
+        </AppText>
       ) : null}
 
       {/* The single most useful thing a user can know when the dashboard looks
           empty, and Settings is where they will come looking for it. */}
-      <Text className="mt-2 text-xs text-neutral-500">
+      <AppText variant="caption" tone="muted" className="mt-2">
         Personal OS reads what&apos;s already in Google Health, so a watch or app has to send its
         data there first.
-      </Text>
+      </AppText>
 
       {state === "not_configured" ? (
         // Nothing to navigate to, and nothing to offer: connecting is a
         // server-side step this screen deliberately does not perform.
-        <Text className="mt-2 min-h-[44px] py-3 text-sm text-neutral-500">
+        <AppText variant="body" tone="muted" className="mt-2 min-h-[44px] py-3">
           There&apos;s nothing to show until Google Health is set up on the server.
-        </Text>
+        </AppText>
       ) : (
-        <Link href="/health" asChild>
-          <Pressable
-            hitSlop={8}
-            accessibilityRole="link"
-            accessibilityLabel="View health data"
-            className="mt-2 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-2 dark:bg-neutral-800"
-          >
-            <Text className="text-center text-sm text-blue-700 dark:text-blue-300">
-              View health data
-            </Text>
-          </Pressable>
-        </Link>
+        <ListRow
+          title="View health data"
+          chevron
+          onPress={() => router.push(HEALTH_ROUTE)}
+          accessibilityRole="link"
+          accessibilityLabel="View health data"
+          inset
+          last
+          className="mt-1"
+        />
       )}
-    </View>
+    </Card>
   );
 }
 
@@ -1782,77 +1819,103 @@ export default function SettingsScreen() {
   const isRevokedSession = devicesErrorStatus === 401;
 
   return (
-    <SafeAreaView className="flex-1 bg-white dark:bg-black">
-      <ScrollView
-        className="flex-1"
-        // Extra room so lower controls can be scrolled clear of the IME --
-        // see components/use-keyboard-height.ts for why insets alone don't do it.
-        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
-        keyboardShouldPersistTaps="handled"
-      >
-        <Text className="mb-4 text-xl font-bold text-black dark:text-white">Devices</Text>
-
-        <ReminderEligibilityBanner device={thisDevice} />
-        <ConnectedCalendarsCard />
-        <ConnectedHealthCard />
-        <ConnectedMailCard />
-        <ConnectedCanvasCard />
-        <MonitoringCard />
-        <CloudAskCard />
-        <NotificationDiagnostics />
-        <OutboxDiagnostics />
-
-        {isLoading ? <Text className="text-neutral-500">Loading…</Text> : null}
-        {isError ? (
-          isRevokedSession ? (
-            <View className="mb-4 rounded border border-amber-500 bg-amber-50 p-3 dark:bg-amber-950">
-              <Text className="mb-1 text-sm font-bold text-amber-900 dark:text-amber-200">
-                This device is no longer registered
-              </Text>
-              <Text className="mb-2 text-xs text-amber-900 dark:text-amber-200">
-                Pair it again to restore reminders and notifications.
-              </Text>
-              <Pressable
-                onPress={confirmForgetThisDevice}
-                className="min-h-[44px] justify-center rounded bg-amber-200 px-3 py-2 dark:bg-amber-900"
-              >
-                <Text className="text-center text-sm text-amber-900 dark:text-amber-100">
-                  Forget this device
-                </Text>
-              </Pressable>
-            </View>
-          ) : (
-            <View className="mb-4 items-start gap-2">
-              <Text className="text-red-600">Couldn&apos;t load devices.</Text>
-              <Pressable
-                onPress={() => void refetch()}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="Retry loading devices"
-                className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-              >
-                <Text className="font-semibold text-white">Retry</Text>
-              </Pressable>
-            </View>
-          )
-        ) : null}
-
-        {data?.items.map((device) => (
-          <DeviceCard
-            key={device.id}
-            device={device}
-            isThisDevice={device.id === identity?.deviceId}
-            onThisDeviceRevoked={forgetThisDevice}
-          />
-        ))}
-
-        <Pressable
-          onPress={confirmForgetThisDevice}
-          className="mt-4 min-h-[44px] justify-center rounded bg-neutral-200 px-3 py-3 dark:bg-neutral-800"
+    // Not the `Screen` primitive: this screen must express its bottom padding
+    // through `contentContainerStyle` alone (the keyboard height is added to
+    // it), and floating-layout.ts records why a `contentContainerClassName`
+    // must never be set alongside it. So the canvas comes from `ScreenFrame`
+    // and the ScrollView stays explicit.
+    <ScreenFrame>
+      <SafeAreaView className="flex-1">
+        <ScrollView
+          className="flex-1"
+          // Extra room so lower controls can be scrolled clear of the IME --
+          // see components/use-keyboard-height.ts for why insets alone don't do it.
+          contentContainerStyle={{
+            paddingHorizontal: 16,
+            paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight,
+          }}
+          keyboardShouldPersistTaps="handled"
         >
-          <Text className="text-center text-black dark:text-white">Forget this device</Text>
-        </Pressable>
-      </ScrollView>
-    </SafeAreaView>
+          {/* First on the screen, before any section (ADR-036): when reminders
+              cannot fire on this device, that outranks every integration. It
+              renders nothing when there is nothing to warn about. */}
+          <View className="pt-4">
+            <ReminderEligibilityBanner device={thisDevice} />
+          </View>
+
+          <SectionHeader title="Integrations" icon="link-variant" />
+          <ConnectedCanvasCard />
+          <ConnectedCalendarsCard />
+          <ConnectedMailCard />
+          <ConnectedHealthCard />
+
+          <AcademicsSection />
+
+          <SectionHeader title="Monitoring" icon="monitor-dashboard" />
+          <MonitoringCard />
+
+          <SectionHeader title="Devices" icon="cellphone" />
+
+          {isLoading ? (
+            <AppText variant="body" tone="muted" className="mb-4">
+              Loading…
+            </AppText>
+          ) : null}
+          {isError ? (
+            isRevokedSession ? (
+              <Card className="mb-4" accessibilityRole="alert">
+                <ListRow
+                  icon="alert"
+                  iconTone="warning"
+                  title="This device is no longer registered"
+                  titleTone="warning"
+                  inset
+                  last
+                />
+                <AppText variant="body" tone="secondary">
+                  Pair it again to restore reminders and notifications.
+                </AppText>
+                <Button
+                  label="Forget this device"
+                  onPress={confirmForgetThisDevice}
+                  variant="tonal"
+                  block
+                  className="mt-3"
+                />
+              </Card>
+            ) : (
+              <InlineRetry
+                message="Couldn't load devices."
+                onRetry={() => void refetch()}
+                accessibilityLabel="Retry loading devices"
+              />
+            )
+          ) : null}
+
+          {data?.items.map((device) => (
+            <DeviceCard
+              key={device.id}
+              device={device}
+              isThisDevice={device.id === identity?.deviceId}
+              onThisDeviceRevoked={forgetThisDevice}
+            />
+          ))}
+
+          <Button
+            label="Forget this device"
+            onPress={confirmForgetThisDevice}
+            variant="outline"
+            block
+          />
+
+          <SectionHeader title="Diagnostics" icon="wrench-outline" />
+          <NotificationDiagnostics />
+          <OutboxDiagnostics />
+
+          <SectionHeader title="Privacy & AI" icon="shield-outline" />
+          <CloudAskCard />
+        </ScrollView>
+      </SafeAreaView>
+    </ScreenFrame>
   );
 }

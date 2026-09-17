@@ -18,16 +18,16 @@
 //    is connected, disconnected, or last synced at some time -- we cannot
 //    see any of that, and guessing would be the single most misleading thing
 //    this card could do.
-import { Pressable, Text, View } from "react-native";
+import { View } from "react-native";
 import type { HealthConnectionSummary, HealthFreshnessDetail } from "@personal-os/schema";
+import { AppText, Button, Card, ListRow, StatusChip } from "@/components/ui";
 import { formatShortDate } from "@/utils/local-date";
 import {
   canRequestSync,
   describeFreshness,
   type HealthConnectionDisplayState,
 } from "./connection-state";
-
-const CARD_CLASS = "mx-4 mb-3 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800";
+import { healthConnectionChipTone } from "./connection-tone";
 
 /**
  * The single most useful sentence on this screen.
@@ -63,50 +63,6 @@ export function scopeLabel(scope: string): string {
   const words = core.split(/[._-]+/).filter(Boolean).join(" ");
   if (words.length === 0) return scope;
   return words.charAt(0).toUpperCase() + words.slice(1);
-}
-
-function ActionButton({
-  label,
-  onPress,
-  disabled,
-  tone = "default",
-}: {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  tone?: "default" | "secondary";
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      accessibilityRole="button"
-      // The prop, not just the dimming: a screen reader has to be told the
-      // control is unavailable, and a visually dimmed but still-pressable
-      // button is the exact shape that fires a second sync.
-      accessibilityState={{ disabled: disabled === true }}
-      hitSlop={8}
-      className={`min-h-[44px] items-center justify-center rounded-lg px-4 py-2 active:opacity-70 ${
-        disabled === true
-          ? "bg-neutral-200 dark:bg-neutral-800"
-          : tone === "secondary"
-            ? "border border-neutral-300 dark:border-neutral-700"
-            : "bg-blue-600"
-      }`}
-    >
-      <Text
-        className={`text-sm font-semibold ${
-          disabled === true
-            ? "text-neutral-500 dark:text-neutral-400"
-            : tone === "secondary"
-              ? "text-neutral-700 dark:text-neutral-200"
-              : "text-white"
-        }`}
-      >
-        {label}
-      </Text>
-    </Pressable>
-  );
 }
 
 interface CopyBlock {
@@ -300,64 +256,70 @@ export function HealthConnectionCard({
   const missingScopes = state === "partial_scope" ? (connection?.missing_scopes ?? []) : [];
 
   return (
-    <View className={CARD_CLASS}>
-      <Text className="text-base font-medium text-black dark:text-white">Google Health</Text>
-      <Text
-        className={`mt-1 text-sm font-medium ${
-          copy.tone === "warning"
-            ? "text-amber-700 dark:text-amber-400"
-            : "text-neutral-600 dark:text-neutral-300"
-        }`}
-      >
-        {copy.status}
-      </Text>
-      <Text className="mt-1 text-sm leading-5 text-neutral-600 dark:text-neutral-400">
+    <Card>
+      <ListRow icon="heart-pulse" iconTone="success" title="Google Health" inset last />
+
+      {/* The status is a WORD about state, so it is a chip (never tappable);
+          its tone follows the copy's own neutral/warning split through the
+          pure map in connection-tone.ts. */}
+      <StatusChip
+        label={copy.status}
+        tone={healthConnectionChipTone(state)}
+        size="md"
+        className="mt-1"
+      />
+      <AppText variant="body" tone="secondary" className="mt-2">
         {copy.body}
-      </Text>
+      </AppText>
 
       {missingScopes.length > 0 ? (
-        <View className="mt-2">
-          <Text className="text-xs font-semibold uppercase text-neutral-500 dark:text-neutral-400">
+        <View className="mt-3">
+          <AppText variant="overline" tone="muted">
             Not included
-          </Text>
+          </AppText>
           {missingScopes.map((scope) => (
-            <Text key={scope} className="text-sm text-neutral-600 dark:text-neutral-400">
+            <AppText key={scope} variant="body" tone="secondary">
               · {scopeLabel(scope)}
-            </Text>
+            </AppText>
           ))}
         </View>
       ) : null}
 
       {notice ? (
-        <Text className="mt-2 text-sm text-blue-600 dark:text-blue-400">{notice}</Text>
+        <AppText variant="label" tone="info" className="mt-3">
+          {notice}
+        </AppText>
       ) : null}
 
       {errorNotice ? (
-        <Text className="mt-2 text-sm text-amber-700 dark:text-amber-400">{errorNotice}</Text>
+        <AppText variant="label" tone="warning" className="mt-3">
+          {errorNotice}
+        </AppText>
       ) : null}
 
       {showSync || showConnect || showReconnect ? (
-        <View className="mt-3 flex-row flex-wrap gap-2">
-          {showConnect ? (
-            <ActionButton label="Connect" onPress={onReconnect!} />
-          ) : null}
-          {showReconnect ? (
-            <ActionButton label="Reconnect" onPress={onReconnect!} />
-          ) : null}
+        <View className="mt-4 flex-row flex-wrap gap-2">
+          {showConnect ? <Button label="Connect" onPress={onReconnect!} /> : null}
+          {showReconnect ? <Button label="Reconnect" onPress={onReconnect!} /> : null}
           {showSync ? (
-            <ActionButton
+            // `disabled`, not `busy`: the label already says "Syncing…" for
+            // both the in-flight mutation and a server-side run, and a screen
+            // reader must be told the control is unavailable either way -- a
+            // visually dimmed but still-pressable button is the exact shape
+            // that fires a second sync.
+            <Button
               label={state === "syncing" || isSyncPending === true ? "Syncing…" : "Sync now"}
               onPress={onSync!}
               disabled={syncDisabled}
-              tone="secondary"
+              variant="outline"
             />
           ) : null}
         </View>
       ) : null}
 
-      <Text className="mt-3 text-xs leading-4 text-neutral-500 dark:text-neutral-400">
+      <AppText variant="caption" tone="muted" className="mt-4">
         {HEALTH_SOURCE_NOTE}
-      </Text>
-    </View>
+      </AppText>
+    </Card>
   );
 }

@@ -3,7 +3,10 @@ import type {
   AcademicAssignment,
   AcademicCourseSummary,
   AcademicEvent,
+  AcademicGradeSummary,
+  AcademicPriorityItem,
   AcademicTodayResponse,
+  AcademicWorkload,
 } from "@personal-os/schema";
 
 // Shared fixture builders for the academic component tests. Not a test file
@@ -89,6 +92,51 @@ export function course(overrides: Partial<AcademicCourseSummary> = {}): Academic
     open_assignment_count: 3,
     overdue_assignment_count: 1,
     next_due_at: "2026-09-23T04:59:00Z",
+    ...overrides,
+  };
+}
+
+/** One ranked "Do next" candidate wrapping an untouched assignment (Checkpoint 10.3). */
+export function priorityItem(overrides: Partial<AcademicPriorityItem> = {}): AcademicPriorityItem {
+  return {
+    assignment: assignment(),
+    urgency: "high",
+    score: 300,
+    reasons: ["due_within_24h"],
+    hours_until_due: 6.5,
+    ...overrides,
+  };
+}
+
+/** An on-track, zero-filled workload over today + 7 days from 2026-09-16 (Checkpoint 10.3). */
+export function workload(overrides: Partial<AcademicWorkload> = {}): AcademicWorkload {
+  const days = [16, 17, 18, 19, 20, 21, 22, 23].map((day) => ({
+    date: `2026-09-${day}`,
+    due_total: 0,
+    points_total: 0,
+  }));
+  return {
+    status: "on_track",
+    open_total: 0,
+    overdue_total: 0,
+    missing_total: 0,
+    due_within_24h_total: 0,
+    due_this_week_total: 0,
+    points_at_stake: 0,
+    horizon_days: 7,
+    days,
+    ...overrides,
+  };
+}
+
+/** A course's grade summary (Checkpoint 10.3). */
+export function gradeSummary(overrides: Partial<AcademicGradeSummary> = {}): AcademicGradeSummary {
+  return {
+    graded_total: 7,
+    average_percentage: 92.4,
+    points_earned: 112,
+    points_possible_graded: 120,
+    weighted_percentage: 93.3,
     ...overrides,
   };
 }

@@ -10,8 +10,9 @@
 // streams have never produced a value (Checkpoint 6.3L), so "missing" is the
 // COMMON case here, not the edge case -- and a dashboard whose common case
 // reads as a measurement is worse than no dashboard.
-import { Pressable, Text, View } from "react-native";
+import { Pressable, View } from "react-native";
 import type { HealthMetricCapability, HealthMetricTile } from "@personal-os/schema";
+import { AppText, cardClass } from "@/components/ui";
 import { formatShortDate } from "@/utils/local-date";
 import { formatHealthValue, metricLabel, metricShortLabel } from "./format";
 import { METRIC_EXPLANATIONS, isMetricMissing, resolveMetricDisplay } from "./metric-state";
@@ -39,8 +40,11 @@ export interface MetricTileProps {
 // whole dashboard jumps whenever anything lands.
 const TILE_MIN_HEIGHT = "min-h-[104px]";
 
-const TILE_CLASS =
-  "flex-1 rounded-xl border border-neutral-200 dark:border-neutral-800 " + TILE_MIN_HEIGHT;
+// The design system's card vocabulary (Checkpoint 10.3), composed through
+// `cardClass` rather than rendered through `Card` because the tile must be
+// `accessible`: a screen reader reads the whole tile as ONE element carrying
+// the label built below, and `Card` exposes no such prop.
+const TILE_CLASS = cardClass("none", "card", `flex-1 ${TILE_MIN_HEIGHT}`);
 
 /**
  * The "last recorded" line, or null.
@@ -101,42 +105,33 @@ export function MetricTile({
 
   const body = (
     <View className={compact ? "gap-1 p-3" : "gap-1 p-4"}>
-      <Text
-        className="text-xs font-semibold uppercase text-neutral-500 dark:text-neutral-400"
-        numberOfLines={1}
-      >
+      <AppText variant="overline" tone="muted" numberOfLines={1}>
         {label}
-      </Text>
+      </AppText>
 
       {formatted === null ? (
         // No numeric node is rendered at all in a missing state. Not a dimmed
         // zero, not a placeholder glyph -- there is simply no number on
         // screen, which is the only rendering a reader cannot mistake for a
         // measurement.
-        <Text
-          className={`${compact ? "text-xs" : "text-sm"} leading-5 text-neutral-500 dark:text-neutral-400`}
-        >
+        <AppText variant={compact ? "caption" : "label"} tone="secondary" className="font-normal">
           {explanation}
-        </Text>
+        </AppText>
       ) : (
         <View className="flex-row items-baseline gap-1">
-          <Text
-            className={`${compact ? "text-2xl" : "text-3xl"} font-semibold text-black dark:text-white`}
-          >
-            {formatted.text}
-          </Text>
+          <AppText variant={compact ? "headline" : "display"}>{formatted.text}</AppText>
           {formatted.unitLabel ? (
-            <Text className="text-sm text-neutral-500 dark:text-neutral-400">
+            <AppText variant="label" tone="muted">
               {formatted.unitLabel}
-            </Text>
+            </AppText>
           ) : null}
         </View>
       )}
 
       {fallback ? (
-        <Text className="text-xs text-neutral-500 dark:text-neutral-400" numberOfLines={2}>
+        <AppText variant="caption" tone="muted" numberOfLines={2}>
           {fallback}
-        </Text>
+        </AppText>
       ) : null}
     </View>
   );

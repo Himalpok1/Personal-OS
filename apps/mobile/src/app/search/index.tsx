@@ -8,13 +8,27 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 import type { ReactNode } from "react";
 import { useRef, useState } from "react";
-import { FlatList, Pressable, SafeAreaView, Text, TextInput, View } from "react-native";
+import { FlatList, Pressable, View } from "react-native";
 import { planAskSubmission } from "@/components/ask/empty-day";
 import { AskView, type AskState } from "@/components/ask/ask-view";
 import { askErrorMessage } from "@/components/ask/ask-errors";
 import { askPresetOf, findAskPreset } from "@/components/ask/ask-presets";
 import { AskModeToggle, type SearchAskMode } from "@/components/ask/mode-toggle";
+import { TextField } from "@/components/ask/text-field";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
+import {
+  AppText,
+  Button,
+  Card,
+  EmptyState,
+  Icon,
+  IconButton,
+  ScreenFrame,
+  SectionHeader,
+  StatusChip,
+  type ChipTone,
+  type IconName,
+} from "@/components/ui";
 import { usePlaceholderColor } from "@/components/placeholder-color";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { useAskCloud, useAskEnabled } from "@/queries/ask";
@@ -54,7 +68,9 @@ import { buildSearchRows, searchRowKey, type SearchRow } from "@/utils/search-se
 //
 // The view and the row are exported hookless so they can be unit-tested by
 // calling them as plain functions, which is how every render-style test in this
-// app works (there is no render library in its dependencies).
+// app works (there is no render library in its dependencies). Checkpoint 10.3
+// composed both on the design system's hookless primitives; every testID,
+// label, state and the FlatList's row model are unchanged.
 
 const TYPE_ACCESSIBILITY: Record<SearchResult["type"], string> = {
   task: "task",
@@ -64,6 +80,24 @@ const TYPE_ACCESSIBILITY: Record<SearchResult["type"], string> = {
   inbox_item: "inbox capture",
   mail_message: "email",
 };
+
+const TYPE_ICON: Record<SearchResult["type"], IconName> = {
+  task: "checkbox-marked-circle-outline",
+  note: "note-text-outline",
+  event: "calendar",
+  project: "folder-outline",
+  inbox_item: "inbox-outline",
+  mail_message: "email-outline",
+};
+
+/** A closed status word reads as a chip: done / completed settle, dropped warns. */
+function statusChipTone(status: string): ChipTone {
+  return status === "Dropped"
+    ? "warning"
+    : status === "Done" || status === "Completed"
+      ? "success"
+      : "neutral";
+}
 
 export interface SearchResultRowProps {
   result: SearchResult;
@@ -112,51 +146,71 @@ export function SearchResultRow({ result, onSelect }: SearchResultRowProps) {
   const archived = "archived" in result && result.archived;
 
   const content = (
-    <View className="flex-1">
-      {/* The type chip is what keeps a mixed "Top matches" section legible on
-          a 480px screen: a task and a mail subject with the same words are
-          told apart by the chip, not by guessing from the preview. */}
-      <Text
-        testID="search-result-chip"
-        className="self-start rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
-      >
-        {SEARCH_TYPE_CHIP_LABELS[result.type]}
-      </Text>
-      <Text className="text-base text-black dark:text-white" numberOfLines={2}>
-        {result.title}
-      </Text>
-      {sender === null ? null : (
-        <Text className="text-xs text-neutral-500 dark:text-neutral-400" numberOfLines={1}>
-          {sender}
-        </Text>
-      )}
-      {date === null ? null : (
-        <Text
-          testID="search-result-date"
-          className="text-xs text-neutral-500 dark:text-neutral-400"
-          numberOfLines={1}
-        >
-          {date}
-        </Text>
-      )}
-      {result.preview === null ? null : (
-        <Text className="text-xs text-neutral-500 dark:text-neutral-400" numberOfLines={2}>
-          {result.preview}
-        </Text>
-      )}
-      {external ? (
-        <Text testID="search-result-external" className="text-xs text-neutral-400">
-          {SEARCH_EXTERNAL_EVENT_COPY}
-        </Text>
-      ) : null}
-      {status === null ? null : (
-        <Text testID="search-result-status" className="text-xs text-neutral-400">
-          {status}
-        </Text>
-      )}
-      {archived ? <Text className="text-xs text-neutral-400">Archived</Text> : null}
-    </View>
+    <>
+      <View className="pt-0.5">
+        <Icon
+          name={TYPE_ICON[result.type]}
+          size="md"
+          tone={href === null ? "on-surface-muted" : "primary"}
+        />
+      </View>
+      <View className="flex-1">
+        <AppText variant="body-strong" numberOfLines={2}>
+          {result.title}
+        </AppText>
+        {sender === null ? null : (
+          <AppText variant="caption" tone="secondary" numberOfLines={1} className="mt-0.5">
+            {sender}
+          </AppText>
+        )}
+        {date === null ? null : (
+          <AppText
+            testID="search-result-date"
+            variant="caption"
+            tone="secondary"
+            numberOfLines={1}
+            className="mt-0.5"
+          >
+            {date}
+          </AppText>
+        )}
+        {result.preview === null ? null : (
+          <AppText variant="caption" tone="secondary" numberOfLines={2} className="mt-0.5">
+            {result.preview}
+          </AppText>
+        )}
+        {external ? (
+          <AppText
+            testID="search-result-external"
+            variant="caption"
+            tone="muted"
+            className="mt-0.5"
+          >
+            {SEARCH_EXTERNAL_EVENT_COPY}
+          </AppText>
+        ) : null}
+        <View className="mt-1.5 flex-row flex-wrap items-center gap-1.5">
+          {/* The type chip is what keeps a mixed "Top matches" section legible
+              on a 480px screen: a task and a mail subject with the same words
+              are told apart by the chip, not by guessing from the preview. */}
+          <View testID="search-result-chip">
+            <StatusChip label={SEARCH_TYPE_CHIP_LABELS[result.type]} tone="neutral" />
+          </View>
+          {status === null ? null : (
+            <View testID="search-result-status">
+              <StatusChip label={status} tone={statusChipTone(status)} />
+            </View>
+          )}
+          {archived ? <StatusChip label="Archived" tone="neutral" dot /> : null}
+        </View>
+      </View>
+      {href === null ? null : <Icon name="chevron-right" size="md" tone="on-surface-muted" />}
+    </>
   );
+
+  // Each result is its own flat card (a hairline, no shadow) so a list of
+  // them reads as one stack; the Card owns every colour.
+  const rowClass = "flex-row items-start gap-3 px-4 py-3";
 
   // A mail result has nowhere to go -- no per-message screen exists and the app
   // may never act on mail (ADR-052). Rendering it as a plain View rather than a
@@ -164,25 +218,27 @@ export function SearchResultRow({ result, onSelect }: SearchResultRowProps) {
   // nothing.
   if (href === null) {
     return (
-      <View
-        testID={`search-result-${result.id}`}
-        className="flex-row items-center border-b border-neutral-200 px-4 py-3 dark:border-neutral-800"
-      >
-        {content}
-      </View>
+      <Card padding="none" elevation="flat" className="mx-4 mb-2">
+        <View testID={`search-result-${result.id}`} className={rowClass}>
+          {content}
+        </View>
+      </Card>
     );
   }
 
   return (
-    <Pressable
-      testID={`search-result-${result.id}`}
-      onPress={() => onSelect(result)}
-      accessibilityRole="button"
-      accessibilityLabel={`Open ${TYPE_ACCESSIBILITY[result.type]}: ${result.title}`}
-      className="min-h-[44px] flex-row items-center border-b border-neutral-200 px-4 py-3 active:opacity-70 dark:border-neutral-800"
-    >
-      {content}
-    </Pressable>
+    <Card padding="none" elevation="flat" className="mx-4 mb-2">
+      <Pressable
+        testID={`search-result-${result.id}`}
+        onPress={() => onSelect(result)}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${TYPE_ACCESSIBILITY[result.type]}: ${result.title}`}
+        hitSlop={4}
+        className={`min-h-[52px] active:opacity-70 ${rowClass}`}
+      >
+        {content}
+      </Pressable>
+    </Card>
   );
 }
 
@@ -198,16 +254,7 @@ function SearchSectionHeader({ row }: { row: Extract<SearchRow, { kind: "header"
       : row.total === row.returned
         ? `${row.label} (${row.shown} more)`
         : `${row.label} (${row.shown} more · ${row.returned} of ${row.total} matched)`;
-  return (
-    <View className="bg-neutral-100 px-4 py-2 dark:bg-neutral-900">
-      <Text
-        accessibilityRole="header"
-        className="text-sm font-semibold uppercase text-neutral-500 dark:text-neutral-400"
-      >
-        {label}
-      </Text>
-    </View>
-  );
+  return <SectionHeader title={label} className="px-4" />;
 }
 
 /** The one-line notice that the list on screen is not yet the answer to the typed query. */
@@ -233,27 +280,24 @@ function SearchResultNotes({ response, stale }: { response: SearchResponse; stal
   return (
     <View className="gap-2 px-4 pb-2">
       {stale ? (
-        <Text testID="search-updating" className="text-xs text-neutral-500 dark:text-neutral-400">
+        <AppText testID="search-updating" variant="caption" tone="muted">
           {SEARCH_UPDATING_COPY}
-        </Text>
+        </AppText>
       ) : null}
       {banner === null ? null : (
-        <Text testID="search-match-banner" className="text-xs text-amber-700 dark:text-amber-400">
+        <AppText testID="search-match-banner" variant="caption" tone="warning">
           {banner}
-        </Text>
+        </AppText>
       )}
       {chip === null ? null : (
-        <Text
-          testID="search-date-chip"
-          className="self-start rounded-full bg-neutral-200 px-3 py-1 text-xs text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
-        >
-          {chip}
-        </Text>
+        <View testID="search-date-chip" className="self-start">
+          <StatusChip label={chip} tone="info" size="md" />
+        </View>
       )}
       {ignored === null ? null : (
-        <Text testID="search-ignored" className="text-xs text-neutral-500 dark:text-neutral-400">
+        <AppText testID="search-ignored" variant="caption" tone="muted">
           {ignored}
-        </Text>
+        </AppText>
       )}
     </View>
   );
@@ -303,10 +347,10 @@ export function SearchView({
   modeToggle,
 }: SearchViewProps) {
   return (
-    <SafeAreaView className="flex-1 bg-white dark:bg-black">
+    <ScreenFrame>
       {modeToggle ?? null}
       <View className="px-4 pb-2 pt-3">
-        <TextInput
+        <TextField
           testID="search-input"
           value={query}
           onChangeText={onQueryChange}
@@ -319,38 +363,64 @@ export function SearchView({
           autoCapitalize="none"
           returnKeyType="search"
           accessibilityLabel="Search query"
-          className="rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+          leadingIcon="magnify"
+          trailing={
+            query.length > 0 ? (
+              <IconButton
+                icon="close-circle"
+                onPress={() => onQueryChange("")}
+                accessibilityLabel="Clear search"
+                tone="on-surface-muted"
+              />
+            ) : undefined
+          }
         />
       </View>
 
       {state.kind === "idle" ? (
-        <Text testID="search-idle" className="p-4 text-neutral-500">
-          Type at least {SEARCH_QUERY_MIN_CHARS} characters to search.
-        </Text>
+        <EmptyState
+          testID="search-idle"
+          icon="magnify"
+          title="Search everything"
+          body={`Type at least ${SEARCH_QUERY_MIN_CHARS} characters to search.`}
+        />
       ) : state.kind === "loading" ? (
-        <Text testID="search-loading" className="p-4 text-neutral-500">
-          Searching...
-        </Text>
+        <View className="flex-row items-center gap-2 px-4 py-4">
+          <Icon name="progress-clock" size="md" tone="on-surface-muted" />
+          <AppText testID="search-loading" variant="body" tone="secondary">
+            Searching...
+          </AppText>
+        </View>
       ) : state.kind === "error" ? (
-        <View testID="search-error" className="flex-1 items-center justify-center gap-3 p-4">
-          <Text className="text-red-600">Couldn&apos;t run that search.</Text>
-          <Pressable
+        <View
+          testID="search-error"
+          className="flex-1 items-center justify-center gap-3 px-6 py-12"
+          accessibilityRole="alert"
+        >
+          <Icon name="alert-circle-outline" size="xl" tone="danger" />
+          <AppText variant="title" className="text-center">
+            Couldn&apos;t run that search.
+          </AppText>
+          <Button
             testID="search-retry"
+            label="Retry"
             onPress={onRetry}
-            accessibilityRole="button"
             accessibilityLabel="Retry search"
-            hitSlop={8}
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="font-semibold text-white">Retry</Text>
-          </Pressable>
+            variant="primary"
+          />
         </View>
       ) : state.response.results.length === 0 ? (
-        <View testID="search-empty" className="p-4">
+        <View testID="search-empty" className="pt-2">
           <SearchResultNotes response={state.response} stale={stale} />
           {/* "No matches." is a statement about the typed query; while the
               empty response is a previous query's it is withheld. */}
-          {stale ? null : <Text className="text-neutral-500">No matches.</Text>}
+          {stale ? null : (
+            <EmptyState
+              icon="magnify-close"
+              title="No matches."
+              body="Try fewer words, or a different spelling."
+            />
+          )}
         </View>
       ) : (
         <FlatList
@@ -373,7 +443,7 @@ export function SearchView({
           contentContainerStyle={{ paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
         />
       )}
-    </SafeAreaView>
+    </ScreenFrame>
   );
 }
 

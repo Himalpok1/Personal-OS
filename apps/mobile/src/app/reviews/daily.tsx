@@ -11,7 +11,26 @@ import { REVIEW_CONTENT_VERSION } from "@personal-os/schema";
 import { Link, useRouter, type Href } from "expo-router";
 import { useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, TextInput, View } from "react-native";
+import { textFieldClass } from "@/components/ask/text-field";
+import {
+  PROJECT_STALLED_PRESENTATION,
+  projectStatusPresentation,
+} from "@/components/projects/status-presentation";
+import {
+  AppText,
+  Button,
+  Card,
+  ErrorState,
+  Icon,
+  ScreenCentered,
+  ScreenFrame,
+  SectionHeader,
+  SkeletonCard,
+  StatusChip,
+  buttonClasses,
+  useTheme,
+} from "@/components/ui";
 import { usePlaceholderColor } from "@/components/placeholder-color";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
@@ -139,22 +158,22 @@ function toggleRef(selected: ReviewPriorityRef[], ref: ReviewPriorityRef): Revie
 
 function EmptyText({ children }: { children: ReactNode }) {
   return (
-    <Text className="py-1 text-sm text-neutral-500 dark:text-neutral-400">{children}</Text>
+    <AppText variant="label" tone="secondary" className="py-1 font-normal">
+      {children}
+    </AppText>
   );
 }
 
 function MoreNote({ hidden }: { hidden: number }) {
   return (
-    <Text className="py-0.5 text-xs text-neutral-500 dark:text-neutral-400">+{hidden} more</Text>
+    <AppText variant="caption" tone="muted" className="py-0.5">
+      +{hidden} more
+    </AppText>
   );
 }
 
-function SectionTitle({ children }: { children: ReactNode }) {
-  return (
-    <Text className="pb-1 pt-2 text-xs font-semibold uppercase text-neutral-500 dark:text-neutral-400">
-      {children}
-    </Text>
-  );
+function SectionTitle({ children }: { children: string }) {
+  return <SectionHeader title={children} spacing="none" className="pb-1 pt-2" />;
 }
 
 // Read-only task row linking to its detail route. The id is always the task's
@@ -165,71 +184,64 @@ function TaskRow({ id, title, dueAt }: { id: string; title: string; dueAt: strin
     <Pressable
       onPress={() => router.push(`/tasks/${id}`)}
       hitSlop={4}
-      className="min-h-[40px] flex-row items-center justify-between py-1"
+      accessibilityRole="button"
+      accessibilityLabel={`Open task: ${title}`}
+      className="min-h-[40px] flex-row items-center justify-between py-1 active:opacity-70"
     >
-      <Text className="flex-1 text-sm text-black dark:text-white" numberOfLines={1}>
+      <AppText variant="label" className="flex-1 font-normal" numberOfLines={1}>
         · {title}
-      </Text>
+      </AppText>
       {dueAt ? (
-        <Text className="ml-2 shrink-0 text-xs text-red-600 dark:text-red-400">
+        <AppText variant="caption" tone="danger" className="ml-2 shrink-0">
           {formatShortTimestamp(dueAt)}
-        </Text>
+        </AppText>
       ) : null}
     </Pressable>
   );
 }
 
-const PROJECT_STATUS_CHIP: Record<ReviewContextProject["status"], string> = {
-  active: "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300",
-  paused: "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300",
-  completed: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
-};
-
 function ProjectCard({ project }: { project: ReviewContextProject }) {
   const router = useRouter();
+  const { colors } = useTheme();
+  const status = projectStatusPresentation(project.status);
   return (
-    <Pressable
+    <Card
+      padding="sm"
+      elevation="flat"
       onPress={() => router.push(`/projects/${project.id}`)}
-      className="mb-2 rounded-xl border border-neutral-200 p-3 dark:border-neutral-800"
+      accessibilityLabel={`Open project: ${project.name}`}
+      className="mb-2"
     >
       <View className="flex-row items-center gap-2">
         <View
           className="h-3 w-3 shrink-0 rounded-full"
-          style={{ backgroundColor: project.color ?? "#999999" }}
+          style={{ backgroundColor: project.color ?? colors["on-surface-muted"] }}
         />
-        <Text
-          className="flex-1 text-sm font-medium text-black dark:text-white"
-          numberOfLines={1}
-        >
+        <AppText variant="body-strong" className="flex-1" numberOfLines={1}>
           {project.name}
-        </Text>
+        </AppText>
         {project.stalled ? (
-          <View className="rounded bg-amber-100 px-2 py-0.5 dark:bg-amber-900">
-            <Text className="text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300">
-              Stalled
-            </Text>
-          </View>
+          <StatusChip
+            label={PROJECT_STALLED_PRESENTATION.label}
+            tone={PROJECT_STALLED_PRESENTATION.tone}
+          />
         ) : null}
-        <View className={`rounded px-2 py-0.5 ${PROJECT_STATUS_CHIP[project.status]}`}>
-          <Text className="text-[10px] uppercase">{project.status}</Text>
-        </View>
+        <StatusChip label={status.label} tone={status.tone} />
       </View>
-      <Text
-        className={
-          project.next_action
-            ? "mt-1.5 text-sm text-neutral-700 dark:text-neutral-300"
-            : "mt-1.5 text-sm font-semibold text-amber-700 dark:text-amber-400"
-        }
+      <AppText
+        variant="label"
+        tone={project.next_action ? "secondary" : "warning"}
+        className={`mt-1.5 ${project.next_action ? "font-normal" : "font-semibold"}`}
         numberOfLines={1}
       >
         {project.next_action ? `Next: ${project.next_action.title}` : "No next action"}
-      </Text>
+      </AppText>
       {project.target_date ? (
-        <Text className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+        <AppText variant="caption" tone="muted" className="mt-1">
           Target {formatHeaderDate(project.target_date)}
-        </Text>
+        </AppText>
       ) : null}
-    </Pressable>
+    </Card>
   );
 }
 
@@ -239,14 +251,14 @@ function MissingNextActionRow({ id, name }: { id: string; name: string }) {
     <Pressable
       onPress={() => router.push(`/projects/${id}`)}
       hitSlop={4}
-      className="min-h-[40px] flex-row items-center justify-between py-1"
+      accessibilityRole="button"
+      accessibilityLabel={`Open project: ${name}`}
+      className="min-h-[40px] flex-row items-center justify-between py-1 active:opacity-70"
     >
-      <Text className="flex-1 text-sm text-black dark:text-white" numberOfLines={1}>
+      <AppText variant="label" className="flex-1 font-normal" numberOfLines={1}>
         · {name}
-      </Text>
-      <Text className="ml-2 shrink-0 text-xs font-semibold uppercase text-amber-700 dark:text-amber-400">
-        No next action
-      </Text>
+      </AppText>
+      <StatusChip label="No next action" tone="warning" className="ml-2 shrink-0" />
     </Pressable>
   );
 }
@@ -265,14 +277,16 @@ function AgendaRow({
     <Pressable
       onPress={() => router.push(href)}
       hitSlop={4}
-      className="min-h-[40px] flex-row items-baseline gap-2 py-1"
+      accessibilityRole="button"
+      accessibilityLabel={`Open event: ${title}`}
+      className="min-h-[40px] flex-row items-baseline gap-2 py-1 active:opacity-70"
     >
-      <Text className="w-11 shrink-0 text-right text-xs text-neutral-500 dark:text-neutral-400">
+      <AppText variant="caption" tone="muted" className="w-11 shrink-0 text-right">
         {time ?? ""}
-      </Text>
-      <Text className="flex-1 text-sm text-black dark:text-white" numberOfLines={1}>
+      </AppText>
+      <AppText variant="label" className="flex-1 font-normal" numberOfLines={1}>
         · {title}
-      </Text>
+      </AppText>
     </Pressable>
   );
 }
@@ -289,19 +303,26 @@ function InboxBody({ inbox }: { inbox: InboxSection }) {
         {inbox.failed_count} failed
       </EmptyText>
       {inbox.items.map((item) => (
-        <Text
+        <AppText
           key={item.id}
-          className="py-0.5 text-sm text-neutral-700 dark:text-neutral-300"
+          variant="label"
+          tone="secondary"
+          className="py-0.5 font-normal"
           numberOfLines={1}
         >
           · {inboxPreviewLabel(item)}
-        </Text>
+        </AppText>
       ))}
       <Link href="/(tabs)/inbox" asChild>
-        <Pressable className="mt-1 min-h-[44px] flex-row items-center">
-          <Text className="text-sm font-medium text-blue-600 dark:text-blue-400">
-            Open inbox →
-          </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open inbox"
+          className="mt-1 min-h-[44px] flex-row items-center gap-1 active:opacity-70"
+        >
+          <AppText variant="label" tone="primary">
+            Open inbox
+          </AppText>
+          <Icon name="chevron-right" size="sm" tone="primary" />
         </Pressable>
       </Link>
     </View>
@@ -345,42 +366,40 @@ function PrioritiesBody({
   }
   return (
     <View>
-      <Text className="py-1 text-xs font-medium text-neutral-500 dark:text-neutral-400">
+      <AppText variant="caption" tone="muted" className="py-1">
         {selected.length}/{PRIORITY_CAP} selected
-      </Text>
+      </AppText>
       <View className="flex-row flex-wrap gap-2 pt-1">
         {options.map(({ ref, title }) => {
           const checked = isSelected(selected, ref);
           // Cap enforcement lives in the UI only: once n/10 is reached the
           // remaining unselected chips disable instead of silently dropping.
           const chipDisabled = !checked && disabled;
+          // A small tonal / outline Button by class (the design system's own
+          // `buttonClasses`), kept a Pressable because it is a CHECKBOX to a
+          // screen reader, which Button cannot express. max-w tightened so 3
+          // chips fit per row on the Rabbit's 480px width.
+          const classes = buttonClasses(checked ? "tonal" : "outline", "sm", false);
           return (
             <Pressable
               key={`${ref.kind}:${ref.id}`}
               accessibilityRole="checkbox"
               accessibilityState={{ checked, disabled: chipDisabled }}
+              accessibilityLabel={title}
               onPress={() => onToggle(ref)}
               disabled={chipDisabled}
               hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
-              // min-h-[44px] + centering brings the ~36px visual chip up to
-              // the >=44px effective touch target; max-w tightened so 3
-              // chips fit per row on the Rabbit's 480px width (448 usable -
-              // 2*8px gaps, /3 ~= 144px, minus the chip's own px-3 padding).
-              className={`min-h-[44px] items-center justify-center rounded-full border px-3 ${
-                checked
-                  ? "border-blue-600 bg-blue-600 active:bg-blue-700"
-                  : chipDisabled
-                    ? "border-neutral-200 bg-white opacity-50 dark:border-neutral-800 dark:bg-black"
-                    : "border-neutral-300 bg-white active:bg-neutral-100 dark:border-neutral-700 dark:bg-black dark:active:bg-neutral-900"
-              }`}
+              className={`${classes.container} ${chipDisabled ? "opacity-50" : ""}`}
             >
-              <Text
-                className={`max-w-[130px] text-sm ${checked ? "font-medium text-white" : "text-black dark:text-white"}`}
+              {checked ? <Icon name="check" size="sm" tone="on-primary-container" /> : null}
+              <AppText
+                variant="label"
+                tone="inherit"
+                className={`max-w-[130px] ${classes.label} ${checked ? "font-semibold" : ""}`}
                 numberOfLines={1}
               >
-                {checked ? "✓ " : ""}
                 {title}
-              </Text>
+              </AppText>
             </Pressable>
           );
         })}
@@ -468,43 +487,31 @@ function StepSection({
   children: ReactNode;
 }) {
   return (
-    <View className="mt-3">
+    <Card padding="none" className="mx-4 mt-3">
       <Pressable
         accessibilityRole="checkbox"
         accessibilityState={{ checked: step.done }}
+        accessibilityLabel={`${step.title}: ${step.done ? "done" : "mark done"}`}
         onPress={onToggle}
         hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-        className="min-h-[44px] flex-row items-center justify-between px-4"
+        className="min-h-[52px] flex-row items-center justify-between gap-2 px-4 pt-3 active:opacity-70"
       >
-        <Text
-          className={`flex-1 pr-2 text-base font-semibold ${
-            step.done
-              ? "text-neutral-500 line-through dark:text-neutral-400"
-              : "text-black dark:text-white"
-          }`}
+        <AppText
+          variant="title"
+          tone={step.done ? "muted" : "default"}
+          className={`flex-1 ${step.done ? "line-through" : ""}`}
         >
           {step.title}
-        </Text>
-        <View
-          className={
-            step.done
-              ? "rounded-full bg-green-100 px-3 py-1 dark:bg-green-950"
-              : "rounded-full border border-neutral-300 px-3 py-1 dark:border-neutral-700"
-          }
-        >
-          <Text
-            className={`text-xs font-semibold ${
-              step.done
-                ? "text-green-700 dark:text-green-300"
-                : "text-neutral-500 dark:text-neutral-400"
-            }`}
-          >
-            {step.done ? "Done ✓" : "Mark done"}
-          </Text>
-        </View>
+        </AppText>
+        <StatusChip
+          label={step.done ? "Done" : "Mark done"}
+          tone={step.done ? "success" : "neutral"}
+          icon={step.done ? "check" : undefined}
+          size="md"
+        />
       </Pressable>
-      <View className="px-4">{children}</View>
-    </View>
+      <View className="px-4 pb-3">{children}</View>
+    </Card>
   );
 }
 
@@ -619,9 +626,9 @@ function DailyFlow({ review, context }: { review: Review; context: DailyReviewCo
   return (
     <View>
       {/* Progress overview; taps live on the per-step headers below */}
-      <View className="mx-4 mt-3 rounded-xl border border-neutral-200 p-2 dark:border-neutral-800">
+      <Card padding="sm" className="mx-4 mt-3">
         <ReviewStepList steps={steps} activeIndex={activeIndex} compact />
-      </View>
+      </Card>
 
       {steps.map((step) =>
         step.key === "summary" ? (
@@ -637,7 +644,9 @@ function DailyFlow({ review, context }: { review: Review; context: DailyReviewCo
               multiline
               placeholder="How did today go?"
               placeholderTextColor={placeholderColor}
-              className="min-h-[96px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+              textAlignVertical="top"
+              accessibilityLabel="Summary"
+              className={textFieldClass({ multiline: true, extra: "min-h-[96px]" })}
             />
           </StepSection>
         ) : (
@@ -653,27 +662,30 @@ function DailyFlow({ review, context }: { review: Review; context: DailyReviewCo
 
       <View className="mt-6 gap-3 px-4 pb-8">
         {saveContent.isError || saveSummary.isError || complete.isError || skip.isError ? (
-          <Text className="text-sm text-red-600 dark:text-red-400">
+          <AppText variant="body" tone="danger" accessibilityRole="alert">
             Saving failed — check your connection and try again.
-          </Text>
+          </AppText>
         ) : null}
         {saveContent.isPending || saveSummary.isPending ? (
-          <Text className="text-xs text-neutral-500 dark:text-neutral-400">Saving…</Text>
+          <AppText variant="caption" tone="muted">
+            Saving…
+          </AppText>
         ) : null}
-        <Pressable
+        <Button
+          label="Complete review"
           onPress={() => complete.mutate({ id: review.id }, { onSuccess: () => router.back() })}
           disabled={complete.isPending || skip.isPending}
-          className="min-h-[44px] items-center justify-center rounded-lg bg-green-600 active:bg-green-700 disabled:opacity-50"
-        >
-          <Text className="font-semibold text-white">Complete review</Text>
-        </Pressable>
-        <Pressable
+          variant="primary"
+          icon="check"
+          block
+        />
+        <Button
+          label="Skip today"
           onPress={() => skip.mutate({ id: review.id }, { onSuccess: () => router.back() })}
           disabled={complete.isPending || skip.isPending}
-          className="min-h-[44px] items-center justify-center rounded-lg border border-neutral-300 active:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:active:bg-neutral-900"
-        >
-          <Text className="font-medium text-black dark:text-white">Skip today</Text>
-        </Pressable>
+          variant="outline"
+          block
+        />
       </View>
     </View>
   );
@@ -685,36 +697,33 @@ function DailyTerminal({ review, context }: { review: Review; context: DailyRevi
   const settledAt = review.completed_at ?? review.updated_at;
   return (
     <View className="pb-8">
-      <View
-        className={`mx-4 mt-4 rounded-xl border p-3 ${
-          completed
-            ? "border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950"
-            : "border-neutral-300 bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900"
-        }`}
-      >
-        <Text
-          className={`text-base font-semibold ${
-            completed ? "text-green-700 dark:text-green-300" : "text-neutral-700 dark:text-neutral-300"
-          }`}
-        >
-          {completed ? "Completed" : "Skipped"}
-        </Text>
-        <Text className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
-          {completed ? "Completed at" : "Skipped at"} {formatShortTimestamp(settledAt)}
-        </Text>
-      </View>
-      <View className="mx-4 mt-3 rounded-xl border border-neutral-200 p-2 dark:border-neutral-800">
+      <Card padding="sm" className="mx-4 mt-4 flex-row items-center gap-3">
+        <Icon
+          name={completed ? "check-circle-outline" : "skip-next-circle-outline"}
+          size="lg"
+          tone={completed ? "success" : "on-surface-variant"}
+        />
+        <View className="flex-1">
+          <AppText variant="title" tone={completed ? "success" : "secondary"}>
+            {completed ? "Completed" : "Skipped"}
+          </AppText>
+          <AppText variant="caption" tone="muted" className="mt-0.5">
+            {completed ? "Completed at" : "Skipped at"} {formatShortTimestamp(settledAt)}
+          </AppText>
+        </View>
+      </Card>
+      <Card padding="sm" className="mx-4 mt-3">
         <ReviewStepList steps={steps} activeIndex={null} compact />
-      </View>
+      </Card>
       {review.summary ? (
         <View className="px-4 pt-3">
           <SectionTitle>Summary</SectionTitle>
-          <Text className="text-sm text-black dark:text-white">{review.summary}</Text>
+          <AppText variant="body">{review.summary}</AppText>
         </View>
       ) : null}
-      <Text className="px-4 pt-4 text-xs text-neutral-500 dark:text-neutral-400">
+      <AppText variant="caption" tone="muted" className="px-4 pt-4">
         This review is closed and read-only.
-      </Text>
+      </AppText>
     </View>
   );
 }
@@ -731,27 +740,34 @@ function StartGate({
   onStart: () => void;
 }) {
   return (
-    <View className="px-4 pt-6 pb-8">
-      <Text className="text-base text-black dark:text-white">{formatHeaderDate(periodStart)}</Text>
-      <Text className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
-        Close out the day: clear the inbox and overdue work, pick tomorrow&apos;s priorities,
-        check today&apos;s calendar and projects, then jot how it went. Your progress saves as
-        you go.
-      </Text>
-      {failed ? (
-        <Text className="mt-3 text-sm text-red-600 dark:text-red-400">
-          Couldn&apos;t start the review — try again.
-        </Text>
-      ) : null}
-      <Pressable
-        onPress={onStart}
-        disabled={starting}
-        className="mt-4 min-h-[44px] items-center justify-center rounded-lg bg-blue-600 active:bg-blue-700 disabled:opacity-50"
-      >
-        <Text className="font-semibold text-white">
-          {starting ? "Starting…" : "Start daily review"}
-        </Text>
-      </Pressable>
+    <View className="px-4 pb-8 pt-6">
+      <Card>
+        <AppText variant="overline" tone="muted">
+          Daily review
+        </AppText>
+        <AppText variant="headline" className="mt-1">
+          {formatHeaderDate(periodStart)}
+        </AppText>
+        <AppText variant="body" tone="secondary" className="mt-2">
+          Close out the day: clear the inbox and overdue work, pick tomorrow&apos;s priorities,
+          check today&apos;s calendar and projects, then jot how it went. Your progress saves as you
+          go.
+        </AppText>
+        {failed ? (
+          <AppText variant="body" tone="danger" className="mt-3" accessibilityRole="alert">
+            Couldn&apos;t start the review — try again.
+          </AppText>
+        ) : null}
+        <Button
+          label={starting ? "Starting…" : "Start daily review"}
+          onPress={onStart}
+          disabled={starting}
+          variant="primary"
+          icon="play-outline"
+          block
+          className="mt-4"
+        />
+      </Card>
     </View>
   );
 }
@@ -764,27 +780,26 @@ export default function DailyReviewScreen() {
 
   if (context.isLoading || latest.isLoading) {
     return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <Text className="text-neutral-500 dark:text-neutral-400">Loading…</Text>
-      </View>
+      <ScreenFrame>
+        <View className="px-4 pt-4">
+          <SkeletonCard lines={4} />
+        </View>
+      </ScreenFrame>
     );
   }
 
   if (context.isError || latest.isError || !context.data) {
     return (
-      <View className="flex-1 items-center justify-center gap-3 bg-white dark:bg-black">
-        <Text className="text-red-600 dark:text-red-400">Couldn&apos;t load the review.</Text>
-        <Pressable
-          onPress={() => {
+      <ScreenCentered>
+        <ErrorState
+          message="Couldn't load the review."
+          onRetry={() => {
             void context.refetch();
             void latest.refetch();
           }}
-          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-          className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 active:bg-blue-700"
-        >
-          <Text className="font-semibold text-white">Retry</Text>
-        </Pressable>
-      </View>
+          retryAccessibilityLabel="Retry loading the review"
+        />
+      </ScreenCentered>
     );
   }
 
@@ -792,32 +807,32 @@ export default function DailyReviewScreen() {
   const review = latest.data ?? null;
 
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      // Extra room so lower controls can be scrolled clear of the IME --
-      // see components/use-keyboard-height.ts for why insets alone don't do it.
-      contentContainerStyle={{ paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
-      keyboardShouldPersistTaps="handled"
-    >
-      {review &&
-      review.status === "in_progress" &&
-      isCurrentPeriod(review, data.period_start) ? (
-        // Keyed so resuming a different review re-initializes local state.
-        <DailyFlow key={review.id} review={review} context={data} />
-      ) : review &&
-        (review.status === "completed" || review.status === "skipped") &&
-        review.period_start === data.period_start ? (
-        // Terminal reviews of the CURRENT period render read-only with no
-        // reopen; older terminal reviews fall through to the start gate.
-        <DailyTerminal key={review.id} review={review} context={data} />
-      ) : (
-        <StartGate
-          periodStart={data.period_start}
-          starting={start.isPending}
-          failed={start.isError}
-          onStart={() => start.mutate("daily")}
-        />
-      )}
-    </ScrollView>
+    <ScreenFrame>
+      <ScrollView
+        className="flex-1"
+        // Extra room so lower controls can be scrolled clear of the IME --
+        // see components/use-keyboard-height.ts for why insets alone don't do it.
+        contentContainerStyle={{ paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
+        keyboardShouldPersistTaps="handled"
+      >
+        {review && review.status === "in_progress" && isCurrentPeriod(review, data.period_start) ? (
+          // Keyed so resuming a different review re-initializes local state.
+          <DailyFlow key={review.id} review={review} context={data} />
+        ) : review &&
+          (review.status === "completed" || review.status === "skipped") &&
+          review.period_start === data.period_start ? (
+          // Terminal reviews of the CURRENT period render read-only with no
+          // reopen; older terminal reviews fall through to the start gate.
+          <DailyTerminal key={review.id} review={review} context={data} />
+        ) : (
+          <StartGate
+            periodStart={data.period_start}
+            starting={start.isPending}
+            failed={start.isError}
+            onStart={() => start.mutate("daily")}
+          />
+        )}
+      </ScrollView>
+    </ScreenFrame>
   );
 }

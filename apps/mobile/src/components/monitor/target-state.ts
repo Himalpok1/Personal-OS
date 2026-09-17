@@ -172,20 +172,29 @@ export function skippedReasonText(status: MonitorTargetStatus): string | null {
   }
 }
 
-/** Neutral for intended states, amber for degraded, red for a live outage. */
-export function monitorStateToneClass(state: MonitorTargetDisplayState): string {
+/**
+ * The chip tone a state wears on the design system (Checkpoint 10.3): an open
+ * incident is danger, a bare failure or an acknowledged incident warning, a
+ * passing check success, and every suppressed or unknown state neutral --
+ * `not_checked` is deliberately NOT success, for the reason the file header
+ * gives.
+ */
+export function monitorStateTone(
+  state: MonitorTargetDisplayState,
+): "neutral" | "success" | "warning" | "danger" {
   switch (state) {
     case "incident_open":
-      return "text-red-600 dark:text-red-400";
+      return "danger";
     case "incident_acknowledged":
     case "down":
-      return "text-amber-700 dark:text-amber-300";
+      return "warning";
+    case "up":
+      return "success";
     case "disabled":
     case "muted":
     case "skipped":
     case "not_checked":
-    case "up":
-      return "text-black dark:text-white";
+      return "neutral";
   }
 }
 
@@ -197,7 +206,10 @@ export function monitorStateToneClass(state: MonitorTargetDisplayState): string 
  */
 export function describeLastCheck(status: MonitorTargetStatus, now: number): string | null {
   if (status.latest_check === null) return null;
-  const elapsedSeconds = Math.max(0, Math.round((now - Date.parse(status.latest_check.checked_at)) / 1000));
+  const elapsedSeconds = Math.max(
+    0,
+    Math.round((now - Date.parse(status.latest_check.checked_at)) / 1000),
+  );
   if (elapsedSeconds < 60) return "Checked just now";
   const minutes = Math.floor(elapsedSeconds / 60);
   if (minutes < 60) return `Checked ${minutes} minute${minutes === 1 ? "" : "s"} ago`;

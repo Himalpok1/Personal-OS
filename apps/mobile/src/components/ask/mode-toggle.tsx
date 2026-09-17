@@ -1,4 +1,5 @@
-import { Pressable, Text, View } from "react-native";
+import { View } from "react-native";
+import { SegmentedControl, type SegmentedOption } from "@/components/calendar/segmented-control";
 
 // The two-way "Search" / "Ask" switch shown above the search screen's input
 // whenever Cloud Ask is enabled (Checkpoint 8.6B). Rendered by the screen's
@@ -12,6 +13,8 @@ import { Pressable, Text, View } from "react-native";
 // 480px than a single boolean control whose two ends need their own labels
 // anyway, and there is no sixth tab or third header icon here -- this is the
 // entire affordance for switching modes inside the existing search screen.
+// Checkpoint 10.3 made it the same segmented control the calendar's view
+// toggle uses; the testIDs, labels and `selected` state are unchanged.
 
 export type SearchAskMode = "search" | "ask";
 
@@ -20,39 +23,20 @@ export interface AskModeToggleProps {
   onChange: (mode: SearchAskMode) => void;
 }
 
-const OPTIONS: readonly { value: SearchAskMode; label: string }[] = [
-  { value: "search", label: "Search" },
-  { value: "ask", label: "Ask" },
+const OPTIONS: readonly SegmentedOption<SearchAskMode>[] = [
+  {
+    value: "search",
+    label: "Search",
+    accessibilityLabel: "Search mode",
+    testID: "ask-mode-search",
+  },
+  { value: "ask", label: "Ask", accessibilityLabel: "Ask mode", testID: "ask-mode-ask" },
 ];
 
 export function AskModeToggle({ mode, onChange }: AskModeToggleProps) {
   return (
-    <View className="flex-row gap-2 px-4 pb-2 pt-3">
-      {OPTIONS.map(({ value, label }) => {
-        const active = mode === value;
-        return (
-          <Pressable
-            key={value}
-            testID={`ask-mode-${value}`}
-            onPress={() => onChange(value)}
-            accessibilityRole="button"
-            accessibilityState={{ selected: active }}
-            accessibilityLabel={`${label} mode`}
-            hitSlop={8}
-            className={`min-h-[36px] items-center justify-center rounded-full px-3 py-1 active:opacity-70 ${
-              active ? "bg-blue-600" : "bg-neutral-200 dark:bg-neutral-800"
-            }`}
-          >
-            <Text
-              className={`text-sm font-medium ${
-                active ? "text-white" : "text-black dark:text-white"
-              }`}
-            >
-              {label}
-            </Text>
-          </Pressable>
-        );
-      })}
+    <View className="px-4 pb-2 pt-3">
+      <SegmentedControl value={mode} options={OPTIONS} onChange={onChange} />
     </View>
   );
 }

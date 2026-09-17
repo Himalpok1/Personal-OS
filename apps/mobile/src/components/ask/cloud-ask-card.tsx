@@ -1,5 +1,6 @@
 import { ApiClientError } from "@personal-os/api-client";
-import { Pressable, Text, View } from "react-native";
+import { View } from "react-native";
+import { AppText, Button, Card, Icon, ListRow, StatusChip } from "@/components/ui";
 import {
   useAskConsentOutdated,
   useAskEnabled,
@@ -36,7 +37,9 @@ import {
 // Disabling is a single reversible button with no confirmation, matching how
 // this app treats other reversible per-device toggles rather than its
 // destructive, hard-to-undo ones (mailbox disconnect, device revoke).
-const CARD_CLASS = "mb-4 rounded border border-neutral-300 p-3 dark:border-neutral-700";
+//
+// Checkpoint 10.3 composed it on the design system (Card, ListRow, Button,
+// StatusChip); every testID, label and the disclosure text are unchanged.
 
 // Checkpoint 9.7 ("Ask about today") rewrote this to name every class of
 // data that leaves, because the 8.6B text ("matching notes and tasks") no
@@ -111,116 +114,139 @@ export function CloudAskCard() {
         ? `On — sends questions to ${route.connection_name}.`
         : "Off — no question is ever sent unless you turn this on.";
 
-  const statusTone = isError ? "text-red-600 dark:text-red-400" : "text-black dark:text-white";
+  const statusChip = isLoading
+    ? null
+    : isError
+      ? { label: "Unknown", tone: "warning" as const }
+      : enabled
+        ? { label: "On", tone: "success" as const }
+        : { label: "Off", tone: "neutral" as const };
 
   return (
-    <View testID="cloud-ask-card" className={CARD_CLASS}>
-      <Text className="mb-2 text-base font-bold text-black dark:text-white">Cloud Ask</Text>
-      <Text className={`min-h-[20px] text-sm ${statusTone}`}>{statusText}</Text>
+    <Card testID="cloud-ask-card" className="mb-4">
+      <View className="flex-row items-center gap-2">
+        <Icon name="cloud-question" size="md" tone="primary" />
+        <AppText variant="title" className="flex-1">
+          Cloud Ask
+        </AppText>
+        {statusChip ? <StatusChip label={statusChip.label} tone={statusChip.tone} dot /> : null}
+      </View>
+      <AppText variant="body" tone={isError ? "danger" : "secondary"} className="mt-2 min-h-[20px]">
+        {statusText}
+      </AppText>
 
       {!isLoading && !isError && enabled && consentOutdated ? (
-        <Text
+        <AppText
           testID="cloud-ask-consent-outdated"
-          className="mt-2 text-xs text-amber-700 dark:text-amber-300"
+          variant="caption"
+          tone="warning"
+          className="mt-2"
         >
           {ASK_CONSENT_OUTDATED_TEXT}
-        </Text>
+        </AppText>
       ) : null}
 
       {!isLoading && !isError && enabled ? (
         <View>
-          <Pressable
+          <Button
             testID="cloud-ask-disable"
-            onPress={() => disableMutation.mutate()}
-            disabled={disableMutation.isPending}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: disableMutation.isPending }}
-            accessibilityLabel={
-              consentOutdated ? "Disable Cloud Ask to re-enable it" : "Disable Cloud Ask"
-            }
-            hitSlop={8}
-            className="mt-2 min-h-[44px] justify-center self-start rounded bg-red-100 px-3 py-2 active:opacity-70 dark:bg-red-950"
-          >
-            <Text className="text-sm font-medium text-red-700 dark:text-red-300">
-              {disableMutation.isPending
+            label={
+              disableMutation.isPending
                 ? "Turning off…"
                 : consentOutdated
                   ? "Disable, then re-enable below"
-                  : "Disable Cloud Ask"}
-            </Text>
-          </Pressable>
+                  : "Disable Cloud Ask"
+            }
+            onPress={() => disableMutation.mutate()}
+            disabled={disableMutation.isPending}
+            accessibilityLabel={
+              consentOutdated ? "Disable Cloud Ask to re-enable it" : "Disable Cloud Ask"
+            }
+            variant="danger"
+            size="sm"
+            className="mt-3"
+          />
           {disableMutation.isError ? (
-            <Text
+            <AppText
               testID="cloud-ask-disable-error"
-              className="mt-2 text-xs text-red-600 dark:text-red-400"
+              variant="caption"
+              tone="danger"
+              className="mt-2"
             >
               Couldn&apos;t turn off Cloud Ask. Something went wrong. Try again.
-            </Text>
+            </AppText>
           ) : null}
         </View>
       ) : null}
 
       {!isLoading && !isError && !enabled ? (
-        <View
-          testID="cloud-ask-disclosure"
-          className="mt-3 border-t border-neutral-200 pt-3 dark:border-neutral-800"
-        >
-          <Text
+        <View testID="cloud-ask-disclosure" className="mt-3">
+          <AppText
             testID="cloud-ask-disclosure-text"
-            className="mb-2 text-xs text-neutral-700 dark:text-neutral-300"
+            variant="caption"
+            tone="secondary"
+            className="mb-2"
           >
             {ASK_DISCLOSURE_TEXT}
-          </Text>
-          <Text
+          </AppText>
+          <AppText
             testID="cloud-ask-context-text"
-            className="mb-2 text-xs text-neutral-700 dark:text-neutral-300"
+            variant="caption"
+            tone="secondary"
+            className="mb-2"
           >
             {ASK_CONTEXT_TEXT}
-          </Text>
+          </AppText>
 
           {modelsQuery.isLoading ? (
-            <Text className="text-sm text-neutral-500">Loading available models…</Text>
+            <AppText variant="label" tone="muted" className="font-normal">
+              Loading available models…
+            </AppText>
           ) : modelsQuery.isError ? (
-            <Text className="text-sm text-red-600 dark:text-red-400">
+            <AppText variant="label" tone="danger" className="font-normal">
               Couldn&apos;t load AI models.
-            </Text>
+            </AppText>
           ) : modelsQuery.models.length === 0 ? (
-            <Text testID="cloud-ask-no-models" className="text-sm text-neutral-500">
+            <AppText
+              testID="cloud-ask-no-models"
+              variant="label"
+              tone="muted"
+              className="font-normal"
+            >
               No AI models are registered yet. Add a provider connection and model first.
-            </Text>
+            </AppText>
           ) : (
-            modelsQuery.models.map((model) => (
-              <Pressable
-                key={model.modelId}
-                testID={`cloud-ask-model-${model.modelId}`}
-                onPress={() => enableMutation.mutate(model.modelId)}
-                disabled={enableMutation.isPending}
-                accessibilityRole="button"
-                accessibilityState={{ disabled: enableMutation.isPending }}
-                accessibilityLabel={`Enable Cloud Ask with ${model.modelLabel}`}
-                hitSlop={8}
-                className="mt-2 min-h-[44px] justify-center rounded border border-neutral-300 px-3 py-2 active:opacity-70 dark:border-neutral-700"
-              >
-                <Text className="text-sm font-medium text-black dark:text-white">
-                  {model.modelLabel}
-                </Text>
-                <Text className="text-xs text-neutral-500">
-                  {model.connectionName} · {model.providerType}
-                </Text>
-              </Pressable>
-            ))
+            <Card padding="none" elevation="flat" className="mt-1">
+              {modelsQuery.models.map((model, index) => (
+                <ListRow
+                  key={model.modelId}
+                  testID={`cloud-ask-model-${model.modelId}`}
+                  icon="robot-outline"
+                  iconTone="primary"
+                  title={model.modelLabel}
+                  subtitle={`${model.connectionName} · ${model.providerType}`}
+                  onPress={() => enableMutation.mutate(model.modelId)}
+                  disabled={enableMutation.isPending}
+                  accessibilityLabel={`Enable Cloud Ask with ${model.modelLabel}`}
+                  chevron
+                  last={index === modelsQuery.models.length - 1}
+                />
+              ))}
+            </Card>
           )}
 
           {enableMutation.isError ? (
-            <Text
+            <AppText
               testID="cloud-ask-enable-error"
-              className="mt-2 text-xs text-red-600 dark:text-red-400"
+              variant="caption"
+              tone="danger"
+              className="mt-2"
             >
               {describeEnableFailure(enableMutation.error)}
-            </Text>
+            </AppText>
           ) : null}
         </View>
       ) : null}
-    </View>
+    </Card>
   );
 }

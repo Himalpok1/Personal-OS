@@ -66,7 +66,6 @@ function deepRender(node: unknown): unknown {
   return el;
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 function findAll(node: unknown, predicate: (n: any) => boolean, acc: any[] = []): any[] {
   if (!node) return acc;
   if (Array.isArray(node)) {
@@ -95,7 +94,6 @@ function getTextContent(node: unknown): string {
   if (el.props?.children !== undefined) return getTextContent(el.props.children);
   return "";
 }
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 const ID = "11111111-1111-4111-8111-111111111111";
 const EVENT_ID = "33333333-3333-4333-8333-333333333333";
@@ -377,8 +375,11 @@ describe("SearchView -- states", () => {
     );
     const header = deepRender(list.props.renderItem({ item: typeHeader }));
     expect(getTextContent(header)).toBe("Mail (1 more · 6 of 298 matched)");
-    // Screen readers land on section headers as headers.
-    expect(findAll(header, (n) => n.type === Text)[0].props.accessibilityRole).toBe("header");
+    // Screen readers land on section headers as headers -- on the title Text
+    // itself (the design system's SectionHeader), never on the row.
+    const headers = findAll(header, (n) => n.props?.accessibilityRole === "header");
+    expect(headers).toHaveLength(1);
+    expect(headers[0].type).toBe(Text);
   });
 
   it("READY: an uncapped per-type header says only how many more rows sit under it", () => {
@@ -491,10 +492,13 @@ describe("SearchView -- states", () => {
     const notes = deepRender(findByTestId(tree, "search-results").props.ListHeaderComponent);
     expect(getTextContent(findByTestId(notes, "search-ignored"))).toBe("Ignored: ninth, tenth");
     // Ordered after the chip: the chip explains the window, the note the words.
-    const texts = findAll(notes, (n) => n.type === Text).map(
+    // Since Checkpoint 10.3 the chip's testID sits on the StatusChip's wrapper
+    // View, so the order is read over every testID-bearing node, not Texts.
+    const ids = findAll(notes, (n) => n.props?.testID !== undefined).map(
       (n: { props: { testID?: string } }) => n.props.testID,
     );
-    expect(texts.indexOf("search-ignored")).toBeGreaterThan(texts.indexOf("search-date-chip"));
+    expect(ids.indexOf("search-date-chip")).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf("search-ignored")).toBeGreaterThan(ids.indexOf("search-date-chip"));
     expectInertText(notes);
 
     const none = renderView({ state: { kind: "ready", response: readyResponse([taskResult()]) } });

@@ -19,3 +19,11 @@ export const useColorScheme = () => ({
 export const cssInterop = () => {};
 export const remapProps = () => {};
 export const verifyInstallation = () => {};
+
+// Checkpoint 10.3: components/ui/web-color-scheme.ts calls this once at boot
+// on web; under vitest it must simply exist.
+export const colorScheme = {
+  set: (_value: "light" | "dark" | "system") => {},
+  get: () => "light" as const,
+  toggle: () => {},
+};

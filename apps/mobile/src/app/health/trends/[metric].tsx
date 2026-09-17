@@ -2,11 +2,23 @@ import { ApiClientError } from "@personal-os/api-client";
 import type { HealthMetricSeriesResponse } from "@personal-os/schema";
 import { useLocalSearchParams } from "expo-router";
 import { useState } from "react";
-import { Pressable, ScrollView, Text, useWindowDimensions, View } from "react-native";
-import { FLOATING_CLEARANCE } from "@/components/floating-layout";
+import { Pressable, useWindowDimensions, View } from "react-native";
 import { formatHealthValue, metricLabel } from "@/components/health/format";
 import { HealthChart } from "@/components/health/health-chart";
 import { METRIC_EXPLANATIONS, resolveMetricDisplay } from "@/components/health/metric-state";
+import {
+  AppText,
+  Card,
+  EmptyState,
+  ErrorState,
+  ListRow,
+  Screen,
+  ScreenCentered,
+  ScreenFrame,
+  ScreenHeader,
+  SkeletonScreen,
+  buttonClasses,
+} from "@/components/ui";
 import { useHealthMetricSeries, useHealthSummary } from "@/queries/health";
 import { addLocalDays, formatShortDate, todayLocalDate } from "@/utils/local-date";
 
@@ -34,6 +46,37 @@ function chartKind(aggregation: HealthMetricSeriesResponse["aggregation"]): "bar
   return aggregation === "sum" ? "bar" : "line";
 }
 
+// A segmented range chip. Composed from the design system's `buttonClasses`
+// rather than rendered through `Button` because a range toggle must announce
+// `accessibilityState.selected`, which `Button` (a plain action) does not
+// carry -- and dropping it would leave a screen reader unable to tell which
+// range is showing.
+function RangeChip({
+  days,
+  selected,
+  onPress,
+}: {
+  days: RangeDays;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const classes = buttonClasses(selected ? "tonal" : "ghost", "sm", false);
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      accessibilityLabel={`Show the last ${days} days`}
+      className={`${classes.container} flex-1`}
+    >
+      <AppText variant="label" tone="inherit" className={`${classes.label} font-semibold`}>
+        {days} days
+      </AppText>
+    </Pressable>
+  );
+}
+
 function RangeSelector({
   value,
   onChange,
@@ -42,43 +85,28 @@ function RangeSelector({
   onChange: (days: RangeDays) => void;
 }) {
   return (
-    <View className="flex-row gap-2 px-4 pt-3">
-      {RANGES.map((days) => {
-        const selected = days === value;
-        return (
-          <Pressable
-            key={days}
-            onPress={() => onChange(days)}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            accessibilityLabel={`Show the last ${days} days`}
-            className={`min-h-[44px] flex-1 items-center justify-center rounded-lg px-3 ${
-              selected
-                ? "bg-blue-600"
-                : "bg-neutral-100 active:bg-neutral-200 dark:bg-neutral-900 dark:active:bg-neutral-800"
-            }`}
-          >
-            <Text
-              className={`text-sm font-medium ${
-                selected ? "text-white" : "text-neutral-700 dark:text-neutral-200"
-              }`}
-            >
-              {days} days
-            </Text>
-          </Pressable>
-        );
-      })}
+    <View className="flex-row gap-2 pt-4">
+      {RANGES.map((days) => (
+        <RangeChip
+          key={days}
+          days={days}
+          selected={days === value}
+          onPress={() => onChange(days)}
+        />
+      ))}
     </View>
   );
 }
 
-function StatRow({ label, value }: { label: string; value: string }) {
+function StatRow({ label, value, last }: { label: string; value: string; last?: boolean }) {
   return (
-    <View className="flex-row items-center justify-between py-1.5">
-      <Text className="text-sm text-neutral-500 dark:text-neutral-400">{label}</Text>
-      <Text className="text-sm font-medium text-black dark:text-white">{value}</Text>
-    </View>
+    <ListRow
+      title={label}
+      titleTone="secondary"
+      trailing={<AppText variant="body-strong">{value}</AppText>}
+      inset
+      last={last}
+    />
   );
 }
 
@@ -103,48 +131,36 @@ function SeriesStats({ series }: { series: HealthMetricSeriesResponse }) {
   };
 
   return (
-    <View className="mx-4 mt-4 rounded-xl border border-neutral-200 px-4 py-2 dark:border-neutral-800">
-      {aggregation === "sum" ? (
-        <StatRow label="Total" value={format(summary.total)} />
-      ) : (
-        <StatRow label="Average" value={format(summary.average)} />
-      )}
-      <StatRow label="Lowest" value={format(summary.min)} />
-      <StatRow label="Highest" value={format(summary.max)} />
-      <View className="my-1 h-px bg-neutral-200 dark:bg-neutral-800" />
-      <StatRow
-        label="Days with a value"
-        value={`${summary.days_with_value} of ${summary.days_in_range}`}
-      />
-      {/* "Checked, nothing recorded" and "never checked" are different facts and
-          are never merged into one "no data" count -- that collapse is the same
-          class of mistake as rendering a missing value as zero. */}
-      <StatRow label="Checked — nothing recorded" value={String(summary.days_verified_absent)} />
-      <StatRow label="Not synced yet" value={String(summary.days_unknown)} />
-    </View>
-  );
-}
-
-function CenteredMessage({ title, body }: { title: string; body?: string }) {
-  return (
-    <View className="flex-1 items-center justify-center gap-2 bg-white px-6 dark:bg-black">
-      <Text className="text-center text-base font-medium text-black dark:text-white">{title}</Text>
-      {body === undefined ? null : (
-        <Text className="text-center text-sm text-neutral-500 dark:text-neutral-400">{body}</Text>
-      )}
-    </View>
+    <>
+      <Card padding="none" className="mt-4 px-4">
+        {aggregation === "sum" ? (
+          <StatRow label="Total" value={format(summary.total)} />
+        ) : (
+          <StatRow label="Average" value={format(summary.average)} />
+        )}
+        <StatRow label="Lowest" value={format(summary.min)} />
+        <StatRow label="Highest" value={format(summary.max)} />
+        <StatRow
+          label="Days with a value"
+          value={`${summary.days_with_value} of ${summary.days_in_range}`}
+        />
+        {/* "Checked, nothing recorded" and "never checked" are different facts and
+            are never merged into one "no data" count -- that collapse is the same
+            class of mistake as rendering a missing value as zero. */}
+        <StatRow label="Checked — nothing recorded" value={String(summary.days_verified_absent)} />
+        <StatRow label="Not synced yet" value={String(summary.days_unknown)} last />
+      </Card>
+    </>
   );
 }
 
 function TrendContent({
   series,
-  metric,
   compact,
   chartWidth,
   todayDate,
 }: {
   series: HealthMetricSeriesResponse;
-  metric: string;
   compact: boolean;
   chartWidth: number;
   todayDate: string;
@@ -173,14 +189,7 @@ function TrendContent({
 
   return (
     <>
-      <View className="px-4 pt-4">
-        <Text className="text-2xl font-bold text-black dark:text-white">{metricLabel(metric)}</Text>
-        <Text className="text-sm text-neutral-500 dark:text-neutral-400">
-          {formatShortDate(series.from)} – {formatShortDate(series.to)}
-        </Text>
-      </View>
-
-      <View className="px-4 pt-4">
+      <Card className="mt-4">
         <HealthChart
           metric={series.metric}
           points={series.points}
@@ -190,14 +199,14 @@ function TrendContent({
           width={chartWidth}
           height={compact ? 140 : 200}
         />
-      </View>
+      </Card>
 
       {explanationKey === null ? null : (
-        <View className="mx-4 mt-4 rounded-xl bg-neutral-100 px-4 py-3 dark:bg-neutral-900">
-          <Text className="text-sm text-neutral-600 dark:text-neutral-300">
+        <Card padding="sm" elevation="flat" className="mt-3">
+          <AppText variant="body" tone="secondary">
             {METRIC_EXPLANATIONS[explanationKey]}
-          </Text>
-        </View>
+          </AppText>
+        </Card>
       )}
 
       <SeriesStats series={series} />
@@ -227,20 +236,24 @@ export default function HealthTrendScreen() {
   const series = useHealthMetricSeries({ metric, from, to, enabled: metric.length > 0 });
 
   // Chart width is measured, never hardcoded: this app renders at 480px on the
-  // Rabbit R1 and at whatever a browser window happens to be. 32 = px-4 either
-  // side; the floor stops a pathologically narrow window producing a chart with
-  // negative width.
-  const chartWidth = Math.max(240, width - 32);
+  // Rabbit R1 and at whatever a browser window happens to be. 64 = the screen's
+  // 16px gutter plus the chart card's 16px padding, either side; the floor
+  // stops a pathologically narrow window producing a chart with negative width.
+  const chartWidth = Math.max(240, width - 64);
 
   if (metric.length === 0) {
-    return <CenteredMessage title="No metric was selected." />;
+    return (
+      <ScreenCentered>
+        <EmptyState icon="chart-line" title="No metric was selected." size="screen" />
+      </ScreenCentered>
+    );
   }
 
   if (series.isLoading) {
     return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <Text className="text-neutral-500">Loading…</Text>
-      </View>
+      <ScreenFrame>
+        <SkeletonScreen />
+      </ScreenFrame>
     );
   }
 
@@ -255,45 +268,48 @@ export default function HealthTrendScreen() {
 
     if (notReadable) {
       return (
-        <CenteredMessage
-          title={`${metricLabel(metric)} doesn't have a daily trend.`}
-          body="This one is recorded as individual sessions rather than a value per day."
-        />
+        <ScreenCentered>
+          <EmptyState
+            icon="chart-line"
+            title={`${metricLabel(metric)} doesn't have a daily trend.`}
+            body="This one is recorded as individual sessions rather than a value per day."
+            size="screen"
+          />
+        </ScreenCentered>
       );
     }
 
     return (
-      <View className="flex-1 items-center justify-center gap-3 bg-white px-6 dark:bg-black">
-        <Text className="text-center text-red-600">Couldn&apos;t load this trend.</Text>
-        <Pressable
-          onPress={() => void series.refetch()}
-          hitSlop={8}
-          accessibilityRole="button"
-          accessibilityLabel="Retry loading this trend"
-          className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-        >
-          <Text className="font-semibold text-white">Retry</Text>
-        </Pressable>
-      </View>
+      <ScreenCentered>
+        <ErrorState
+          message="Couldn't load this trend."
+          onRetry={() => void series.refetch()}
+          retryAccessibilityLabel="Retry loading this trend"
+          size="screen"
+        />
+      </ScreenCentered>
     );
   }
 
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      contentContainerClassName={FLOATING_CLEARANCE}
-      keyboardShouldPersistTaps="handled"
-    >
+    <Screen refreshing={series.isRefetching} onRefresh={() => void series.refetch()}>
+      <ScreenHeader
+        title={metricLabel(metric)}
+        subtitle={
+          series.data === undefined
+            ? undefined
+            : `${formatShortDate(series.data.from)} – ${formatShortDate(series.data.to)}`
+        }
+      />
       <RangeSelector value={days} onChange={setDays} />
       {series.data === undefined ? null : (
         <TrendContent
           series={series.data}
-          metric={metric}
           compact={compact}
           chartWidth={chartWidth}
           todayDate={anchor}
         />
       )}
-    </ScrollView>
+    </Screen>
   );
 }

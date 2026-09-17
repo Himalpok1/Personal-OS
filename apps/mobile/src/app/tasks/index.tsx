@@ -12,9 +12,20 @@ import {
   useTasks,
 } from "@/queries/tasks";
 import { FLOATING_CLEARANCE, FLOATING_CTA_CLEARANCE_NO_TABBAR } from "@/components/floating-layout";
-import { Link, useRouter } from "expo-router";
+import { SegmentedControl, type SegmentedOption } from "@/components/calendar/segmented-control";
+import {
+  AppText,
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  ScreenFrame,
+  SkeletonList,
+  useTheme,
+} from "@/components/ui";
+import { useRouter } from "expo-router";
 import { useState } from "react";
-import { FlatList, Pressable, SafeAreaView, Text, View } from "react-native";
+import { FlatList, Pressable, RefreshControl, View } from "react-native";
 
 type Filter = "new" | "active" | "done" | "dropped";
 
@@ -24,6 +35,10 @@ const FILTER_STATUS: Record<Filter, TaskStatus[]> = {
   done: ["done"],
   dropped: ["dropped"],
 };
+
+const FILTERS: readonly SegmentedOption<Filter>[] = (
+  ["new", "active", "done", "dropped"] as Filter[]
+).map((f) => ({ value: f, label: f[0]!.toUpperCase() + f.slice(1) }));
 
 function TaskRow({ task }: { task: Task }) {
   const router = useRouter();
@@ -92,15 +107,23 @@ function TaskRow({ task }: { task: Task }) {
       },
     });
 
+  // The body and the action buttons are SIBLINGS on an inert card, not
+  // nested pressables: the pre-10.3 row stopped each action tap's
+  // propagation by hand (under react-native-web a nested Pressable's tap
+  // bubbles to the row's own onPress), and siblings need no such guard.
+  // Behaviour is unchanged -- the body opens the task, the buttons act.
   return (
-    <Pressable
-      onPress={() => router.push(`/tasks/${task.id}`)}
-      className="flex-row items-center justify-between border-b border-neutral-200 px-4 py-3 dark:border-neutral-800"
-    >
-      <View className="flex-1 pr-2">
-        <Text className="text-base text-black dark:text-white" numberOfLines={2}>
+    <Card padding="none" className="mb-3">
+      <Pressable
+        onPress={() => router.push(`/tasks/${task.id}`)}
+        accessibilityRole="button"
+        accessibilityLabel={`Open task: ${task.title}`}
+        hitSlop={4}
+        className="p-4 active:opacity-70"
+      >
+        <AppText variant="body-strong" numberOfLines={2}>
           {task.title}
-        </Text>
+        </AppText>
         {/* A recurring task's `due_at` is the SERIES ANCHOR (contract §0) --
             always persisted since 9.4, never advanced -- so on a rule that
             has been running for a month it would read as a due date a month
@@ -108,160 +131,142 @@ function TaskRow({ task }: { task: Task }) {
             the actual next instance lives on the detail screen's "Next:"
             line (components/task-actions.tsx). */}
         {task.due_at && !task.rrule ? (
-          <Text className="text-xs text-neutral-500">
+          <AppText variant="caption" tone="secondary" className="mt-0.5">
             Due {new Date(task.due_at).toLocaleString()}
-          </Text>
+          </AppText>
         ) : null}
         {task.rrule ? (
-          <Text className="text-xs text-neutral-500 dark:text-neutral-400" numberOfLines={1}>
-            ⟲ {describeTaskRepeat(task)}
-          </Text>
+          <AppText variant="caption" tone="secondary" numberOfLines={1} className="mt-0.5">
+            Repeats · {describeTaskRepeat(task)}
+          </AppText>
         ) : null}
         {error ? (
-          <Text className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</Text>
+          <AppText variant="caption" tone="danger" className="mt-1">
+            {error}
+          </AppText>
         ) : null}
-      </View>
-      {/* Each action Pressable stops propagation so it does not ALSO trigger
-          the row's navigate-to-detail onPress. Same precedent as
-          components/calendar/day-cell.tsx: on native the touch responder
-          already grants to the inner view, but Pressable maps to bubbling DOM
-          events under react-native-web, where this app also ships. */}
-      <View className="flex-row gap-2">
+      </Pressable>
+      <View className="flex-row flex-wrap gap-2 px-4 pb-3">
         {task.status === "inbox" ? (
-          <Pressable
-            onPress={(e) => {
-              e.stopPropagation();
-              activate.mutate(task.id);
-            }}
-            hitSlop={8}
+          <Button
+            label="Start"
+            onPress={() => activate.mutate(task.id)}
+            variant="tonal"
+            size="sm"
+            icon="play-outline"
             disabled={activate.isPending}
-            className="min-h-[44px] items-center justify-center rounded bg-blue-100 px-2 disabled:opacity-50 dark:bg-blue-950"
-          >
-            <Text className="text-xs text-blue-700 dark:text-blue-300">Start</Text>
-          </Pressable>
+            accessibilityLabel={`Start task: ${task.title}`}
+          />
         ) : null}
         {task.status === "active" ? (
           <>
-            <Pressable
-              onPress={(e) => {
-                e.stopPropagation();
-                onComplete();
-              }}
-              hitSlop={8}
+            <Button
+              label="Done"
+              onPress={onComplete}
+              variant="tonal"
+              size="sm"
+              icon="check"
               disabled={complete.isPending || completeOccurrence.isPending}
-              className="min-h-[44px] items-center justify-center rounded bg-green-100 px-2 disabled:opacity-50 dark:bg-green-950"
-            >
-              <Text className="text-xs text-green-700 dark:text-green-300">Done</Text>
-            </Pressable>
-            <Pressable
-              onPress={(e) => {
-                e.stopPropagation();
-                onDrop();
-              }}
-              hitSlop={8}
+              accessibilityLabel={`Complete task: ${task.title}`}
+            />
+            <Button
+              label="Drop"
+              onPress={onDrop}
+              variant="danger"
+              size="sm"
               disabled={drop.isPending}
-              className="min-h-[44px] items-center justify-center rounded bg-neutral-100 px-2 disabled:opacity-50 dark:bg-neutral-800"
-            >
-              <Text className="text-xs text-neutral-600 dark:text-neutral-300">Drop</Text>
-            </Pressable>
+              accessibilityLabel={`Drop task: ${task.title}`}
+            />
           </>
         ) : null}
         {task.status === "done" || task.status === "dropped" ? (
-          <Pressable
-            onPress={(e) => {
-              e.stopPropagation();
+          <Button
+            label="Reopen"
+            onPress={() => {
               setError(null);
               reopen.mutate(task.id, { onError: showFailure });
             }}
-            hitSlop={8}
+            variant="outline"
+            size="sm"
+            icon="restore"
             disabled={reopen.isPending}
-            accessibilityRole="button"
             accessibilityLabel="Reopen task"
-            className="min-h-[44px] items-center justify-center rounded bg-blue-100 px-2 disabled:opacity-50 dark:bg-blue-950"
-          >
-            <Text className="text-xs text-blue-700 dark:text-blue-300">Reopen</Text>
-          </Pressable>
+          />
         ) : null}
-        <Pressable
-          onPress={(e) => {
-            e.stopPropagation();
-            onArchive();
-          }}
-          hitSlop={8}
+        <Button
+          label="Archive"
+          onPress={onArchive}
+          variant="ghost"
+          size="sm"
+          icon="archive-arrow-down-outline"
           disabled={archive.isPending}
-          className="min-h-[44px] items-center justify-center rounded bg-neutral-100 px-2 disabled:opacity-50 dark:bg-neutral-800"
-        >
-          <Text className="text-xs text-neutral-600 dark:text-neutral-300">Archive</Text>
-        </Pressable>
+          accessibilityLabel={`Archive task: ${task.title}`}
+        />
       </View>
-    </Pressable>
+    </Card>
   );
 }
 
 export default function TasksScreen() {
+  const router = useRouter();
   const [filter, setFilter] = useState<Filter>("active");
-  const { data, isLoading, isError, refetch } = useTasks({ status: FILTER_STATUS[filter] });
+  const { data, isLoading, isError, isRefetching, refetch } = useTasks({
+    status: FILTER_STATUS[filter],
+  });
+  const { colors } = useTheme();
 
   return (
-    <SafeAreaView className="flex-1 bg-white dark:bg-black">
-      <View className="flex-row justify-around border-b border-neutral-200 dark:border-neutral-800">
-        {(["new", "active", "done", "dropped"] as Filter[]).map((f) => {
-          const isActive = filter === f;
-          const label = f[0]!.toUpperCase() + f.slice(1);
-          return (
-            <Pressable
-              key={f}
-              onPress={() => setFilter(f)}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityState={{ selected: isActive }}
-              accessibilityLabel={label}
-              className="min-h-[44px] min-w-[44px] items-center justify-center"
-            >
-              <Text
-                className={
-                  isActive ? "font-semibold text-blue-600" : "text-neutral-500 dark:text-neutral-400"
-                }
-              >
-                {label}
-              </Text>
-            </Pressable>
-          );
-        })}
+    <ScreenFrame>
+      <View className="px-4 pt-3">
+        <SegmentedControl value={filter} options={FILTERS} onChange={setFilter} />
       </View>
 
       {isLoading ? (
-        <Text className="p-4 text-neutral-500">Loading...</Text>
+        <SkeletonList className="px-4 pt-2" />
       ) : isError ? (
-        <View className="flex-1 items-center justify-center gap-3 p-4">
-          <Text className="text-red-600">Couldn&apos;t load tasks.</Text>
-          <Pressable
-            onPress={() => void refetch()}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading tasks"
-            hitSlop={8}
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="font-semibold text-white">Retry</Text>
-          </Pressable>
-        </View>
+        <ErrorState
+          size="screen"
+          message="Couldn't load tasks."
+          onRetry={() => void refetch()}
+          retryAccessibilityLabel="Retry loading tasks"
+        />
       ) : (
         <FlatList
           data={data?.items ?? []}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => <TaskRow task={item} />}
-          contentContainerClassName={FLOATING_CLEARANCE}
+          contentContainerClassName={`${FLOATING_CLEARANCE} flex-grow px-4 pt-4`}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefetching}
+              onRefresh={() => void refetch()}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+              progressBackgroundColor={colors.surface}
+            />
+          }
           ListEmptyComponent={
-            <Text className="p-4 text-neutral-500">No {filter} tasks.</Text>
+            <EmptyState
+              size="screen"
+              icon="checkbox-marked-circle-outline"
+              title={`No ${filter} tasks.`}
+            />
           }
         />
       )}
 
-      <Link href="/tasks/new" asChild>
-        <Pressable className={`mx-4 mt-4 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700 ${FLOATING_CTA_CLEARANCE_NO_TABBAR}`}>
-          <Text className="font-semibold text-white">New task</Text>
-        </Pressable>
-      </Link>
-    </SafeAreaView>
+      <View className={`mx-4 mt-4 ${FLOATING_CTA_CLEARANCE_NO_TABBAR}`}>
+        <Button
+          label="New task"
+          onPress={() => router.push("/tasks/new")}
+          variant="primary"
+          // Navigation, not an action: no haptic (components/ui/haptics.ts).
+          haptic={false}
+          icon="plus"
+          block
+          accessibilityLabel="New task"
+        />
+      </View>
+    </ScreenFrame>
   );
 }

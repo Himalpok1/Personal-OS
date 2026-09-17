@@ -1,16 +1,24 @@
-import { Pressable, Text, View } from "react-native";
+import { useEffect, useRef } from "react";
+import { ActivityIndicator, Animated, Easing, Pressable, View } from "react-native";
 import { FLOATING_BUTTON_BOTTOM, FLOATING_BUTTON_SIZE } from "@/components/floating-layout";
+import { AppText, Icon, useTheme, type IconName } from "@/components/ui";
 import { usePttRecorder } from "./use-ptt-recorder";
 
-const LABEL_BY_STATUS: Record<string, string> = {
-  idle: "🎙️",
-  preparing: "…",
-  recording: "⏹",
-  stopping: "…",
-  uploading: "…",
-  transcribing: "…",
-  done: "✓",
-  failed: "!",
+/**
+ * The glyph for each recorder status (Checkpoint 10.3: an icon by role, not
+ * an emoji). A `null` glyph means the button shows an activity indicator
+ * instead -- every in-between state (preparing, stopping, uploading,
+ * transcribing) is "busy", and a spinner says so without a fourth glyph.
+ */
+export const ICON_BY_STATUS: Record<string, IconName | null> = {
+  idle: "microphone",
+  preparing: null,
+  recording: "stop",
+  stopping: null,
+  uploading: null,
+  transcribing: null,
+  done: "check",
+  failed: "alert",
 };
 
 // Mounted next to QuickAddFab in the root layout -- a second, equally
@@ -29,6 +37,11 @@ export function PttButton({ layoutOnly = false }: { layoutOnly?: boolean } = {})
   return <PttButtonLive />;
 }
 
+// The idle circle: a raised surface with a strong outline, so it reads as a
+// control beside the primary-coloured QuickAddFab without competing with it.
+const IDLE_CLASS =
+  "border border-outline-strong bg-surface-raised shadow-card dark:border-outline-strong-dark dark:bg-surface-raised-dark dark:shadow-none";
+
 // Real geometry and idle styling, no recorder, no permission, no-op on tap --
 // so FAB/PTT clearance can be verified on hardware without granting the
 // layout-verification build a microphone.
@@ -40,9 +53,9 @@ function PttButtonLayoutOnly() {
         accessibilityLabel="Push to talk (layout only)"
         accessibilityState={{ disabled: true }}
         disabled
-        className={`${FLOATING_BUTTON_SIZE} items-center justify-center rounded-full bg-neutral-700 shadow-lg`}
+        className={`${FLOATING_BUTTON_SIZE} items-center justify-center rounded-full ${IDLE_CLASS}`}
       >
-        <Text className="text-2xl">{LABEL_BY_STATUS["idle"]}</Text>
+        <Icon name={ICON_BY_STATUS["idle"]!} size="lg" tone="on-surface" />
       </Pressable>
     </View>
   );
@@ -52,7 +65,7 @@ function PttButtonLayoutOnly() {
 // change with status, but a screen reader previously always heard the static
 // "Push to talk" -- no way to tell the button was recording, busy or failed.
 // Same pattern as QuickAddFab's fabAccessibilityLabel.
-function pttAccessibilityLabel(status: string, canRetry: boolean): string {
+export function pttAccessibilityLabel(status: string, canRetry: boolean): string {
   switch (status) {
     case "recording":
       return "Push to talk, recording. Tap to stop.";
@@ -72,8 +85,56 @@ function pttAccessibilityLabel(status: string, canRetry: boolean): string {
   }
 }
 
+/**
+ * A ring that breathes behind the button while recording. React Native's
+ * own `Animated` (opacity loop on the native driver) -- the same mechanism
+ * the design system's skeletons use, so no worklet, no babel plugin, runs on
+ * web and is inert under vitest. Styled through `style`: `Animated.View` is
+ * not one of the components NativeWind's interop wraps.
+ */
+function RecordingRing({ color }: { color: string }) {
+  const opacity = useRef(new Animated.Value(0.2)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, {
+          toValue: 0.7,
+          duration: 600,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 0.2,
+          duration: 600,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [opacity]);
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        top: -6,
+        left: -6,
+        right: -6,
+        bottom: -6,
+        borderRadius: 999,
+        borderWidth: 3,
+        borderColor: color,
+        opacity,
+      }}
+    />
+  );
+}
+
 function PttButtonLive() {
   const ptt = usePttRecorder();
+  const { colors } = useTheme();
   const busy =
     ptt.status === "preparing" ||
     ptt.status === "stopping" ||
@@ -91,43 +152,59 @@ function PttButtonLive() {
     }
   };
 
-  const bg =
-    ptt.status === "recording"
-      ? "bg-red-600 active:bg-red-700"
-      : ptt.status === "failed"
-        ? "bg-red-500 active:bg-red-600"
-        : ptt.status === "done"
-          ? "bg-green-600"
-          : "bg-neutral-700 active:bg-neutral-800";
+  // Recording and failed both fill with the danger colour -- one is "live",
+  // the other "needs you" -- distinguished by the glyph (stop vs alert), the
+  // pulsing ring (recording only) and the spoken label, never by colour
+  // alone. Done fills green for the one moment it says "sent".
+  const fill =
+    ptt.status === "recording" || ptt.status === "failed"
+      ? "bg-danger active:opacity-90 dark:bg-danger-dark"
+      : ptt.status === "done"
+        ? "bg-success dark:bg-success-dark"
+        : IDLE_CLASS;
+  const onFill = ptt.status === "idle" || busy ? "on-surface" : "on-primary";
+  const glyph = ICON_BY_STATUS[ptt.status] ?? null;
 
   return (
     // Offset and size come from components/floating-layout.ts, shared with
     // QuickAddFab and with every scroll container's bottom padding.
     <View className={`absolute ${FLOATING_BUTTON_BOTTOM} left-6 items-start`}>
-      <Pressable
-        onPress={onPress}
-        disabled={busy}
-        className={`${FLOATING_BUTTON_SIZE} items-center justify-center rounded-full shadow-lg ${bg}`}
-        accessibilityRole="button"
-        accessibilityLabel={pttAccessibilityLabel(ptt.status, ptt.canRetry)}
-      >
-        <Text className="text-2xl">{LABEL_BY_STATUS[ptt.status]}</Text>
-      </Pressable>
+      <View className={FLOATING_BUTTON_SIZE}>
+        {ptt.status === "recording" ? <RecordingRing color={colors.danger} /> : null}
+        <Pressable
+          onPress={onPress}
+          disabled={busy}
+          className={`${FLOATING_BUTTON_SIZE} items-center justify-center rounded-full ${fill}`}
+          accessibilityRole="button"
+          accessibilityLabel={pttAccessibilityLabel(ptt.status, ptt.canRetry)}
+          accessibilityState={{ disabled: busy, busy }}
+        >
+          {glyph === null ? (
+            <ActivityIndicator size="small" color={colors[onFill]} />
+          ) : (
+            <Icon name={glyph} size="lg" tone={onFill} />
+          )}
+        </Pressable>
+      </View>
       {ptt.status === "recording" ? (
-        <Text className="mt-1 text-xs text-red-600">
+        <AppText variant="caption" tone="danger" className="mt-1">
           Recording {(ptt.durationMillis / 1000).toFixed(0)}s -- tap to stop
-        </Text>
+        </AppText>
       ) : null}
       {ptt.status === "uploading" ? (
-        <Text className="mt-1 text-xs text-neutral-500">Uploading...</Text>
+        <AppText variant="caption" tone="muted" className="mt-1">
+          Uploading...
+        </AppText>
       ) : null}
       {ptt.status === "transcribing" ? (
-        <Text className="mt-1 text-xs text-neutral-500">Transcribing...</Text>
+        <AppText variant="caption" tone="muted" className="mt-1">
+          Transcribing...
+        </AppText>
       ) : null}
       {ptt.status === "failed" ? (
-        <Text className="mt-1 max-w-[140px] text-xs text-red-600">
+        <AppText variant="caption" tone="danger" className="mt-1 max-w-[140px]">
           {ptt.error ?? "Failed"} ({ptt.canRetry ? "tap to retry" : "tap to dismiss"})
-        </Text>
+        </AppText>
       ) : null}
     </View>
   );

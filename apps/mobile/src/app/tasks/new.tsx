@@ -1,3 +1,6 @@
+import { ChoiceChip } from "@/components/ask/choice-chip";
+import { FieldLabel, textFieldClass } from "@/components/ask/text-field";
+import { AppText, Button, ScreenFrame } from "@/components/ui";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { usePlaceholderColor } from "@/components/placeholder-color";
@@ -17,7 +20,7 @@ import {
 } from "@personal-os/core/recurrence/editor";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ScrollView, TextInput, View } from "react-native";
 
 export default function NewTaskScreen() {
   const keyboardHeight = useKeyboardHeight();
@@ -105,103 +108,103 @@ export default function NewTaskScreen() {
   };
 
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      // Padding lives entirely in contentContainerStyle (no
-      // contentContainerClassName) because NativeWind remaps that class onto
-      // this same prop -- see FLOATING_CLEARANCE_PX. The clearance keeps the
-      // globally-mounted QuickAdd/PTT buttons off this form's Save/Archive
-      // control; the keyboard height gives room to scroll it clear of the IME.
-      // Extra room so lower controls can be scrolled clear of the IME --
-      // see components/use-keyboard-height.ts for why insets alone don't do it.
-      contentContainerStyle={{ padding: 16, paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
-      // Without this the first tap on a submit button below a focused field
-      // only dismisses the keyboard instead of submitting.
-      keyboardShouldPersistTaps="handled"
-    >
-      <Text className="mb-1 text-sm text-neutral-500">Title</Text>
-      <TextInput
-        value={title}
-        onChangeText={setTitle}
-        placeholder="What needs doing?"
-        placeholderTextColor={placeholderColor}
-        // The server's own bound (packages/schema/src/text-bounds.ts), so an
-        // over-long paste is stopped here rather than refused as a 400.
-        maxLength={ENTITY_TITLE_MAX_CHARS}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-      <FieldLengthCounter length={title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
-
-      <Text className="mb-1 text-sm text-neutral-500">Notes (optional)</Text>
-      <TextInput
-        value={body}
-        onChangeText={setBody}
-        multiline
-        placeholder=""
-        maxLength={TASK_BODY_MAX_CHARS}
-        className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-      <FieldLengthCounter length={body.length} maxLength={TASK_BODY_MAX_CHARS} />
-
-      <DateTimeField label="Due date (optional)" value={dueAt} onChange={onDueAtChange} />
-
-      <TaskRepeatField
-        value={recurrence}
-        onChange={setRecurrence}
-        dueAt={dueAt}
-        timezone={deviceTimezone()}
-      />
-
-      <DateTimeField
-        label="Reminder (optional)"
-        value={remindAt}
-        onChange={setRemindAt}
-        warnIfPast
-      />
-
-      <Text className="mb-1 text-sm text-neutral-500">Project (optional)</Text>
-      <View className="mb-4 flex-row flex-wrap gap-2">
-        {(projects ?? []).map((project) => (
-          <Pressable
-            key={project.id}
-            onPress={() => setProjectId(projectId === project.id ? undefined : project.id)}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityState={{ selected: projectId === project.id }}
-            className={
-              projectId === project.id
-                ? "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
-                : "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
-            }
-          >
-            <Text className={projectId === project.id ? "text-white" : "text-black dark:text-white"}>
-              {project.name}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-
-      {formError ? (
-        <Text className="mb-2 text-red-600" accessibilityRole="alert">
-          {formError}
-        </Text>
-      ) : createTask.isError ? (
-        <Text className="mb-2 text-red-600" accessibilityRole="alert">
-          {/* A refused field (client-side parse or a server 400) names the
-              field and its bound; anything else keeps the generic line. */}
-          {describeValidationError(createTask.error) ?? "Couldn't create that task."}
-        </Text>
-      ) : null}
-
-      <Pressable
-        onPress={submit}
-        disabled={createTask.isPending || !title.trim()}
-        className="items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700"
+    <ScreenFrame>
+      <ScrollView
+        className="flex-1"
+        // Padding lives entirely in contentContainerStyle (no
+        // contentContainerClassName) because NativeWind remaps that class onto
+        // this same prop -- see FLOATING_CLEARANCE_PX. The clearance keeps the
+        // globally-mounted QuickAdd/PTT buttons off this form's Save/Archive
+        // control; the keyboard height gives room to scroll it clear of the IME.
+        // Extra room so lower controls can be scrolled clear of the IME --
+        // see components/use-keyboard-height.ts for why insets alone don't do it.
+        contentContainerStyle={{
+          padding: 16,
+          paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight,
+        }}
+        // Without this the first tap on a submit button below a focused field
+        // only dismisses the keyboard instead of submitting.
+        keyboardShouldPersistTaps="handled"
       >
-        <Text className="font-semibold text-white">
-          {createTask.isPending ? "Saving..." : "Create task"}
-        </Text>
-      </Pressable>
-    </ScrollView>
+        <FieldLabel>Title</FieldLabel>
+        <TextInput
+          value={title}
+          onChangeText={setTitle}
+          placeholder="What needs doing?"
+          placeholderTextColor={placeholderColor}
+          // The server's own bound (packages/schema/src/text-bounds.ts), so an
+          // over-long paste is stopped here rather than refused as a 400.
+          maxLength={ENTITY_TITLE_MAX_CHARS}
+          accessibilityLabel="Title"
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+        <FieldLengthCounter length={title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
+
+        <FieldLabel>Notes (optional)</FieldLabel>
+        <TextInput
+          value={body}
+          onChangeText={setBody}
+          multiline
+          textAlignVertical="top"
+          placeholder=""
+          maxLength={TASK_BODY_MAX_CHARS}
+          accessibilityLabel="Notes"
+          className={textFieldClass({ multiline: true, extra: "mb-4 min-h-[80px]" })}
+        />
+        <FieldLengthCounter length={body.length} maxLength={TASK_BODY_MAX_CHARS} />
+
+        <DateTimeField label="Due date (optional)" value={dueAt} onChange={onDueAtChange} />
+
+        <TaskRepeatField
+          value={recurrence}
+          onChange={setRecurrence}
+          dueAt={dueAt}
+          timezone={deviceTimezone()}
+        />
+
+        <DateTimeField
+          label="Reminder (optional)"
+          value={remindAt}
+          onChange={setRemindAt}
+          warnIfPast
+        />
+
+        <FieldLabel>Project (optional)</FieldLabel>
+        <View className="mb-4 flex-row flex-wrap gap-2">
+          {(projects ?? []).map((project) => (
+            <ChoiceChip
+              key={project.id}
+              label={project.name}
+              selected={projectId === project.id}
+              onPress={() => setProjectId(projectId === project.id ? undefined : project.id)}
+              accessibilityLabel={`Project: ${project.name}`}
+            />
+          ))}
+        </View>
+
+        {formError ? (
+          <AppText variant="caption" tone="danger" className="mb-2" accessibilityRole="alert">
+            {formError}
+          </AppText>
+        ) : createTask.isError ? (
+          <AppText variant="caption" tone="danger" className="mb-2" accessibilityRole="alert">
+            {/* A refused field (client-side parse or a server 400) names the
+                field and its bound; anything else keeps the generic line. */}
+            {describeValidationError(createTask.error) ?? "Couldn't create that task."}
+          </AppText>
+        ) : null}
+
+        <Button
+          label={createTask.isPending ? "Saving..." : "Create task"}
+          onPress={submit}
+          // `disabled`, not `busy`: the pending label has always read
+          // "Saving...", which `busy` would render as "Create task…".
+          disabled={createTask.isPending || !title.trim()}
+          variant="primary"
+          icon="plus"
+          block
+        />
+      </ScrollView>
+    </ScreenFrame>
   );
 }

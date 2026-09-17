@@ -1,6 +1,8 @@
 import { DatePickerDialog, Host, TimePickerDialog } from "@expo/ui/jetpack-compose";
 import { useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, View } from "react-native";
+import { FieldLabel, fieldWellClass } from "@/components/ask/text-field";
+import { AppText, Icon, IconButton } from "@/components/ui";
 import {
   combineDateAndTime,
   datePickerInitialInstant,
@@ -68,7 +70,7 @@ export function DateTimeField({
 
   return (
     <View className="mb-4">
-      <Text className="mb-1 text-sm text-neutral-500">{label}</Text>
+      <FieldLabel>{label}</FieldLabel>
       <View className="flex-row items-center gap-2">
         <Pressable
           testID={testID}
@@ -76,28 +78,26 @@ export function DateTimeField({
           hitSlop={8}
           accessibilityRole="button"
           accessibilityLabel={shown ? `${label}: ${shown}. Change` : `Set ${label}`}
-          className="min-h-[44px] flex-1 justify-center rounded-lg border border-neutral-300 px-3 dark:border-neutral-700"
+          className={fieldWellClass("flex-1 flex-row items-center gap-2 active:opacity-80")}
         >
-          <Text className={shown ? "text-black dark:text-white" : "text-neutral-500"}>
+          <Icon name="calendar-clock-outline" size="md" tone="on-surface-muted" />
+          <AppText variant="body" tone={shown ? "default" : "muted"} className="flex-1">
             {shown ?? "Not set"}
-          </Text>
+          </AppText>
         </Pressable>
         {shown ? (
-          <Pressable
+          <IconButton
+            icon="close-circle"
             onPress={() => onChange(null)}
-            hitSlop={8}
-            accessibilityRole="button"
             accessibilityLabel={`Clear ${label}`}
-            className="min-h-[44px] min-w-[44px] items-center justify-center rounded-lg px-3"
-          >
-            <Text className="text-blue-600 dark:text-blue-400">Clear</Text>
-          </Pressable>
+            tone="on-surface-muted"
+          />
         ) : null}
       </View>
       {past ? (
-        <Text className="mt-1 text-xs text-amber-700 dark:text-amber-500">
+        <AppText variant="caption" tone="warning" className="mt-1">
           That time has already passed.
-        </Text>
+        </AppText>
       ) : null}
 
       {pickingDate ? (

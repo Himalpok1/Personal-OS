@@ -82,20 +82,23 @@ const PRESET_CHIPS: { preset: TaskRepeatPreset; label: string }[] = [
   { preset: "every_n_days", label: "Every N days" },
 ];
 
-// The project-chip idiom from app/tasks/new.tsx, so the two chip rows on the
-// same form look alike.
-const CHIP_ON = "min-h-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1";
+// Selectable chips on the palette (Checkpoint 10.3): the same pair the
+// ChoiceChip in components/ask/choice-chip.tsx draws, restated here because
+// this component predates it and its test pins these exact class strings.
+const CHIP_ON =
+  "min-h-[44px] items-center justify-center rounded-full bg-primary px-3 py-1 dark:bg-primary-dark";
 const CHIP_OFF =
-  "min-h-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800";
-const CHIP_TEXT_ON = "text-white";
-const CHIP_TEXT_OFF = "text-black dark:text-white";
+  "min-h-[44px] items-center justify-center rounded-full bg-surface-container px-3 py-1 dark:bg-surface-container-dark";
+const CHIP_TEXT_ON = "text-on-primary dark:text-on-primary-dark";
+const CHIP_TEXT_OFF = "text-on-surface dark:text-on-surface-dark";
 
 // The amber card classes recurrence-editor.tsx uses for its own custom-rule
 // notice, so the two notices read as one kind of thing.
 const AMBER_CARD =
-  "gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950";
-const AMBER_TITLE = "text-sm font-medium text-amber-900 dark:text-amber-200";
-const AMBER_BODY = "text-xs text-amber-700 dark:text-amber-300";
+  "gap-2 rounded-inner border border-warning/40 bg-warning-container p-3 dark:border-warning-dark/40 dark:bg-warning-container-dark";
+const AMBER_TITLE =
+  "text-sm font-medium text-on-warning-container dark:text-on-warning-container-dark";
+const AMBER_BODY = "text-xs text-on-warning-container dark:text-on-warning-container-dark";
 
 // A plain render function rather than a component, so the chips appear in
 // the view's element tree as the Pressables they are (the tree-walk tests
@@ -155,7 +158,9 @@ export function TaskRepeatFieldView({
 
   return (
     <View className="mb-4" testID="task-repeat-field">
-      <Text className="mb-1 text-sm text-neutral-500">Repeat</Text>
+      <Text className="mb-1 text-sm text-on-surface-variant dark:text-on-surface-variant-dark">
+        Repeat
+      </Text>
 
       {isCustom ? (
         <View testID="repeat-custom-notice" className={AMBER_CARD}>
@@ -196,7 +201,9 @@ export function TaskRepeatFieldView({
 
           {selection.preset === "every_n_days" ? (
             <View className="mt-2 flex-row items-center gap-2">
-              <Text className="text-sm text-neutral-600 dark:text-neutral-300">Every</Text>
+              <Text className="text-sm text-on-surface-variant dark:text-on-surface-variant-dark">
+                Every
+              </Text>
               <TextInput
                 testID="repeat-interval-input"
                 editable={!disabled}
@@ -205,9 +212,11 @@ export function TaskRepeatFieldView({
                 onChangeText={onIntervalTextChange}
                 onBlur={onIntervalBlur}
                 accessibilityLabel={`Repeat every how many days (${EVERY_N_DAYS_MIN} to ${EVERY_N_DAYS_MAX})`}
-                className="min-h-[44px] w-16 rounded-lg border border-neutral-300 bg-white p-2 text-center text-sm font-semibold text-black dark:border-neutral-700 dark:bg-black dark:text-white"
+                className="min-h-[44px] w-16 rounded-lg border border-outline-strong bg-surface p-2 text-center text-sm font-semibold text-on-surface dark:border-outline-strong-dark dark:bg-surface-dark dark:text-on-surface-dark"
               />
-              <Text className="text-sm text-neutral-600 dark:text-neutral-300">days</Text>
+              <Text className="text-sm text-on-surface-variant dark:text-on-surface-variant-dark">
+                days
+              </Text>
             </View>
           ) : null}
 
@@ -227,7 +236,7 @@ export function TaskRepeatFieldView({
           {selection.preset !== "never" ? (
             <Text
               testID="repeat-summary"
-              className="mt-2 text-sm text-neutral-700 dark:text-neutral-300"
+              className="mt-2 text-sm text-on-surface-variant dark:text-on-surface-variant-dark"
             >
               {summary}
             </Text>

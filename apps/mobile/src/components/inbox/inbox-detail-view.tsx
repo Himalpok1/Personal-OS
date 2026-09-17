@@ -1,6 +1,18 @@
 import { ENTITY_TITLE_MAX_CHARS, type InboxItem, type ParserToolCall } from "@personal-os/schema";
-import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
+import { TextInput, View } from "react-native";
+import { ChoiceChip } from "@/components/ask/choice-chip";
+import { FieldLabel, textFieldClass } from "@/components/ask/text-field";
 import { DateTimeField } from "@/components/datetime-field";
+import {
+  AppText,
+  Button,
+  Card,
+  Icon,
+  SectionHeader,
+  type ChipTone,
+  type ColorRole,
+} from "@/components/ui";
+import { inboxStatusPresentation } from "@/components/inbox/status-presentation";
 import { formatFieldLabel } from "@/components/datetime-field-state";
 import { usePlaceholderColor } from "@/components/placeholder-color";
 import { FieldLengthCounter } from "@/components/field-length-counter";
@@ -28,6 +40,10 @@ import { summarizeParseResult } from "@/components/inbox/parse-summary";
 // Every string here lands in a <Text> or a TextInput value. Nothing is
 // interpreted, autolinked, or used to derive a route -- destinations come only
 // from `entityRoute`, which reads two server-authored fields.
+//
+// Checkpoint 10.3 composed it on the design system's hookless primitives
+// (Card, Button, ChoiceChip, AppText); every testID, label, state and
+// callback is unchanged.
 
 export const STATUS_LABEL: Record<InboxItem["status"], string> = {
   pending: "Parsing…",
@@ -47,6 +63,17 @@ export const SOURCE_LABEL: Record<InboxItem["source"], string> = {
 };
 
 const KIND_LABEL: Record<FileAsKind, string> = { task: "Task", note: "Note", event: "Event" };
+
+// The status icon beside the meta line takes its colour from the status's
+// chip tone, through the palette role the Icon primitive reads.
+const STATUS_ICON_ROLE: Record<ChipTone, ColorRole> = {
+  neutral: "on-surface-variant",
+  primary: "primary",
+  success: "success",
+  warning: "warning",
+  danger: "danger",
+  info: "info",
+};
 const FILE_AS_KINDS: readonly FileAsKind[] = ["task", "note", "event"];
 
 export interface InboxDetailViewProps {
@@ -80,105 +107,95 @@ export function InboxDetailView(props: InboxDetailViewProps) {
     fileable && rawText !== null ? buildCorrectionFromDraft(rawText, draft, props.timezone) : null;
   const busy = props.confirm.isPending || props.awaitingCommit;
 
+  const status = inboxStatusPresentation(item.status);
+
   return (
     <View>
       {/* The capture itself. */}
-      <Text
-        testID="inbox-detail-raw-text"
-        selectable
-        className="text-lg text-black dark:text-white"
-      >
-        {rawText !== null
-          ? rawText
-          : item.status === "failed"
-            ? "Transcription failed"
-            : "Transcribing…"}
-      </Text>
-      <Text testID="inbox-detail-meta" className="mt-2 text-xs text-neutral-500">
-        {SOURCE_LABEL[item.source]} · {STATUS_LABEL[item.status]}
-        {formatFieldLabel(item.captured_at) ? ` · ${formatFieldLabel(item.captured_at)}` : ""}
-      </Text>
+      <Card>
+        <AppText testID="inbox-detail-raw-text" selectable variant="title">
+          {rawText !== null
+            ? rawText
+            : item.status === "failed"
+              ? "Transcription failed"
+              : "Transcribing…"}
+        </AppText>
+        <View className="mt-3 flex-row items-center gap-1.5">
+          <Icon name={status.icon} size="sm" tone={STATUS_ICON_ROLE[status.tone]} />
+          <AppText testID="inbox-detail-meta" variant="caption" tone="muted" className="flex-1">
+            {SOURCE_LABEL[item.source]} · {STATUS_LABEL[item.status]}
+            {formatFieldLabel(item.captured_at) ? ` · ${formatFieldLabel(item.captured_at)}` : ""}
+          </AppText>
+        </View>
+      </Card>
 
       {/* What the parser made of it. */}
-      <View className="mt-4 rounded border border-neutral-300 p-3 dark:border-neutral-700">
-        <Text className="mb-1 text-sm font-semibold text-black dark:text-white">Parse result</Text>
+      <Card className="mt-4">
+        <SectionHeader title="Parse result" icon="auto-fix" spacing="card" />
         {summary.length === 0 ? (
-          <Text testID="inbox-detail-summary-empty" className="text-sm text-neutral-500">
+          <AppText testID="inbox-detail-summary-empty" variant="body" tone="secondary">
             {item.status === "pending" ? "Not parsed yet." : "Nothing readable was stored."}
-          </Text>
+          </AppText>
         ) : (
           summary.map((line, index) => (
-            <Text
+            <AppText
               key={`${line.label}-${index}`}
               testID="inbox-detail-summary-line"
-              className="text-sm text-neutral-700 dark:text-neutral-300"
+              variant="body"
+              tone="secondary"
             >
-              <Text className="text-neutral-500">{line.label}: </Text>
+              <AppText variant="body" tone="muted">
+                {line.label}:{" "}
+              </AppText>
               {line.value}
-            </Text>
+            </AppText>
           ))
         )}
-      </View>
+      </Card>
 
       {/* Committed: the tap-through is the primary action. */}
       {route !== null && item.entity_type !== null ? (
-        <Pressable
+        <Button
           testID="inbox-detail-open-entity"
+          label={`Open ${item.entity_type}`}
           onPress={() => props.onOpenEntity(route)}
-          hitSlop={8}
-          accessibilityRole="button"
           accessibilityLabel={`Open ${item.entity_type}`}
-          className="mt-4 min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-        >
-          <Text className="font-semibold text-white">Open {item.entity_type}</Text>
-        </Pressable>
+          variant="primary"
+          block
+          className="mt-4"
+        />
       ) : null}
 
       {/* Fileable: confirm the stored guess, or file it by hand. */}
       {fileable ? (
-        <View className="mt-4">
+        <Card className="mt-4">
           {confirmable ? (
-            <Pressable
+            <Button
               testID="inbox-detail-confirm-stored"
+              label={props.confirm.isPending ? "Confirming…" : "Confirm as parsed"}
               onPress={props.onConfirmStored}
               disabled={busy}
-              hitSlop={8}
-              accessibilityRole="button"
               accessibilityLabel="Confirm this capture as parsed"
-              className="mb-3 min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-            >
-              <Text className="font-semibold text-white">
-                {props.confirm.isPending ? "Confirming…" : "Confirm as parsed"}
-              </Text>
-            </Pressable>
+              variant="primary"
+              block
+              className="mb-3"
+            />
           ) : null}
 
-          <Text className="mb-1 text-sm text-neutral-500">
-            {confirmable ? "Or file it as something else" : "File it as"}
-          </Text>
+          <FieldLabel>{confirmable ? "Or file it as something else" : "File it as"}</FieldLabel>
           <View className="mb-3 flex-row gap-2">
             {FILE_AS_KINDS.map((kind) => {
               const selected = draft.kind === kind;
               return (
-                <Pressable
+                <ChoiceChip
                   key={kind}
                   testID={`inbox-detail-kind-${kind}`}
+                  label={KIND_LABEL[kind]}
+                  selected={selected}
                   onPress={() => props.onChooseKind(selected ? null : kind)}
                   disabled={busy}
-                  hitSlop={8}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
                   accessibilityLabel={`File as ${KIND_LABEL[kind].toLowerCase()}`}
-                  className={
-                    selected
-                      ? "min-h-[44px] flex-1 items-center justify-center rounded-full bg-blue-600 px-3"
-                      : "min-h-[44px] flex-1 items-center justify-center rounded-full bg-neutral-100 px-3 dark:bg-neutral-800"
-                  }
-                >
-                  <Text className={selected ? "text-white" : "text-black dark:text-white"}>
-                    {KIND_LABEL[kind]}
-                  </Text>
-                </Pressable>
+                />
               );
             })}
           </View>
@@ -193,81 +210,75 @@ export function InboxDetailView(props: InboxDetailViewProps) {
           ) : null}
 
           {draft.kind !== null ? (
-            <Pressable
+            <Button
               testID="inbox-detail-file-submit"
+              label={
+                props.confirm.isPending
+                  ? "Filing…"
+                  : `File as ${KIND_LABEL[draft.kind].toLowerCase()}`
+              }
               onPress={() => {
                 if (pendingCall !== null) props.onFile(pendingCall);
               }}
               disabled={busy || pendingCall === null}
-              hitSlop={8}
-              accessibilityRole="button"
               accessibilityLabel={`File as ${KIND_LABEL[draft.kind].toLowerCase()}`}
-              className={
-                busy || pendingCall === null
-                  ? "min-h-[44px] items-center justify-center rounded-lg bg-blue-300 px-4 py-2 dark:bg-blue-900"
-                  : "min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-              }
-            >
-              <Text className="font-semibold text-white">
-                {props.confirm.isPending
-                  ? "Filing…"
-                  : `File as ${KIND_LABEL[draft.kind].toLowerCase()}`}
-              </Text>
-            </Pressable>
+              variant="primary"
+              block
+            />
           ) : null}
 
           {props.confirm.isError ? (
-            <Text
+            <AppText
               testID="inbox-detail-confirm-error"
-              className="mt-2 text-sm text-red-600 dark:text-red-400"
+              variant="body"
+              tone="danger"
+              className="mt-2"
             >
               {confirmErrorMessage(props.confirm.error)}
-            </Text>
+            </AppText>
           ) : null}
 
           {props.awaitingCommit ? (
             <View testID="inbox-detail-awaiting" className="mt-3 flex-row items-center gap-2">
-              <ActivityIndicator />
-              <Text className="text-sm text-neutral-500">Filing…</Text>
+              <Icon name="progress-clock" size="md" tone="primary" />
+              <AppText variant="body" tone="secondary">
+                Filing…
+              </AppText>
             </View>
           ) : null}
           {props.commitPollExhausted ? (
-            <Text
+            <AppText
               testID="inbox-detail-poll-exhausted"
-              className="mt-2 text-sm text-amber-700 dark:text-amber-500"
+              variant="body"
+              tone="warning"
+              className="mt-2"
             >
               This is taking longer than usual. It will finish in the background; check back
               shortly.
-            </Text>
+            </AppText>
           ) : null}
-        </View>
+        </Card>
       ) : null}
 
       {/* Dismiss: archive the inbox row. Never deletes, never touches the entity. */}
-      <Pressable
+      <Button
         testID="inbox-detail-dismiss"
+        label={props.dismiss.isPending ? "Dismissing…" : "Dismiss"}
         onPress={props.onDismiss}
         disabled={props.dismiss.isPending || props.confirm.isPending}
-        hitSlop={8}
-        accessibilityRole="button"
         accessibilityLabel="Dismiss this capture from the inbox"
-        className="mt-6 min-h-[44px] items-center justify-center rounded-lg bg-neutral-100 px-4 py-2 dark:bg-neutral-800"
-      >
-        <Text className="font-semibold text-neutral-600 dark:text-neutral-300">
-          {props.dismiss.isPending ? "Dismissing…" : "Dismiss"}
-        </Text>
-      </Pressable>
+        variant="outline"
+        block
+        className="mt-6"
+      />
       {props.dismiss.isError ? (
-        <Text
-          testID="inbox-detail-dismiss-error"
-          className="mt-2 text-sm text-red-600 dark:text-red-400"
-        >
+        <AppText testID="inbox-detail-dismiss-error" variant="body" tone="danger" className="mt-2">
           Couldn&apos;t dismiss this capture. Try again.
-        </Text>
+        </AppText>
       ) : null}
-      <Text className="mt-2 text-xs text-neutral-500">
+      <AppText variant="caption" tone="muted" className="mt-2">
         Dismissing hides this capture from the inbox. Anything already filed from it stays.
-      </Text>
+      </AppText>
     </View>
   );
 }
@@ -286,7 +297,7 @@ function FileAsForm({
   const placeholderColor = usePlaceholderColor();
   return (
     <View>
-      <Text className="mb-1 text-sm text-neutral-500">Title</Text>
+      <FieldLabel>Title</FieldLabel>
       <TextInput
         testID="inbox-detail-title"
         value={draft.title}
@@ -298,7 +309,8 @@ function FileAsForm({
         // (packages/schema/src/text-bounds.ts); build-correction.ts caps at
         // the same constant.
         maxLength={ENTITY_TITLE_MAX_CHARS}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+        accessibilityLabel="Title"
+        className={textFieldClass({ extra: "mb-4" })}
       />
       <FieldLengthCounter
         testID="inbox-detail-title-counter"
@@ -321,15 +333,15 @@ function FileAsForm({
             value={draft.startAt}
             onChange={(startAt) => onDraftChange({ startAt })}
           />
-          <Text className="-mt-2 mb-4 text-xs text-neutral-500">
+          <AppText variant="caption" tone="muted" className="-mt-2 mb-4">
             Ends one hour after it starts. You can change that on the event afterwards.
-          </Text>
+          </AppText>
         </>
       ) : null}
       {kind === "note" ? (
-        <Text className="mb-4 text-xs text-neutral-500">
+        <AppText variant="caption" tone="muted" className="mb-4">
           The whole capture becomes the note&apos;s body.
-        </Text>
+        </AppText>
       ) : null}
     </View>
   );

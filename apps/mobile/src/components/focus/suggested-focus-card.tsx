@@ -1,7 +1,8 @@
 import type { FocusSource, FocusSuggestionResponse } from "@personal-os/schema";
 import { FOCUS_MIN_CANDIDATES } from "@personal-os/schema";
-import { Pressable, Text, View } from "react-native";
+import { View } from "react-native";
 import { AskSourceRow } from "@/components/ask/ask-view";
+import { AppText, Button, Card, SectionHeader } from "@/components/ui";
 
 // Suggested Focus (Checkpoint 9.8): when Cloud Ask is on and there are at
 // least FOCUS_MIN_CANDIDATES today (overdue + due-today tasks), a tap picks
@@ -13,7 +14,10 @@ import { AskSourceRow } from "@/components/ask/ask-view";
 // EVERY STRING HERE IS INERT TEXT -- same rule as AskView/SearchView: the
 // suggestion is attacker-influenceable prose grounded in the owner's own
 // data but still not first-party text; a source's title is the owner's own
-// stored text. Both land in a plain <Text>.
+// stored text. Both land in a plain <Text> (AppText is a Text with a class).
+//
+// Checkpoint 10.3: composed from the design system (Card, SectionHeader,
+// Button, AppText). Every state, testID, label and behaviour is unchanged.
 
 export type SuggestedFocusState =
   | { kind: "idle" }
@@ -32,8 +36,9 @@ export interface SuggestedFocusCardProps {
   onSelectSource: (source: FocusSource) => void;
 }
 
-const SUGGEST_BUTTON_BASE =
-  "min-h-[44px] items-center justify-center self-start rounded-full border px-3 py-2 active:opacity-70";
+function Title() {
+  return <SectionHeader title="Suggested focus" icon="target" spacing="card" />;
+}
 
 export function SuggestedFocusCard({
   candidateCount,
@@ -49,14 +54,12 @@ export function SuggestedFocusCard({
 
   if (state.kind === "ready") {
     return (
-      <View testID="suggested-focus-card" className="mt-3 px-4">
+      <Card testID="suggested-focus-card" className="mt-3">
+        <Title />
         <View testID="suggested-focus-answer-container">
-          <Text
-            testID="suggested-focus-answer"
-            className="text-sm leading-5 text-black dark:text-white"
-          >
+          <AppText testID="suggested-focus-answer" variant="body">
             {state.response.suggestion}
-          </Text>
+          </AppText>
           <AskSourceRow
             source={state.response.source}
             onSelect={() => onSelectSource(state.response.source)}
@@ -65,18 +68,17 @@ export function SuggestedFocusCard({
               this for now): a future helpful/not-helpful affordance could be
               added here as an optional prop without restructuring this
               component -- nothing is built for it yet. */}
-          <Pressable
+          <Button
             testID="suggested-focus-suggest"
             onPress={onSuggest}
-            hitSlop={8}
-            accessibilityRole="button"
             accessibilityLabel="Suggest focus again"
-            className={`mt-2 ${SUGGEST_BUTTON_BASE} border-neutral-300 dark:border-neutral-700`}
-          >
-            <Text className="text-sm font-medium text-black dark:text-white">Suggest again</Text>
-          </Pressable>
+            label="Suggest again"
+            variant="outline"
+            size="sm"
+            className="mt-3"
+          />
         </View>
-      </View>
+      </Card>
     );
   }
 
@@ -90,74 +92,64 @@ export function SuggestedFocusCard({
     // call request, which either succeeds (the count changed) or returns the
     // same honest refusal.
     return (
-      <View testID="suggested-focus-card" className="mt-3 px-4">
-        <Text
-          testID="suggested-focus-not-enough"
-          className="text-sm text-neutral-500 dark:text-neutral-400"
-        >
+      <Card testID="suggested-focus-card" className="mt-3">
+        <Title />
+        <AppText testID="suggested-focus-not-enough" variant="body" tone="secondary">
           {SUGGESTED_FOCUS_NOT_ENOUGH_COPY}
-        </Text>
-        <Pressable
+        </AppText>
+        <Button
           testID="suggested-focus-suggest"
           onPress={onSuggest}
-          hitSlop={8}
-          accessibilityRole="button"
           accessibilityLabel="Check again"
-          className={`mt-2 ${SUGGEST_BUTTON_BASE} border-neutral-300 dark:border-neutral-700`}
-        >
-          <Text className="text-sm font-medium text-black dark:text-white">Check again</Text>
-        </Pressable>
-      </View>
+          label="Check again"
+          variant="outline"
+          size="sm"
+          className="mt-3"
+        />
+      </Card>
     );
   }
 
   if (state.kind === "error") {
     return (
-      <View testID="suggested-focus-card" className="mt-3 px-4">
+      <Card testID="suggested-focus-card" className="mt-3">
+        <Title />
         <View testID="suggested-focus-error-container">
-          <Text testID="suggested-focus-error" className="text-sm text-red-600 dark:text-red-400">
+          <AppText testID="suggested-focus-error" variant="body" tone="danger">
             {state.message}
-          </Text>
-          <Pressable
+          </AppText>
+          <Button
             testID="suggested-focus-suggest"
             onPress={onSuggest}
-            hitSlop={8}
-            accessibilityRole="button"
             accessibilityLabel="Try suggesting focus again"
-            className={`mt-2 ${SUGGEST_BUTTON_BASE} border-neutral-300 dark:border-neutral-700`}
-          >
-            <Text className="text-sm font-medium text-black dark:text-white">Try again</Text>
-          </Pressable>
+            label="Try again"
+            variant="outline"
+            size="sm"
+            className="mt-3"
+          />
         </View>
-      </View>
+      </Card>
     );
   }
 
   const loading = state.kind === "loading";
   return (
-    <View testID="suggested-focus-card" className="mt-3 px-4">
-      <Pressable
+    <Card testID="suggested-focus-card" className="mt-3">
+      <Title />
+      <AppText variant="body" tone="secondary" className="mb-3">
+        One task to start with, and why -- picked from today&apos;s overdue and due items.
+      </AppText>
+      {/* `busy` renders "Thinking…" and BINDS the disabled state, so a second
+          tap during the request is a no-op rather than a second model call. */}
+      <Button
         testID="suggested-focus-suggest"
         onPress={onSuggest}
-        disabled={loading}
-        hitSlop={8}
-        accessibilityRole="button"
-        accessibilityState={{ disabled: loading }}
+        busy={loading}
         accessibilityLabel="Suggest focus"
-        className={`${SUGGEST_BUTTON_BASE} ${
-          loading
-            ? "border-neutral-200 bg-neutral-100 dark:border-neutral-800 dark:bg-neutral-900"
-            : "border-blue-300 bg-blue-50 dark:border-blue-800 dark:bg-blue-950"
-        }`}
-      >
-        <Text
-          className={`text-sm font-medium ${
-            loading ? "text-neutral-500 dark:text-neutral-400" : "text-blue-700 dark:text-blue-300"
-          }`}
-        >
-          {loading ? "Thinking…" : "Suggest focus"}
-        </Text>
-      </Pressable>
-    </View>
+        label={loading ? "Thinking" : "Suggest focus"}
+        variant="tonal"
+        size="sm"
+      />
+    </Card>
   );
 }

@@ -17,6 +17,20 @@ import {
   normalizeSubmissionStatus,
   type AcademicSubmissionStatus,
 } from "@personal-os/core/academic/derive";
+import { deriveGradeSummary } from "@personal-os/core/academic/grade-summary";
+import {
+  courseAttentionRank,
+  deriveCourseAttention,
+  deriveUrgency,
+  deriveWorkloadStatus,
+  hoursUntilDue,
+  rankAcademicPriorities,
+  scoreAcademicPriority,
+  type AcademicCourseAttentionLevel,
+  type AcademicPriorityReason,
+  type AcademicUrgency,
+} from "@personal-os/core/academic/urgency";
+import { academicPointsAtStake, academicWorkloadDays } from "@personal-os/core/academic/workload";
 import {
   canvasAnnouncements,
   canvasAssignments,
@@ -28,10 +42,12 @@ import {
 import {
   ACADEMIC_ANNOUNCEMENTS_ITEM_CAP,
   ACADEMIC_ANNOUNCEMENT_LOOKBACK_DAYS,
+  ACADEMIC_COURSE_ATTENTION_ITEM_CAP,
   ACADEMIC_DUE_THIS_WEEK_ITEM_CAP,
   ACADEMIC_DUE_TODAY_ITEM_CAP,
   ACADEMIC_EVENTS_ITEM_CAP,
   ACADEMIC_OVERDUE_ITEM_CAP,
+  ACADEMIC_PRIORITIES_ITEM_CAP,
   ACADEMIC_UPCOMING_DAY_COUNT,
   AcademicCourseDetailResponseSchema,
   AcademicCoursesResponseSchema,
@@ -39,13 +55,17 @@ import {
   type AcademicAnnouncement,
   type AcademicAssignment,
   type AcademicCourse,
+  type AcademicCourseAttention,
   type AcademicCourseDetailResponse,
   type AcademicCourseSummary,
   type AcademicCoursesQuery,
   type AcademicCoursesResponse,
   type AcademicEvent,
+  type AcademicGradeSummary,
+  type AcademicPriorityItem,
   type AcademicTodayQuery,
   type AcademicTodayResponse,
+  type AcademicWorkload,
 } from "@personal-os/schema";
 import { and, asc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 
@@ -289,6 +309,268 @@ function toCalendarEvent(row: EventRow): AcademicEvent {
 
 const compareIds = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const compareStrings = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+// ---------------------------------------------------------------------------
+// Academic intelligence (Checkpoint 10.3, Lane A) -- priorities, workload,
+// course attention, grade summary. Every rule is a core function
+// (packages/core/src/academic/{urgency,workload,grade-summary}.ts) applied to
+// the SAME scoped assignments, the SAME effectiveNow and the SAME horizon end
+// the buckets above were computed from; nothing here re-derives a boundary.
+// The results land only on the new OPTIONAL top-level response keys -- an
+// item schema is never extended (the versionCode-25 client's strict copy).
+// ---------------------------------------------------------------------------
+
+/** An assignment with its urgency resolved once, for every consumer below. */
+interface UrgencyAssignment extends DerivedAssignment {
+  urgency: AcademicUrgency | null;
+}
+
+/** A ranked priority candidate: the core comparator's four keys plus the row. */
+interface PriorityCandidate {
+  id: string;
+  title: string;
+  dueAt: Date | null;
+  score: number;
+  row: UrgencyAssignment;
+  urgency: AcademicUrgency;
+  reasons: AcademicPriorityReason[];
+  hoursUntilDue: number | null;
+}
+
+function withUrgency(
+  assignments: readonly DerivedAssignment[],
+  effectiveNow: Date,
+  horizonEndUtc: Date,
+): UrgencyAssignment[] {
+  return assignments.map((row) => ({
+    ...row,
+    // Only an OPEN assignment carries an urgency: a submitted or graded one
+    // needs nothing from the owner, whatever its due instant (the `open`
+    // rule every bucket is built on).
+    urgency: row.open ? deriveUrgency(row.dueAt, effectiveNow, horizonEndUtc) : null,
+  }));
+}
+
+/**
+ * Candidates are every open, dated assignment due before the horizon end
+ * (urgency critical/high/medium -- never `low`, never undated). Scored and
+ * ranked through core, so the wire's `score`/`reasons` are exactly the
+ * documented table applied to the row's own flags.
+ */
+function buildPriorities(
+  assignments: readonly UrgencyAssignment[],
+  effectiveNow: Date,
+): { items: AcademicPriorityItem[]; total: number } {
+  const candidates: PriorityCandidate[] = [];
+  for (const row of assignments) {
+    if (row.urgency === null || row.urgency === "low") continue;
+    const hours = hoursUntilDue(row.dueAt, effectiveNow);
+    const { score, reasons } = scoreAcademicPriority({
+      urgency: row.urgency,
+      missing: row.submissionMissing === true,
+      late: row.submissionLate === true,
+      pointsPossible: row.pointsPossible,
+      hoursUntilDue: hours,
+    });
+    candidates.push({
+      id: row.id,
+      title: row.title,
+      dueAt: row.dueAt,
+      score,
+      row,
+      urgency: row.urgency,
+      reasons,
+      hoursUntilDue: hours,
+    });
+  }
+  const ranked = rankAcademicPriorities(candidates);
+  return {
+    items: ranked.slice(0, ACADEMIC_PRIORITIES_ITEM_CAP).map((c) => ({
+      assignment: toAcademicAssignment(c.row),
+      urgency: c.urgency,
+      score: c.score,
+      reasons: c.reasons,
+      hours_until_due: c.hoursUntilDue,
+    })),
+    total: ranked.length,
+  };
+}
+
+/**
+ * The per-day rule and `points_at_stake` are core's (`academicWorkloadDays`,
+ * `academicPointsAtStake`); the totals are the buckets' own counts restated
+ * beside them so `workload` is self-contained for a client. `dueThisWeekIds`
+ * is the bucket's membership, never a second statement of its predicate.
+ */
+function buildWorkload(params: {
+  assignments: readonly UrgencyAssignment[];
+  effectiveNow: Date;
+  tz: string;
+  horizonEndUtc: Date;
+  overdueTotal: number;
+  dueThisWeekTotal: number;
+  missingTotal: number;
+}): AcademicWorkload {
+  const { assignments, effectiveNow, tz, horizonEndUtc } = params;
+  let openTotal = 0;
+  let dueWithin24hTotal = 0;
+  for (const row of assignments) {
+    if (!row.open) continue;
+    openTotal += 1;
+    if (row.urgency === "high") dueWithin24hTotal += 1;
+  }
+  return {
+    status: deriveWorkloadStatus({
+      overdueTotal: params.overdueTotal,
+      missingTotal: params.missingTotal,
+      dueWithin24hTotal,
+    }),
+    open_total: openTotal,
+    overdue_total: params.overdueTotal,
+    missing_total: params.missingTotal,
+    due_within_24h_total: dueWithin24hTotal,
+    due_this_week_total: params.dueThisWeekTotal,
+    points_at_stake: academicPointsAtStake(assignments, effectiveNow, horizonEndUtc),
+    horizon_days: ACADEMIC_UPCOMING_DAY_COUNT,
+    days: academicWorkloadDays({
+      assignments,
+      effectiveNow,
+      tz,
+      upcomingDayCount: ACADEMIC_UPCOMING_DAY_COUNT,
+    }).map((day) => ({
+      date: day.date,
+      due_total: day.dueTotal,
+      points_total: day.pointsTotal,
+    })),
+  };
+}
+
+/** The zeroed workload the not-configured response carries (eight zero-filled days). */
+function emptyWorkload(tz: string, effectiveNow: Date, horizonEndUtc: Date): AcademicWorkload {
+  return buildWorkload({
+    assignments: [],
+    effectiveNow,
+    tz,
+    horizonEndUtc,
+    overdueTotal: 0,
+    dueThisWeekTotal: 0,
+    missingTotal: 0,
+  });
+}
+
+interface CourseAttentionRow extends AcademicCourseAttention {
+  nextDue: Date | null;
+}
+
+/**
+ * Level rank (high, medium, low), then overdue desc, then due-within-24h
+ * desc, then next_due_at asc (nulls last), then course name, then id.
+ */
+function compareCourseAttention(a: CourseAttentionRow, b: CourseAttentionRow): number {
+  return (
+    courseAttentionRank(a.attention) - courseAttentionRank(b.attention) ||
+    b.overdue_total - a.overdue_total ||
+    b.due_within_24h_total - a.due_within_24h_total ||
+    compareNullableInstants(a.nextDue, b.nextDue, 1) ||
+    compareStrings(a.course_name, b.course_name) ||
+    compareIds(a.course_id, b.course_id)
+  );
+}
+
+/**
+ * One row per course with at least one OPEN assignment (a level of `none`
+ * means nothing open, and such a course is never listed). Every count has
+ * the workload's definition, scoped to the course; `next_due_at` is the
+ * course summary's rule (earliest open due instant at or after
+ * effectiveNow). Grouped from the assignment rows themselves -- a course
+ * with no open assignment could only ever be `none`, so no course query is
+ * needed.
+ */
+function buildCourseAttention(
+  assignments: readonly UrgencyAssignment[],
+  effectiveNow: Date,
+  dueThisWeekIds: ReadonlySet<string>,
+): { items: AcademicCourseAttention[]; total: number } {
+  const nowMs = effectiveNow.getTime();
+  const byCourse = new Map<string, CourseAttentionRow>();
+  for (const row of assignments) {
+    if (!row.open) continue;
+    let entry = byCourse.get(row.courseId);
+    if (!entry) {
+      entry = {
+        course_id: row.courseId,
+        course_name: row.courseName,
+        course_code: row.courseCode,
+        open_total: 0,
+        overdue_total: 0,
+        due_within_24h_total: 0,
+        due_this_week_total: 0,
+        next_due_at: null,
+        attention: "none",
+        nextDue: null,
+      };
+      byCourse.set(row.courseId, entry);
+    }
+    entry.open_total += 1;
+    if (row.urgency === "critical") entry.overdue_total += 1;
+    if (row.urgency === "high") entry.due_within_24h_total += 1;
+    if (dueThisWeekIds.has(row.id)) entry.due_this_week_total += 1;
+    if (row.dueAt !== null && row.dueAt.getTime() >= nowMs) {
+      if (entry.nextDue === null || row.dueAt.getTime() < entry.nextDue.getTime()) {
+        entry.nextDue = row.dueAt;
+      }
+    }
+  }
+  const rows: CourseAttentionRow[] = [];
+  for (const entry of byCourse.values()) {
+    const attention: AcademicCourseAttentionLevel = deriveCourseAttention({
+      overdueTotal: entry.overdue_total,
+      dueWithin24hTotal: entry.due_within_24h_total,
+      dueThisWeekTotal: entry.due_this_week_total,
+      openTotal: entry.open_total,
+    });
+    if (attention === "none") continue;
+    rows.push({ ...entry, attention, next_due_at: iso(entry.nextDue) });
+  }
+  rows.sort(compareCourseAttention);
+  return {
+    items: rows.slice(0, ACADEMIC_COURSE_ATTENTION_ITEM_CAP).map((row) => ({
+      course_id: row.course_id,
+      course_name: row.course_name,
+      course_code: row.course_code,
+      open_total: row.open_total,
+      overdue_total: row.overdue_total,
+      due_within_24h_total: row.due_within_24h_total,
+      due_this_week_total: row.due_this_week_total,
+      next_due_at: row.next_due_at,
+      attention: row.attention,
+    })),
+    total: rows.length,
+  };
+}
+
+/**
+ * Computed from the PROJECTED assignments, so the summary is built from the
+ * very `grade.status` / `grade.score` / `grade.percentage` / `points_possible`
+ * values the same response carries -- consistent by construction.
+ */
+function buildGradeSummary(assignments: readonly AcademicAssignment[]): AcademicGradeSummary {
+  const summary = deriveGradeSummary(
+    assignments.map((a) => ({
+      gradingStatus: a.grade.status,
+      score: a.grade.score,
+      pointsPossible: a.points_possible,
+      percentage: a.grade.percentage,
+    })),
+  );
+  return {
+    graded_total: summary.gradedTotal,
+    average_percentage: summary.averagePercentage,
+    points_earned: summary.pointsEarned,
+    points_possible_graded: summary.pointsPossibleGraded,
+    weighted_percentage: summary.weightedPercentage,
+  };
+}
 
 /** Nulls last for an ascending sort; the caller flips the sign for descending. */
 function compareNullableInstants(a: Date | null, b: Date | null, direction: 1 | -1): number {
@@ -543,6 +825,11 @@ export async function buildAcademicTodayResponse(
       due_this_week: { items: [], total: 0 },
       announcements: { items: [], total: 0 },
       events: { items: [], total: 0 },
+      // The 10.3 keys are never absent -- zeroed here so a client can render
+      // the same shape either way.
+      priorities: { items: [], total: 0 },
+      workload: emptyWorkload(query.tz, effectiveNow, horizonEndUtc),
+      course_attention: { items: [], total: 0 },
     });
   }
 
@@ -550,7 +837,11 @@ export async function buildAcademicTodayResponse(
   // the fetch keeps the `open`/bucket rules stated once (in core) and the
   // assignment query identical to the course detail's.
   const scope = await resolveCurrentTermScope(db, effectiveNow);
-  const assignments = (await fetchAssignments(db)).filter((a) => scope.courseIds.has(a.courseId));
+  const assignments = withUrgency(
+    (await fetchAssignments(db)).filter((a) => scope.courseIds.has(a.courseId)),
+    effectiveNow,
+    horizonEndUtc,
+  );
   const buckets = bucketAcademicAssignments({
     assignments,
     effectiveNow,
@@ -561,6 +852,24 @@ export async function buildAcademicTodayResponse(
   // (AcademicTodayResponseSchema's doc comment): reported beside
   // overdue_total, never reconciled with it.
   const missingTotal = assignments.filter((a) => a.open && a.submissionMissing === true).length;
+
+  // Checkpoint 10.3: the three intelligence keys, from the same scoped rows,
+  // effectiveNow and horizon the buckets used.
+  const priorities = buildPriorities(assignments, effectiveNow);
+  const workload = buildWorkload({
+    assignments,
+    effectiveNow,
+    tz: query.tz,
+    horizonEndUtc,
+    overdueTotal: buckets.overdue.length,
+    dueThisWeekTotal: buckets.dueThisWeek.length,
+    missingTotal,
+  });
+  const courseAttention = buildCourseAttention(
+    assignments,
+    effectiveNow,
+    new Set(buckets.dueThisWeek.map((a) => a.id)),
+  );
 
   // Announcements posted within the lookback, as instant arithmetic from
   // effectiveNow: [now - N days, now]. A posted_at in the future (Canvas's
@@ -664,6 +973,9 @@ export async function buildAcademicTodayResponse(
       items: scopedEvents.slice(0, ACADEMIC_EVENTS_ITEM_CAP).map(toCalendarEvent),
       total: scopedEvents.length,
     },
+    priorities,
+    workload,
+    course_attention: courseAttention,
   });
 }
 
@@ -782,10 +1094,14 @@ export async function getAcademicCourseDetail(
     .where(and(eq(canvasEvents.courseId, courseRow.id), isNull(canvasEvents.archivedAt)));
   eventRows.sort(compareEventsByStart);
 
+  const projectedAssignments = assignments.map(toAcademicAssignment);
   return AcademicCourseDetailResponseSchema.parse({
     course: toAcademicCourseSummary(courseRow, assignments, effectiveNow),
-    assignments: assignments.map(toAcademicAssignment),
+    assignments: projectedAssignments,
     announcements: announcementRows.map(toAcademicAnnouncement),
     events: eventRows.map(toCalendarEvent),
+    // Checkpoint 10.3: over the course's graded assignments, from the
+    // projected rows above.
+    grade_summary: buildGradeSummary(projectedAssignments),
   });
 }

@@ -1,91 +1,112 @@
 import type { ProjectSummaryItem } from "@personal-os/schema";
 import { useProjectSummaries, useUnarchiveProject } from "@/queries/projects";
-import { Link, useRouter } from "expo-router";
-import { FlatList, Pressable, SafeAreaView, Text, View } from "react-native";
+import { useRouter } from "expo-router";
+import { FlatList, Pressable, RefreshControl, View } from "react-native";
 import { FLOATING_CLEARANCE, FLOATING_CTA_CLEARANCE } from "@/components/floating-layout";
+import {
+  PROJECT_STALLED_PRESENTATION,
+  projectDisplayStatus,
+  projectStatusPresentation,
+} from "@/components/projects/status-presentation";
+import {
+  AppText,
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  ScreenFrame,
+  SectionHeader,
+  SkeletonList,
+  StatusChip,
+  useTheme,
+} from "@/components/ui";
 import { formatShortDate } from "@/utils/local-date";
-
-type DisplayStatus = ProjectSummaryItem["status"] | "archived";
-
-const STATUS_PILL: Record<DisplayStatus, string> = {
-  active: "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300",
-  paused: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-  completed: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
-  archived: "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300",
-};
 
 type Row =
   | { kind: "header"; key: string; title: string }
   | { kind: "empty"; key: string }
   | { kind: "project"; key: string; project: ProjectSummaryItem };
 
-function displayStatusOf(project: ProjectSummaryItem): DisplayStatus {
-  return project.archived_at ? "archived" : project.status;
-}
-
 function ProjectRow({ project }: { project: ProjectSummaryItem }) {
   const router = useRouter();
   const unarchive = useUnarchiveProject();
-  const displayStatus = displayStatusOf(project);
+  const { colors } = useTheme();
+  const displayStatus = projectDisplayStatus(project);
+  const status = projectStatusPresentation(displayStatus);
 
+  // The body and the Unarchive control are SIBLINGS on an inert card, not
+  // nested pressables: the pre-10.3 row stopped the unarchive tap's
+  // propagation by hand, and siblings need no such guard (same pattern as
+  // the note rows). Behaviour is unchanged -- the body opens the project,
+  // the button unarchives it.
   return (
-    <Pressable
-      onPress={() => router.push(`/projects/${project.id}`)}
-      className="border-b border-neutral-200 px-4 py-3 active:bg-neutral-50 dark:border-neutral-800 dark:active:bg-neutral-900"
-    >
-      <View className="flex-row items-center gap-2">
-        <View className="h-3 w-3 rounded-full" style={{ backgroundColor: project.color ?? "#999" }} />
-        <Text numberOfLines={1} className="flex-1 text-base text-black dark:text-white">
-          {project.name}
-        </Text>
-        {project.stalled ? (
-          <View className="rounded bg-amber-100 px-2 py-0.5 dark:bg-amber-900">
-            <Text className="text-[10px] uppercase text-amber-700 dark:text-amber-300">
-              Stalled
-            </Text>
-          </View>
-        ) : null}
-        <View className={`rounded px-2 py-0.5 ${STATUS_PILL[displayStatus]}`}>
-          <Text className="text-[10px] uppercase">{displayStatus}</Text>
-        </View>
-      </View>
-      {project.next_action ? (
-        <Text numberOfLines={1} className="mt-1 text-sm text-neutral-700 dark:text-neutral-300">
-          Next: {project.next_action.title}
-        </Text>
-      ) : null}
-      <Text className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-        {project.counts.open} open · {project.counts.done} done · {project.counts.overdue} overdue
-        {project.target_date ? ` · Target ${formatShortDate(project.target_date)}` : ""}
-      </Text>
-      {displayStatus === "archived" ? (
-        <>
-          <Pressable
-            onPress={(e) => {
-              // Stop the tap from also triggering the row's onPress
-              // (navigate to detail) -- both handlers are on nested
-              // Pressables, same pattern as calendar/day-cell.tsx.
-              e.stopPropagation();
-              unarchive.mutate(project.id);
-            }}
-            disabled={unarchive.isPending}
-            className="mt-2 min-h-[44px] min-w-[44px] items-center justify-center self-start rounded bg-neutral-100 px-3 active:bg-neutral-200 disabled:opacity-50 dark:bg-neutral-800 dark:active:bg-neutral-700"
-          >
-            <Text className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">
-              Unarchive
-            </Text>
-          </Pressable>
-          {unarchive.isError ? (
-            <Text className="mt-1 text-xs text-red-600">Couldn&apos;t unarchive.</Text>
+    <Card padding="none" className="mb-3">
+      <Pressable
+        onPress={() => router.push(`/projects/${project.id}`)}
+        accessibilityRole="button"
+        accessibilityLabel={`Open project: ${project.name}`}
+        hitSlop={4}
+        className="p-4 active:opacity-70"
+      >
+        <View className="flex-row items-center gap-2">
+          <View
+            className="h-3 w-3 rounded-full"
+            // The project's own colour is data; the fallback is the palette's
+            // muted role rather than a hex of this screen's own.
+            style={{ backgroundColor: project.color ?? colors["on-surface-muted"] }}
+          />
+          <AppText variant="body-strong" numberOfLines={1} className="flex-1">
+            {project.name}
+          </AppText>
+          {project.stalled ? (
+            <StatusChip
+              label={PROJECT_STALLED_PRESENTATION.label}
+              tone={PROJECT_STALLED_PRESENTATION.tone}
+            />
           ) : null}
-        </>
+          <StatusChip label={status.label} tone={status.tone} />
+        </View>
+        {project.next_action ? (
+          <AppText
+            variant="label"
+            tone="secondary"
+            numberOfLines={1}
+            className="mt-1.5 font-normal"
+          >
+            Next: {project.next_action.title}
+          </AppText>
+        ) : null}
+        <AppText variant="caption" tone="muted" className="mt-1">
+          {project.counts.open} open · {project.counts.done} done · {project.counts.overdue} overdue
+          {project.target_date ? ` · Target ${formatShortDate(project.target_date)}` : ""}
+        </AppText>
+      </Pressable>
+      {displayStatus === "archived" ? (
+        <View className="px-4 pb-4">
+          <Button
+            label="Unarchive"
+            onPress={() => unarchive.mutate(project.id)}
+            variant="outline"
+            size="sm"
+            icon="archive-arrow-up-outline"
+            disabled={unarchive.isPending}
+            accessibilityLabel={`Unarchive project: ${project.name}`}
+          />
+          {unarchive.isError ? (
+            <AppText variant="caption" tone="danger" className="mt-1">
+              Couldn&apos;t unarchive.
+            </AppText>
+          ) : null}
+        </View>
       ) : null}
-    </Pressable>
+    </Card>
   );
 }
 
 export default function ProjectsScreen() {
-  const { data, isLoading, isError, refetch } = useProjectSummaries(true);
+  const router = useRouter();
+  const { data, isLoading, isError, isRefetching, refetch } = useProjectSummaries(true);
+  const { colors } = useTheme();
 
   const sections: { title: string; projects: ProjectSummaryItem[] }[] = [
     { title: "Active", projects: [] },
@@ -120,51 +141,59 @@ export default function ProjectsScreen() {
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-white dark:bg-black">
+    <ScreenFrame>
       {isLoading ? (
-        <Text className="p-4 text-neutral-500">Loading...</Text>
+        <SkeletonList className="px-4 pt-2" />
       ) : isError ? (
-        <View className="flex-1 items-center justify-center gap-3 p-4">
-          <Text className="text-red-600">Couldn&apos;t load projects.</Text>
-          <Pressable
-            onPress={() => void refetch()}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading projects"
-            hitSlop={8}
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="font-semibold text-white">Retry</Text>
-          </Pressable>
-        </View>
+        <ErrorState
+          size="screen"
+          message="Couldn't load projects."
+          onRetry={() => void refetch()}
+          retryAccessibilityLabel="Retry loading projects"
+        />
       ) : (
         <FlatList
           data={rows}
           keyExtractor={(row) => row.key}
-          contentContainerClassName={FLOATING_CLEARANCE}
+          contentContainerClassName={`${FLOATING_CLEARANCE} px-4`}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefetching}
+              onRefresh={() => void refetch()}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+              progressBackgroundColor={colors.surface}
+            />
+          }
           renderItem={({ item }) => {
             if (item.kind === "header") {
-              return (
-                <Text className="bg-neutral-50 px-4 pb-1 pt-4 text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:bg-neutral-950">
-                  {item.title}
-                </Text>
-              );
+              return <SectionHeader title={item.title} icon="folder-outline" />;
             }
             if (item.kind === "empty") {
               return (
-                <Text className="px-4 py-3 text-neutral-500 dark:text-neutral-400">
-                  No projects here yet.
-                </Text>
+                <EmptyState
+                  icon="folder-outline"
+                  title="No projects here yet"
+                  body="A project groups its tasks, notes and events."
+                />
               );
             }
             return <ProjectRow project={item.project} />;
           }}
         />
       )}
-      <Link href="/projects/new" asChild>
-        <Pressable className={`mx-4 mt-4 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700 ${FLOATING_CTA_CLEARANCE}`}>
-          <Text className="font-semibold text-white">New project</Text>
-        </Pressable>
-      </Link>
-    </SafeAreaView>
+      <View className={`mx-4 mt-4 ${FLOATING_CTA_CLEARANCE}`}>
+        <Button
+          label="New project"
+          onPress={() => router.push("/projects/new")}
+          variant="primary"
+          // Navigation, not an action: no haptic (components/ui/haptics.ts).
+          haptic={false}
+          icon="plus"
+          block
+          accessibilityLabel="New project"
+        />
+      </View>
+    </ScreenFrame>
   );
 }

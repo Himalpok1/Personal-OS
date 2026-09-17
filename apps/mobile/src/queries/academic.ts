@@ -20,7 +20,8 @@ export const academicKeys = {
   /** Prefix every academic query shares, so one invalidate covers the domain. */
   all: ["academic"] as const,
   today: () => [...academicKeys.all, "today"] as const,
-  courses: (includeArchived: boolean) => [...academicKeys.all, "courses", includeArchived] as const,
+  courses: (includeArchived: boolean, includePastTerms = false) =>
+    [...academicKeys.all, "courses", includeArchived, includePastTerms] as const,
   course: (id: string | null) => [...academicKeys.all, "course", id] as const,
 };
 
@@ -41,11 +42,23 @@ export function useAcademicToday() {
   });
 }
 
-/** `GET /academic/courses?include_archived=` -- every active connection's courses with computed counts. */
-export function useAcademicCourses(includeArchived = false) {
+export interface AcademicCoursesOptions {
+  includeArchived?: boolean;
+  /** Widen from the current term (ADR-070a's default) to every term. */
+  includePastTerms?: boolean;
+}
+
+/**
+ * `GET /academic/courses?include_archived=&include_past_terms=` -- every
+ * active connection's courses with computed counts, current term only by
+ * default. Accepts the pre-10.3 boolean form (`useAcademicCourses(true)` ==
+ * `includeArchived`) as well as an options object.
+ */
+export function useAcademicCourses(options: AcademicCoursesOptions = {}) {
+  const { includeArchived = false, includePastTerms = false } = options;
   return useQuery({
-    queryKey: academicKeys.courses(includeArchived),
-    queryFn: () => api.listAcademicCourses({ includeArchived }),
+    queryKey: academicKeys.courses(includeArchived, includePastTerms),
+    queryFn: () => api.listAcademicCourses({ includeArchived, includePastTerms }),
   });
 }
 

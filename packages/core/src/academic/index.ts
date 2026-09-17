@@ -3,3 +3,6 @@
 export * from "./derive.js";
 export * from "./buckets.js";
 export * from "./current-term.js";
+export * from "./urgency.js";
+export * from "./workload.js";
+export * from "./grade-summary.js";

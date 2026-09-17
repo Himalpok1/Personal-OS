@@ -44,7 +44,6 @@ function deepRender(node: unknown): unknown {
   return el;
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 function findAll(node: unknown, predicate: (n: any) => boolean, acc: any[] = []): any[] {
   if (!node) return acc;
   if (Array.isArray(node)) {
@@ -64,7 +63,6 @@ function findAll(node: unknown, predicate: (n: any) => boolean, acc: any[] = [])
 function findByTestId(node: unknown, testID: string): any {
   return findAll(node, (n) => n.props?.testID === testID)[0];
 }
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 function getTextContent(node: unknown): string {
   if (node === null || node === undefined) return "";

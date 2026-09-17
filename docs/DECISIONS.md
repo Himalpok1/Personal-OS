@@ -93,6 +93,7 @@ Ordering below is the original log order: amendments (`ADR-046a`, `ADR-047a`, `A
 | [ADR-068a](decisions/ADR-068a.md) | Amendment to ADR-068: assignment `score` and `grade` are stored (migration 0021); `description`, `entered_*` and attachments stay excluded | Locked |
 | [ADR-070](decisions/ADR-070.md) | Checkpoint 10.2: the Academic Intelligence Layer is a computed read model over the Canvas tables, structurally outside the AI lanes | Locked |
 | [ADR-070a](decisions/ADR-070a.md) | Amendment to ADR-070: academic surfaces show the current term only, selected by date (most recently started term), never by name | Locked |
+| [ADR-071](decisions/ADR-071.md) | Checkpoint 10.3: deterministic, explainable academic intelligence sections (urgency, priorities, workload, course attention, grade summary) as optional wire keys; a token-based mobile design system with three new Expo modules | Locked |
 
 ## Open later-phase decisions
 

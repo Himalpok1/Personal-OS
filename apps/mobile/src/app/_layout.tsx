@@ -13,14 +13,9 @@ import { UI_TEST_MODE, assertUiTestPackageIsolation } from "@/config/ui-test-mod
 import { queryClient } from "@/queries/client";
 import { useQueryLifecycle } from "@/queries/use-query-lifecycle";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
-// NativeWind's own useColorScheme, not react-native's -- under the default
-// 'media' dark-mode strategy, react-native-css-interop's patched hook
-// throws ("Cannot manually set color scheme...") if the raw RN hook is
-// read instead, since only NativeWind's own hook is wired to that
-// strategy's read path without triggering a set.
-import { useColorScheme } from "nativewind";
-import { SafeAreaView, Text, View } from "react-native";
+import { Stack, ThemeProvider } from "expo-router";
+import { navigationTheme, useSyncWebColorSchemeClass, useTheme } from "@/components/ui";
+import { View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import * as Application from "expo-application";
 
@@ -31,7 +26,15 @@ import * as Application from "expo-application";
 assertUiTestPackageIsolation(Application.applicationId ?? null);
 
 export default function RootLayout() {
-  const { colorScheme } = useColorScheme();
+  // NativeWind's own useColorScheme (inside useTheme), not react-native's --
+  // under the default 'media' dark-mode strategy, react-native-css-interop's
+  // patched hook throws ("Cannot manually set color scheme...") if the raw RN
+  // hook is read instead, since only NativeWind's own hook is wired to that
+  // strategy's read path without triggering a set.
+  const { scheme } = useTheme();
+  // Checkpoint 10.3: on web, keep the `dark` class the compiled `dark:`
+  // selectors need in step with the hook (components/ui/web-color-scheme.ts).
+  useSyncWebColorSchemeClass(scheme);
   return (
     // SafeAreaProvider is required by react-native-safe-area-context's
     // SafeAreaView, which quick-add-fab.tsx has consumed since Phase 3 -- it
@@ -39,7 +42,7 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <QueryClientProvider client={queryClient}>
         <DeviceIdentityProvider>
-          <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+          <ThemeProvider value={navigationTheme(scheme)}>
             <RootContent />
           </ThemeProvider>
         </DeviceIdentityProvider>
@@ -69,11 +72,10 @@ function ProductionContent() {
   useQueryLifecycle();
 
   if (isLoading) {
-    return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <Text className="text-neutral-500">Loading…</Text>
-      </SafeAreaView>
-    );
+    // The whole-app gate's own loading state: a bare canvas, no spinner --
+    // identity resolves from SecureStore in milliseconds and a flash of
+    // skeleton would be more visible than the wait.
+    return <View className="flex-1 bg-canvas dark:bg-canvas-dark" />;
   }
 
   if (!identity) {

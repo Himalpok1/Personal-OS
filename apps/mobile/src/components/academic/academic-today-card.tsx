@@ -1,39 +1,41 @@
-// The "Academics" card for the Today screen (Checkpoint 10.2, ADR-070) --
-// the deterministic successor to Checkpoint 10.1's Canvas upcoming-
-// assignments card, now over `GET /academic/today`, whose overdue / due-today
-// / due-this-week buckets are computed server-side under the same `tz` and
-// the same rules as `/today`'s own sections.
+// The "Academics" card for the Today screen (Checkpoint 10.2, ADR-070;
+// redesigned in Checkpoint 10.3 as the academic intelligence card) -- over
+// `GET /academic/today`, whose overdue / due-today / due-this-week buckets,
+// ranked priorities, workload status and per-day workload are ALL computed
+// server-side under the same `tz` and the same rules as `/today`'s own
+// sections.
 //
 // Owns its own query, exactly like HealthTodayCard / MailDigestCard /
 // BriefCard above it on Today -- a slow or failing Canvas sync must never
 // delay, blank, or error the command centre. Renders NOTHING at all (not an
 // empty state) while loading, on an error, when the server is not configured
-// for academics, or when there is nothing to show (see
+// for academics, or when there is nothing to act on (see
 // shouldRenderAcademicCard): a permanent not-configured placeholder would be
 // clutter on the busiest screen in the app, and a card that appears a moment
 // late is a smaller disruption than one that appears and then vanishes.
 //
 // Nothing here is AI. This card renders the server's read model verbatim and
-// derives nothing: no bucketing, no counting, no re-sorting.
+// derives nothing: no bucketing, no counting, no re-sorting, no urgency of
+// its own -- every chip is a word for a value the server sent. The three
+// Checkpoint 10.3 keys are OPTIONAL on the wire (an older server omits them)
+// and every block guards on their absence.
 import { useRouter, type Href } from "expo-router";
-import type { AcademicAssignment } from "@personal-os/schema";
-import { Pressable, Text, View } from "react-native";
+import type { AcademicAssignment, AcademicPriorityItem } from "@personal-os/schema";
+import { Pressable, View } from "react-native";
+import { AppText, Card, Icon, ListRow, SectionHeader, StatusChip, useTheme } from "@/components/ui";
 import { useAcademicToday } from "@/queries/academic";
 import {
   shouldRenderAcademicCard,
   visibleAcademicSections,
+  visiblePriorities,
   type AcademicSectionTone,
 } from "./academic-today-card-state";
-import {
-  courseLabel,
-  formatDueLabel,
-  pluralize,
-  submissionBadge,
-  type SubmissionBadgeTone,
-} from "./format";
+import { courseLabel, formatDueLabel, pluralize, submissionBadge } from "./format";
 import { SourceLink } from "./source-link";
-
-const CARD_CLASS = "mx-4 mb-3 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800";
+import { badgeChipTone, urgencyChip } from "./urgency-chip";
+import { courseFocusRow } from "./course-focus";
+import { workloadChip } from "./workload-state";
+import { workloadStripColumns, workloadStripLabel } from "./workload-strip";
 
 /**
  * The course list. Typed through `Href` rather than as a bare literal for the
@@ -43,20 +45,13 @@ const CARD_CLASS = "mx-4 mb-3 rounded-xl border border-neutral-200 p-4 dark:bord
  */
 const ACADEMIC_ROUTE = "/academic" as Href;
 
-const SECTION_TONE_CLASS: Record<AcademicSectionTone, string> = {
-  red: "text-red-600 dark:text-red-400",
-  blue: "text-blue-600 dark:text-blue-400",
-  neutral: "text-neutral-500 dark:text-neutral-400",
+const SECTION_TONE: Record<AcademicSectionTone, "danger" | "info" | "default"> = {
+  red: "danger",
+  blue: "info",
+  neutral: "default",
 };
 
-const BADGE_TONE_CLASS: Record<SubmissionBadgeTone, string> = {
-  red: "text-red-600 dark:text-red-400",
-  amber: "text-amber-600 dark:text-amber-400",
-  green: "text-green-700 dark:text-green-300",
-  neutral: "text-neutral-500 dark:text-neutral-400",
-};
-
-function AssignmentRow({ item }: { item: AcademicAssignment }) {
+function AssignmentRow({ item, last }: { item: AcademicAssignment; last: boolean }) {
   const course = courseLabel(item.course_code, item.course_name);
   const due = formatDueLabel(item.due_at);
   const badge = submissionBadge(item.submission);
@@ -65,24 +60,85 @@ function AssignmentRow({ item }: { item: AcademicAssignment }) {
       htmlUrl={item.html_url}
       sourceBaseUrl={item.source_base_url}
       accessibilityLabel={`${item.title}, ${course}, due ${due}${badge ? `, ${badge.text}` : ""}`}
-      className="min-h-[44px] justify-center border-b border-neutral-100 py-2 last:border-b-0 dark:border-neutral-900 active:opacity-70"
+      className="active:opacity-70"
     >
-      <Text className="text-sm font-medium text-black dark:text-white" numberOfLines={1}>
-        {item.title}
-      </Text>
-      <View className="mt-0.5 flex-row items-center gap-2">
-        <Text className="shrink text-xs text-neutral-500 dark:text-neutral-400" numberOfLines={1}>
-          {course}
-        </Text>
-        <Text className="text-xs text-neutral-400 dark:text-neutral-500">·</Text>
-        <Text className="text-xs text-neutral-500 dark:text-neutral-400">{due}</Text>
-        {badge ? (
-          <Text className={`text-xs font-medium ${BADGE_TONE_CLASS[badge.tone]}`}>
-            {badge.text}
-          </Text>
-        ) : null}
-      </View>
+      {/* The press lives on SourceLink (the one gated call site); the row is
+          a plain View, so there is exactly one pressable per assignment. */}
+      <ListRow
+        title={item.title}
+        subtitle={`${course} · ${due}`}
+        trailing={badge ? <StatusChip tone={badgeChipTone(badge.tone)} label={badge.text} /> : null}
+        inset
+        last={last}
+      />
     </SourceLink>
+  );
+}
+
+function PriorityRow({ item, last }: { item: AcademicPriorityItem; last: boolean }) {
+  const { assignment } = item;
+  const course = courseLabel(assignment.course_code, assignment.course_name);
+  const due = formatDueLabel(assignment.due_at);
+  const chip = urgencyChip(item.urgency);
+  const badge = submissionBadge(assignment.submission);
+  return (
+    <SourceLink
+      htmlUrl={assignment.html_url}
+      sourceBaseUrl={assignment.source_base_url}
+      accessibilityLabel={`${assignment.title}, ${course}, due ${due}, ${chip.label}${
+        badge ? `, ${badge.text}` : ""
+      }`}
+      className="active:opacity-70"
+    >
+      <ListRow
+        title={assignment.title}
+        subtitle={`${course} · ${due}`}
+        trailing={
+          <View className="items-end gap-1">
+            <StatusChip tone={chip.tone} label={chip.label} />
+            {badge ? <StatusChip tone={badgeChipTone(badge.tone)} label={badge.text} /> : null}
+          </View>
+        }
+        inset
+        last={last}
+      />
+    </SourceLink>
+  );
+}
+
+function WorkloadStrip({ days }: { days: Parameters<typeof workloadStripColumns>[0] }) {
+  // A raw colour is unavoidable for a drawn bar (theme.ts: "a chart stroke"),
+  // so it comes from the resolved palette, never a hex or a `dark:` class.
+  const { colors } = useTheme();
+  const columns = workloadStripColumns(days);
+  if (columns.length === 0) return null;
+  return (
+    <View
+      className="mt-3"
+      accessible
+      accessibilityRole="summary"
+      accessibilityLabel={workloadStripLabel(columns)}
+    >
+      <AppText variant="overline" tone="muted">
+        This week
+      </AppText>
+      <View className="mt-1.5 flex-row items-end gap-1.5">
+        {columns.map((column) => (
+          <View key={column.date} className="flex-1 items-center">
+            <View
+              className="w-full rounded-sm"
+              style={{
+                height: column.heightPx,
+                backgroundColor: column.dueTotal > 0 ? colors.primary : colors["outline-strong"],
+              }}
+            />
+            <AppText variant="caption" tone="muted" className="mt-1">
+              {column.weekdayInitial}
+            </AppText>
+          </View>
+        ))}
+      </View>
+    </View>
   );
 }
 
@@ -99,47 +155,133 @@ export function AcademicTodayCard() {
   if (data === undefined) return null;
   if (!shouldRenderAcademicCard(data)) return null;
 
-  const sections = visibleAcademicSections(data);
+  const priorities = visiblePriorities(data);
+  // The bucket sections skip whatever "Do next" already lists (see
+  // visibleAcademicSections): the priority candidates ARE the three buckets.
+  const sections = visibleAcademicSections(
+    data,
+    new Set(priorities?.rows.map((row) => row.assignment.id) ?? []),
+  );
+  const workload = data.workload === undefined ? null : workloadChip(data.workload);
+  const focus = courseFocusRow(data);
+  const termName = data.current_term?.name ?? null;
   const unread = data.summary.unread_announcements_total;
 
   return (
-    <View className={CARD_CLASS} accessibilityRole="summary">
-      <View className="flex-row items-center justify-between">
-        <Text className="text-base font-medium text-black dark:text-white">Academics</Text>
-        <Pressable
-          onPress={() => router.push(ACADEMIC_ROUTE)}
-          accessibilityRole="button"
-          accessibilityLabel="View courses"
-          hitSlop={8}
-          className="min-h-[44px] justify-center active:opacity-70"
+    <Card className="mb-3" accessibilityRole="summary">
+      <SectionHeader
+        title="Academics"
+        icon="school-outline"
+        spacing="none"
+        trailing={
+          <Pressable
+            onPress={() => router.push(ACADEMIC_ROUTE)}
+            accessibilityRole="button"
+            accessibilityLabel="View courses"
+            hitSlop={8}
+            className="min-h-[44px] flex-row items-center justify-center active:opacity-70"
+          >
+            <AppText variant="label" tone="primary">
+              Courses ›
+            </AppText>
+          </Pressable>
+        }
+      />
+      {termName ? (
+        <AppText variant="caption" tone="muted" numberOfLines={1}>
+          {termName}
+        </AppText>
+      ) : null}
+
+      {workload ? (
+        <View className="mt-2 flex-row flex-wrap items-center gap-2">
+          <StatusChip tone={workload.tone} label={workload.label} size="md" dot />
+          {workload.detail ? (
+            <AppText variant="caption" tone="secondary" numberOfLines={1}>
+              {workload.detail}
+            </AppText>
+          ) : null}
+        </View>
+      ) : null}
+
+      {/* "Which courses need focus?" -- the server's course_attention, one
+          chip per course at high (danger) or medium (warning) attention. */}
+      {focus ? (
+        <View
+          className="mt-2 flex-row flex-wrap items-center gap-1.5"
+          accessible
+          accessibilityRole="summary"
+          accessibilityLabel={`Needs focus: ${focus.chips
+            .map((c) => `${c.label} (${c.reason})`)
+            .join(", ")}${focus.hiddenCount > 0 ? `, and ${focus.hiddenCount} more` : ""}`}
         >
-          <Text className="text-sm text-blue-600 dark:text-blue-400">Courses ›</Text>
-        </Pressable>
-      </View>
+          <AppText variant="caption" tone="muted">
+            Focus on
+          </AppText>
+          {focus.chips.map((chip) => (
+            <StatusChip key={chip.courseId} tone={chip.tone} label={chip.label} />
+          ))}
+          {focus.hiddenCount > 0 ? (
+            <AppText variant="caption" tone="muted">
+              +{focus.hiddenCount}
+            </AppText>
+          ) : null}
+        </View>
+      ) : null}
+
+      {priorities ? (
+        <View className="mt-3">
+          <View className="flex-row items-center gap-1.5 pb-1">
+            <Icon name="flag-outline" size="sm" tone="primary" />
+            <AppText variant="overline" tone="primary">
+              Do next
+            </AppText>
+          </View>
+          {priorities.rows.map((item, index) => (
+            <PriorityRow
+              key={item.assignment.id}
+              item={item}
+              last={index === priorities.rows.length - 1}
+            />
+          ))}
+          {priorities.hiddenCount > 0 ? (
+            <AppText variant="caption" tone="muted" className="pt-1">
+              +{priorities.hiddenCount} more
+            </AppText>
+          ) : null}
+        </View>
+      ) : null}
 
       {sections.map((section) => (
-        <View key={section.key} className="mt-2">
-          <Text
-            className={`pb-1 text-xs font-semibold uppercase ${SECTION_TONE_CLASS[section.tone]}`}
-          >
-            {section.title} · {section.total}
-          </Text>
-          {section.rows.map((item) => (
-            <AssignmentRow key={item.id} item={item} />
+        <View key={section.key} className="mt-3">
+          <SectionHeader
+            title={section.title}
+            count={section.total}
+            tone={SECTION_TONE[section.tone]}
+            spacing="none"
+            className="pb-1"
+          />
+          {section.rows.map((item, index) => (
+            <AssignmentRow key={item.id} item={item} last={index === section.rows.length - 1} />
           ))}
           {section.hiddenCount > 0 ? (
-            <Text className="pt-1 text-xs text-neutral-500 dark:text-neutral-400">
+            <AppText variant="caption" tone="muted" className="pt-1">
               +{section.hiddenCount} more
-            </Text>
+            </AppText>
           ) : null}
         </View>
       ))}
 
+      {data.workload ? <WorkloadStrip days={data.workload.days} /> : null}
+
       {unread > 0 ? (
-        <Text className="mt-3 text-xs text-neutral-500 dark:text-neutral-400">
-          {pluralize(unread, "unread announcement")}
-        </Text>
+        <View className="mt-3 flex-row items-center gap-1.5">
+          <Icon name="bullhorn-outline" size="sm" tone="on-surface-muted" />
+          <AppText variant="caption" tone="muted">
+            {pluralize(unread, "unread announcement")}
+          </AppText>
+        </View>
       ) : null}
-    </View>
+    </Card>
   );
 }

@@ -1,4 +1,6 @@
-import { Text, TextInput, View } from "react-native";
+import { TextInput, View } from "react-native";
+import { FieldLabel, textFieldClass } from "@/components/ask/text-field";
+import { AppText } from "@/components/ui";
 import { usePlaceholderColor } from "@/components/placeholder-color";
 import { formatDateFieldLabel } from "@/components/date-field-state";
 import type { DateFieldProps } from "@/components/date-field";
@@ -15,19 +17,19 @@ export function DateField({ label, value, onChange }: DateFieldProps) {
 
   return (
     <View className="mb-4">
-      <Text className="mb-1 text-sm text-neutral-500">{label} (YYYY-MM-DD)</Text>
+      <FieldLabel>{`${label} (YYYY-MM-DD)`}</FieldLabel>
       <TextInput
         value={value ?? ""}
         onChangeText={(next) => onChange(next.trim() === "" ? null : next.trim())}
         placeholder="2026-09-15"
         placeholderTextColor={placeholderColor}
         accessibilityLabel={label}
-        className="min-h-[44px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+        className={textFieldClass()}
       />
       {value && !formatDateFieldLabel(value) ? (
-        <Text className="mt-1 text-xs text-amber-700 dark:text-amber-500">
+        <AppText variant="caption" tone="warning" className="mt-1">
           That is not a date we can read.
-        </Text>
+        </AppText>
       ) : null}
     </View>
   );

@@ -14,13 +14,16 @@
 // A sleep session is attributed to the civil date it ENDED -- the morning you
 // woke (ADR-049). `wake_local_date` is named for that meaning, and it is the
 // axis the provider filter and the tombstone sweep use too.
-import { Text, View } from "react-native";
+import { View } from "react-native";
 import type { HealthSleepSession, HealthWorkoutSession } from "@personal-os/schema";
+import { AppText, ListRow, cardClass } from "@/components/ui";
 import { formatShortDate } from "@/utils/local-date";
 import { formatDuration } from "./format";
 
-const CARD_CLASS = "rounded-xl border border-neutral-200 p-4 dark:border-neutral-800";
-const ROW_CLASS = "border-b border-neutral-100 px-4 py-3 dark:border-neutral-900";
+// The summary card is `accessible` -- one spoken element for the whole night
+// -- which `Card` cannot express, so it composes the same vocabulary through
+// `cardClass` (the reasoning metric-tile.tsx records).
+const CARD_CLASS = cardClass("md", "card");
 
 /**
  * Detail Personal OS does not have, said once, in one place.
@@ -64,10 +67,10 @@ export function civilDate(iso: string, offsetSeconds: number): string {
 function LabelledValue({ label, value }: { label: string; value: string }) {
   return (
     <View className="flex-1">
-      <Text className="text-xs font-semibold uppercase text-neutral-500 dark:text-neutral-400">
+      <AppText variant="overline" tone="muted">
         {label}
-      </Text>
-      <Text className="text-base text-black dark:text-white">{value}</Text>
+      </AppText>
+      <AppText variant="body">{value}</AppText>
     </View>
   );
 }
@@ -82,11 +85,15 @@ export interface SleepSummaryCardProps {
 export function SleepSummaryCard({ session, averageSeconds, compact }: SleepSummaryCardProps) {
   if (session === null) {
     return (
-      <View className={CARD_CLASS} accessible accessibilityLabel="Sleep: no sleep sessions recorded">
-        <Text className="text-base font-medium text-black dark:text-white">Sleep</Text>
-        <Text className="mt-1 text-sm leading-5 text-neutral-500 dark:text-neutral-400">
+      <View
+        className={CARD_CLASS}
+        accessible
+        accessibilityLabel="Sleep: no sleep sessions recorded"
+      >
+        <AppText variant="title">Sleep</AppText>
+        <AppText variant="label" tone="secondary" className="mt-1 font-normal">
           No sleep sessions have reached Google Health yet.
-        </Text>
+        </AppText>
       </View>
     );
   }
@@ -107,12 +114,14 @@ export function SleepSummaryCard({ session, averageSeconds, compact }: SleepSumm
 
   return (
     <View className={CARD_CLASS} accessible accessibilityLabel={accessibilityLabel}>
-      <Text className="text-base font-medium text-black dark:text-white">Sleep</Text>
-      <Text className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
+      <AppText variant="title">Sleep</AppText>
+      <AppText variant="caption" tone="muted" className="mt-0.5">
         Night ending {wakeDate}
-      </Text>
+      </AppText>
 
-      <Text className="mt-2 text-3xl font-semibold text-black dark:text-white">{duration}</Text>
+      <AppText variant="display" className="mt-2">
+        {duration}
+      </AppText>
 
       {/* Stacked on the Rabbit: two side-by-side columns at 480px wide leave
           each label about 60px, which wraps "Bedtime" onto two lines. */}
@@ -122,9 +131,9 @@ export function SleepSummaryCard({ session, averageSeconds, compact }: SleepSumm
       </View>
 
       {averageSeconds === null ? null : (
-        <Text className="mt-3 text-sm text-neutral-600 dark:text-neutral-400">
+        <AppText variant="label" tone="secondary" className="mt-3 font-normal">
           7-day average {formatDuration(averageSeconds)}
-        </Text>
+        </AppText>
       )}
 
       {/* Rendered from the CONTRACT, not hardcoded: `stages` is always null
@@ -132,15 +141,27 @@ export function SleepSummaryCard({ session, averageSeconds, compact }: SleepSumm
           note disappears on its own rather than lying about a gap that has
           been filled. */}
       {session.stages === null ? (
-        <Text className="mt-3 text-xs leading-4 text-neutral-500 dark:text-neutral-400">
+        <AppText variant="caption" tone="muted" className="mt-3">
           {SLEEP_STAGE_NOTE}
-        </Text>
+        </AppText>
       ) : null}
     </View>
   );
 }
 
-export function SleepSessionRow({ session }: { session: HealthSleepSession }) {
+export interface SessionRowProps {
+  /** Suppresses the hairline divider under the final row of a card. */
+  last?: boolean;
+}
+
+// The rows are `ListRow`s inside an `accessible` wrapper: the wrapper is what
+// makes a screen reader read the whole night (or workout) as one element with
+// the label below, which `ListRow` itself does not expose. `inset` because
+// every caller places the rows inside a padded `Card`.
+export function SleepSessionRow({
+  session,
+  last = false,
+}: { session: HealthSleepSession } & SessionRowProps) {
   const duration = formatDuration(session.duration_seconds);
   const bedtime = civilTime(session.start_at, session.start_utc_offset_seconds);
   const wake = civilTime(session.end_at, session.end_utc_offset_seconds);
@@ -148,17 +169,16 @@ export function SleepSessionRow({ session }: { session: HealthSleepSession }) {
 
   return (
     <View
-      className={ROW_CLASS}
       accessible
       accessibilityLabel={`Night ending ${wakeDate}, ${duration}, bedtime ${bedtime}, woke ${wake}`}
     >
-      <View className="flex-row items-baseline justify-between gap-3">
-        <Text className="text-base text-black dark:text-white">{wakeDate}</Text>
-        <Text className="text-base font-semibold text-black dark:text-white">{duration}</Text>
-      </View>
-      <Text className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">
-        {bedtime} → {wake}
-      </Text>
+      <ListRow
+        title={wakeDate}
+        subtitle={`${bedtime} → ${wake}`}
+        trailing={<AppText variant="body-strong">{duration}</AppText>}
+        inset
+        last={last}
+      />
     </View>
   );
 }
@@ -178,27 +198,24 @@ function workoutTitle(session: HealthWorkoutSession): string {
   return parts.length === 0 ? "Workout" : parts.join(" · ");
 }
 
-export function WorkoutSessionRow({ session }: { session: HealthWorkoutSession }) {
+export function WorkoutSessionRow({
+  session,
+  last = false,
+}: { session: HealthWorkoutSession } & SessionRowProps) {
   const title = workoutTitle(session);
   const duration = formatDuration(session.duration_seconds);
   const startTime = civilTime(session.start_at, session.start_utc_offset_seconds);
   const startDate = formatShortDate(session.start_local_date);
 
   return (
-    <View
-      className={ROW_CLASS}
-      accessible
-      accessibilityLabel={`${title}, ${startDate} at ${startTime}, ${duration}`}
-    >
-      <View className="flex-row items-baseline justify-between gap-3">
-        <Text className="flex-1 text-base text-black dark:text-white" numberOfLines={2}>
-          {title}
-        </Text>
-        <Text className="text-base font-semibold text-black dark:text-white">{duration}</Text>
-      </View>
-      <Text className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">
-        {startDate} at {startTime}
-      </Text>
+    <View accessible accessibilityLabel={`${title}, ${startDate} at ${startTime}, ${duration}`}>
+      <ListRow
+        title={title}
+        subtitle={`${startDate} at ${startTime}`}
+        trailing={<AppText variant="body-strong">{duration}</AppText>}
+        inset
+        last={last}
+      />
       {/* distance_meters / calories_kcal / heart_rate_zones are always null
           today. Their rows are OMITTED entirely rather than printed with an
           empty value: a "Distance" label with nothing beside it reads as a

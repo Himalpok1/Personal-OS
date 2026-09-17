@@ -1,8 +1,20 @@
 import type { HealthWorkoutSession } from "@personal-os/schema";
 import { useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
-import { FLOATING_CLEARANCE } from "@/components/floating-layout";
+import { View } from "react-native";
 import { WORKOUT_DETAIL_NOTE, WorkoutSessionRow } from "@/components/health/session-cards";
+import {
+  AppText,
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  Screen,
+  ScreenCentered,
+  ScreenFrame,
+  ScreenHeader,
+  SectionHeader,
+  SkeletonScreen,
+} from "@/components/ui";
 import { useHealthSummary, useHealthWorkoutSessions } from "@/queries/health";
 import { addLocalDays, formatHeaderDate, todayLocalDate } from "@/utils/local-date";
 
@@ -44,26 +56,22 @@ export default function HealthWorkoutsScreen() {
 
   if (workouts.isLoading) {
     return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <Text className="text-neutral-500">Loading…</Text>
-      </View>
+      <ScreenFrame>
+        <SkeletonScreen />
+      </ScreenFrame>
     );
   }
 
   if (workouts.isError || workouts.data === undefined) {
     return (
-      <View className="flex-1 items-center justify-center gap-3 bg-white px-6 dark:bg-black">
-        <Text className="text-center text-red-600">Couldn&apos;t load workouts.</Text>
-        <Pressable
-          onPress={() => void workouts.refetch()}
-          hitSlop={8}
-          accessibilityRole="button"
-          accessibilityLabel="Retry loading workouts"
-          className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-        >
-          <Text className="font-semibold text-white">Retry</Text>
-        </Pressable>
-      </View>
+      <ScreenCentered>
+        <ErrorState
+          message="Couldn't load workouts."
+          onRetry={() => void workouts.refetch()}
+          retryAccessibilityLabel="Retry loading workouts"
+          size="screen"
+        />
+      </ScreenCentered>
     );
   }
 
@@ -73,64 +81,62 @@ export default function HealthWorkoutsScreen() {
   const atCap = limit >= MAX_LIMIT;
 
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      contentContainerClassName={FLOATING_CLEARANCE}
-      keyboardShouldPersistTaps="handled"
-    >
-      <View className="px-4 pt-4">
-        <Text className="text-2xl font-bold text-black dark:text-white">Workouts</Text>
-        <Text className="text-sm text-neutral-500 dark:text-neutral-400">
-          Last {RANGE_DAYS} days, by start date
-        </Text>
-      </View>
+    <Screen refreshing={workouts.isRefetching} onRefresh={() => void workouts.refetch()}>
+      <ScreenHeader
+        variant="compact"
+        title="Workouts"
+        subtitle={`Last ${RANGE_DAYS} days, by start date`}
+      />
 
       {/* The standing gap, stated once from the contract rather than hardcoded
           per row: the 6.3 sync engine stores an allowlisted SessionDetail only,
           so distance, calories and heart-rate zones are always null today. */}
-      <Text className="px-4 pt-3 text-sm text-neutral-500 dark:text-neutral-400">
+      <AppText variant="label" tone="secondary" className="pt-3 font-normal">
         {WORKOUT_DETAIL_NOTE}
-      </Text>
+      </AppText>
 
       {groups.length === 0 ? (
-        <Text className="px-4 pt-6 text-sm text-neutral-500 dark:text-neutral-400">
-          No workouts in the last {RANGE_DAYS} days. A session has to reach Google Health before
-          Personal OS can read it.
-        </Text>
+        <Card className="mt-4">
+          <EmptyState
+            icon="run"
+            title={`No workouts in the last ${RANGE_DAYS} days.`}
+            body="A session has to reach Google Health before Personal OS can read it."
+          />
+        </Card>
       ) : (
         groups.map((group) => (
           <View key={group.date}>
-            <Text className="px-4 pb-1 pt-5 text-sm font-semibold uppercase text-neutral-500 dark:text-neutral-400">
-              {formatHeaderDate(group.date)}
-            </Text>
-            {group.sessions.map((session) => (
-              <WorkoutSessionRow key={session.id} session={session} />
-            ))}
+            <SectionHeader title={formatHeaderDate(group.date)} />
+            <Card padding="none" className="px-4">
+              {group.sessions.map((session, index) => (
+                <WorkoutSessionRow
+                  key={session.id}
+                  session={session}
+                  last={index === group.sessions.length - 1}
+                />
+              ))}
+            </Card>
           </View>
         ))
       )}
 
       {hasMore ? (
-        <View className="px-4 pt-5">
+        <View className="pt-5">
           {atCap ? (
-            <Text className="text-sm text-neutral-500 dark:text-neutral-400">
+            <AppText variant="label" tone="secondary" className="font-normal">
               Showing the first {items.length} of {total} sessions.
-            </Text>
+            </AppText>
           ) : (
-            <Pressable
+            <Button
+              label={`Load more (${items.length} of ${total})`}
               onPress={() => setLimit((current) => Math.min(MAX_LIMIT, current + PAGE_SIZE))}
-              hitSlop={8}
-              accessibilityRole="button"
               accessibilityLabel="Load more workouts"
-              className="min-h-[44px] items-center justify-center rounded-lg border border-neutral-300 px-4 active:bg-neutral-100 dark:border-neutral-700 dark:active:bg-neutral-900"
-            >
-              <Text className="font-medium text-blue-600 dark:text-blue-400">
-                Load more ({items.length} of {total})
-              </Text>
-            </Pressable>
+              variant="outline"
+              block
+            />
           )}
         </View>
       ) : null}
-    </ScrollView>
+    </Screen>
   );
 }

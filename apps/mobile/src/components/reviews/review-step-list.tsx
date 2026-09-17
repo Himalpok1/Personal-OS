@@ -1,4 +1,5 @@
-import { Text, View } from "react-native";
+import { View } from "react-native";
+import { AppText, Icon } from "@/components/ui";
 import type {
   DailyReviewChecklist,
   DailyReviewContext,
@@ -83,6 +84,18 @@ export function activeStepIndex(steps: ReviewStepView[]): number {
 }
 
 // ---- Presentational component (no data fetching; taps live on screens) ----
+//
+// Checkpoint 10.3: the step disc and title draw from the design tokens -- a
+// done step is a `success-container` disc with a check, the active step a
+// `primary` disc, the rest an outlined disc. There is no stepper primitive in
+// components/ui/, so the token classes are written here, the same way the
+// primitives write them.
+
+const DISC_DONE = "bg-success-container dark:bg-success-container-dark";
+const DISC_ACTIVE = "bg-primary dark:bg-primary-dark";
+const DISC_IDLE =
+  "border border-outline-strong bg-surface dark:border-outline-strong-dark dark:bg-surface-dark";
+const GLYPH_ACTIVE = "text-on-primary dark:text-on-primary-dark";
 
 export function ReviewStepList(props: {
   steps: ReviewStepView[];
@@ -96,32 +109,7 @@ export function ReviewStepList(props: {
       {steps.map((step, index) => {
         const isActive = activeIndex === index;
         const circleSize = compact ? "h-6 w-6" : "h-7 w-7";
-        const circleBase = `items-center justify-center rounded-full ${circleSize}`;
-        const circleTone = step.done
-          ? "bg-green-600"
-          : isActive
-            ? "bg-blue-600"
-            : "border border-neutral-300 bg-white dark:border-neutral-700 dark:bg-black";
-        const glyph = step.done ? "✓" : String(index + 1);
-        const glyphClass =
-          step.done || isActive
-            ? compact
-              ? "text-[10px] font-semibold text-white"
-              : "text-xs font-semibold text-white"
-            : compact
-              ? "text-[10px] font-semibold text-neutral-500 dark:text-neutral-400"
-              : "text-xs font-semibold text-neutral-500 dark:text-neutral-400";
-        const titleClass = isActive
-          ? compact
-            ? "flex-1 text-sm font-bold text-black dark:text-white"
-            : "flex-1 text-base font-bold text-black dark:text-white"
-          : compact
-            ? `flex-1 text-xs ${
-                step.done ? "text-neutral-500 dark:text-neutral-400" : "text-black dark:text-white"
-              }`
-            : `flex-1 text-sm ${
-                step.done ? "text-neutral-500 dark:text-neutral-400" : "text-black dark:text-white"
-              }`;
+        const circleTone = step.done ? DISC_DONE : isActive ? DISC_ACTIVE : DISC_IDLE;
 
         return (
           // min-h-[40px] keeps every row a valid future touch target even in
@@ -131,10 +119,30 @@ export function ReviewStepList(props: {
             key={step.key}
             className={`min-h-[40px] flex-row items-center gap-3 ${compact ? "py-1" : "py-2"}`}
           >
-            <View className={`${circleBase} ${circleTone}`}>
-              <Text className={glyphClass}>{glyph}</Text>
+            <View
+              className={`items-center justify-center rounded-full ${circleSize} ${circleTone}`}
+            >
+              {step.done ? (
+                <Icon name="check" size={compact ? "xs" : "sm"} tone="on-success-container" />
+              ) : (
+                <AppText
+                  variant="caption"
+                  tone={isActive ? "inherit" : "muted"}
+                  className={`font-semibold ${compact ? "text-[10px]" : ""} ${
+                    isActive ? GLYPH_ACTIVE : ""
+                  }`}
+                >
+                  {String(index + 1)}
+                </AppText>
+              )}
             </View>
-            <Text className={titleClass}>{step.title}</Text>
+            <AppText
+              variant={compact ? "label" : "body"}
+              tone={isActive ? "default" : step.done ? "muted" : "default"}
+              className={`flex-1 ${isActive ? "font-bold" : compact ? "font-normal" : ""}`}
+            >
+              {step.title}
+            </AppText>
           </View>
         );
       })}

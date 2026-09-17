@@ -160,6 +160,11 @@ describe("apps/mobile renders untrusted text inertly", () => {
     // trivially. Pinning the file that motivated the guard keeps it honest.
     const screen = files.find((file) => relative(SRC, file).includes("app/search"));
     expect(screen).toBeDefined();
-    expect(readFileSync(screen!, "utf8")).toContain("<Text");
+    // Since Checkpoint 10.3 the screen draws through the design system's
+    // AppText rather than a raw <Text>; either spelling proves the results
+    // list is still rendered here (a bare "<Text" also matched "<TextField").
+    const source = readFileSync(screen!, "utf8");
+    expect(source).toMatch(/<AppText\b|<Text\b/);
+    expect(source).toContain('testID="search-results"');
   });
 });

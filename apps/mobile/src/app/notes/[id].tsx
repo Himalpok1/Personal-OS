@@ -1,4 +1,14 @@
+import { ChoiceChip } from "@/components/ask/choice-chip";
+import { FieldLabel, textFieldClass } from "@/components/ask/text-field";
 import { confirmDestructive } from "@/components/confirm-destructive";
+import {
+  AppText,
+  Button,
+  ErrorState,
+  ScreenCentered,
+  ScreenFrame,
+  SkeletonCard,
+} from "@/components/ui";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { FieldLengthCounter } from "@/components/field-length-counter";
@@ -9,14 +19,7 @@ import { ApiClientError } from "@personal-os/api-client";
 import { ENTITY_TITLE_MAX_CHARS, NOTE_BODY_MAX_CHARS } from "@personal-os/schema";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { ScrollView, TextInput, View } from "react-native";
 
 export default function EditNoteScreen() {
   const keyboardHeight = useKeyboardHeight();
@@ -42,44 +45,30 @@ export default function EditNoteScreen() {
     setProjectId(note.project_id ?? undefined);
   }, [note]);
 
-  if (isLoading) {
+  if (isLoading || (!isError && !note)) {
     return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <ActivityIndicator />
-      </View>
+      <ScreenFrame>
+        <View className="px-4 pt-4">
+          <SkeletonCard lines={5} />
+        </View>
+      </ScreenFrame>
     );
   }
 
-  if (isError) {
+  if (isError || !note) {
     const status = error instanceof ApiClientError ? error.status : null;
     return (
-      <View className="flex-1 items-center justify-center gap-3 bg-white px-4 dark:bg-black">
-        <Text className="text-red-600">
-          {status === 404 ? "This note couldn't be found." : "Couldn't load this note."}
-        </Text>
-        {/* A 404 is terminal -- refetching the same id repeats the same
-            answer -- so the affordance appears only for a failure that could
-            actually clear. */}
-        {status === 404 ? null : (
-          <Pressable
-            onPress={() => void refetch()}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading this note"
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="font-semibold text-white">Retry</Text>
-          </Pressable>
-        )}
-      </View>
-    );
-  }
-
-  if (!note) {
-    return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <ActivityIndicator />
-      </View>
+      <ScreenCentered>
+        <ErrorState
+          title={status === 404 ? "Not found" : "Something went wrong"}
+          message={status === 404 ? "This note couldn't be found." : "Couldn't load this note."}
+          // A 404 is terminal -- refetching the same id repeats the same
+          // answer -- so the affordance appears only for a failure that could
+          // actually clear.
+          onRetry={status === 404 ? undefined : () => void refetch()}
+          retryAccessibilityLabel="Retry loading this note"
+        />
+      </ScreenCentered>
     );
   }
 
@@ -106,95 +95,94 @@ export default function EditNoteScreen() {
   };
 
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      // Padding lives entirely in contentContainerStyle (no
-      // contentContainerClassName) because NativeWind remaps that class onto
-      // this same prop -- see FLOATING_CLEARANCE_PX. The clearance keeps the
-      // globally-mounted QuickAdd/PTT buttons off this form's Save/Archive
-      // control; the keyboard height gives room to scroll it clear of the IME.
-      // Extra room so lower controls can be scrolled clear of the IME --
-      // see components/use-keyboard-height.ts for why insets alone don't do it.
-      contentContainerStyle={{ padding: 16, paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
-      // Without this the first tap on a submit button below a focused field
-      // only dismisses the keyboard instead of submitting.
-      keyboardShouldPersistTaps="handled"
-    >
-      <Text className="mb-1 text-sm text-neutral-500">Title</Text>
-      <TextInput
-        value={title}
-        onChangeText={setTitle}
-        // The server's own bound (packages/schema/src/text-bounds.ts), so an
-        // over-long paste is stopped here rather than refused as a 400.
-        maxLength={ENTITY_TITLE_MAX_CHARS}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-      <FieldLengthCounter length={title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
-
-      <Text className="mb-1 text-sm text-neutral-500">Body</Text>
-      <TextInput
-        value={body}
-        onChangeText={setBody}
-        multiline
-        maxLength={NOTE_BODY_MAX_CHARS}
-        className="mb-4 min-h-[120px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-      <FieldLengthCounter length={body.length} maxLength={NOTE_BODY_MAX_CHARS} />
-
-      <Text className="mb-1 text-sm text-neutral-500">Project</Text>
-      <View className="mb-4 flex-row flex-wrap gap-2">
-        {(projects ?? []).map((project) => (
-          <Pressable
-            key={project.id}
-            onPress={() => setProjectId(projectId === project.id ? undefined : project.id)}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityState={{ selected: projectId === project.id }}
-            className={
-              projectId === project.id
-                ? "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
-                : "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
-            }
-          >
-            <Text className={projectId === project.id ? "text-white" : "text-black dark:text-white"}>
-              {project.name}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-
-      {saveError ? (
-        <Text className="mb-2 text-red-600" accessibilityRole="alert">
-          {saveError}
-        </Text>
-      ) : null}
-
-      <Pressable
-        onPress={submit}
-        disabled={updateNote.isPending}
-        className="mb-3 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700"
+    <ScreenFrame>
+      <ScrollView
+        className="flex-1"
+        // Padding lives entirely in contentContainerStyle (no
+        // contentContainerClassName) because NativeWind remaps that class onto
+        // this same prop -- see FLOATING_CLEARANCE_PX. The clearance keeps the
+        // globally-mounted QuickAdd/PTT buttons off this form's Save/Archive
+        // control; the keyboard height gives room to scroll it clear of the IME.
+        // Extra room so lower controls can be scrolled clear of the IME --
+        // see components/use-keyboard-height.ts for why insets alone don't do it.
+        contentContainerStyle={{
+          padding: 16,
+          paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight,
+        }}
+        // Without this the first tap on a submit button below a focused field
+        // only dismisses the keyboard instead of submitting.
+        keyboardShouldPersistTaps="handled"
       >
-        <Text className="font-semibold text-white">
-          {updateNote.isPending ? "Saving..." : "Save changes"}
-        </Text>
-      </Pressable>
+        <FieldLabel>Title</FieldLabel>
+        <TextInput
+          value={title}
+          onChangeText={setTitle}
+          // The server's own bound (packages/schema/src/text-bounds.ts), so an
+          // over-long paste is stopped here rather than refused as a 400.
+          maxLength={ENTITY_TITLE_MAX_CHARS}
+          accessibilityLabel="Title"
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+        <FieldLengthCounter length={title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
 
-      <Pressable
-        onPress={() =>
-          confirmDestructive({
-        title: "Archive this note?",
-        message: "This hides it from your lists. There's currently no way to view or restore it from the app.",
-        confirmLabel: "Archive",
-        onConfirm: () => archiveNote.mutate(note.id, { onSuccess: () => router.back() }),
-      })
-        }
-        disabled={archiveNote.isPending}
-        className="items-center rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"
-      >
-        <Text className="font-semibold text-neutral-600 dark:text-neutral-300">
-          {archiveNote.isPending ? "Archiving..." : "Archive note"}
-        </Text>
-      </Pressable>
-    </ScrollView>
+        <FieldLabel>Body</FieldLabel>
+        <TextInput
+          value={body}
+          onChangeText={setBody}
+          multiline
+          textAlignVertical="top"
+          maxLength={NOTE_BODY_MAX_CHARS}
+          accessibilityLabel="Body"
+          className={textFieldClass({ multiline: true, extra: "mb-4 min-h-[160px]" })}
+        />
+        <FieldLengthCounter length={body.length} maxLength={NOTE_BODY_MAX_CHARS} />
+
+        <FieldLabel>Project</FieldLabel>
+        <View className="mb-4 flex-row flex-wrap gap-2">
+          {(projects ?? []).map((project) => (
+            <ChoiceChip
+              key={project.id}
+              label={project.name}
+              selected={projectId === project.id}
+              onPress={() => setProjectId(projectId === project.id ? undefined : project.id)}
+              accessibilityLabel={`Project: ${project.name}`}
+            />
+          ))}
+        </View>
+
+        {saveError ? (
+          <AppText variant="body" tone="danger" className="mb-2" accessibilityRole="alert">
+            {saveError}
+          </AppText>
+        ) : null}
+
+        <Button
+          label={updateNote.isPending ? "Saving..." : "Save changes"}
+          onPress={submit}
+          disabled={updateNote.isPending}
+          variant="primary"
+          icon="content-save-outline"
+          block
+          className="mb-3"
+        />
+
+        <Button
+          label={archiveNote.isPending ? "Archiving..." : "Archive note"}
+          onPress={() =>
+            confirmDestructive({
+              title: "Archive this note?",
+              message:
+                "This hides it from your lists. There's currently no way to view or restore it from the app.",
+              confirmLabel: "Archive",
+              onConfirm: () => archiveNote.mutate(note.id, { onSuccess: () => router.back() }),
+            })
+          }
+          disabled={archiveNote.isPending}
+          variant="danger"
+          icon="archive-arrow-down-outline"
+          block
+        />
+      </ScrollView>
+    </ScreenFrame>
   );
 }

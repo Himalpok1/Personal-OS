@@ -9,8 +9,9 @@
 // tolerate: given a series with holes it either connects across them or fills
 // them with zero, and both draw a number nobody recorded. Owning the drawing
 // is what makes "a gap is a gap" something a test can assert.
-import { Text, View } from "react-native";
+import { View } from "react-native";
 import type { HealthAggregation, HealthMetricPoint } from "@personal-os/schema";
+import { AppText, useTheme } from "@/components/ui";
 import { formatShortDate } from "@/utils/local-date";
 import { GAP_MARKER_HEIGHT, GAP_MARKER_WIDTH, buildHealthChart, slotEdge } from "./chart-geometry";
 import { formatHealthValue, metricLabel } from "./format";
@@ -101,9 +102,9 @@ export function ChartDataSummary({
   unit: string;
 }) {
   return (
-    <Text className="text-xs leading-4 text-neutral-500 dark:text-neutral-400">
+    <AppText variant="caption" tone="muted" className="mt-2">
       {describeSeries(metric, points, unit)}
-    </Text>
+    </AppText>
   );
 }
 
@@ -212,6 +213,11 @@ export function HealthChart({
   height,
 }: HealthChartProps) {
   const description = describeSeries(metric, points, unit);
+  // Every mark is coloured through `style` from the resolved palette
+  // (Checkpoint 10.3): the marks are absolutely-positioned Views whose
+  // geometry already lives in `style`, and a chart stroke is one of the few
+  // places theme.ts exists for -- a class name cannot reach a computed pixel.
+  const { colors } = useTheme();
 
   if (points.length === 0) {
     // An honest empty frame, not a blank box. The height is still reserved so
@@ -219,12 +225,12 @@ export function HealthChart({
     return (
       <View accessible accessibilityLabel={description}>
         <View
-          style={{ width, height }}
-          className="items-center justify-center rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700"
+          style={{ width, height, borderColor: colors["outline-strong"] }}
+          className="items-center justify-center rounded-inner border border-dashed"
         >
-          <Text className="px-3 text-center text-xs text-neutral-500 dark:text-neutral-400">
+          <AppText variant="caption" tone="muted" className="px-3 text-center">
             No days in this range yet.
-          </Text>
+          </AppText>
         </View>
         <ChartDataSummary metric={metric} points={points} unit={unit} />
       </View>
@@ -257,8 +263,9 @@ export function HealthChart({
               // changing the tiling the geometry computed.
               width: Math.max(1, bar.width - 1),
               height: bar.height,
+              backgroundColor: colors.primary,
             }}
-            className="rounded-sm bg-blue-500 dark:bg-blue-400"
+            className="rounded-sm"
           />
         ))}
 
@@ -272,8 +279,8 @@ export function HealthChart({
               width: segment.length,
               height: LINE_THICKNESS,
               transform: [{ rotate: `${segment.angleDeg}deg` }],
+              backgroundColor: colors.primary,
             }}
-            className="bg-blue-500 dark:bg-blue-400"
           />
         ))}
 
@@ -289,8 +296,9 @@ export function HealthChart({
                     top: (point.y ?? 0) - POINT_DOT_SIZE / 2,
                     width: POINT_DOT_SIZE,
                     height: POINT_DOT_SIZE,
+                    backgroundColor: colors.primary,
                   }}
-                  className="rounded-full bg-blue-600 dark:bg-blue-300"
+                  className="rounded-full"
                 />
               ))
           : null}
@@ -318,8 +326,8 @@ export function HealthChart({
                 top: height - GAP_MARKER_HEIGHT,
                 width: GAP_MARKER_WIDTH,
                 height: GAP_MARKER_HEIGHT,
+                backgroundColor: colors["outline-strong"],
               }}
-              className="bg-neutral-300 dark:bg-neutral-700"
             />
           ) : null,
         )}

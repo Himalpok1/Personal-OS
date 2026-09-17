@@ -13,6 +13,21 @@ export default defineConfig({
         "./src/__mocks__/expo-ui-jetpack-compose.ts",
       ),
       "expo-crypto": path.resolve(import.meta.dirname, "./src/__mocks__/expo-crypto.ts"),
+      // Checkpoint 10.3 design-system dependencies: each reaches a native
+      // module registry at import, so each is mocked the way expo-router is.
+      "expo-linear-gradient": path.resolve(
+        import.meta.dirname,
+        "./src/__mocks__/expo-linear-gradient.ts",
+      ),
+      "expo-haptics": path.resolve(import.meta.dirname, "./src/__mocks__/expo-haptics.ts"),
+      "react-native-safe-area-context": path.resolve(
+        import.meta.dirname,
+        "./src/__mocks__/react-native-safe-area-context.ts",
+      ),
+      "@expo/vector-icons": path.resolve(
+        import.meta.dirname,
+        "./src/__mocks__/expo-vector-icons.ts",
+      ),
     },
   },
   test: {

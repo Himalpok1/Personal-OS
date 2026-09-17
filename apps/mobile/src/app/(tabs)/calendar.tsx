@@ -10,7 +10,8 @@ import type { EventRangeItem } from "@personal-os/schema";
 import { addMonths, addWeeks, endOfDay, format, startOfDay, subMonths, subWeeks } from "date-fns";
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { Pressable, View } from "react-native";
+import { AppText, Card, ErrorState, IconButton, ScreenFrame, SkeletonCard } from "@/components/ui";
 
 // Month/Week are grid views over a computed [from, to] window; Agenda is a
 // self-fetching vertical list that owns its own range and project filter
@@ -93,92 +94,87 @@ export default function CalendarScreen() {
       : `${format(getWeekDays(anchor)[0]!, "MMM d")} - ${format(getWeekDays(anchor)[6]!, "MMM d, yyyy")}`;
 
   return (
-    <View className="flex-1 bg-white dark:bg-black">
+    <ScreenFrame>
       {viewMode === "agenda" ? null : (
-        <View className="flex-row items-center justify-between border-b border-neutral-200 p-3 dark:border-neutral-800">
+        <View className="flex-row items-center justify-between px-2 pt-2">
           {/* "Previous month"/"Next month" is wrong when the user is on Week
               -- the label must track the current view mode, matching the
               precedent already set by "Jump to today" below. */}
-          <Pressable
+          <IconButton
+            icon="chevron-left"
             onPress={() => setAnchor((current) => shiftAnchor(viewMode, current, -1))}
-            hitSlop={12}
-            accessibilityRole="button"
             accessibilityLabel={viewMode === "month" ? "Previous month" : "Previous week"}
-            className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
-          >
-            <Text className="text-lg text-black dark:text-white">‹</Text>
-          </Pressable>
+          />
 
           <Pressable
             onPress={() => setAnchor(new Date())}
             hitSlop={8}
             accessibilityRole="button"
             accessibilityLabel="Jump to today"
-            className="min-h-[44px] items-center justify-center px-2"
+            className="min-h-[44px] flex-1 items-center justify-center px-2 active:opacity-70"
           >
-            <Text className="text-base font-semibold text-black dark:text-white">{label}</Text>
+            <AppText variant="title" numberOfLines={1}>
+              {label}
+            </AppText>
           </Pressable>
 
-          <Pressable
+          <IconButton
+            icon="chevron-right"
             onPress={() => setAnchor((current) => shiftAnchor(viewMode, current, 1))}
-            hitSlop={12}
-            accessibilityRole="button"
             accessibilityLabel={viewMode === "month" ? "Next month" : "Next week"}
-            className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
-          >
-            <Text className="text-lg text-black dark:text-white">›</Text>
-          </Pressable>
+          />
         </View>
       )}
 
-      <View className="flex-row items-center justify-between border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
+      <View className="flex-row items-center gap-2 px-4 py-2">
         <ViewModeToggle value={viewMode} onChange={setViewMode} />
 
-        <Pressable
+        <IconButton
+          icon="plus"
+          variant="tonal"
+          tone="primary"
           onPress={() => router.push("/events/new")}
-          hitSlop={12}
-          accessibilityRole="button"
           accessibilityLabel="New event"
-          className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
-        >
-          <Text className="text-xl text-blue-600">+</Text>
-        </Pressable>
+        />
       </View>
 
       {viewMode === "agenda" ? (
         <AgendaView />
       ) : isLoading ? (
-        <View className="flex-1 items-center justify-center">
-          <ActivityIndicator />
+        <View className="px-4 pt-2">
+          <SkeletonCard lines={6} />
         </View>
       ) : isError && !UI_TEST_MODE ? (
-        <View className="flex-1 items-center justify-center gap-3 p-4">
-          <Text className="text-red-600">Couldn&apos;t load the calendar.</Text>
-          <Pressable
-            onPress={() => void refetch()}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading the calendar"
-            hitSlop={8}
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="font-semibold text-white">Retry</Text>
-          </Pressable>
-        </View>
-      ) : viewMode === "month" ? (
-        <MonthGrid
-          month={anchor}
-          entries={entries ?? []}
-          onDayPress={goToNewAllDay}
-          onEntryPress={goToEvent}
+        <ErrorState
+          size="screen"
+          message="Couldn't load the calendar."
+          onRetry={() => void refetch()}
+          retryAccessibilityLabel="Retry loading the calendar"
         />
       ) : (
-        <WeekGrid
-          week={anchor}
-          entries={entries ?? []}
-          onSlotPress={goToNewTimed}
-          onEntryPress={goToEvent}
-        />
+        // One card around whichever grid is showing: the grid draws its own
+        // hairlines and cell surfaces, the card gives it the same edge every
+        // other block on the canvas has. `overflow-hidden` clips the cells to
+        // the card radius; `flex-1` lets the week grid's own ScrollView fill
+        // the remaining height exactly as it did on the bare screen.
+        <Card padding="none" className="mx-4 mb-2 flex-1 overflow-hidden">
+          {viewMode === "month" ? (
+            <MonthGrid
+              month={anchor}
+              entries={entries ?? []}
+              onDayPress={goToNewAllDay}
+              onEntryPress={goToEvent}
+            />
+          ) : (
+            <WeekGrid
+              week={anchor}
+              entries={entries ?? []}
+              onSlotPress={goToNewTimed}
+              onEntryPress={goToEvent}
+            />
+          )}
+        </Card>
       )}
-    </View>
+    </ScreenFrame>
   );
 }

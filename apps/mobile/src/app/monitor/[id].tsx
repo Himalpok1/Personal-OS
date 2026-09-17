@@ -2,16 +2,20 @@ import { ApiClientError } from "@personal-os/api-client";
 import type { MonitorTargetKind, MonitorTargetUpdate } from "@personal-os/schema";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  Switch,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { ScrollView, Switch, TextInput, View } from "react-native";
+import { FieldLabel, textFieldClass } from "@/components/ask/text-field";
 import { confirmDestructive } from "@/components/confirm-destructive";
+import {
+  AppText,
+  Button,
+  Card,
+  ErrorState,
+  ScreenCentered,
+  ScreenFrame,
+  SkeletonCard,
+  StatusChip,
+  useTheme,
+} from "@/components/ui";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import {
   describeMonitorTargetMutationFailure,
@@ -54,6 +58,7 @@ const KIND_LABEL: Record<MonitorTargetKind, string> = {
 export default function MonitorTargetDetailScreen() {
   const keyboardHeight = useKeyboardHeight();
   const placeholderColor = usePlaceholderColor();
+  const { colors } = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { data: target, isLoading, isError, error, refetch } = useMonitorTarget(id);
@@ -97,46 +102,34 @@ export default function MonitorTargetDetailScreen() {
     );
   }, [target]);
 
-  if (isLoading) {
+  if (isLoading || (!isError && !target)) {
     return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <ActivityIndicator />
-      </View>
+      <ScreenFrame>
+        <View className="px-4 pt-4">
+          <SkeletonCard lines={6} />
+        </View>
+      </ScreenFrame>
     );
   }
 
-  if (isError) {
+  if (isError || !target) {
     const status = error instanceof ApiClientError ? error.status : null;
     return (
-      <View className="flex-1 items-center justify-center gap-3 bg-white px-4 dark:bg-black">
-        <Text className="text-red-600">
-          {status === 404
-            ? "This monitor target couldn't be found."
-            : "Couldn't load this monitor target."}
-        </Text>
-        {/* A 404 is terminal -- refetching the same id repeats the same
-            answer -- so the affordance appears only for a failure that could
-            actually clear, matching tasks/[id].tsx's identical convention. */}
-        {status === 404 ? null : (
-          <Pressable
-            onPress={() => void refetch()}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading this monitor target"
-            className="min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-          >
-            <Text className="font-semibold text-white">Retry</Text>
-          </Pressable>
-        )}
-      </View>
-    );
-  }
-
-  if (!target) {
-    return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <ActivityIndicator />
-      </View>
+      <ScreenCentered>
+        <ErrorState
+          title={status === 404 ? "Not found" : "Something went wrong"}
+          message={
+            status === 404
+              ? "This monitor target couldn't be found."
+              : "Couldn't load this monitor target."
+          }
+          // A 404 is terminal -- refetching the same id repeats the same
+          // answer -- so the affordance appears only for a failure that could
+          // actually clear, matching tasks/[id].tsx's identical convention.
+          onRetry={status === 404 ? undefined : () => void refetch()}
+          retryAccessibilityLabel="Retry loading this monitor target"
+        />
+      </ScreenCentered>
     );
   }
 
@@ -202,152 +195,190 @@ export default function MonitorTargetDetailScreen() {
     });
   };
 
+  const incidentChip =
+    activeIncident === null
+      ? target.enabled
+        ? { label: "Enabled", tone: "success" as const }
+        : { label: "Disabled", tone: "neutral" as const }
+      : activeIncident.status === "acknowledged"
+        ? { label: "Incident acknowledged", tone: "warning" as const }
+        : { label: "Incident open", tone: "danger" as const };
+
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      contentContainerStyle={{ padding: 16, paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
-      keyboardShouldPersistTaps="handled"
-    >
-      <Text className="mb-1 text-sm text-neutral-500">Name</Text>
-      <TextInput
-        value={name}
-        onChangeText={setName}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-
-      <Text className="mb-1 text-sm text-neutral-500">Type</Text>
-      <Text className="mb-4 text-black dark:text-white">{KIND_LABEL[target.kind]}</Text>
-
-      {isHttp ? (
-        <>
-          <Text className="mb-1 text-sm text-neutral-500">URL</Text>
-          <TextInput
-            value={url}
-            onChangeText={setUrl}
-            autoCapitalize="none"
-            autoCorrect={false}
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-          />
-
-          <Text className="mb-1 text-sm text-neutral-500">Expected status</Text>
-          <TextInput
-            value={expectedStatus}
-            onChangeText={(text) => setExpectedStatus(onlyDigits(text))}
-            keyboardType="number-pad"
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-          />
-
-          <View className="mb-4 flex-row items-center justify-between">
-            <Text className="text-black dark:text-white">Also check the health payload</Text>
-            <Switch
-              value={expectHealthyPayload}
-              onValueChange={setExpectHealthyPayload}
-              accessibilityLabel="Also check the health payload"
-            />
-          </View>
-
-          {isHttpsUrl(url) ? (
-            <>
-              <Text className="mb-1 text-sm text-neutral-500">
-                Warn before certificate expiry, in days (optional)
-              </Text>
-              <TextInput
-                value={tlsWarnDays}
-                onChangeText={(text) => setTlsWarnDays(onlyDigits(text))}
-                keyboardType="number-pad"
-                placeholder="Not set"
-                placeholderTextColor={placeholderColor}
-                className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-              />
-            </>
-          ) : null}
-        </>
-      ) : (
-        <>
-          <Text className="mb-1 text-sm text-neutral-500">
-            Max heartbeat age, in seconds (optional)
-          </Text>
-          <TextInput
-            value={heartbeatMaxAgeSeconds}
-            onChangeText={(text) => setHeartbeatMaxAgeSeconds(onlyDigits(text))}
-            keyboardType="number-pad"
-            placeholder="Not set"
-            placeholderTextColor={placeholderColor}
-            className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-          />
-        </>
-      )}
-
-      <Text className="mb-1 text-sm text-neutral-500">Timeout, in ms</Text>
-      <TextInput
-        value={timeoutMs}
-        onChangeText={(text) => setTimeoutMs(onlyDigits(text))}
-        keyboardType="number-pad"
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-
-      <Text className="mb-1 text-sm text-neutral-500">Check interval, in seconds</Text>
-      <TextInput
-        value={intervalSeconds}
-        onChangeText={(text) => setIntervalSeconds(onlyDigits(text))}
-        keyboardType="number-pad"
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-
-      <Text className="mb-1 text-sm text-neutral-500">
-        Consecutive failures to open an incident
-      </Text>
-      <TextInput
-        value={failureThreshold}
-        onChangeText={(text) => setFailureThreshold(onlyDigits(text))}
-        keyboardType="number-pad"
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-
-      <Text className="mb-1 text-sm text-neutral-500">Consecutive successes to resolve one</Text>
-      <TextInput
-        value={recoveryThreshold}
-        onChangeText={(text) => setRecoveryThreshold(onlyDigits(text))}
-        keyboardType="number-pad"
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-
-      {saveError ? <Text className="mb-2 text-red-600">{saveError}</Text> : null}
-
-      <Pressable
-        onPress={submit}
-        disabled={updateTarget.isPending}
-        accessibilityRole="button"
-        accessibilityLabel="Save changes"
-        className="mb-4 items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700"
+    <ScreenFrame>
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={{
+          padding: 16,
+          paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight,
+        }}
+        keyboardShouldPersistTaps="handled"
       >
-        <Text className="font-semibold text-white">
-          {updateTarget.isPending ? "Saving..." : "Save changes"}
-        </Text>
-      </Pressable>
+        <View className="mb-4 flex-row items-center justify-between gap-2">
+          <AppText variant="caption" tone="muted" className="flex-1">
+            {KIND_LABEL[target.kind]}
+          </AppText>
+          <StatusChip label={incidentChip.label} tone={incidentChip.tone} dot />
+        </View>
 
-      <View className="mb-2 flex-row items-center justify-between rounded-lg border border-neutral-300 p-3 dark:border-neutral-700">
-        <Text className="text-black dark:text-white">Enabled</Text>
-        <Switch
-          value={target.enabled}
-          onValueChange={toggleEnabled}
-          disabled={enableTarget.isPending || disableTarget.isPending}
-          accessibilityLabel="Enabled"
+        <FieldLabel>Name</FieldLabel>
+        <TextInput
+          value={name}
+          onChangeText={setName}
+          accessibilityLabel="Name"
+          className={textFieldClass({ extra: "mb-4" })}
         />
-      </View>
-      {toggleError ? <Text className="mb-4 text-red-600">{toggleError}</Text> : null}
 
-      <Pressable
-        onPress={confirmArchive}
-        disabled={archiveTarget.isPending}
-        accessibilityRole="button"
-        accessibilityLabel="Archive monitor target"
-        className="mt-2 items-center rounded-lg bg-neutral-100 py-3 dark:bg-neutral-800"
-      >
-        <Text className="font-semibold text-neutral-600 dark:text-neutral-300">
-          {archiveTarget.isPending ? "Archiving..." : "Archive monitor"}
-        </Text>
-      </Pressable>
-    </ScrollView>
+        <FieldLabel>Type</FieldLabel>
+        <AppText variant="body" className="mb-4">
+          {KIND_LABEL[target.kind]}
+        </AppText>
+
+        {isHttp ? (
+          <>
+            <FieldLabel>URL</FieldLabel>
+            <TextInput
+              value={url}
+              onChangeText={setUrl}
+              autoCapitalize="none"
+              autoCorrect={false}
+              accessibilityLabel="URL"
+              className={textFieldClass({ extra: "mb-4" })}
+            />
+
+            <FieldLabel>Expected status</FieldLabel>
+            <TextInput
+              value={expectedStatus}
+              onChangeText={(text) => setExpectedStatus(onlyDigits(text))}
+              keyboardType="number-pad"
+              accessibilityLabel="Expected status"
+              className={textFieldClass({ extra: "mb-4" })}
+            />
+
+            <View className="mb-4 flex-row items-center justify-between gap-3">
+              <AppText variant="body" className="flex-1">
+                Also check the health payload
+              </AppText>
+              <Switch
+                value={expectHealthyPayload}
+                onValueChange={setExpectHealthyPayload}
+                accessibilityLabel="Also check the health payload"
+                trackColor={{ true: colors.primary }}
+              />
+            </View>
+
+            {isHttpsUrl(url) ? (
+              <>
+                <FieldLabel>Warn before certificate expiry, in days (optional)</FieldLabel>
+                <TextInput
+                  value={tlsWarnDays}
+                  onChangeText={(text) => setTlsWarnDays(onlyDigits(text))}
+                  keyboardType="number-pad"
+                  placeholder="Not set"
+                  placeholderTextColor={placeholderColor}
+                  accessibilityLabel="Warn before certificate expiry, in days"
+                  className={textFieldClass({ extra: "mb-4" })}
+                />
+              </>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <FieldLabel>Max heartbeat age, in seconds (optional)</FieldLabel>
+            <TextInput
+              value={heartbeatMaxAgeSeconds}
+              onChangeText={(text) => setHeartbeatMaxAgeSeconds(onlyDigits(text))}
+              keyboardType="number-pad"
+              placeholder="Not set"
+              placeholderTextColor={placeholderColor}
+              accessibilityLabel="Max heartbeat age, in seconds"
+              className={textFieldClass({ extra: "mb-4" })}
+            />
+          </>
+        )}
+
+        <FieldLabel>Timeout, in ms</FieldLabel>
+        <TextInput
+          value={timeoutMs}
+          onChangeText={(text) => setTimeoutMs(onlyDigits(text))}
+          keyboardType="number-pad"
+          accessibilityLabel="Timeout, in ms"
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+
+        <FieldLabel>Check interval, in seconds</FieldLabel>
+        <TextInput
+          value={intervalSeconds}
+          onChangeText={(text) => setIntervalSeconds(onlyDigits(text))}
+          keyboardType="number-pad"
+          accessibilityLabel="Check interval, in seconds"
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+
+        <FieldLabel>Consecutive failures to open an incident</FieldLabel>
+        <TextInput
+          value={failureThreshold}
+          onChangeText={(text) => setFailureThreshold(onlyDigits(text))}
+          keyboardType="number-pad"
+          accessibilityLabel="Consecutive failures to open an incident"
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+
+        <FieldLabel>Consecutive successes to resolve one</FieldLabel>
+        <TextInput
+          value={recoveryThreshold}
+          onChangeText={(text) => setRecoveryThreshold(onlyDigits(text))}
+          keyboardType="number-pad"
+          accessibilityLabel="Consecutive successes to resolve one"
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+
+        {saveError ? (
+          <AppText variant="caption" tone="danger" className="mb-2" accessibilityRole="alert">
+            {saveError}
+          </AppText>
+        ) : null}
+
+        <Button
+          label={updateTarget.isPending ? "Saving..." : "Save changes"}
+          onPress={submit}
+          disabled={updateTarget.isPending}
+          accessibilityLabel="Save changes"
+          variant="primary"
+          icon="content-save-outline"
+          block
+          className="mb-4"
+        />
+
+        <Card padding="sm" className="mb-2 flex-row items-center justify-between gap-3">
+          <AppText variant="body" className="flex-1 pl-1">
+            Enabled
+          </AppText>
+          <Switch
+            value={target.enabled}
+            onValueChange={toggleEnabled}
+            disabled={enableTarget.isPending || disableTarget.isPending}
+            accessibilityLabel="Enabled"
+            trackColor={{ true: colors.primary }}
+          />
+        </Card>
+        {toggleError ? (
+          <AppText variant="caption" tone="danger" className="mb-4" accessibilityRole="alert">
+            {toggleError}
+          </AppText>
+        ) : null}
+
+        <Button
+          label={archiveTarget.isPending ? "Archiving..." : "Archive monitor"}
+          onPress={confirmArchive}
+          disabled={archiveTarget.isPending}
+          accessibilityLabel="Archive monitor target"
+          variant="danger"
+          icon="archive-arrow-down-outline"
+          block
+          className="mt-2"
+        />
+      </ScrollView>
+    </ScreenFrame>
   );
 }

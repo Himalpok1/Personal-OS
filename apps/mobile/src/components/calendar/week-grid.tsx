@@ -14,10 +14,16 @@
 // concept of -- forcing this into that shape would mean re-deriving the
 // same layout math DayCell doesn't do anyway. Google Calendar's own
 // week-view/month-view split follows the same reasoning.
+//
+// Checkpoint 10.3: colours come from the design tokens -- a timed block is a
+// `primary` block, an all-day entry a `secondary-container` pill, today a
+// `primary-container` disc -- written here because components/ui/ has no
+// calendar primitive. The placement math and every dimension are untouched.
 import { useMemo } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, ScrollView, View } from "react-native";
 import { format } from "date-fns";
 import type { EventRangeItem } from "@personal-os/schema";
+import { AppText } from "@/components/ui";
 import {
   MINUTES_PER_DAY,
   isSameLocalDay,
@@ -45,6 +51,16 @@ const GUTTER_WIDTH = 44;
 // is still given at least this much visual height so it stays legible and
 // tappable -- a rendering concern only, not part of the pure layout math.
 const MIN_BLOCK_MINUTES = 30;
+
+const HAIRLINE_CLASS = "border-outline dark:border-outline-dark";
+const GRIDLINE_CLASS = "border-outline/60 dark:border-outline-dark/60";
+const TIMED_BLOCK_CLASS = "bg-primary active:opacity-80 dark:bg-primary-dark";
+const TIMED_TEXT_CLASS = "text-on-primary dark:text-on-primary-dark";
+const ALL_DAY_PILL_CLASS =
+  "bg-secondary-container active:opacity-80 dark:bg-secondary-container-dark";
+const ALL_DAY_TEXT_CLASS = "text-on-secondary-container dark:text-on-secondary-container-dark";
+const TODAY_DISC_CLASS = "bg-primary-container dark:bg-primary-container-dark";
+const TODAY_TEXT_CLASS = "text-on-primary-container dark:text-on-primary-container-dark";
 
 function minutesToPixels(minutes: number): number {
   return (minutes / MINUTES_PER_DAY) * GRID_HEIGHT;
@@ -85,16 +101,26 @@ function TimedBlock({
       onPress={() => onPress(placement.entry)}
       style={{ position: "absolute", top, height, left: 1, right: 1 }}
       hitSlop={4}
-      className="overflow-hidden rounded-sm bg-blue-600 px-1 py-0.5 active:bg-blue-700"
+      className={`overflow-hidden rounded-sm px-1 py-0.5 ${TIMED_BLOCK_CLASS}`}
       accessibilityRole="button"
       accessibilityLabel={placement.entry.title}
     >
-      <Text numberOfLines={1} className="text-[10px] font-semibold text-white">
+      <AppText
+        variant="caption"
+        tone="inherit"
+        numberOfLines={1}
+        className={`text-[10px] font-semibold leading-[13px] ${TIMED_TEXT_CLASS}`}
+      >
         {placement.entry.title}
-      </Text>
-      <Text numberOfLines={1} className="text-[9px] text-blue-100">
+      </AppText>
+      <AppText
+        variant="caption"
+        tone="inherit"
+        numberOfLines={1}
+        className={`text-[9px] leading-[12px] opacity-80 ${TIMED_TEXT_CLASS}`}
+      >
         {formatTimeLabel(placement.entry, placement.startMinutes)}
-      </Text>
+      </AppText>
     </Pressable>
   );
 }
@@ -132,9 +158,9 @@ export function WeekGrid({ week, entries, onSlotPress, onEntryPress }: WeekGridP
   const hasAnyAllDayEntry = layout.allDay.length > 0;
 
   return (
-    <View className="flex-1 bg-white dark:bg-neutral-950">
+    <View className="flex-1 bg-surface dark:bg-surface-dark">
       {/* Day-name / date header row */}
-      <View className="flex-row border-b border-neutral-200 dark:border-neutral-800">
+      <View className={`flex-row border-b ${HAIRLINE_CLASS}`}>
         <View style={{ width: GUTTER_WIDTH }} />
         {layout.days.map((day, dayIndex) => {
           const isToday = isSameLocalDay(day, today);
@@ -143,22 +169,26 @@ export function WeekGrid({ week, entries, onSlotPress, onEntryPress }: WeekGridP
               key={dayIndex}
               className="flex-1 items-center py-1"
               // One accessible node per header day, naming "today" explicitly:
-              // the blue circle was otherwise the only signal (6.7A, AY6).
+              // the tinted circle was otherwise the only signal (6.7A, AY6).
               accessible
               accessibilityLabel={`${format(day, "EEEE d")}${isToday ? ", today" : ""}`}
             >
-              <Text className="text-[10px] uppercase text-neutral-500 dark:text-neutral-400">
+              <AppText variant="overline" tone="muted" className="text-[10px]">
                 {format(day, "EEE")}
-              </Text>
-              <Text
-                className={
-                  isToday
-                    ? "h-6 w-6 rounded-full bg-blue-600 text-center text-sm font-bold leading-6 text-white"
-                    : "text-sm font-semibold text-black dark:text-white"
-                }
+              </AppText>
+              <View
+                className={`h-6 w-6 items-center justify-center rounded-full ${
+                  isToday ? TODAY_DISC_CLASS : ""
+                }`}
               >
-                {format(day, "d")}
-              </Text>
+                <AppText
+                  variant="label"
+                  tone={isToday ? "inherit" : "default"}
+                  className={`font-semibold ${isToday ? TODAY_TEXT_CLASS : ""}`}
+                >
+                  {format(day, "d")}
+                </AppText>
+              </View>
             </View>
           );
         })}
@@ -169,7 +199,7 @@ export function WeekGrid({ week, entries, onSlotPress, onEntryPress }: WeekGridP
           within it. Omitted entirely (no empty strip) when nothing is
           all-day this week. */}
       {hasAnyAllDayEntry ? (
-        <View className="flex-row border-b border-neutral-200 py-1 dark:border-neutral-800">
+        <View className={`flex-row border-b py-1 ${HAIRLINE_CLASS}`}>
           <View style={{ width: GUTTER_WIDTH }} />
           {layout.days.map((_, dayIndex) => (
             <View key={dayIndex} className="flex-1 gap-0.5 px-0.5">
@@ -180,11 +210,16 @@ export function WeekGrid({ week, entries, onSlotPress, onEntryPress }: WeekGridP
                   hitSlop={4}
                   accessibilityRole="button"
                   accessibilityLabel={placement.entry.title}
-                  className="rounded-sm bg-emerald-600 px-1 py-0.5 active:bg-emerald-700"
+                  className={`rounded-sm px-1 py-0.5 ${ALL_DAY_PILL_CLASS}`}
                 >
-                  <Text numberOfLines={1} className="text-[10px] font-semibold text-white">
+                  <AppText
+                    variant="caption"
+                    tone="inherit"
+                    numberOfLines={1}
+                    className={`text-[10px] font-semibold leading-[13px] ${ALL_DAY_TEXT_CLASS}`}
+                  >
                     {placement.entry.title}
-                  </Text>
+                  </AppText>
                 </Pressable>
               ))}
             </View>
@@ -199,12 +234,14 @@ export function WeekGrid({ week, entries, onSlotPress, onEntryPress }: WeekGridP
           <View style={{ width: GUTTER_WIDTH }}>
             {Array.from({ length: 24 }, (_, hour) => (
               <View key={hour} style={{ height: HOUR_ROW_HEIGHT }} className="items-end pr-1">
-                <Text
+                <AppText
+                  variant="caption"
+                  tone="muted"
                   numberOfLines={1}
-                  className="text-[10px] text-neutral-500 dark:text-neutral-400"
+                  className="text-[10px] leading-[13px]"
                 >
                   {hour === 0 ? "" : format(new Date(2000, 0, 1, hour), "h a")}
-                </Text>
+                </AppText>
               </View>
             ))}
           </View>
@@ -214,7 +251,7 @@ export function WeekGrid({ week, entries, onSlotPress, onEntryPress }: WeekGridP
             <View
               key={dayIndex}
               style={{ height: GRID_HEIGHT }}
-              className="relative flex-1 border-l border-neutral-100 dark:border-neutral-900"
+              className={`relative flex-1 border-l ${GRIDLINE_CLASS}`}
             >
               {Array.from({ length: 24 }, (_, hour) => (
                 <Pressable
@@ -225,7 +262,9 @@ export function WeekGrid({ week, entries, onSlotPress, onEntryPress }: WeekGridP
                     onSlotPress(slotDate);
                   }}
                   style={{ height: HOUR_ROW_HEIGHT }}
-                  className="border-b border-neutral-100 dark:border-neutral-900"
+                  accessibilityRole="button"
+                  accessibilityLabel={`${format(day, "EEEE d")}, ${format(new Date(2000, 0, 1, hour), "h a")}, new event`}
+                  className={`border-b ${GRIDLINE_CLASS}`}
                 />
               ))}
               {(timedByDay.get(dayIndex) ?? []).map((placement) => (

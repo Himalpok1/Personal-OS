@@ -8,8 +8,11 @@ import {
 } from "@personal-os/db";
 import {
   ACADEMIC_ANNOUNCEMENTS_ITEM_CAP,
+  ACADEMIC_COURSE_ATTENTION_ITEM_CAP,
   ACADEMIC_EVENTS_ITEM_CAP,
   ACADEMIC_OVERDUE_ITEM_CAP,
+  ACADEMIC_PRIORITIES_ITEM_CAP,
+  ACADEMIC_UPCOMING_DAY_COUNT,
   AcademicCourseDetailResponseSchema,
   AcademicCoursesResponseSchema,
   AcademicTodayResponseSchema,
@@ -951,5 +954,436 @@ describe("getAcademicCourseDetail", () => {
     expect(
       detail!.events.every((e) => e.kind === "calendar_event" && e.course_id === course.id),
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Checkpoint 10.3 -- priorities, workload, course attention, grade summary
+// ---------------------------------------------------------------------------
+
+const EMPTY_DAYS = [
+  "2026-09-16",
+  "2026-09-17",
+  "2026-09-18",
+  "2026-09-19",
+  "2026-09-20",
+  "2026-09-21",
+  "2026-09-22",
+  "2026-09-23",
+].map((date) => ({ date, due_total: 0, points_total: 0 }));
+
+describe("buildAcademicTodayResponse -- priorities (10.3)", () => {
+  it("not configured: the three keys are present, zeroed, with eight zero-filled days", async () => {
+    const res = await today();
+    expect(res.configured).toBe(false);
+    expect(res.priorities).toEqual({ items: [], total: 0 });
+    expect(res.course_attention).toEqual({ items: [], total: 0 });
+    expect(res.workload).toEqual({
+      status: "on_track",
+      open_total: 0,
+      overdue_total: 0,
+      missing_total: 0,
+      due_within_24h_total: 0,
+      due_this_week_total: 0,
+      points_at_stake: 0,
+      horizon_days: ACADEMIC_UPCOMING_DAY_COUNT,
+      days: EMPTY_DAYS,
+    });
+    expect(AcademicTodayResponseSchema.parse(res)).toEqual(res);
+  });
+
+  it("lands urgency boundaries in the right level and excludes low, undated and closed rows", async () => {
+    const connection = await seedConnection(app.db);
+    const course = await seedCourse(app.db, connection.id);
+    const overdue = await seedAssignment(app.db, connection.id, course.id, {
+      title: "Overdue by a millisecond",
+      dueAt: plus(-1),
+    });
+    const high = await seedAssignment(app.db, connection.id, course.id, {
+      title: "Due in 23h59m",
+      dueAt: plus(24 * HOUR - 60 * 1000),
+    });
+    const medium = await seedAssignment(app.db, connection.id, course.id, {
+      title: "Due in 24h01m",
+      dueAt: plus(24 * HOUR + 60 * 1000),
+    });
+    const lastInHorizon = await seedAssignment(app.db, connection.id, course.id, {
+      title: "Last instant of day +7",
+      dueAt: at("2026-09-24T04:59:59Z"),
+    });
+    await seedAssignment(app.db, connection.id, course.id, {
+      title: "At the horizon end -> low",
+      dueAt: at("2026-09-24T05:00:00Z"),
+    });
+    await seedAssignment(app.db, connection.id, course.id, { title: "Undated", dueAt: null });
+    await seedAssignment(app.db, connection.id, course.id, {
+      title: "Submitted, would be critical",
+      dueAt: plus(-DAY),
+      submissionState: "submitted",
+    });
+
+    const res = await today();
+    const items = res.priorities!.items;
+    expect(items.map((i) => i.assignment.id)).toEqual([
+      overdue.id,
+      high.id,
+      medium.id,
+      lastInHorizon.id,
+    ]);
+    expect(items.map((i) => i.urgency)).toEqual(["critical", "high", "medium", "medium"]);
+    expect(items.map((i) => i.score)).toEqual([400, 300, 200, 200]);
+    expect(items.map((i) => i.reasons)).toEqual([
+      ["overdue"],
+      ["due_within_24h"],
+      ["due_this_week"],
+      ["due_this_week"],
+    ]);
+    expect(items[0]!.hours_until_due).toBe(0); // -1 ms rounds to 0, never -0
+    expect(items[1]!.hours_until_due).toBe(24);
+    expect(items[2]!.hours_until_due).toBe(24);
+    expect(res.priorities!.total).toBe(4);
+    // The wrapped assignment is the untouched item shape.
+    expect(items[0]!.assignment).toEqual(res.overdue.items[0]);
+  });
+
+  it("ranks by score desc, then due_at asc, then title, then id -- with the additive reasons", async () => {
+    const connection = await seedConnection(app.db);
+    const course = await seedCourse(app.db, connection.id);
+    const weekPlain = await seedAssignment(app.db, connection.id, course.id, {
+      title: "Week plain",
+      dueAt: plus(3 * DAY),
+      pointsPossible: 10,
+    });
+    const weekHighPoints = await seedAssignment(app.db, connection.id, course.id, {
+      title: "Week high points",
+      dueAt: plus(5 * DAY),
+      pointsPossible: 50,
+    });
+    const overdueMissingLate = await seedAssignment(app.db, connection.id, course.id, {
+      title: "Overdue missing late",
+      dueAt: plus(-2 * DAY),
+      submissionMissing: true,
+      submissionLate: true,
+      pointsPossible: 100,
+    });
+    const overduePlain = await seedAssignment(app.db, connection.id, course.id, {
+      title: "Overdue plain",
+      dueAt: plus(-DAY),
+      pointsPossible: 5,
+    });
+    const soonB = await seedAssignment(app.db, connection.id, course.id, {
+      title: "B",
+      dueAt: plus(2 * HOUR),
+    });
+    const soonA = await seedAssignment(app.db, connection.id, course.id, {
+      title: "A",
+      dueAt: plus(2 * HOUR),
+    });
+
+    const res = await today();
+    const items = res.priorities!.items;
+    expect(items.map((i) => i.assignment.id)).toEqual([
+      overdueMissingLate.id,
+      overduePlain.id,
+      soonA.id,
+      soonB.id,
+      weekHighPoints.id,
+    ]);
+    // Cap 5 with an honest total.
+    expect(items).toHaveLength(ACADEMIC_PRIORITIES_ITEM_CAP);
+    expect(res.priorities!.total).toBe(6);
+    expect(items[0]).toMatchObject({
+      score: 500,
+      reasons: ["overdue", "marked_missing", "marked_late", "high_points"],
+      hours_until_due: -48,
+    });
+    expect(items[1]).toMatchObject({ score: 400, reasons: ["overdue"], hours_until_due: -24 });
+    expect(items[2]).toMatchObject({ score: 300, reasons: ["due_within_24h"], hours_until_due: 2 });
+    expect(items[4]).toMatchObject({ score: 225, reasons: ["due_this_week", "high_points"] });
+    // The sixth (weekPlain, 200) fell off the cap but is counted.
+    expect(items.some((i) => i.assignment.id === weekPlain.id)).toBe(false);
+  });
+
+  it("ADR-070a: a past-term row never reaches priorities, workload or course attention", async () => {
+    const connection = await seedConnection(app.db);
+    const fall = await seedCourse(app.db, connection.id, {
+      name: "Fall",
+      termStartAt: at("2026-08-03T05:00:00Z"),
+    });
+    const spring = await seedCourse(app.db, connection.id, {
+      name: "Spring",
+      termStartAt: at("2025-12-15T06:00:00Z"),
+    });
+    const fallRow = await seedAssignment(app.db, connection.id, fall.id, {
+      dueAt: plus(3 * HOUR),
+      pointsPossible: 10,
+    });
+    await seedAssignment(app.db, connection.id, spring.id, {
+      dueAt: plus(-30 * DAY),
+      submissionMissing: true,
+      pointsPossible: 100,
+    });
+
+    const res = await today();
+    expect(res.priorities!.items.map((i) => i.assignment.id)).toEqual([fallRow.id]);
+    expect(res.workload).toMatchObject({
+      status: "at_risk",
+      open_total: 1,
+      overdue_total: 0,
+      missing_total: 0,
+      due_within_24h_total: 1,
+      points_at_stake: 10,
+    });
+    expect(res.course_attention!.items.map((i) => i.course_id)).toEqual([fall.id]);
+  });
+});
+
+describe("buildAcademicTodayResponse -- workload (10.3)", () => {
+  it("fills eight local days from the same windows the buckets use, and reports the totals", async () => {
+    const connection = await seedConnection(app.db);
+    const course = await seedCourse(app.db, connection.id);
+    // Today (09-16 CDT): one overdue earlier today (still on today's entry),
+    // one later today.
+    await seedAssignment(app.db, connection.id, course.id, {
+      dueAt: at("2026-09-16T14:00:00Z"),
+      pointsPossible: 10,
+    });
+    await seedAssignment(app.db, connection.id, course.id, {
+      dueAt: at("2026-09-16T23:00:00Z"),
+      pointsPossible: 20,
+    });
+    await seedAssignment(app.db, connection.id, course.id, {
+      dueAt: at("2026-09-17T03:00:00Z"), // 22:00 CDT today
+      pointsPossible: 5,
+    });
+    // Overdue from an EARLIER day: on no entry, but in overdue_total.
+    await seedAssignment(app.db, connection.id, course.id, {
+      dueAt: at("2026-09-14T12:00:00Z"),
+      pointsPossible: 1000,
+    });
+    // Tomorrow at local midnight, and day +3 with null points.
+    await seedAssignment(app.db, connection.id, course.id, {
+      dueAt: at("2026-09-17T05:00:00Z"),
+      pointsPossible: 100,
+    });
+    await seedAssignment(app.db, connection.id, course.id, {
+      dueAt: at("2026-09-19T12:00:00Z"),
+      pointsPossible: null,
+    });
+    // Last instant of day +7, then the horizon end (out), then closed and undated.
+    await seedAssignment(app.db, connection.id, course.id, {
+      dueAt: at("2026-09-24T04:59:59Z"),
+      pointsPossible: 7,
+    });
+    await seedAssignment(app.db, connection.id, course.id, {
+      dueAt: at("2026-09-24T05:00:00Z"),
+      pointsPossible: 1000,
+    });
+    await seedAssignment(app.db, connection.id, course.id, {
+      dueAt: at("2026-09-18T12:00:00Z"),
+      pointsPossible: 1000,
+      submissionState: "graded",
+    });
+    await seedAssignment(app.db, connection.id, course.id, { dueAt: null, pointsPossible: 1000 });
+
+    const res = await today();
+    expect(res.workload!.days).toEqual([
+      { date: "2026-09-16", due_total: 3, points_total: 35 },
+      { date: "2026-09-17", due_total: 1, points_total: 100 },
+      { date: "2026-09-18", due_total: 0, points_total: 0 },
+      { date: "2026-09-19", due_total: 1, points_total: 0 },
+      { date: "2026-09-20", due_total: 0, points_total: 0 },
+      { date: "2026-09-21", due_total: 0, points_total: 0 },
+      { date: "2026-09-22", due_total: 0, points_total: 0 },
+      { date: "2026-09-23", due_total: 1, points_total: 7 },
+    ]);
+    expect(res.workload).toMatchObject({
+      status: "behind",
+      open_total: 9,
+      overdue_total: 2,
+      missing_total: 0,
+      due_within_24h_total: 3, // 18:00 and 22:00 today + tomorrow midnight (10h away)
+      due_this_week_total: 3,
+      // From now through the horizon end: 20 + 5 + 100 + 0 + 7 -- overdue (10,
+      // 1000), horizon-end (1000), closed (1000) and undated (1000) excluded.
+      points_at_stake: 132,
+      horizon_days: 7,
+    });
+    expect(res.summary.overdue_total).toBe(res.workload!.overdue_total);
+    expect(res.summary.due_this_week_total).toBe(res.workload!.due_this_week_total);
+  });
+
+  it("status is behind on a missing flag alone, at_risk on a 24h item alone, on_track otherwise", async () => {
+    const connection = await seedConnection(app.db);
+    const course = await seedCourse(app.db, connection.id);
+    // Missing but due next week: no overdue, no 24h -- still behind.
+    await seedAssignment(app.db, connection.id, course.id, {
+      dueAt: plus(5 * DAY),
+      submissionMissing: true,
+    });
+    expect((await today()).workload!.status).toBe("behind");
+
+    await app.db.delete(canvasAssignments);
+    await seedAssignment(app.db, connection.id, course.id, { dueAt: plus(HOUR) });
+    expect((await today()).workload!.status).toBe("at_risk");
+
+    await app.db.delete(canvasAssignments);
+    await seedAssignment(app.db, connection.id, course.id, { dueAt: plus(5 * DAY) });
+    await seedAssignment(app.db, connection.id, course.id, { dueAt: null });
+    const res = await today();
+    expect(res.workload!.status).toBe("on_track");
+    expect(res.workload!.open_total).toBe(2);
+  });
+});
+
+describe("buildAcademicTodayResponse -- course attention (10.3)", () => {
+  it("lists one row per course with open work, ordered by level then the tie-breaks, skipping none", async () => {
+    const connection = await seedConnection(app.db);
+    // A course with only closed and no assignments -> none, never listed.
+    const done = await seedCourse(app.db, connection.id, { name: "Done" });
+    await seedAssignment(app.db, connection.id, done.id, {
+      dueAt: plus(-DAY),
+      submissionState: "graded",
+    });
+    await seedCourse(app.db, connection.id, { name: "Empty" });
+    // low: only an undated open item.
+    const low = await seedCourse(app.db, connection.id, { name: "Low" });
+    await seedAssignment(app.db, connection.id, low.id, { dueAt: null });
+    // medium: due in 3 days.
+    const medium = await seedCourse(app.db, connection.id, { name: "Medium" });
+    await seedAssignment(app.db, connection.id, medium.id, { dueAt: plus(3 * DAY) });
+    // high via 24h only, next due in 2h.
+    const highSoon = await seedCourse(app.db, connection.id, {
+      name: "High soon",
+      courseCode: "HS",
+    });
+    await seedAssignment(app.db, connection.id, highSoon.id, { dueAt: plus(2 * HOUR) });
+    // high via one overdue, next due in 4 days -> overdue desc puts it first.
+    const highOverdue = await seedCourse(app.db, connection.id, { name: "High overdue" });
+    await seedAssignment(app.db, connection.id, highOverdue.id, { dueAt: plus(-DAY) });
+    await seedAssignment(app.db, connection.id, highOverdue.id, { dueAt: plus(4 * DAY) });
+    // high via 24h, same overdue (0) and same 24h count as "High soon", later next due -> after it.
+    const highLater = await seedCourse(app.db, connection.id, { name: "High later" });
+    await seedAssignment(app.db, connection.id, highLater.id, { dueAt: plus(5 * HOUR) });
+    // Two more high-via-24h courses tied on every count and next due: by name, then id.
+    const tieB = await seedCourse(app.db, connection.id, { name: "Tie" });
+    const tieA = await seedCourse(app.db, connection.id, { name: "Tie" });
+    await seedAssignment(app.db, connection.id, tieB.id, { dueAt: plus(6 * HOUR) });
+    await seedAssignment(app.db, connection.id, tieA.id, { dueAt: plus(6 * HOUR) });
+    const [tieFirst, tieSecond] = tieA.id < tieB.id ? [tieA, tieB] : [tieB, tieA];
+
+    const res = await today();
+    const items = res.course_attention!.items;
+    expect(items.map((i) => i.course_id)).toEqual([
+      highOverdue.id,
+      highSoon.id,
+      highLater.id,
+      tieFirst.id,
+      tieSecond.id,
+      medium.id,
+      low.id,
+    ]);
+    expect(res.course_attention!.total).toBe(7);
+    expect(items[0]).toEqual({
+      course_id: highOverdue.id,
+      course_name: "High overdue",
+      course_code: null,
+      open_total: 2,
+      overdue_total: 1,
+      due_within_24h_total: 0,
+      due_this_week_total: 1,
+      next_due_at: plus(4 * DAY).toISOString(),
+      attention: "high",
+    });
+    expect(items[1]).toMatchObject({
+      course_code: "HS",
+      due_within_24h_total: 1,
+      due_this_week_total: 0,
+      next_due_at: plus(2 * HOUR).toISOString(),
+      attention: "high",
+    });
+    expect(items[5]).toMatchObject({ attention: "medium", due_this_week_total: 1 });
+    expect(items[6]).toMatchObject({ attention: "low", open_total: 1, next_due_at: null });
+    expect(items.some((i) => i.course_id === done.id)).toBe(false);
+  });
+
+  it("caps course-attention rows at the item cap with an honest total", async () => {
+    const connection = await seedConnection(app.db);
+    for (let i = 0; i < ACADEMIC_COURSE_ATTENTION_ITEM_CAP + 1; i += 1) {
+      const course = await seedCourse(app.db, connection.id, { name: `Course ${i}` });
+      await seedAssignment(app.db, connection.id, course.id, { dueAt: plus(3 * DAY) });
+    }
+    const res = await today();
+    expect(res.course_attention!.items).toHaveLength(ACADEMIC_COURSE_ATTENTION_ITEM_CAP);
+    expect(res.course_attention!.total).toBe(ACADEMIC_COURSE_ATTENTION_ITEM_CAP + 1);
+    expect(AcademicTodayResponseSchema.parse(res)).toEqual(res);
+  });
+});
+
+describe("getAcademicCourseDetail -- grade summary (10.3)", () => {
+  it("is a zero count with null figures when nothing is graded", async () => {
+    const connection = await seedConnection(app.db);
+    const course = await seedCourse(app.db, connection.id);
+    await seedAssignment(app.db, connection.id, course.id, { score: 9, pointsPossible: 10 });
+    await seedAssignment(app.db, connection.id, course.id, {
+      submissionState: "pending_review",
+      score: 9,
+      pointsPossible: 10,
+    });
+    const detail = await getAcademicCourseDetail(app.db, course.id, { now: NOW });
+    expect(detail!.grade_summary).toEqual({
+      graded_total: 0,
+      average_percentage: null,
+      points_earned: null,
+      points_possible_graded: null,
+      weighted_percentage: null,
+    });
+  });
+
+  it("averages percentages and weights points over graded rows; an excused row counts only in the total", async () => {
+    const connection = await seedConnection(app.db);
+    const course = await seedCourse(app.db, connection.id);
+    await seedAssignment(app.db, connection.id, course.id, {
+      submissionState: "graded",
+      score: 9,
+      pointsPossible: 10,
+    });
+    await seedAssignment(app.db, connection.id, course.id, {
+      submissionState: "graded",
+      score: 50,
+      pointsPossible: 100,
+    });
+    // Excused: graded, null score.
+    await seedAssignment(app.db, connection.id, course.id, {
+      submissionState: "graded",
+      score: null,
+      grade: "EX",
+      pointsPossible: 100,
+    });
+    // Graded with a score but no points possible: no percentage, no points.
+    await seedAssignment(app.db, connection.id, course.id, {
+      submissionState: "graded",
+      score: 5,
+      pointsPossible: null,
+    });
+    // Not graded, would skew everything if counted.
+    await seedAssignment(app.db, connection.id, course.id, { score: 0, pointsPossible: 100 });
+    // Archived graded row: not in the detail at all.
+    await seedAssignment(app.db, connection.id, course.id, {
+      submissionState: "graded",
+      score: 0,
+      pointsPossible: 100,
+      archivedAt: at("2026-09-01T00:00:00Z"),
+    });
+
+    const detail = await getAcademicCourseDetail(app.db, course.id, { now: NOW });
+    expect(detail!.grade_summary).toEqual({
+      graded_total: 4,
+      average_percentage: 70,
+      points_earned: 59,
+      points_possible_graded: 110,
+      weighted_percentage: 53.6,
+    });
+    expect(AcademicCourseDetailResponseSchema.parse(detail)).toEqual(detail);
   });
 });

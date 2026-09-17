@@ -8,8 +8,9 @@ import {
 } from "@personal-os/core/task-snooze";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { View } from "react-native";
 import { confirmDestructive } from "@/components/confirm-destructive";
+import { AppText, Button, Card, type ButtonVariant } from "@/components/ui";
 import { deviceTimezone, formatFieldLabel } from "@/components/datetime-field-state";
 import { ReminderActionBanner } from "@/components/reminder-action-banner";
 import {
@@ -58,6 +59,11 @@ import {
 // (contract §0): Complete, Skip and Snooze act on that row directly when it
 // is known, so the parent's `due_at` -- the series anchor -- is never moved
 // by a snooze and the 9.3 POST-then-409-then-occurrence detour is skipped.
+//
+// Checkpoint 10.3: composed on the design system's Card and Button. Every
+// action, label, testID and confirmation gate is unchanged; only the
+// variant each action wears is new -- Complete is the primary action of the
+// screen, Start/Skip are tonal, Reopen and Undo outline, Drop danger.
 
 const SNOOZE_CHIPS: { choice: SnoozeChoice; label: string }[] = [
   { choice: "tomorrowMorning", label: "Tomorrow 9am" },
@@ -72,37 +78,19 @@ const ACTION_LABEL: Record<TaskAction, string> = {
   reopen: "Reopen",
 };
 
-const ACTION_CLASS: Record<TaskAction | "skip" | "undo", { button: string; text: string }> = {
-  start: {
-    button: "bg-blue-100 active:bg-blue-200 dark:bg-blue-950",
-    text: "text-blue-700 dark:text-blue-300",
-  },
-  complete: {
-    button: "bg-green-100 active:bg-green-200 dark:bg-green-950",
-    text: "text-green-700 dark:text-green-300",
-  },
-  skip: {
-    button: "bg-neutral-100 active:bg-neutral-200 dark:bg-neutral-800",
-    text: "text-neutral-600 dark:text-neutral-300",
-  },
-  drop: {
-    button: "bg-neutral-100 active:bg-neutral-200 dark:bg-neutral-800",
-    text: "text-neutral-600 dark:text-neutral-300",
-  },
-  reopen: {
-    button: "bg-blue-100 active:bg-blue-200 dark:bg-blue-950",
-    text: "text-blue-700 dark:text-blue-300",
-  },
-  undo: {
-    button: "bg-blue-100 active:bg-blue-200 dark:bg-blue-950",
-    text: "text-blue-700 dark:text-blue-300",
-  },
+const ACTION_VARIANT: Record<TaskAction, ButtonVariant> = {
+  start: "tonal",
+  complete: "primary",
+  drop: "danger",
+  reopen: "outline",
 };
 
-const BUTTON_CLASS =
-  "min-h-[44px] min-w-[44px] items-center justify-center rounded-lg px-4 disabled:opacity-50";
-const CHIP_CLASS =
-  "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 disabled:opacity-50 dark:bg-neutral-800";
+const ACTION_ICON = {
+  start: "play-outline",
+  complete: "check",
+  drop: "close",
+  reopen: "restore",
+} as const;
 
 export function TaskActions({ task }: { task: Task }) {
   const queryClient = useQueryClient();
@@ -277,123 +265,118 @@ export function TaskActions({ task }: { task: Task }) {
     : null;
 
   return (
-    <View className="mb-4">
+    <Card className="mb-4">
       <ReminderActionBanner taskId={task.id} />
 
-      <Text
-        className="mb-2 text-sm text-neutral-500 dark:text-neutral-400"
+      <AppText
+        variant="label"
+        tone="secondary"
+        className="mb-2"
         accessibilityLabel={`Status: ${describeTaskStatus(task)}`}
       >
         {describeTaskStatus(task)}
-      </Text>
+      </AppText>
 
       {recurring ? (
-        <Text
+        <AppText
           testID="task-repeat-line"
-          className="mb-2 text-sm text-neutral-500 dark:text-neutral-400"
+          variant="label"
+          tone="secondary"
           numberOfLines={1}
+          className="mb-2 font-normal"
         >
-          ⟲ {describeTaskRepeat(task)}
-        </Text>
+          Repeats · {describeTaskRepeat(task)}
+        </AppText>
       ) : null}
 
       {nextLine ? (
-        <Text
+        <AppText
           testID="task-next-line"
-          className={
-            nextLine.overdue
-              ? "mb-2 text-sm text-red-600 dark:text-red-400"
-              : "mb-2 text-sm text-neutral-700 dark:text-neutral-300"
-          }
+          variant="body-strong"
+          tone={nextLine.overdue ? "danger" : "default"}
+          className="mb-2"
         >
           {nextLine.text}
-        </Text>
+        </AppText>
       ) : noUpcomingLine ? (
-        <Text testID="task-no-upcoming-line" className="mb-2 text-sm text-amber-700 dark:text-amber-300">
+        <AppText testID="task-no-upcoming-line" variant="body" tone="warning" className="mb-2">
           {noUpcomingLine}
-        </Text>
+        </AppText>
       ) : null}
 
       <View className="flex-row flex-wrap gap-2">
         {actions.map((action) => (
-          <Pressable
+          <Button
             key={action}
+            label={ACTION_LABEL[action]}
             onPress={() => run(action)}
             disabled={pending}
-            hitSlop={8}
-            accessibilityRole="button"
+            variant={ACTION_VARIANT[action]}
+            size="sm"
+            icon={ACTION_ICON[action]}
             accessibilityLabel={`${ACTION_LABEL[action]} task`}
-            className={`${BUTTON_CLASS} ${ACTION_CLASS[action].button}`}
-          >
-            <Text className={`font-semibold ${ACTION_CLASS[action].text}`}>
-              {ACTION_LABEL[action]}
-            </Text>
-          </Pressable>
+          />
         ))}
         {canSkip ? (
-          <Pressable
+          <Button
             testID="task-skip"
+            label="Skip"
             onPress={runSkip}
             disabled={pending}
-            hitSlop={8}
-            accessibilityRole="button"
+            variant="tonal"
+            size="sm"
+            icon="skip-next-outline"
             accessibilityLabel="Skip this occurrence"
-            className={`${BUTTON_CLASS} ${ACTION_CLASS.skip.button}`}
-          >
-            <Text className={`font-semibold ${ACTION_CLASS.skip.text}`}>Skip</Text>
-          </Pressable>
+          />
         ) : null}
       </View>
 
       {showSnooze ? (
         <View className="mt-3">
-          <Text className="mb-1 text-sm text-neutral-500 dark:text-neutral-400">Snooze</Text>
+          <AppText variant="label" tone="secondary" className="mb-1">
+            Snooze
+          </AppText>
           <View className="flex-row flex-wrap gap-2">
             {SNOOZE_CHIPS.map(({ choice, label }) => (
-              <Pressable
+              <Button
                 key={choice}
+                label={label}
                 onPress={() => applySnooze(choice)}
                 disabled={pending || !snoozeAvailable}
-                hitSlop={8}
-                accessibilityRole="button"
+                variant="outline"
+                size="sm"
                 accessibilityLabel={`Snooze until ${label}`}
-                className={CHIP_CLASS}
-              >
-                <Text className="text-black dark:text-white">{label}</Text>
-              </Pressable>
+              />
             ))}
           </View>
           {snoozeLabel ? (
-            <Text className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+            <AppText variant="caption" tone="muted" className="mt-1">
               Snoozed until {snoozeLabel}
-            </Text>
+            </AppText>
           ) : null}
         </View>
       ) : null}
 
       {undoable ? (
         <View className="mt-3 flex-row flex-wrap gap-2">
-          <Pressable
+          <Button
             testID="task-undo"
+            label={undoLabel(undoable.action)}
             onPress={runUndo}
             disabled={pending}
-            hitSlop={8}
-            accessibilityRole="button"
+            variant="outline"
+            size="sm"
+            icon="undo"
             accessibilityLabel={`${undoLabel(undoable.action)} on the last occurrence`}
-            className={`${CHIP_CLASS} ${ACTION_CLASS.undo.button}`}
-          >
-            <Text className={`font-semibold ${ACTION_CLASS.undo.text}`}>
-              {undoLabel(undoable.action)}
-            </Text>
-          </Pressable>
+          />
         </View>
       ) : null}
 
       {error ? (
-        <Text className="mt-2 text-red-600" accessibilityRole="alert">
+        <AppText variant="body" tone="danger" className="mt-2" accessibilityRole="alert">
           {error}
-        </Text>
+        </AppText>
       ) : null}
-    </View>
+    </Card>
   );
 }

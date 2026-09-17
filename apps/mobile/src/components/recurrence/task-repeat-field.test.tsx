@@ -102,8 +102,8 @@ describe("<TaskRepeatFieldView />", () => {
       expect(chip.props.className).toContain("rounded-full");
       expect(chip.props.accessibilityState.selected).toBe(preset === "never");
     }
-    expect(findByTestId(tree, "repeat-preset-never").props.className).toContain("bg-blue-600");
-    expect(findByTestId(tree, "repeat-preset-daily").props.className).not.toContain("bg-blue-600");
+    expect(findByTestId(tree, "repeat-preset-never").props.className).toContain("bg-primary");
+    expect(findByTestId(tree, "repeat-preset-daily").props.className).not.toContain("bg-primary");
     // Nothing to summarise, no interval box, no anchor toggle, no hint.
     expect(findByTestId(tree, "repeat-summary")).toBeNull();
     expect(findByTestId(tree, "repeat-interval-input")).toBeNull();
@@ -182,7 +182,7 @@ describe("<TaskRepeatFieldView />", () => {
     const { tree } = render({ value, dueAt: null });
     const hint = findByTestId(tree, "repeat-due-hint");
     expect(hint).toBeTruthy();
-    expect(hint.props.className).toContain("border-amber-300");
+    expect(hint.props.className).toContain("bg-warning-container");
     expect(getTextContent(hint)).toBe(REPEAT_NO_DUE_DATE_HINT);
 
     expect(findByTestId(render({ value, dueAt: MONDAY_DUE }).tree, "repeat-due-hint")).toBeNull();
@@ -198,7 +198,7 @@ describe("<TaskRepeatFieldView />", () => {
       const { tree } = render({ value: custom });
       const notice = findByTestId(tree, "repeat-custom-notice");
       expect(notice).toBeTruthy();
-      expect(notice.props.className).toContain("border-amber-300");
+      expect(notice.props.className).toContain("bg-warning-container");
       expect(getTextContent(notice)).toContain("Custom repeat rule");
       expect(getTextContent(findByTestId(tree, "repeat-summary"))).toBe("Weekly on Mon, Wed, Fri");
       expect(findByTestId(tree, "repeat-preset-daily")).toBeNull();

@@ -101,7 +101,9 @@ describe("academic surfaces open URLs through exactly one gated place", () => {
     // verbatim; the card must not re-derive them from due instants.
     const body = stripComments(source("../components/academic/academic-today-card.tsx"));
     expect(body).not.toMatch(/Date\.now\(\)|new Date\(|Date\.parse\(|\.sort\(/);
-    expect(body).toContain("visibleAcademicSections(data)");
+    // Since 10.3 the sections are told which ids "Do next" already shows; the
+    // call is still the state helper's, with the data passed through whole.
+    expect(body).toMatch(/visibleAcademicSections\(\s*data,/);
     expect(body).toContain("shouldRenderAcademicCard(data)");
   });
 });

@@ -2,12 +2,25 @@
 // index.tsx's TodayScreen (owns its own state, fetches its own data), so
 // the calendar screen's integration owner can mount <AgendaView /> with no
 // required props, exactly like Today is mounted as a tab screen.
+//
+// Checkpoint 10.3: composed on the design system -- `Screen` owns the canvas,
+// the floating-button clearance and pull-to-refresh; each day is a Card of
+// ListRows; the project filter is a row of ChoiceChips.
 import type { AgendaDay, AgendaResponse } from "@personal-os/schema";
 import { useMemo, useState, type JSX } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { ScrollView, View } from "react-native";
 import { useAgenda } from "@/queries/agenda";
 import { useProjects } from "@/queries/projects";
-import { FLOATING_CLEARANCE } from "@/components/floating-layout";
+import { ChoiceChip } from "@/components/ask/choice-chip";
+import {
+  AppText,
+  Card,
+  EmptyState,
+  ErrorState,
+  Screen,
+  ScreenCentered,
+  SkeletonList,
+} from "@/components/ui";
 import { AgendaItemRow, SectionHeader, agendaItemKey } from "./agenda-rows";
 import { defaultAgendaRange, filterNonEmptyDays, formatAgendaDayLabel } from "./agenda-grouping";
 
@@ -30,63 +43,26 @@ function ProjectFilterBar({
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
-      className="mt-3"
+      className="-mx-4 mt-3"
       contentContainerClassName="flex-row gap-2 px-4"
     >
       {/* Role + selected state on both chip shapes: selection was previously
           conveyed by border/background color alone with nothing in the
           accessibility tree, unlike every other picker in the app (6.7A, AY5). */}
-      <Pressable
+      <ChoiceChip
+        label="All"
+        selected={selectedProjectId === undefined}
         onPress={() => onSelect(undefined)}
-        hitSlop={4}
-        accessibilityRole="button"
-        accessibilityState={{ selected: selectedProjectId === undefined }}
-      >
-        <View
-          className={`min-h-[40px] items-center justify-center rounded-full border px-3 ${
-            selectedProjectId === undefined
-              ? "border-blue-600 bg-blue-50 dark:bg-blue-950"
-              : "border-neutral-300 bg-white dark:border-neutral-700 dark:bg-neutral-900"
-          }`}
-        >
-          <Text
-            className={`text-sm ${
-              selectedProjectId === undefined
-                ? "text-blue-600 dark:text-blue-400"
-                : "text-black dark:text-white"
-            }`}
-          >
-            All
-          </Text>
-        </View>
-      </Pressable>
+        accessibilityLabel="All projects"
+      />
       {projects.map((project) => (
-        <Pressable
+        <ChoiceChip
           key={project.id}
+          label={project.name}
+          selected={selectedProjectId === project.id}
           onPress={() => onSelect(project.id)}
-          hitSlop={4}
-          accessibilityRole="button"
-          accessibilityState={{ selected: selectedProjectId === project.id }}
-        >
-          <View
-            className={`min-h-[40px] items-center justify-center rounded-full border px-3 ${
-              selectedProjectId === project.id
-                ? "border-blue-600 bg-blue-50 dark:bg-blue-950"
-                : "border-neutral-300 bg-white dark:border-neutral-700 dark:bg-neutral-900"
-            }`}
-          >
-            <Text
-              className={`text-sm ${
-                selectedProjectId === project.id
-                  ? "text-blue-600 dark:text-blue-400"
-                  : "text-black dark:text-white"
-              }`}
-              numberOfLines={1}
-            >
-              {project.name}
-            </Text>
-          </View>
-        </Pressable>
+          accessibilityLabel={`Filter by project: ${project.name}`}
+        />
       ))}
     </ScrollView>
   );
@@ -97,9 +73,11 @@ function OverdueSection({ items }: { items: AgendaResponse["overdue"] }) {
   return (
     <View>
       <SectionHeader title={`Overdue · ${items.length}`} tone="red" />
-      {items.map((item) => (
-        <AgendaItemRow key={agendaItemKey(item)} item={item} />
-      ))}
+      <Card padding="none">
+        {items.map((item, index) => (
+          <AgendaItemRow key={agendaItemKey(item)} item={item} last={index === items.length - 1} />
+        ))}
+      </Card>
     </View>
   );
 }
@@ -109,9 +87,15 @@ function DaySection({ day, todayLocalDate }: { day: AgendaDay; todayLocalDate: s
   return (
     <View>
       <SectionHeader title={formatAgendaDayLabel(day.date, todayLocalDate)} tone="neutral" />
-      {day.items.map((item) => (
-        <AgendaItemRow key={agendaItemKey(item)} item={item} />
-      ))}
+      <Card padding="none">
+        {day.items.map((item, index) => (
+          <AgendaItemRow
+            key={agendaItemKey(item)}
+            item={item}
+            last={index === day.items.length - 1}
+          />
+        ))}
+      </Card>
     </View>
   );
 }
@@ -121,28 +105,29 @@ export function AgendaView(): JSX.Element {
   const { from, to } = useMemo(() => defaultAgendaRange(todayLocalDate), [todayLocalDate]);
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
 
-  const { data, isLoading, isError, refetch } = useAgenda({ from, to, projectId });
+  const { data, isLoading, isError, isRefetching, refetch } = useAgenda({
+    from,
+    to,
+    projectId,
+  });
 
   if (isLoading) {
     return (
-      <View className="flex-1 items-center justify-center bg-white dark:bg-black">
-        <Text className="text-neutral-500">Loading…</Text>
-      </View>
+      <ScreenCentered>
+        <SkeletonList className="w-full" />
+      </ScreenCentered>
     );
   }
 
   if (isError || !data) {
     return (
-      <View className="flex-1 items-center justify-center gap-3 bg-white dark:bg-black">
-        <Text className="text-red-600">Couldn&apos;t load the agenda.</Text>
-        <Pressable
-          onPress={() => void refetch()}
-          hitSlop={4}
-          className="min-h-[40px] rounded-lg bg-blue-600 px-4 py-2 active:bg-blue-700"
-        >
-          <Text className="font-semibold text-white">Retry</Text>
-        </Pressable>
-      </View>
+      <ScreenCentered>
+        <ErrorState
+          message="Couldn't load the agenda."
+          onRetry={() => void refetch()}
+          retryAccessibilityLabel="Retry loading the agenda"
+        />
+      </ScreenCentered>
     );
   }
 
@@ -150,25 +135,25 @@ export function AgendaView(): JSX.Element {
   const isWhollyEmpty = data.overdue.length === 0 && visibleDays.length === 0;
 
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      contentContainerClassName={FLOATING_CLEARANCE}
-    >
-      <View className="px-4 pt-4">
-        <Text className="text-2xl font-bold text-black dark:text-white">Agenda</Text>
-        <Text className="text-sm text-neutral-500 dark:text-neutral-400">
+    <Screen refreshing={isRefetching} onRefresh={() => void refetch()}>
+      <View className="pt-4">
+        <AppText variant="title" accessibilityRole="header">
+          Agenda
+        </AppText>
+        <AppText variant="caption" tone="secondary">
           {data.from} – {data.to}
-        </Text>
+        </AppText>
       </View>
 
       <ProjectFilterBar selectedProjectId={projectId} onSelect={setProjectId} />
 
       {isWhollyEmpty ? (
-        <View className="items-center px-4 py-12">
-          <Text className="text-sm text-neutral-500 dark:text-neutral-400">
-            Nothing scheduled in this range.
-          </Text>
-        </View>
+        <EmptyState
+          icon="calendar-check-outline"
+          tone="success"
+          title="Nothing scheduled in this range."
+          className="py-12"
+        />
       ) : (
         <>
           <OverdueSection items={data.overdue} />
@@ -177,6 +162,6 @@ export function AgendaView(): JSX.Element {
           ))}
         </>
       )}
-    </ScrollView>
+    </Screen>
   );
 }

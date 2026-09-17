@@ -301,6 +301,201 @@ export const AcademicCurrentTermSchema = z
 export type AcademicCurrentTerm = z.infer<typeof AcademicCurrentTermSchema>;
 
 // ---------------------------------------------------------------------------
+// Academic intelligence -- urgency, priority, workload, attention, grades
+// (Checkpoint 10.3, Lane A)
+// ---------------------------------------------------------------------------
+//
+// Every shape below is DERIVED server-side, at read time, by
+// packages/core/src/academic/{urgency,workload,grade-summary}.ts, from the
+// same scoped rows and the same single `effective_now` the Today buckets
+// use. Nothing is stored (ADR-068a's rule for `percentage` applies to all of
+// it) and nothing here reaches a model: these keys live on
+// `AcademicTodayResponseSchema` / `AcademicCourseDetailResponseSchema`, which
+// no AI collector reads (Guard 5).
+//
+// COMPATIBILITY RULE, RESTATED BECAUSE IT SHAPES EVERYTHING HERE: the
+// versionCode-25 client parses `AcademicAssignmentSchema`,
+// `AcademicCourseSummarySchema` and the other item schemas as `.strict()`
+// from its compiled copy of this file, so an `urgency` or `score` key on an
+// ASSIGNMENT would make that client reject every row the moment the new api
+// deployed (the 10.2 review's MAJOR, in a new coat). Derived facts therefore
+// live ONLY on NEW, OPTIONAL, top-level keys of the two non-strict response
+// objects -- exactly like `current_term` -- and wrap the untouched item
+// (`AcademicPriorityItemSchema.assignment`) rather than extending it. The
+// enum vocabularies mirror core's `as const` arrays member-for-member and are
+// pinned equal by academic.test.ts, the search-score precedent.
+
+/**
+ * The urgency ladder, in severity order (core's `deriveUrgency`):
+ *   critical ⟺ due_at < effective_now (overdue);
+ *   high     ⟺ due within ACADEMIC_URGENCY_HIGH_WINDOW_HOURS (strict <);
+ *   medium   ⟺ due before the `due_this_week` horizon end (end of local day + 7);
+ *   low      ⟺ otherwise.
+ * Undated is never urgent and appears in no priority list.
+ */
+export const AcademicUrgencySchema = z.enum(["critical", "high", "medium", "low"]);
+export type AcademicUrgency = z.infer<typeof AcademicUrgencySchema>;
+
+/**
+ * The closed reason vocabulary behind a priority `score` (core's
+ * `scoreAcademicPriority`). Integer points, one frozen table:
+ *   overdue 400 · due_within_24h 300 · due_this_week 200 (the urgency's own
+ *   reason; `low` carries a 100 base and NO reason) · marked_missing +50 ·
+ *   marked_late +25 · high_points +25 (points_possible ≥ ACADEMIC_HIGH_POINTS_THRESHOLD).
+ * `score` = the urgency's base + the additive reasons' points, so a client can
+ * recompute any ranking from `urgency` and `reasons` alone.
+ */
+export const AcademicPriorityReasonSchema = z.enum([
+  "overdue",
+  "due_within_24h",
+  "due_this_week",
+  "marked_missing",
+  "marked_late",
+  "high_points",
+]);
+export type AcademicPriorityReason = z.infer<typeof AcademicPriorityReasonSchema>;
+
+/**
+ * `behind` ⟺ overdue_total > 0 ∨ missing_total > 0; else `at_risk` ⟺
+ * due_within_24h_total > 0; else `on_track` (core's `deriveWorkloadStatus`).
+ * A threshold on counts the same object reports, never a weighted blend.
+ */
+export const AcademicWorkloadStatusSchema = z.enum(["on_track", "at_risk", "behind"]);
+export type AcademicWorkloadStatus = z.infer<typeof AcademicWorkloadStatusSchema>;
+
+/**
+ * `high` ⟺ overdue_total > 0 ∨ due_within_24h_total > 0; else `medium` ⟺
+ * due_this_week_total > 0; else `low` ⟺ open_total > 0; else `none` (core's
+ * `deriveCourseAttention`). A `none` course is never listed.
+ */
+export const AcademicCourseAttentionLevelSchema = z.enum(["high", "medium", "low", "none"]);
+export type AcademicCourseAttentionLevel = z.infer<typeof AcademicCourseAttentionLevelSchema>;
+
+/** Must equal core's `URGENCY_HIGH_WINDOW_HOURS`; pinned by academic.test.ts. */
+export const ACADEMIC_URGENCY_HIGH_WINDOW_HOURS = 24;
+/** Must equal core's `HIGH_POINTS_THRESHOLD`; pinned by academic.test.ts. */
+export const ACADEMIC_HIGH_POINTS_THRESHOLD = 50;
+export const ACADEMIC_PRIORITIES_ITEM_CAP = 5;
+export const ACADEMIC_COURSE_ATTENTION_ITEM_CAP = 10;
+
+/**
+ * One "what should I do next?" candidate: the UNTOUCHED assignment item plus
+ * its derived urgency, score and reasons. Candidates are every open, dated,
+ * current-term assignment whose urgency is critical/high/medium (due before
+ * the horizon end -- never `low`), ranked score desc, due_at asc, title, id.
+ * `hours_until_due` is signed (negative when overdue), one decimal.
+ */
+export const AcademicPriorityItemSchema = z
+  .object({
+    assignment: AcademicAssignmentSchema,
+    urgency: AcademicUrgencySchema,
+    score: z.number().int().min(0),
+    reasons: z.array(AcademicPriorityReasonSchema),
+    hours_until_due: z.number().nullable(),
+  })
+  .strict();
+export type AcademicPriorityItem = z.infer<typeof AcademicPriorityItemSchema>;
+
+/**
+ * One local calendar day of the workload view (core's `academicWorkloadDays`):
+ * `due_total` counts OPEN assignments whose `due_at` falls inside that local
+ * day's window and `points_total` sums their `points_possible` (null → 0).
+ * Today's entry therefore includes anything already overdue EARLIER TODAY,
+ * and an item overdue from an earlier day is on no entry at all -- earlier
+ * days are not represented; `overdue_total` is reported separately so a
+ * client can subtract rather than guess.
+ */
+export const AcademicWorkloadDaySchema = z
+  .object({
+    date: z.string().date(),
+    due_total: z.number().int().min(0),
+    points_total: z.number().min(0),
+  })
+  .strict();
+export type AcademicWorkloadDay = z.infer<typeof AcademicWorkloadDaySchema>;
+
+/**
+ * The workload summary over the current term's open assignments:
+ *   open_total            every open assignment, dated or not;
+ *   overdue_total         = `summary.overdue_total` (rule 2);
+ *   missing_total         = `summary.missing_total` (Canvas's flag, windowless);
+ *   due_within_24h_total  urgency `high` (instant arithmetic; OVERLAPS
+ *                         due_today / due_this_week, which are local-day buckets);
+ *   due_this_week_total   = `summary.due_this_week_total` (local days +1..+7);
+ *   points_at_stake       Σ points_possible over OPEN assignments due from
+ *                         effective_now (inclusive) to the horizon end
+ *                         (exclusive), null points counting 0 -- overdue and
+ *                         beyond-horizon points are NOT at stake here;
+ *   horizon_days          ACADEMIC_UPCOMING_DAY_COUNT;
+ *   days                  today + the `horizon_days` following local days, in
+ *                         order, one entry per day, zero-filled.
+ * The not-configured response still carries this key (all zero, `on_track`,
+ * eight zero-filled days), so a client never branches on absence.
+ */
+export const AcademicWorkloadSchema = z
+  .object({
+    status: AcademicWorkloadStatusSchema,
+    open_total: z.number().int().min(0),
+    overdue_total: z.number().int().min(0),
+    missing_total: z.number().int().min(0),
+    due_within_24h_total: z.number().int().min(0),
+    due_this_week_total: z.number().int().min(0),
+    points_at_stake: z.number().min(0),
+    horizon_days: z.number().int().min(0),
+    days: z.array(AcademicWorkloadDaySchema),
+  })
+  .strict();
+export type AcademicWorkload = z.infer<typeof AcademicWorkloadSchema>;
+
+/**
+ * One current-term course that needs attention (level ≠ `none`), with the
+ * counts its level was derived from (same definitions as the workload's,
+ * scoped to the course) and `next_due_at`, the earliest open due instant at
+ * or after `effective_now`. Ordered by level (high, medium, low), then
+ * overdue desc, then due_within_24h desc, then next_due_at asc (nulls last),
+ * then course name, then id.
+ */
+export const AcademicCourseAttentionSchema = z
+  .object({
+    course_id: z.string().uuid(),
+    course_name: z.string(),
+    course_code: z.string().nullable(),
+    open_total: z.number().int().min(0),
+    overdue_total: z.number().int().min(0),
+    due_within_24h_total: z.number().int().min(0),
+    due_this_week_total: z.number().int().min(0),
+    next_due_at: z.string().datetime({ offset: true }).nullable(),
+    attention: AcademicCourseAttentionLevelSchema,
+  })
+  .strict();
+export type AcademicCourseAttention = z.infer<typeof AcademicCourseAttentionSchema>;
+
+/**
+ * A course's grade summary over its assignments with `grade.status ===
+ * "graded"` (core's `deriveGradeSummary`), computed at read time from the
+ * ADR-068a columns and never stored:
+ *   graded_total            count of graded assignments;
+ *   average_percentage      mean of the non-null `grade.percentage` values,
+ *                           one decimal; null when none;
+ *   points_earned /         Σ score / Σ points_possible over graded rows where
+ *   points_possible_graded  BOTH are present; null when none;
+ *   weighted_percentage     points_earned / points_possible_graded × 100, one
+ *                           decimal; null when the denominator is null or 0.
+ * An excused graded row (null score) counts in `graded_total` only. Neither
+ * percentage is clamped (extra credit).
+ */
+export const AcademicGradeSummarySchema = z
+  .object({
+    graded_total: z.number().int().min(0),
+    average_percentage: z.number().nullable(),
+    points_earned: z.number().nullable(),
+    points_possible_graded: z.number().nullable(),
+    weighted_percentage: z.number().nullable(),
+  })
+  .strict();
+export type AcademicGradeSummary = z.infer<typeof AcademicGradeSummarySchema>;
+
+// ---------------------------------------------------------------------------
 // GET /academic/today
 // ---------------------------------------------------------------------------
 
@@ -386,6 +581,15 @@ export const AcademicTodayResponseSchema = z.object({
   due_this_week: boundedItemsSectionSchema(AcademicAssignmentSchema),
   announcements: boundedItemsSectionSchema(AcademicAnnouncementSchema),
   events: boundedItemsSectionSchema(AcademicEventSchema),
+  // The three Checkpoint 10.3 intelligence keys. Optional for the same
+  // reason `current_term` is: the versionCode-25 client's compiled copy of
+  // this schema predates them, and a non-strict object drops unknown keys,
+  // so that client keeps parsing. A server NEVER omits them -- the
+  // not-configured response carries them empty/zeroed too -- so a new client
+  // never branches on absence. Capped with honest totals like every section.
+  priorities: boundedItemsSectionSchema(AcademicPriorityItemSchema).optional(),
+  workload: AcademicWorkloadSchema.optional(),
+  course_attention: boundedItemsSectionSchema(AcademicCourseAttentionSchema).optional(),
 });
 export type AcademicTodayResponse = z.infer<typeof AcademicTodayResponseSchema>;
 
@@ -429,5 +633,10 @@ export const AcademicCourseDetailResponseSchema = z.object({
   assignments: z.array(AcademicAssignmentSchema),
   announcements: z.array(AcademicAnnouncementSchema),
   events: z.array(AcademicEventSchema),
+  // Optional for the versionCode-25 client's compiled schema (see
+  // `current_term` and the Today response's three keys); a server never
+  // omits it -- a course with no graded assignment carries a zero count and
+  // null figures, never an absent key.
+  grade_summary: AcademicGradeSummarySchema.optional(),
 });
 export type AcademicCourseDetailResponse = z.infer<typeof AcademicCourseDetailResponseSchema>;

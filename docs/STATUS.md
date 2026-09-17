@@ -16,7 +16,10 @@ the cloud build).** The owner's live disconnect → reconnect (22:32Z) closed th
 — and surfaced a **credential-in-log defect**, contained within minutes and fixed the same evening
 (hotfix `4c614db`); the owner also decided the academic surfaces show **the current term only**
 (ADR-070a, `1edb61b`). Both are **DEPLOYED** (api/worker/web at `1edb61b`, ~22:53Z). Open owner
-action: **rotate the Canvas PAT** that reached the log (and this chat).
+action: **rotate the Canvas PAT** that reached the log (and this chat). **Checkpoint 10.3 — Academic
+Intelligence Expansion + Mobile UX Modernization — is IMPLEMENTED, LOCALLY VERIFIED and
+INDEPENDENTLY REVIEWED (2026-09-16) and NOT DEPLOYED** (ADR-071; no migration; api/web rebuild and
+a native Rabbit rebuild pending owner authorization).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -80,7 +83,7 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress. |
 | Backups | **None, by design** (ADR-024). |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE** (re-verified 2026-09-16). No CI, no Actions workflow, no repository secret. **`main` is the canonical branch again as of 2026-09-16** (fast-forwarded to the Phase 10 tip; PR #1 merged). |
-| Test baseline | **6,292 tests across 13 packages** at `1edb61b` (10.2 + hotfix + ADR-070a): api 1,486 · mobile 1,467 · core 964 · worker 728 · schema 546 · health-providers 332 · api-client 200 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25 (was 6,265 at 10.2, 6,054 at 10.1C). |
+| Test baseline | **6,477 tests across 13 packages** at the 10.3 commit (not yet deployed): api 1,496 · mobile 1,574 · core 1,014 · worker 728 · schema 563 · health-providers 332 · api-client 201 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25. Production (`1edb61b`) was 6,292: api 1,486 · mobile 1,467 · core 964 · schema 546 · api-client 200, the rest as now. |
 | pg-boss | **31 queues, 11 schedules** (worker startup log at 10.1B; `pgboss.queue` reads one more with the internal `__pgboss__send-it`). Every retrying queue has a dead-letter queue (9.0): `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues, `occurrences.generate-lazy`, `occurrences.expand-window`. `occurrences.expand-window` has a phase-2 idempotent lazy repair since 9.4. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C) · `health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now` (9.0). First scheduled run 2026-09-13T04:00Z; the job's daily runs have not been individually re-verified since the 9.0 acceptance. |
 | Alert keys | Occurrence-scoped (ADR-058). Producers: health-sync breaker (first live emission 2026-09-12T03:00:14Z), `occurrences.generate-lazy.dead:<occurrenceId>`, `occurrences.expand-window.dead:<UTC date>` (9.0; also covers a failed 9.4 phase-2 repair), `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (9.5). The three 9.x producers are unexercised in production by design. |
@@ -1043,6 +1046,218 @@ personal-os-{api,worker,web}:rollback-pre-10.2 personal-os-{api,worker,web}:late
 frozen `up -d --no-deps --no-build --force-recreate api worker web`; `0021` is additive, so the
 pre-10.2 images run against the post-migration schema.
 
+### Checkpoint 10.3 — Academic Intelligence Expansion + Mobile UX Modernization: IMPLEMENTED, LOCALLY VERIFIED, INDEPENDENTLY REVIEWED (2026-09-16) — NOT DEPLOYED
+
+**Objective (owner-directed, 2026-09-16).** Two objectives in one checkpoint: turn the 10.2 academic
+read model into a daily intelligence system that answers *what needs attention today, what is
+approaching, which courses need focus, am I falling behind, what should I do next* — deterministic,
+derived from the existing `canvas_*` tables, outside every AI collector — and give the universal
+Expo client a production-grade design system so Personal OS "feels like a premium personal
+operating system on mobile". Decision record: **ADR-071**. **No migration** (level stays 22), no
+new route, no new queue, no new consent surface; the worker is untouched.
+
+**Execution model.** One integrator wrote the design-system foundation first (tokens, primitives,
+mocks, navigator theming) and verified it in the browser pane at the Rabbit's 480px width in both
+schemes before any screen was built on it; four implementation lanes then ran in parallel with
+disjoint file ownership — **A** backend intelligence (`packages/core`, `packages/schema`,
+`apps/api`, on its own test-database clone `personalos_test_a103`, dropped at closeout), **B** Today
++ academic surfaces, **C1** Health + Settings + Capture, **C2** the four tabs, Search and every
+detail/edit screen — followed by an independent adversarial review lane (record below). The
+integrator resolved the cross-lane seams by hand: the Today tab now hides its navigator bar and
+draws its own header (greeting as the title, Search/Settings beside it, "+ Event" and "All tasks" as
+section actions), stack screens use a `compact` header so the navigator title is never repeated,
+and a `containsControl` rule on `ListRow` (plus the calendar day cell) removed the nested
+`<button>`-inside-`<button>` the first render produced on web.
+
+**What shipped — academic intelligence (Lane A; rules stated in ADR-071):**
+
+- `packages/core/src/academic/urgency.ts` — `deriveUrgency` (critical ⟺ overdue; high ⟺ due
+  < 24 h; medium ⟺ due before the same end-of-local-day + 7 horizon the buckets use; low
+  otherwise; undated never urgent), `scoreAcademicPriority` (base 400/300/200/100 by urgency plus
+  `marked_missing` +50, `marked_late` +25, `high_points` +25 at ≥ 50 points, over a closed
+  six-member reason vocabulary — the ADR-065 search-scoring idiom), `rankAcademicPriorities`
+  (score → due → title → id), `deriveWorkloadStatus` (`behind` ⟺ overdue or missing; else
+  `at_risk` ⟺ due within 24 h; else `on_track`), `deriveCourseAttention` (high / medium / low /
+  none by the same counts); `workload.ts` (today + seven local days of due counts and points,
+  zero-filled, from the buckets' own `localDayWindowForDate`); `grade-summary.ts` (graded count,
+  mean percentage, points-weighted percentage; an excused graded row counts in the total only).
+- `packages/schema/src/academic.ts` — five new `.strict()` shapes and four enums, exposed ONLY as
+  **optional top-level keys** (`priorities`, `workload`, `course_attention` on the Today response;
+  `grade_summary` on the course detail) — the `current_term` precedent, because the deployed
+  versionCode-25 client parses every academic item schema as `.strict()` (the 10.2 review's
+  MAJOR); a test pins that the pre-10.3 shape still parses and that `urgency` is rejected on an
+  assignment item. Every new schema joined the structural key-walk guard; the enum vocabularies and
+  both thresholds are test-pinned equal to core's.
+- `apps/api/src/read-models/academic.ts` — the three sections computed inside the existing
+  `buildAcademicTodayResponse` (same `effectiveNow`, same current-term scope, same horizon), the
+  grade summary inside `getAcademicCourseDetail`; the not-configured response carries every key
+  zeroed. Egress Guard 5 passed unmodified.
+
+**What shipped — mobile (integrator + Lanes B, C1, C2):**
+
+- **Design system** (`apps/mobile/src/components/ui/`, `docs/MOBILE-DESIGN-SYSTEM.md`): one token
+  file (`tokens.js`, CommonJS so `tailwind.config.js` can require it; `theme.ts` re-exports it typed
+  and `theme.test.ts` pins the two equal) — Material 3 colour roles with a dark sibling per role,
+  a seven-step type scale, card/inner radii, two card shadows, six gradient presets — and the
+  primitives `Screen`/`ScreenFrame`/`ScreenCentered`/`ScreenHeader` (pull-to-refresh, floating
+  clearance, `safeTop`, `compact`), `Card`/`GradientCard`, `SectionHeader`, `ListRow`,
+  `StatusChip`, `MetricCard`, `ProgressBar`, `Button`/`IconButton`, `EmptyState`/`ErrorState`,
+  `Skeleton*`, `Icon`, `triggerHaptic`, `navigationTheme`, `useSyncWebColorSchemeClass`. Three
+  Expo SDK 57 modules added (`expo-linear-gradient`, `expo-haptics`, `@expo/vector-icons`) with
+  vitest mocks beside the existing `expo-router`/`nativewind` ones (and one for
+  `react-native-safe-area-context`, which `Screen` now reads). Tab bar and header icons replace the
+  emoji glyphs; the navigator chrome is themed from the palette.
+- **One pre-existing web defect fixed:** `darkMode: "class"` has been pinned since Phase 2 but
+  nothing ever set the `dark` class on the document, so a browser in dark mode drew a dark
+  navigator over light content and every raw colour read through NativeWind's hook was the dark
+  value on a light surface (header icons invisible). Verified in the pane before the fix
+  (`document.querySelectorAll('.dark').length === 0` with `prefers-color-scheme: dark` matching).
+- **Today** rebuilt on the primitives: greeting header (pure `utils/greeting.ts`, hour from the
+  query's `dataUpdatedAt`, never a clock read), the one hero gradient (counts only — the summary
+  carries no completed count, so no progress is invented), a `MetricCard` stat row, sections on
+  `Card`/`ListRow` with honest empty states, `SkeletonScreen`/`ErrorState`, pull-to-refresh; every
+  existing behaviour kept (occurrence-first completion with the 409 fallback, review banners, the
+  Ask chip and Suggested Focus gated exactly as before, the Brief/Health/Mail/Academic/Reminder
+  card slots).
+- **Academics card** now answers all five questions: a workload `StatusChip` ("Behind · 1 overdue ·
+  1 missing" / "At risk" / "On track"), a "Focus on" row of course chips from `course_attention`
+  (high → danger, medium → warning), a "Do next" list of the top three priorities with urgency chips
+  (Overdue / Due <24h / This week), the existing Overdue / Due today / Due this week rows, a
+  seven-day workload strip, and the unread-announcement footer — every piece guarded for an older
+  server that omits the key. `/academic`: semester hero (term, courses, open, overdue, next due),
+  a "Show past terms" toggle (new `include_past_terms` api-client binding), course cards with
+  overdue/open/next-due chips. `/academic/[id]`: course hero with the grade summary and a clamped
+  progress bar, urgency chips on upcoming rows (client-side `deriveUrgency` against the query's
+  `dataUpdatedAt` and the device zone's horizon — the one permitted client derivation, as the 10.2
+  detail screen already documented for its partition), graded rows with grade labels, announcements
+  with a "New" chip. Every provider link still opens only through `source-link.tsx`.
+- **Health** (hero, metric grid on cards with the missing-value rule verbatim, chart colours from
+  the palette), **Settings** (Integrations / Academics / Monitoring / Devices / Diagnostics /
+  Privacy & AI on cards, chips, buttons with `busy` wired to `isPending`; all six
+  `confirmDestructive` gates byte-identical), **Capture** (56px primary FAB, bottom-sheet composer
+  with a success haptic, PTT circle with a pulsing recording ring, pairing screen), the **four
+  tabs**, **Search** (segmented Search/Ask, field well, result cards by type), and every
+  task/note/project/event/review/monitor screen restyled without behavioural change; the
+  recurrence editor and repeat fields moved onto the palette by the integrator (their one test
+  re-pinned from `bg-blue-600` to `bg-primary`).
+
+**Live browser verification (local dev API + Expo web at 480 × 800, light and dark, seeded data
+removed after).** A synthetic connection (`https://seed-10-3.example.edu`), four courses (three
+Fall 2026, one completed Spring 2026 with an old overdue that must not surface), fourteen
+assignments spanning every bucket and two announcements were seeded into the local dev database.
+`GET /academic/today?tz=America/Chicago` answered `workload.status: behind` (1 overdue · 1
+missing), `points_at_stake 95` (the overdue 100-point paper correctly excluded), priorities
+`475 [overdue, marked_missing, high_points] → 300 → 300 → 225 → 200`, course attention `INSY
+high · MATH high · ACCT medium`, `days` with the expected per-day counts, and the past-term course
+absent; the course detail carried `grade_summary { graded_total 2, average 96.3, weighted 96.3 }`.
+Walked in the browser: Today (both schemes), the Academics card with every new block, `/academic`
+and a course detail, Health, Settings, Inbox, Notes, Projects, Calendar (month), Search with
+results, Tasks and a task detail, the capture sheet; `document.querySelectorAll('button button')`
+is 0 on every screen after the `containsControl`/day-cell fixes; a cache-cleared
+`expo export --platform web` bundles cleanly (3.3 MB entry, the icon font as its one asset).
+
+**Verification (integrator, serial, on the shared `personalos_test`):** `pnpm build --force` 12/12
+· `pnpm typecheck` 23/23 · `npx eslint apps packages` exit 0 and `apps/mobile` `npx eslint .` **0
+errors, 0 warnings** (the ten pre-existing unused-directive warnings removed with `--fix`; the
+`monitor/index.tsx` purity error is gone — it now reads `overview.dataUpdatedAt`) · root
+`npx prettier --check .` clean · `git diff --check` clean · `gitleaks detect --no-git` no leaks ·
+`pnpm test --force` **23/23 tasks, 6,477 tests across 13 packages, zero failing** (core 1,014
+[+50] · schema 563 [+17] · api 1,496 [+10] · api-client 201 [+1] · mobile 1,574 [+107]; the
+other eight packages unchanged; was 6,292 at `1edb61b`; 6,471 before the review fixes). Mobile
+prettier: 80 files fail `--check`, every one already unformatted at HEAD (the root
+`.prettierignore` skips `apps/mobile` — recorded debt); every new file is formatted and no file
+that was clean at HEAD regressed. The one remaining mobile eslint warning is in the generated,
+git-ignored `.expo/types/router.d.ts`.
+
+**Independent adversarial review (a separate agent, read-only, no implementation context,
+instructed to verify every claim against code and library source; seven lenses).** Verdict:
+**safe to commit after fixes — no BLOCKER.** Lenses A (privacy / AI boundary), B (wire
+compatibility: HEAD's response schemas are plain `z.object`, zod 4.4.3 strips the new keys, no
+`.strict()` item schema gained a field) and C (read-model correctness: every urgency boundary, the
+total order, the caps, the DST windows, the grade math) were confirmed clean. **Four MAJOR
+findings, all on the mobile half, all closed in-checkpoint:** (1) light-mode gradient text failed
+contrast (white-90 on the health gradient measured **2.26:1**, academic 3.16:1) — the light stops
+were darkened (`hero`, `academic`, `health`, `warm`, `calm`), `on-gradient-muted` raised from
+white-80 to white-90, and `theme.test.ts` now pins white / white-90 ≥ 4.5:1 on every stop of
+every white-text gradient; (2) `on-surface-muted` carried 11–13px captions, eyebrows and tab
+labels at 3.2–3.7:1 — darkened to `#646A7F` / `#8E95AD`, the `danger` text colour nudged to
+`#D12222` (4.43 → 4.86 on the canvas), a `placeholder` role added and `usePlaceholderColor`
+routed through it (the old `#737373` read 4.16:1 on the new input wells), and the test pins every
+text role ≥ 4.5:1 on every surface plus every on-container pair; (3) Today's completion circle
+was drawn in `outline-strong` at 1.57:1 — now `on-surface-variant`, matching Agenda and the
+project screen; (4) the web dark-mode "fix" was PLAUSIBLY dev-server-only — **confirmed by a
+static `expo export` under `prefers-color-scheme: dark`: `.dark` absent, light rendering** —
+because react-native-css-interop pins the scheme to "light" at boot whenever the compiled
+stylesheet is already applied; fixed by calling NativeWind's `colorScheme.set("system")` once at
+boot before the class sync, re-verified on the export (`.dark` present under dark, absent under
+light; a mid-session preference change needs a reload). **Sixteen MINOR findings; fourteen closed:**
+the Today event time column truncating a real range (`w-24` at caption size restored, matching
+Agenda); the reminder-eligibility banner demoted below three sections in Settings (restored to
+the top, above every section — ADR-036); haptics firing on the four navigation "New …" buttons
+(`haptic={false}`); `SectionHeader` putting the heading role on the row (moved to the title Text,
+the loosened search-screen assertion restored to Text-level); group labels on non-accessible Views
+never spoken (`accessible` + `summary` on labelled `Card`/`ListRow`/skeletons and the academic
+strip, focus row and grade block); decorative icons not hidden on web (`aria-hidden`); the
+segmented control at 40px (44); the tab-bar `HeaderActions` wrapper a handler-less `Pressable`
+(`View`); "Do next" re-listing the same assignments as the three buckets, since the priority
+candidates are exactly their union (`visibleAcademicSections` now skips ids already shown above,
+keeps the honest total, drops a section shown in full; pinned in state and render tests); the
+haptic contract having no positive test (one under a stubbed Android platform); the worker's
+inert-rendering positive control made vacuous by `<TextField` (re-pinned on `<AppText` and the
+results-list testID); the unmigrated `reminder-action-banner` colours; dead code
+(`monitorStateToneClass`, the boolean `useAcademicCourses` overload, `inboxStatusLabel`, an
+untested `segmentClass` export) and four stale comments. **Two accepted as recorded debt:** the
+calendar grids' sub-44px event pills and hour slots (the grid's own geometry), and the three
+composites (`ChoiceChip`, `TextField`, `SegmentedControl`) living beside their first consumer.
+The review also corrected the claim of "zero behavioural change": the data layer, mutations, all
+seventeen `confirmDestructive` gates and every navigation target are unchanged, but ~25 labels
+moved to sentence case or lost glyphs ("⟲" → "Repeats"), six entry points went from `Link` to
+`router.push`, the Inbox tab's "Confirm as parsed" and the project screen's completion circle no
+longer also navigate on web (a nested-Pressable bug at HEAD), `monitor/index.tsx` now reads
+`dataUpdatedAt` instead of the clock, and the FAB's pending label reads "Capture…". The docs and
+ADR-071 were reconciled to the code after the fixes (closed primitive set → primitives plus three
+named composites; the contrast tiers; the haptic rule; the web dark-mode mechanism; the exceptions
+list; three shadows, not two; the full mock list).
+
+**Unchanged and reaffirmed:** ADR-018, ADR-024, ADR-056 (no embeddings, no write-capable lane;
+Cloud Ask and Suggested Focus cannot see academic data), ADR-058 (no new alert producer), ADR-065
+(Canvas rows stay outside `GET /search` and `GET /export`), ADR-066/067, ADR-068/068a, ADR-070/070a.
+
+**Recorded, not fixed:** three composites live beside their first consumer rather than in `ui/`
+(`components/calendar/segmented-control.tsx`, `components/ask/choice-chip.tsx`,
+`components/ask/text-field.tsx`) — promote when a fourth consumer appears (moving them now would
+make the `ui` barrel import itself), and `settings.tsx`/`pairing-screen.tsx` restate the field
+well at 42px; the calendar month/week grids' event pills and hour slots are under 44px (the grid's
+own geometry); the Settings integration cards show a state chip at both the card and the row
+level; the two modal scrims (`bg-black/50` in `events/[id].tsx`, `bg-black/40` in the FAB) and
+the on-gradient pill are the documented raw-colour exceptions; a selected `ChoiceChip` shares
+`StatusChip tone="primary"`'s colours and differs by radius; destructive confirms fire no haptic;
+a web colour-scheme change mid-session needs a reload; `course_attention` renders only on the
+Today card, not on `/academic`; relative day labels ("Tomorrow") are still not on the Academics
+card; `hours_until_due` is on the wire and unused by the client; the `@expo/vector-icons` font
+(~1 MB) is now part of every bundle; toggling "Show past terms" flashes the courses skeleton (no
+`placeholderData`); Settings' per-section loading lines still read `Loading…`; the 80 pre-existing
+unformatted mobile files. The Rabbit R1 has NOT been rebuilt — every client change
+needs a full APK, and the three new modules make this a native rebuild (`eas build --local`, see
+the 10.2 record); versionCode 25 keeps working against the new api by construction (optional keys
+only), which the schema test pins.
+
+**Deployment plan (NOT executed — the brief's gate is implementation → tests → independent review
+→ migration safety → rollback plan → deployment, and this record closes at the review).** No
+migration, so the frozen order minus its migrate step: commit and push; tag the serving
+api/web images `rollback-pre-10.3` by digest (worker untouched — no rebuild, no tag); `git
+archive` to `/home/himallinux/personal-os-10.3-release`; build api + web; verify the api image
+carries `priorities`/`workload`/`course_attention` in `dist/read-models/academic.js`; recreate
+`api` then `web` alone (`--no-deps --no-build --force-recreate`, `postgres` and `worker` never
+named); validate `GET /academic/today?tz=America/Chicago` on the real account (every new key
+present, `configured: true`, `current_term` Fall 2026) and that the versionCode-25 Rabbit's card
+still renders (its strict item schemas ignore the new top-level keys); then
+`eas build --local --profile production-internal` → `adb install -r` → walk Today, the Academics
+card, `/academic`, Health, Settings, the capture sheet and one dark-mode screen on the device.
+**Rollback:** `docker tag personal-os-{api,web}:rollback-pre-10.3 personal-os-{api,web}:latest`
+then the frozen `up -d --no-deps --no-build --force-recreate api web`; no schema involved, and the
+pre-10.3 client keeps parsing either api.
+
 ---
 
 ## Remaining warnings / technical debt
@@ -1270,8 +1485,12 @@ live** — see the deployment record at the end of the 10.1C entry above. Produc
 **Checkpoint 10.2 — the Academic Intelligence Layer — is deployed (api/worker/web at `1edb61b`,
 level 22), production-validated, accepted on the Rabbit R1 (versionCode 25, built locally), and
 amended the same day by the current-term rule (ADR-070a) and the credential-in-log hotfix.** The
-record is above; the one open owner action (rotate the PAT) is in *Next action*. Nothing after 10.2
-is selected.
+record is above; the one open owner action (rotate the PAT) is in *Next action*.
+
+**Checkpoint 10.3 — Academic Intelligence Expansion + Mobile UX Modernization — is implemented,
+verified and independently reviewed on branch `claude/phase-10-3-academic-mobile-36b57c` and NOT
+deployed** (ADR-071). Its deployment plan and rollback are in the 10.3 record above and wait on the
+owner.
 
 ---
 
@@ -1304,6 +1523,7 @@ phase is in `docs/history/`; the one-line summary is:
 | **10.1** | Canvas LMS integration: read-only, Personal-Access-Token-authenticated sync of courses/assignments/announcements/calendar events into six new tables (migration `0020`), a Today "upcoming assignments" card, a same-origin-checked "open in Canvas" link, CalDAV-derived SSRF protection on `canvas_base_url`. **Deployed (api/worker/web, level 21) and live-validated against the owner's real UTA account and the physical Rabbit R1 (versionCode 22) 2026-09-16** (ADR-068). |
 | **10.1C** | Canvas reconnect lifecycle fix: `connectCanvasConnection` SELECTs any prior row by `canvas_base_url` first and reactivates a non-active row in place (same `id`/`created_at`, FK-linked history preserved), refuses an active row (`409 canvas_already_connected`) and a different `canvas_user_id` (`409 canvas_account_mismatch`); route returns 200 on reactivation, 201 on creation. **Deployed (api only, no migration) and live-validated against the owner's real UTA account 2026-09-16** — reconnect `200` on the same row with history preserved, cron succeeding since. |
 | **10.2** | Academic Intelligence Layer: a provider-agnostic academic read model computed over the Canvas tables (`GET /academic/today`, `/academic/courses`, `/academic/courses/:id`; ADR-070), `score`/`grade` synced under ADR-068a (migration `0021`), a deterministic Today card (Overdue / Due today / Due this week / unread announcements) and `/academic` course screens, the single same-origin-gated "open in Canvas" call site, `invalid_token` wired into the worker's auth-failure path, an egress guard keeping academic data out of every AI lane. **Deployed (api/worker/web, level 22) and production-validated against the owner's real UTA account 2026-09-16** (ADR-070/068a); Rabbit R1 accepted on versionCode 25, built locally after the EAS quota refused the cloud build. |
+| **10.3** | Academic Intelligence Expansion + Mobile UX Modernization: deterministic urgency / explainable priority scoring / workload status / course attention / grade summary as optional keys on the academic read model (ADR-071, no migration), a token-based mobile design system (`components/ui/`, three new Expo modules, web dark mode fixed) and every screen restyled on it. **Implemented, verified (6,477 tests) and independently reviewed 2026-09-16 on `claude/phase-10-3-academic-mobile-36b57c`; NOT deployed.** |
 
 **Production is at migration level 22** and serves api, worker and web built from `b2c273b` (10.2).
 All three Google integrations plus Canvas are active. Monitoring runs against five active targets
@@ -1319,11 +1539,12 @@ The Rabbit R1 runs `com.himal.personalos` versionCode 25, built locally from `8a
 
 ## Current work
 
-**Checkpoint 10.2 complete in production (`1edb61b`: 10.2 + hotfix + ADR-070a); one owner action
-open** — rotate the Canvas PAT that reached the api log and this chat, then reconnect from Settings.
-`main` is `1edb61b` and canonical; the feature branch is fully contained in it. Android APKs are built
-locally (see the 10.2 entry's *Device build* paragraph); the EAS build service is no longer on the
-release path.
+**Checkpoint 10.3 implemented on `claude/phase-10-3-academic-mobile-36b57c` (from `13d3f89`),
+awaiting the owner's deployment decision.** Production is unchanged at `1edb61b` (10.2 + hotfix +
+ADR-070a); the one owner action from 10.2 stays open — rotate the Canvas PAT that reached the api
+log and that chat, then reconnect from Settings. `main` is `13d3f89` and canonical. Android APKs
+are built locally (see the 10.2 entry's *Device build* paragraph); the EAS build service is no
+longer on the release path.
 
 **Repository housekeeping done 2026-09-16 (this reconciliation, no product change):** `main`
 fast-forwarded to the Phase 10 tip and made canonical again (PR #1 merged); the decision log split
@@ -1338,6 +1559,16 @@ removed from the primary checkout.
 ---
 
 ## Last verification
+
+**Checkpoint 10.3 gate (2026-09-16), on the worktree branch before commit, after the review
+fixes.** `pnpm build --force` 12/12 · `pnpm typecheck` 23/23 · `npx eslint apps packages` exit 0 ·
+`apps/mobile` eslint 0 errors (one warning in the generated `.expo/types/router.d.ts`) · root
+`prettier --check` clean · `git diff --check` clean · `gitleaks detect --no-git` no leaks ·
+`pnpm test --force` **23/23 tasks, 6,477 tests, zero failing** · cache-cleared
+`expo export --platform web` clean, and dark mode verified on the static export · local browser
+verification at 480 × 800 in both schemes with seeded academic data (removed after) · independent
+adversarial review, four MAJOR + fourteen MINOR closed (record in the 10.3 entry). Production
+unchanged and not re-verified this checkpoint.
 
 **10.2 hotfix + ADR-070a deployment (2026-09-16, ~22:50–22:55Z), read directly from production.**
 api/worker/web recreated from `personal-os-10.2b-release` (`1edb61b`), `RestartCount=0`, postgres
@@ -1398,7 +1629,11 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
    Then, optionally, re-read the Rabbit's Today card — it should show Fall 2026 only (`OVERDUE · 2`
    at the time of writing) without a rebuild.
 
-2. **Then choose the next checkpoint — a product-direction decision for the owner.** Candidates
+2. **Decide on Checkpoint 10.3's deployment** (owner): the api/web rollout and the local Rabbit
+   rebuild follow the plan in the 10.3 record (no migration; optional wire keys keep versionCode 25
+   working meanwhile). Until then the branch stays unmerged.
+
+3. **Then choose the next checkpoint — a product-direction decision for the owner.** Candidates
    carried from the 9.8 and 10.0/10.1 closeouts: widen the Canvas integration further (device-token
    auth on the academic routes; announcement/event surfaces beyond the course screen; the
    `invalid_token` wiring is now done by 10.2); widen the intelligence lane (`get_calendar_context`/`get_task_context`, Option B
@@ -1409,7 +1644,7 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
    owner decision rather than being debt: the `tags`/`item_tags` safe-to-drop classification (a table
    drop is irreversible under ADR-024) and the deferred `knip` dead-code-tooling question.
 
-3. **Open owner actions outside any checkpoint:** `docs/SOURCE-DURABILITY.md` Option 2 — the encrypted
+4. **Open owner actions outside any checkpoint:** `docs/SOURCE-DURABILITY.md` Option 2 — the encrypted
    configuration copy — is still not done and remains the sharpest source-durability risk; and the
    `EXPO_TOKEN` that sat in a mode-644 Expo dev log (deleted 2026-09-16) should be rotated.
 

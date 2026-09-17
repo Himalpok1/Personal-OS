@@ -1,3 +1,6 @@
+import { ChoiceChip } from "@/components/ask/choice-chip";
+import { FieldLabel, textFieldClass } from "@/components/ask/text-field";
+import { AppText, Button, ScreenFrame } from "@/components/ui";
 import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { PLACEHOLDER_LIGHT, usePlaceholderColor } from "@/components/placeholder-color";
@@ -42,7 +45,7 @@ import {
 import { randomUUID } from "expo-crypto";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import { ScrollView, Switch, TextInput, View } from "react-native";
 
 // Pre-fill query-param shape, used by the calendar tab's day/slot taps:
 //   router.push(`/events/new?date=2026-09-15&allDay=true`)                       // month-grid day tap
@@ -119,165 +122,169 @@ export function NewEventView(props: NewEventViewProps) {
   const placeholderColor = props.placeholderColor ?? PLACEHOLDER_LIGHT;
 
   return (
-    <ScrollView
-      className="flex-1 bg-white dark:bg-black"
-      // Padding lives entirely in contentContainerStyle (no
-      // contentContainerClassName) because NativeWind remaps that class onto
-      // this same prop -- see FLOATING_CLEARANCE_PX. The clearance keeps the
-      // globally-mounted QuickAdd/PTT buttons off this form's Create control;
-      // the keyboard height gives room to scroll it clear of the IME.
-      contentContainerStyle={{ padding: 16, paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight }}
-      // Without this the first tap on a submit button below a focused field
-      // only dismisses the keyboard instead of submitting.
-      keyboardShouldPersistTaps="handled"
-    >
-      <Text className="mb-1 text-sm text-neutral-500">Title</Text>
-      <TextInput
-        testID="event-title-input"
-        value={props.title}
-        onChangeText={props.onTitleChange}
-        placeholder="What's the event?"
-        placeholderTextColor={placeholderColor}
-        // The server's own bound (packages/schema/src/text-bounds.ts), so an
-        // over-long paste is stopped here rather than refused as a 400.
-        maxLength={ENTITY_TITLE_MAX_CHARS}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-      <FieldLengthCounter length={props.title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
-
-      <CalendarTargetPicker
-        targets={props.calendarTargets}
-        selected={props.calendar}
-        onChange={props.onCalendarChange}
-      />
-      {/* An erroring targets query must never hide the fact that no calendar
-          can be chosen -- the event is still created, in Personal OS only. */}
-      {props.calendarTargetsError && props.calendarTargets.length === 0 ? (
-        <Text testID="calendar-targets-error" className="mb-4 text-xs text-neutral-500">
-          {"Couldn't load calendars — this event will stay in Personal OS only"}
-        </Text>
-      ) : null}
-
-      <View className="mb-4 flex-row items-center justify-between">
-        <Text className="text-black dark:text-white">All-day</Text>
-        <Switch
-          testID="event-all-day-switch"
-          value={props.allDay}
-          onValueChange={props.onAllDayChange}
-        />
-      </View>
-
-      {props.allDay ? (
-        <>
-          <DateField
-            testID="event-start-date"
-            label="Start date"
-            value={props.allDayRange.startDate}
-            onChange={props.onStartDateChange}
-          />
-          <DateField
-            testID="event-end-date"
-            label="End date"
-            value={props.allDayRange.endDate}
-            onChange={props.onEndDateChange}
-            clearable={false}
-          />
-        </>
-      ) : (
-        <>
-          <DateTimeField
-            testID="event-starts-at"
-            label="Starts"
-            value={props.timed.startsAt}
-            onChange={props.onStartsAtChange}
-          />
-          <DateTimeField
-            testID="event-ends-at"
-            label="Ends"
-            value={props.timed.endsAt}
-            onChange={props.onEndsAtChange}
-          />
-        </>
-      )}
-
-      <EventRepeatField
-        value={props.recurrence}
-        onChange={props.onRecurrenceChange}
-        start={{
-          allDay: props.allDay,
-          startDate: props.allDayRange.startDate,
-          startsAt: props.timed.startsAt,
+    <ScreenFrame>
+      <ScrollView
+        className="flex-1"
+        // Padding lives entirely in contentContainerStyle (no
+        // contentContainerClassName) because NativeWind remaps that class onto
+        // this same prop -- see FLOATING_CLEARANCE_PX. The clearance keeps the
+        // globally-mounted QuickAdd/PTT buttons off this form's Create control;
+        // the keyboard height gives room to scroll it clear of the IME.
+        contentContainerStyle={{
+          padding: 16,
+          paddingBottom: FLOATING_CLEARANCE_PX + keyboardHeight,
         }}
-        timezone={props.timezone}
-      />
-
-      <Text className="mb-1 text-sm text-neutral-500">Location (optional)</Text>
-      <TextInput
-        value={props.location}
-        onChangeText={props.onLocationChange}
-        maxLength={EVENT_LOCATION_MAX_CHARS}
-        className="mb-4 rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-      <FieldLengthCounter length={props.location.length} maxLength={EVENT_LOCATION_MAX_CHARS} />
-
-      <Text className="mb-1 text-sm text-neutral-500">Notes (optional)</Text>
-      <TextInput
-        value={props.description}
-        onChangeText={props.onDescriptionChange}
-        multiline
-        maxLength={EVENT_DESCRIPTION_MAX_CHARS}
-        className="mb-4 min-h-[80px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
-      />
-      <FieldLengthCounter
-        length={props.description.length}
-        maxLength={EVENT_DESCRIPTION_MAX_CHARS}
-      />
-
-      <Text className="mb-1 text-sm text-neutral-500">Project (optional)</Text>
-      <View className="mb-4 flex-row flex-wrap gap-2">
-        {(props.projects ?? []).map((project) => (
-          <Pressable
-            key={project.id}
-            onPress={() =>
-              props.onProjectIdChange(props.projectId === project.id ? undefined : project.id)
-            }
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityState={{ selected: props.projectId === project.id }}
-            className={
-              props.projectId === project.id
-                ? "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-blue-600 px-3 py-1"
-                : "min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-neutral-100 px-3 py-1 dark:bg-neutral-800"
-            }
-          >
-            <Text
-              className={
-                props.projectId === project.id ? "text-white" : "text-black dark:text-white"
-              }
-            >
-              {project.name}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-
-      {props.formError ? (
-        <Text testID="event-form-error" className="mb-2 text-red-600" accessibilityRole="alert">
-          {props.formError}
-        </Text>
-      ) : null}
-
-      <Pressable
-        testID="create-event-button"
-        onPress={props.onSubmit}
-        disabled={props.isSubmitting || !props.title.trim()}
-        className="items-center rounded-lg bg-blue-600 py-3 active:bg-blue-700"
+        // Without this the first tap on a submit button below a focused field
+        // only dismisses the keyboard instead of submitting.
+        keyboardShouldPersistTaps="handled"
       >
-        <Text className="font-semibold text-white">
-          {props.isSubmitting ? "Saving..." : "Create event"}
-        </Text>
-      </Pressable>
-    </ScrollView>
+        <FieldLabel>Title</FieldLabel>
+        <TextInput
+          testID="event-title-input"
+          value={props.title}
+          onChangeText={props.onTitleChange}
+          placeholder="What's the event?"
+          placeholderTextColor={placeholderColor}
+          // The server's own bound (packages/schema/src/text-bounds.ts), so an
+          // over-long paste is stopped here rather than refused as a 400.
+          maxLength={ENTITY_TITLE_MAX_CHARS}
+          accessibilityLabel="Title"
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+        <FieldLengthCounter length={props.title.length} maxLength={ENTITY_TITLE_MAX_CHARS} />
+
+        <CalendarTargetPicker
+          targets={props.calendarTargets}
+          selected={props.calendar}
+          onChange={props.onCalendarChange}
+        />
+        {/* An erroring targets query must never hide the fact that no calendar
+            can be chosen -- the event is still created, in Personal OS only. */}
+        {props.calendarTargetsError && props.calendarTargets.length === 0 ? (
+          <AppText testID="calendar-targets-error" variant="caption" tone="muted" className="mb-4">
+            {"Couldn't load calendars — this event will stay in Personal OS only"}
+          </AppText>
+        ) : null}
+
+        <View className="mb-4 flex-row items-center justify-between gap-3">
+          <AppText variant="body" className="flex-1">
+            All-day
+          </AppText>
+          <Switch
+            testID="event-all-day-switch"
+            value={props.allDay}
+            onValueChange={props.onAllDayChange}
+            accessibilityLabel="All-day"
+          />
+        </View>
+
+        {props.allDay ? (
+          <>
+            <DateField
+              testID="event-start-date"
+              label="Start date"
+              value={props.allDayRange.startDate}
+              onChange={props.onStartDateChange}
+            />
+            <DateField
+              testID="event-end-date"
+              label="End date"
+              value={props.allDayRange.endDate}
+              onChange={props.onEndDateChange}
+              clearable={false}
+            />
+          </>
+        ) : (
+          <>
+            <DateTimeField
+              testID="event-starts-at"
+              label="Starts"
+              value={props.timed.startsAt}
+              onChange={props.onStartsAtChange}
+            />
+            <DateTimeField
+              testID="event-ends-at"
+              label="Ends"
+              value={props.timed.endsAt}
+              onChange={props.onEndsAtChange}
+            />
+          </>
+        )}
+
+        <EventRepeatField
+          value={props.recurrence}
+          onChange={props.onRecurrenceChange}
+          start={{
+            allDay: props.allDay,
+            startDate: props.allDayRange.startDate,
+            startsAt: props.timed.startsAt,
+          }}
+          timezone={props.timezone}
+        />
+
+        <FieldLabel>Location (optional)</FieldLabel>
+        <TextInput
+          value={props.location}
+          onChangeText={props.onLocationChange}
+          maxLength={EVENT_LOCATION_MAX_CHARS}
+          accessibilityLabel="Location"
+          className={textFieldClass({ extra: "mb-4" })}
+        />
+        <FieldLengthCounter length={props.location.length} maxLength={EVENT_LOCATION_MAX_CHARS} />
+
+        <FieldLabel>Notes (optional)</FieldLabel>
+        <TextInput
+          value={props.description}
+          onChangeText={props.onDescriptionChange}
+          multiline
+          textAlignVertical="top"
+          maxLength={EVENT_DESCRIPTION_MAX_CHARS}
+          accessibilityLabel="Notes"
+          className={textFieldClass({ multiline: true, extra: "mb-4 min-h-[80px]" })}
+        />
+        <FieldLengthCounter
+          length={props.description.length}
+          maxLength={EVENT_DESCRIPTION_MAX_CHARS}
+        />
+
+        <FieldLabel>Project (optional)</FieldLabel>
+        <View className="mb-4 flex-row flex-wrap gap-2">
+          {(props.projects ?? []).map((project) => (
+            <ChoiceChip
+              key={project.id}
+              label={project.name}
+              selected={props.projectId === project.id}
+              onPress={() =>
+                props.onProjectIdChange(props.projectId === project.id ? undefined : project.id)
+              }
+              accessibilityLabel={`Project: ${project.name}`}
+            />
+          ))}
+        </View>
+
+        {props.formError ? (
+          <AppText
+            testID="event-form-error"
+            variant="caption"
+            tone="danger"
+            className="mb-2"
+            accessibilityRole="alert"
+          >
+            {props.formError}
+          </AppText>
+        ) : null}
+
+        <Button
+          testID="create-event-button"
+          label={props.isSubmitting ? "Saving..." : "Create event"}
+          onPress={props.onSubmit}
+          disabled={props.isSubmitting || !props.title.trim()}
+          variant="primary"
+          icon="plus"
+          block
+        />
+      </ScrollView>
+    </ScreenFrame>
   );
 }
 

@@ -1,4 +1,6 @@
-import { Text, TextInput, View } from "react-native";
+import { TextInput, View } from "react-native";
+import { FieldLabel, textFieldClass } from "@/components/ask/text-field";
+import { AppText } from "@/components/ui";
 import { usePlaceholderColor } from "@/components/placeholder-color";
 import { formatFieldLabel, isPastInstant } from "@/components/datetime-field-state";
 import type { DateTimeFieldProps } from "@/components/datetime-field";
@@ -19,24 +21,24 @@ export function DateTimeField({ label, value, onChange, warnIfPast = false }: Da
 
   return (
     <View className="mb-4">
-      <Text className="mb-1 text-sm text-neutral-500">{label} (ISO 8601)</Text>
+      <FieldLabel>{`${label} (ISO 8601)`}</FieldLabel>
       <TextInput
         value={value ?? ""}
         onChangeText={(next) => onChange(next.trim() === "" ? null : next)}
         placeholder="2026-09-15T14:00:00"
         placeholderTextColor={placeholderColor}
         accessibilityLabel={label}
-        className="min-h-[44px] rounded-lg border border-neutral-300 p-3 text-black dark:border-neutral-700 dark:text-white"
+        className={textFieldClass()}
       />
       {value && !formatFieldLabel(value) ? (
-        <Text className="mt-1 text-xs text-amber-700 dark:text-amber-500">
+        <AppText variant="caption" tone="warning" className="mt-1">
           That is not a date we can read.
-        </Text>
+        </AppText>
       ) : null}
       {past ? (
-        <Text className="mt-1 text-xs text-amber-700 dark:text-amber-500">
+        <AppText variant="caption" tone="warning" className="mt-1">
           That time has already passed.
-        </Text>
+        </AppText>
       ) : null}
     </View>
   );

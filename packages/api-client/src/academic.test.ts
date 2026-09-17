@@ -106,6 +106,18 @@ describe("listAcademicCourses", () => {
     await listAcademicCourses(BASE, { includeArchived: true });
     expect(String(g.mock.calls[0]![0])).toBe(`${BASE}/academic/courses?include_archived=true`);
   });
+
+  it("omits include_past_terms by default and sends it when asked (ADR-070a)", async () => {
+    const f = stub({ configured: true, items: [] });
+    await listAcademicCourses(BASE, { includePastTerms: true });
+    expect(String(f.mock.calls[0]![0])).toBe(`${BASE}/academic/courses?include_past_terms=true`);
+
+    const g = stub({ configured: true, items: [] });
+    await listAcademicCourses(BASE, { includeArchived: true, includePastTerms: true });
+    expect(String(g.mock.calls[0]![0])).toBe(
+      `${BASE}/academic/courses?include_archived=true&include_past_terms=true`,
+    );
+  });
 });
 
 describe("getAcademicCourse", () => {
