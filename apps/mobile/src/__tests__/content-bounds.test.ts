@@ -27,7 +27,10 @@ function maxLengthsOf(source: string): (string | null)[] {
   });
 }
 
-const SCREENS: Record<string, { inputs: string[]; unbounded?: number; banner: RegExp }> = {
+// `banner` is optional only for a shared, prop-driven form whose inputs are
+// bounded here but whose refusal banner lives in each hosting screen (listed
+// as its own entry with `inputs: []`).
+const SCREENS: Record<string, { inputs: string[]; unbounded?: number; banner?: RegExp }> = {
   "../app/tasks/new.tsx": {
     inputs: ["ENTITY_TITLE_MAX_CHARS", "TASK_BODY_MAX_CHARS"],
     banner: /describeValidationError\(createTask\.error\) \?\? "Couldn't create that task\."/,
@@ -72,6 +75,20 @@ const SCREENS: Record<string, { inputs: string[]; unbounded?: number; banner: Re
     inputs: ["CAPTURE_TEXT_MAX_LENGTH"],
     banner: /describeValidationError\(capture\.error\) \?\?/,
   },
+  // Checkpoint 10.7 (ADR-077): the memory editor is one prop-driven form
+  // shared by /memory/new and /memory/[id]; the bounds live in the form, the
+  // banner in each screen.
+  "../components/memory/memory-form.tsx": {
+    inputs: ["MEMORY_STATEMENT_MAX_CHARS", "MEMORY_NOTE_MAX_CHARS"],
+  },
+  "../app/memory/new.tsx": {
+    inputs: [],
+    banner: /describeValidationError\(createMemory\.error\) \?\?/,
+  },
+  "../app/memory/[id].tsx": {
+    inputs: [],
+    banner: /onError: \(err\) =>\s*setSaveError\(\s*describeValidationError\(err\) \?\?/,
+  },
 };
 
 describe("every user text field is bounded at the schema's constant (Checkpoint 9.6)", () => {
@@ -93,9 +110,12 @@ describe("every user text field is bounded at the schema's constant (Checkpoint 
       expect((source!.match(/<FieldLengthCounter\b/g) ?? []).length).toBe(expected.inputs.length);
     });
 
-    it(`${file}: a refused field reaches the banner through describeValidationError`, () => {
-      expect(SOURCES[file]!).toMatch(expected.banner);
-    });
+    if (expected.banner) {
+      const banner = expected.banner;
+      it(`${file}: a refused field reaches the banner through describeValidationError`, () => {
+        expect(SOURCES[file]!).toMatch(banner);
+      });
+    }
   }
 });
 

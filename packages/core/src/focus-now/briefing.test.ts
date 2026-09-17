@@ -303,6 +303,158 @@ describe("composeBriefing -- schedule", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Checkpoint 10.7 (ADR-077 §5): the working-hours memory and the memory source
+// ---------------------------------------------------------------------------
+
+describe("composeBriefing -- schedule with a working-hours memory", () => {
+  const memory = { workingHours: { dayStartHour: 9, dayEndHour: 18 } };
+
+  it("bounds the free blocks by the memory's hours and names them in one memory-sourced line, before the blocks", () => {
+    const result = section(
+      composeBriefing(
+        input({
+          memory,
+          today: {
+            overdueTotal: 0,
+            dueTodayTotal: 0,
+            eventsToday: [timed("Dentist", plus(2 * HOUR), plus(3 * HOUR))], // 16:00–17:00
+            inboxAttentionTotal: 0,
+          },
+        }),
+      ),
+      "schedule",
+    );
+    expect(result).toEqual({
+      kind: "schedule",
+      title: "Schedule",
+      lines: [
+        { text: "1 event today", source: "calendar", tone: "neutral" },
+        { text: "Next: Dentist at 16:00", source: "calendar", tone: "neutral" },
+        {
+          text: "Working hours 09:00–18:00 — from your preferences",
+          source: "memory",
+          tone: "neutral",
+        },
+        { text: "Free 14:00–16:00 (2h 00m)", source: "calendar", tone: "neutral" },
+        { text: "Free 17:00–18:00 (1h 00m)", source: "calendar", tone: "neutral" },
+      ],
+    });
+    // The memory line carries no ref: there is no row to navigate to.
+    expect(result?.lines[2]).not.toHaveProperty("ref");
+  });
+
+  it("with no events, the memory line precedes the single remaining block", () => {
+    expect(section(composeBriefing(input({ memory })), "schedule")?.lines).toEqual([
+      {
+        text: "Working hours 09:00–18:00 — from your preferences",
+        source: "memory",
+        tone: "neutral",
+      },
+      { text: "Free 14:00–18:00 (4h 00m)", source: "calendar", tone: "neutral" },
+    ]);
+  });
+
+  it("is omitted entirely after the owner's hours with no events -- the line never stands alone", () => {
+    const afterHours = iso("2026-09-16T23:30:00Z"); // 18:30 CDT: inside the 22:00 default, past the memory's 18:00
+    expect(section(composeBriefing(input({ effectiveNow: afterHours })), "schedule")).toBeDefined();
+    expect(
+      section(composeBriefing(input({ effectiveNow: afterHours, memory })), "schedule"),
+    ).toBeUndefined();
+  });
+
+  it("treats absent, null, and invalid memory hours as the defaults, with no memory line", () => {
+    const plain = section(composeBriefing(input()), "schedule");
+    expect(section(composeBriefing(input({ memory: null })), "schedule")).toEqual(plain);
+    expect(section(composeBriefing(input({ memory: {} })), "schedule")).toEqual(plain);
+    expect(section(composeBriefing(input({ memory: { workingHours: null } })), "schedule")).toEqual(
+      plain,
+    );
+    for (const workingHours of [
+      { dayStartHour: 18, dayEndHour: 9 },
+      { dayStartHour: 9, dayEndHour: 9 },
+      { dayStartHour: 9.5, dayEndHour: 18 },
+      { dayStartHour: -1, dayEndHour: 18 },
+      { dayStartHour: 9, dayEndHour: 25 },
+    ]) {
+      expect(
+        section(composeBriefing(input({ memory: { workingHours } })), "schedule"),
+        JSON.stringify(workingHours),
+      ).toEqual(plain);
+    }
+    expect(plain?.lines.some((l) => l.source === "memory")).toBe(false);
+  });
+
+  it("DST fall-back day 2026-11-01 under memory bounds: the free window is 09:00–18:00 CST, 9h on the clock", () => {
+    const early = iso("2026-11-01T05:30:00Z"); // 00:30 CDT
+    const result = section(composeBriefing(input({ effectiveNow: early, memory })), "schedule");
+    expect(result?.lines).toEqual([
+      {
+        text: "Working hours 09:00–18:00 — from your preferences",
+        source: "memory",
+        tone: "neutral",
+      },
+      { text: "Free 09:00–18:00 (9h 00m)", source: "calendar", tone: "neutral" },
+    ]);
+  });
+
+  it("leaves the headline, and every other section, untouched by the memory input", () => {
+    const withMemory = composeBriefing(
+      input({ memory, academic: academic({ overdueTotal: 1 }), health: health() }),
+    );
+    const without = composeBriefing(
+      input({ academic: academic({ overdueTotal: 1 }), health: health() }),
+    );
+    expect(withMemory.headline).toBe(without.headline);
+    expect(section(withMemory, "academic")).toEqual(section(without, "academic"));
+    expect(section(withMemory, "health")).toEqual(section(without, "health"));
+    expect(BRIEFING_SECTION_KINDS).toEqual(["academic", "schedule", "health", "focus"]); // no new section kind
+  });
+});
+
+describe("composeBriefing -- focus lines inherit a memory-driven primary source", () => {
+  it("a row whose only reason is a memory reason reads with source memory and the static why", () => {
+    const only = c({
+      id: "m",
+      title: "Read chapter 4",
+      reasons: ["supports_goal"],
+      baseScore: 100,
+      contextPoints: 15,
+      score: 115,
+    });
+    expect(section(composeBriefing(input({ focus: [only] })), "focus")?.lines).toEqual([
+      {
+        text: "Read chapter 4 — A saved goal is linked to this item's project",
+        source: "memory",
+        tone: "neutral",
+        ref: { kind: "task", id: "m" },
+      },
+    ]);
+  });
+
+  it("a memory reason never displaces the urgency as the primary: the line keeps the task source", () => {
+    const remembered = focusNowCandidateFromTask(
+      {
+        id: "t",
+        title: "Call the insurance guy",
+        dueAt: plus(-1),
+        priority: null,
+        memory: { matchesPreference: true, supportsGoal: true },
+      },
+      NOW,
+      HORIZON,
+    );
+    expect(section(composeBriefing(input({ focus: [remembered] })), "focus")?.lines).toEqual([
+      {
+        text: "Call the insurance guy — Past its due time",
+        source: "task",
+        tone: "danger",
+        ref: { kind: "task", id: "t" },
+      },
+    ]);
+  });
+});
+
 describe("composeBriefing -- health", () => {
   it("compares last night's sleep to the 7-day average, with the documented thresholds", () => {
     const below = section(composeBriefing(input({ health: health() })), "health");

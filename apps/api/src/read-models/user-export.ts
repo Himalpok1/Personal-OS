@@ -1,4 +1,4 @@
-import { inboxItems, notes, projects, tasks, type Db } from "@personal-os/db";
+import { inboxItems, memories, notes, projects, tasks, type Db } from "@personal-os/db";
 import {
   EXPORT_ENTITY_MAX_ROWS,
   EXPORT_FORMAT_VERSION,
@@ -27,8 +27,9 @@ import { toProjectPayload } from "./project-summaries.js";
 //      mechanism `apps/api/src/routes/mail-connections.ts` relies on to make a
 //      ciphertext column "structurally incapable of reaching the wire".
 //
-// Four tables are read. `SELECT *` over an arbitrary table is not expressible
-// in this module, and neither is any table outside these four -- the imports at
+// Five tables are read (four since Checkpoint 8.3, plus `memories` since
+// Checkpoint 10.7). `SELECT *` over an arbitrary table is not expressible in
+// this module, and neither is any table outside these five -- the imports at
 // the top are the complete set, so a credential table is not merely omitted
 // from a list, it is absent from the module's scope.
 //
@@ -114,6 +115,30 @@ function toInboxItemPayload(row: typeof inboxItems.$inferSelect) {
 }
 
 /**
+ * Checkpoint 10.7 (ADR-077 §2): the flat memory row -- ids only, never the
+ * resolved project/course names the list item carries, because the export is
+ * the owner's own record and a display denormalisation is not part of it.
+ * `memory_suggestions` (the decision table) and `memory_settings` (the switch)
+ * are plumbing, like `client_uuid`, and are not read here at all. This file
+ * deliberately does NOT import read-models/memories.ts (Guard 6 forbids any
+ * other read model from doing so): the export allowlist stays readable here.
+ */
+function toMemoryPayload(row: typeof memories.$inferSelect) {
+  return {
+    id: row.id,
+    kind: row.kind,
+    statement: row.statement,
+    note: row.note,
+    source: row.source,
+    suggestion_id: row.suggestionId,
+    project_id: row.projectId,
+    canvas_course_id: row.canvasCourseId,
+    created_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
+
+/**
  * Assembles the export.
  *
  * `generatedAt` is injected rather than read from the clock here, so the route
@@ -130,6 +155,8 @@ export async function buildUserExport(db: Db, generatedAt: Date): Promise<Export
     noteTotals,
     inboxRows,
     inboxTotals,
+    memoryRows,
+    memoryTotals,
   ] = await Promise.all([
     db
       .select()
@@ -147,6 +174,12 @@ export async function buildUserExport(db: Db, generatedAt: Date): Promise<Export
       .orderBy(asc(inboxItems.createdAt), asc(inboxItems.id))
       .limit(ENTITY_LIMIT),
     db.select({ total: count() }).from(inboxItems),
+    db
+      .select()
+      .from(memories)
+      .orderBy(asc(memories.createdAt), asc(memories.id))
+      .limit(ENTITY_LIMIT),
+    db.select({ total: count() }).from(memories),
   ]);
 
   const counts = {
@@ -154,6 +187,7 @@ export async function buildUserExport(db: Db, generatedAt: Date): Promise<Export
     tasks: { returned: taskRows.length, total: taskTotals[0]?.total ?? 0 },
     notes: { returned: noteRows.length, total: noteTotals[0]?.total ?? 0 },
     inbox_items: { returned: inboxRows.length, total: inboxTotals[0]?.total ?? 0 },
+    memories: { returned: memoryRows.length, total: memoryTotals[0]?.total ?? 0 },
   };
 
   return ExportResponseSchema.parse({
@@ -166,5 +200,6 @@ export async function buildUserExport(db: Db, generatedAt: Date): Promise<Export
     tasks: taskRows.map(toTaskPayload),
     notes: noteRows.map(toNotePayload),
     inbox_items: inboxRows.map(toInboxItemPayload),
+    memories: memoryRows.map(toMemoryPayload),
   });
 }

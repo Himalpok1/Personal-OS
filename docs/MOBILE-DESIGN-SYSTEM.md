@@ -53,9 +53,11 @@ light canvas and `shadow-fab` under the floating capture button; dark mode relie
 surface/outline contrast (`dark:shadow-none`).
 
 **Gradients** (`GradientCard gradient=`): `hero` (Today), `academic`, `health`, `soft` (quiet
-tinted panel, drawn under the ordinary on-surface tones), plus `warm` (needs attention) and `calm`
-(all clear) held for a future surface — no consumer today. One per screen at most; every stop of
-the white-text presets is contrast-pinned.
+tinted panel, drawn under the ordinary on-surface tones — its first hero consumer is the Memory
+Center's headline card, Checkpoint 10.7, which keeps `AppText`'s default/secondary tones rather
+than `on-gradient`), plus `warm` (needs attention) and `calm` (all clear) held for a future surface
+— no consumer today. One per screen at most; every stop of the white-text presets is
+contrast-pinned.
 
 ## Primitives
 
@@ -166,7 +168,14 @@ Android back button dismiss it.
 8. **Haptics only on meaningful taps.** `Button variant="primary"` fires a light impact and a
    successful capture fires a success notification; a primary button that only navigates opts out
    with `haptic={false}` (the "New …" buttons do). Destructive confirms are silent today.
-9. **Dark mode on web** needs two things `useSyncWebColorSchemeClass` does: once at boot it calls
+9. **Toggles are Buttons.** The design system ships no Switch primitive, and a coloured word is
+   never tappable (rule 3), so a reversible on/off setting is a `Button variant="tonal"
+   size="sm"` whose label names the action it will take ("Turn off" / "Turn on"), beside a
+   `StatusChip` that names the current state. No confirmation for a switch that gates use
+   rather than storage (the Memory switch, Checkpoint 10.7; Cloud Ask's disable); a
+   destructive, hard-to-undo action keeps `confirmDestructive`. `react-native`'s `Switch` in
+   `app/settings.tsx` predates this rule and is the accepted exception.
+10. **Dark mode on web** needs two things `useSyncWebColorSchemeClass` does: once at boot it calls
    NativeWind's `colorScheme.set("system")` (on a static export the interop runtime otherwise pins
    the scheme to "light" because `<html>` carries no `dark` class when the stylesheet is already
    applied), then it keeps the `dark` class on `<html>` in step with the hook so the compiled

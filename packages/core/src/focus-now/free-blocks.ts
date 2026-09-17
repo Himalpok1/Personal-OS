@@ -20,7 +20,11 @@
 // clock, never "effectiveNow + N hours", so on a 25-hour fall-back day and a
 // 23-hour spring-forward day the window is still 08:00–22:00 (14h) and the
 // transition hour lands where the clock says it does. `dayEndHour === 24`
-// means the end of the local day (the next day's first instant).
+// means the end of the local day (the next day's first instant). The
+// defaults are overridable per call (`dayStartHour`/`dayEndHour`); since
+// Checkpoint 10.7 (ADR-077 §5) the briefing passes a working-hours
+// `preference` memory through them (`memoryWorkingHours`, packages/core/src/
+// memory/match.ts) -- the same wall-clock rule applies to the owner's hours.
 //
 // ===========================================================================
 // BUSY TIME IS TIMED EVENTS ONLY, CLAMPED AND MERGED
@@ -92,10 +96,24 @@ function localHourInstant(
   return resolveWallClockToInstant({ year, month, day, hour, minute: 0, second: 0 }, tz);
 }
 
+function isHour(hour: number): boolean {
+  return Number.isInteger(hour) && hour >= 0 && hour <= 24;
+}
+
 function assertHour(name: string, hour: number): void {
-  if (!Number.isInteger(hour) || hour < 0 || hour > 24) {
+  if (!isHour(hour)) {
     throw new RangeError(`${name} must be an integer hour in 0..24, got ${hour}`);
   }
+}
+
+/**
+ * Whether a pair of bounds is one `freeBlocks` accepts: integer hours in
+ * 0..24 with the start strictly before the end. A caller holding bounds it
+ * did not derive itself (the briefing, given a memory's hours) checks here
+ * and falls back to the defaults rather than throwing on data.
+ */
+export function isValidFreeBlockWindow(dayStartHour: number, dayEndHour: number): boolean {
+  return isHour(dayStartHour) && isHour(dayEndHour) && dayStartHour < dayEndHour;
 }
 
 /** Sorts spans by start and merges any that overlap or touch. */

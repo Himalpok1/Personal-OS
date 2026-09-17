@@ -52,6 +52,8 @@ import {
   useUpdateProject,
 } from "@/queries/projects";
 import { useCompleteTask } from "@/queries/tasks";
+import { fetchMemorySuggestionForProject } from "@/queries/memory";
+import { showMemorySuggestion } from "@/components/memory/memory-suggestion-sheet";
 import { formatShortDateTime } from "@/utils/format-datetime";
 import { formatShortDate } from "@/utils/local-date";
 import { describeValidationError } from "@/utils/validation-error";
@@ -202,6 +204,18 @@ export default function ProjectDetailScreen() {
     updateProject.mutate(
       { id: project.id, body },
       {
+        // The explicit moment (Checkpoint 10.7, ADR-077 §4): a goal was just
+        // saved and is non-empty, so ask ONCE whether the server has a
+        // `project_goal` suggestion for THIS project and, if so, offer it in
+        // the root-mounted sheet. Nothing else on this screen -- no edit, no
+        // completion, no visit -- opens it; a failed lookup opens nothing.
+        onSuccess: () => {
+          if (typeof body.goal === "string" && body.goal.length > 0) {
+            void fetchMemorySuggestionForProject(queryClient, project.id).then((suggestion) => {
+              if (suggestion) showMemorySuggestion(suggestion);
+            });
+          }
+        },
         // A refused field (a server 400 or the api-client's pre-request parse)
         // names the field and its bound; anything else keeps a generic line.
         onError: (err) =>

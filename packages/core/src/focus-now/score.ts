@@ -3,7 +3,7 @@
 // items (the academic Today read model's `priorities` section, Checkpoint
 // 10.3) into ONE ranked, capped, explainable list (Checkpoint 10.4, ADR-072;
 // context scoring and the linked-assignment dedupe added by Checkpoint 10.6,
-// ADR-075).
+// ADR-075; the two memory reasons by Checkpoint 10.7, ADR-077 §5).
 //
 // Pure, total functions, no clock read (the caller passes `effectiveNow` and,
 // for a task, the same `horizonEndUtc` `academicTodayWindows` computes), no
@@ -32,10 +32,24 @@
 //   baseScore      a TASK: the urgency ladder + `top_priority`, scored here
 //                  an ASSIGNMENT: the SERVER's own `AcademicPriorityItem.score`,
 //                  taken VERBATIM
-//   contextPoints  Σ FOCUS_NOW_CONTEXT_POINTS[reason] over the context
-//                  reasons (reasons.ts): +25 for a linked assignment, a
-//                  stalled project or a high-attention course; 0 for the
-//                  informational ones
+//   contextPoints  min(FOCUS_NOW_CONTEXT_POINTS_CAP, Σ FOCUS_NOW_CONTEXT_POINTS
+//                  [reason] over the context reasons) (reasons.ts): +25 for
+//                  a linked assignment, a stalled project or a high-attention
+//                  course; 0 for the informational ones; +15 for each of the
+//                  two MEMORY reasons (ADR-077 §5); the total capped at 75,
+//                  the pre-10.7 maximum, in the ONE function every path -- a
+//                  scored task, a wrapped assignment, a merged pair -- goes
+//                  through (`contextPointsFor`)
+//
+// MEMORY ARRIVES AS TWO BOOLEANS, NEVER AS TEXT. `FocusNowTaskInput.memory`
+// / `FocusNowAcademicInput.memory` are `{ matchesPreference, supportsGoal }`
+// -- the projection `memoryMatchFlags` (packages/core/src/memory/match.ts)
+// makes of a typed-link match. The scorer therefore stays a pure table: it
+// cannot see a statement, cannot match text, and cannot award a memory
+// reason more than once per row however many memories are linked. The
+// matched memory objects travel separately to `explain.ts` so the "why" can
+// name them. When the global switch is off the caller passes no memory and
+// nothing here changes (ADR-077 §7).
 //
 // THIS MODULE NEVER RE-DERIVES AN ACADEMIC SCORE. An academic candidate's
 // `baseScore`/urgency reasons are taken verbatim from the server's own
@@ -54,10 +68,15 @@
 // relationship between the two domains. When a task candidate's link names
 // an academic candidate in the SAME list, `mergeLinkedCandidates` collapses
 // them into ONE row of kind `task` -- the task is the thing the owner can act
-// on in-app -- keeping the stronger base, summing the context bonuses,
-// adding `linked_assignment` (+25) and the union of both reasons lists. A
-// link that points at an assignment NOT in the list is left alone: there is
-// nothing in this list to link to, so no bonus and no reason.
+// on in-app -- keeping the stronger base, adding `linked_assignment` (+25),
+// taking the UNION of both reasons lists and recomputing the context bonus
+// over that union, so a reason both sides carried -- a memory reason when
+// the task's project and the assignment's course each match a memory -- is
+// counted ONCE (ADR-077 §5: "a merged task+assignment row receives a memory
+// bonus once"). Before 10.7 the two sides' context reasons were disjoint,
+// so this is byte-identical to the 10.6 "sum both sides + 25". A link that
+// points at an assignment NOT in the list is left alone: there is nothing
+// in this list to link to, so no bonus and no reason.
 import {
   ACADEMIC_URGENCY_BASE_POINTS,
   compareAcademicPriorities,
@@ -69,11 +88,14 @@ import {
 } from "../academic/urgency.js";
 import {
   FOCUS_NOW_CONTEXT_POINTS,
+  FOCUS_NOW_CONTEXT_POINTS_CAP,
+  FOCUS_NOW_CONTEXT_REASONS,
   FOCUS_NOW_TASK_REASON,
   FOCUS_NOW_TOP_PRIORITY,
   FOCUS_NOW_TOP_PRIORITY_POINTS,
   sortReasons,
   type FocusNowContextReason,
+  type FocusNowMemoryReason,
   type FocusNowReason,
 } from "./reasons.js";
 
@@ -81,7 +103,10 @@ import {
 // re-exported here so every pre-10.6 import of this module keeps resolving.
 export {
   FOCUS_NOW_CONTEXT_POINTS,
+  FOCUS_NOW_CONTEXT_POINTS_CAP,
   FOCUS_NOW_CONTEXT_REASONS,
+  FOCUS_NOW_MEMORY_POINTS,
+  FOCUS_NOW_MEMORY_REASONS,
   FOCUS_NOW_REASON_ORDER,
   FOCUS_NOW_SOURCES,
   FOCUS_NOW_TASK_REASON,
@@ -89,6 +114,7 @@ export {
   FOCUS_NOW_TOP_PRIORITY_POINTS,
   sortReasons,
   type FocusNowContextReason,
+  type FocusNowMemoryReason,
   type FocusNowReason,
   type FocusNowSource,
 } from "./reasons.js";
@@ -117,9 +143,45 @@ export interface FocusNowCandidate {
   linkedAssignmentId: string | null;
 }
 
-/** Σ FOCUS_NOW_CONTEXT_POINTS over a list of context reasons. */
-function contextPointsFor(reasons: readonly FocusNowContextReason[]): number {
+/** Σ FOCUS_NOW_CONTEXT_POINTS over a list of context reasons, before the cap. */
+export function uncappedContextPointsFor(reasons: readonly FocusNowContextReason[]): number {
   return reasons.reduce((sum, reason) => sum + FOCUS_NOW_CONTEXT_POINTS[reason], 0);
+}
+
+/**
+ * A row's context points: the table sum, capped at FOCUS_NOW_CONTEXT_POINTS_CAP.
+ * The ONE place the cap is applied -- `scoreFocusNowTask`,
+ * `focusNowCandidateFromAcademic` and `mergeLinkedCandidates` all compute
+ * their `contextPoints` here, so the number on the row and the equation
+ * `explain.ts` renders can never disagree about it.
+ */
+export function contextPointsFor(reasons: readonly FocusNowContextReason[]): number {
+  return Math.min(FOCUS_NOW_CONTEXT_POINTS_CAP, uncappedContextPointsFor(reasons));
+}
+
+const CONTEXT_REASON_SET: ReadonlySet<FocusNowReason> = new Set<FocusNowReason>(
+  FOCUS_NOW_CONTEXT_REASONS,
+);
+
+function isContextReason(reason: FocusNowReason): reason is FocusNowContextReason {
+  return CONTEXT_REASON_SET.has(reason);
+}
+
+/** The two booleans a typed-link memory match projects to (`memoryMatchFlags` in memory/match.ts). */
+export interface FocusNowMemoryFlags {
+  /** A `preference`/`fact` memory is linked to the row's project or the assignment's course. */
+  matchesPreference: boolean;
+  /** A `goal` memory is linked to the row's project. */
+  supportsGoal: boolean;
+}
+
+/** The memory reasons a flags object earns, in vocabulary order; absent/undefined ⇒ none. */
+function memoryReasonsFor(memory: FocusNowMemoryFlags | null | undefined): FocusNowMemoryReason[] {
+  if (memory === undefined || memory === null) return [];
+  const reasons: FocusNowMemoryReason[] = [];
+  if (memory.matchesPreference) reasons.push("matches_preference");
+  if (memory.supportsGoal) reasons.push("supports_goal");
+  return reasons;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +202,8 @@ export interface FocusNowTaskInput {
   snoozedUntil?: Date | null;
   /** The task's project is stalled (docs/ARCHITECTURE.md rule 8); true adds `project_stalled` (+25). */
   projectStalled?: boolean;
+  /** Typed-link memory matches (ADR-077 §5); each true flag adds its +15 reason once. */
+  memory?: FocusNowMemoryFlags | null;
 }
 
 export interface FocusNowTaskScore {
@@ -198,6 +262,7 @@ export function scoreFocusNowTask(
   if (input.projectStalled === true) context.push("project_stalled");
   if (input.remindAt !== undefined && input.remindAt !== null) context.push("reminder_set");
   if (input.snoozedUntil !== undefined && input.snoozedUntil !== null) context.push("snoozed");
+  context.push(...memoryReasonsFor(input.memory));
   const contextPoints = contextPointsFor(context);
 
   return {
@@ -249,6 +314,8 @@ export interface FocusNowAcademicInput {
   submissionUnsubmitted?: boolean;
   /** The assignment's course is at attention level `high` (ADR-071); true adds `course_attention_high` (+25). */
   courseAttentionHigh?: boolean;
+  /** Typed-link memory matches (ADR-077 §5); each true flag adds its +15 reason once. The server's `score` stays the base verbatim. */
+  memory?: FocusNowMemoryFlags | null;
 }
 
 /**
@@ -261,6 +328,7 @@ export function focusNowCandidateFromAcademic(input: FocusNowAcademicInput): Foc
   const context: FocusNowContextReason[] = [];
   if (input.courseAttentionHigh === true) context.push("course_attention_high");
   if (input.submissionUnsubmitted === true) context.push("no_submission");
+  context.push(...memoryReasonsFor(input.memory));
   const contextPoints = contextPointsFor(context);
   return {
     id: input.id,
@@ -288,9 +356,14 @@ export function focusNowCandidateFromAcademic(input: FocusNowAcademicInput): Foc
  *   id / title            the task's
  *   dueAt                 the task's, falling back to the assignment's
  *   baseScore             max(task.baseScore, academic.baseScore)
- *   contextPoints         task.contextPoints + academic.contextPoints
- *                         + FOCUS_NOW_CONTEXT_POINTS.linked_assignment
  *   reasons               sortReasons(task ∪ academic ∪ {linked_assignment})
+ *   contextPoints         `contextPointsFor` over the CONTEXT reasons of that
+ *                         union -- each reason counted once, so a memory
+ *                         reason both sides earned is +15, not +30, and the
+ *                         total capped at FOCUS_NOW_CONTEXT_POINTS_CAP
+ *                         (ADR-077 §5); equal to "task + academic + 25" for
+ *                         every pre-10.7 pair, whose context reasons were
+ *                         disjoint and summed to at most 75
  *   linkedAssignmentId    kept
  *
  * A task whose link names an assignment NOT in the list is returned
@@ -313,10 +386,12 @@ export function mergeLinkedCandidates<T extends FocusNowCandidate>(candidates: r
       const academic = academicById.get(candidate.linkedAssignmentId);
       if (academic !== undefined) {
         consumed.add(academic.id);
-        const contextPoints =
-          candidate.contextPoints +
-          academic.contextPoints +
-          FOCUS_NOW_CONTEXT_POINTS.linked_assignment;
+        const reasons = sortReasons([
+          ...candidate.reasons,
+          ...academic.reasons,
+          "linked_assignment",
+        ]);
+        const contextPoints = contextPointsFor(reasons.filter(isContextReason));
         const baseScore = Math.max(candidate.baseScore, academic.baseScore);
         merged.push({
           ...candidate,
@@ -324,7 +399,7 @@ export function mergeLinkedCandidates<T extends FocusNowCandidate>(candidates: r
           baseScore,
           contextPoints,
           score: baseScore + contextPoints,
-          reasons: sortReasons([...candidate.reasons, ...academic.reasons, "linked_assignment"]),
+          reasons,
         });
         continue;
       }

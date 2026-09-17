@@ -1,11 +1,16 @@
 import {
   aiProviderConnections,
+  canvasConnections,
+  canvasCourses,
   devices,
   events,
   healthConnections,
   inboxItems,
   mailConnections,
   mailMessages,
+  memories,
+  memorySettings,
+  memorySuggestions,
   notes,
   projects,
   tasks,
@@ -27,6 +32,15 @@ const SECRET_HEALTH_USER = "health-user-id-do-not-export";
 const SECRET_AI_PROVIDER = "provider-name-do-not-export";
 const SECRET_MAIL_SUBJECT = "third-party subject do-not-export";
 const SECRET_EVENT_TITLE = "stranger-authored event do-not-export";
+// Checkpoint 10.7 (ADR-077 §2): the export carries the flat memory row only --
+// never the linked course's name (a Canvas-authored string that reaches no
+// export), and nothing from the decision table or the switch.
+const SECRET_COURSE_NAME = "canvas course name do-not-export";
+const SECRET_COURSE_CODE = "CODE-do-not-export";
+
+function countOccurrences(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1;
+}
 
 describe("GET /export", () => {
   let app: FastifyInstance;
@@ -41,6 +55,12 @@ describe("GET /export", () => {
 
   beforeEach(async () => {
     await truncateTestTables(app);
+    // Checkpoint 10.7 tables: memories references memory_suggestions (set
+    // null), so it clears first; canvas_connections cascades to courses.
+    await app.db.delete(memories);
+    await app.db.delete(memorySuggestions);
+    await app.db.delete(memorySettings);
+    await app.db.delete(canvasConnections);
   });
 
   function get() {
@@ -120,6 +140,7 @@ describe("GET /export", () => {
     expect(body.tasks).toEqual([]);
     expect(body.notes).toEqual([]);
     expect(body.inbox_items).toEqual([]);
+    expect(body.memories).toEqual([]);
     for (const counts of Object.values(body.counts)) {
       expect(counts).toEqual({ returned: 0, total: 0 });
     }
@@ -132,6 +153,7 @@ describe("GET /export", () => {
       "format_version",
       "generated_at",
       "inbox_items",
+      "memories",
       "notes",
       "projects",
       "scope",
@@ -171,6 +193,12 @@ describe("GET /export", () => {
       capturedAt: new Date("2026-08-01T10:00:00Z"),
       timezone: TZ,
     });
+    await app.db.insert(memories).values({
+      kind: "preference",
+      statement: "I prefer to call contractors before noon",
+      source: "user",
+      projectId: project!.id,
+    });
 
     const body = await exportBody();
     expect(body.counts).toEqual({
@@ -178,12 +206,15 @@ describe("GET /export", () => {
       tasks: { returned: 1, total: 1 },
       notes: { returned: 1, total: 1 },
       inbox_items: { returned: 1, total: 1 },
+      memories: { returned: 1, total: 1 },
     });
     expect(body.projects[0]!.name).toBe("Roof replacement");
     expect(body.tasks[0]!.title).toBe("Call the roofer");
     expect(body.tasks[0]!.body).toBe("ask about the ridge");
     expect(body.notes[0]!.body).toBe("three so far");
     expect(body.inbox_items[0]!.raw_text).toBe("remind me to chase the quote");
+    expect(body.memories[0]!.statement).toBe("I prefer to call contractors before noon");
+    expect(body.memories[0]!.project_id).toBe(project!.id);
   });
 
   it("includes ARCHIVED rows -- an export is the copy that must not lose them", async () => {
@@ -344,15 +375,132 @@ describe("GET /export", () => {
     }
   });
 
-  it("keeps the allowlist to exactly four entity arrays", async () => {
+  it("keeps the allowlist to exactly five entity arrays", async () => {
     await seedForbiddenNeighbours();
     const body = await exportBody();
     const arrayKeys = Object.entries(body)
       .filter(([, value]) => Array.isArray(value))
       .map(([key]) => key)
       .sort();
-    expect(arrayKeys).toEqual(["inbox_items", "notes", "projects", "tasks"]);
-    expect(Object.keys(body.counts).sort()).toEqual(["inbox_items", "notes", "projects", "tasks"]);
+    expect(arrayKeys).toEqual(["inbox_items", "memories", "notes", "projects", "tasks"]);
+    expect(Object.keys(body.counts).sort()).toEqual([
+      "inbox_items",
+      "memories",
+      "notes",
+      "projects",
+      "tasks",
+    ]);
+  });
+
+  // ---- memories (Checkpoint 10.7, ADR-077 §2) -----------------------
+
+  it("emits only the frozen FLAT field set for a memory -- ids, never resolved names", async () => {
+    const [project] = await app.db
+      .insert(projects)
+      .values({ name: "Thesis", goal: "Defend by May" })
+      .returning({ id: projects.id });
+    const [connection] = await app.db
+      .insert(canvasConnections)
+      .values({
+        canvasBaseUrl: "https://export-test.instructure.com",
+        canvasUserId: 1,
+        canvasUserName: "Test Student",
+        status: "active",
+      })
+      .returning({ id: canvasConnections.id });
+    const [course] = await app.db
+      .insert(canvasCourses)
+      .values({
+        connectionId: connection!.id,
+        canvasCourseId: 4242,
+        name: SECRET_COURSE_NAME,
+        courseCode: SECRET_COURSE_CODE,
+      })
+      .returning({ id: canvasCourses.id });
+    const [suggestion] = await app.db
+      .insert(memorySuggestions)
+      .values({
+        suggestionKey: `project_goal:${project!.id}`,
+        suggestionKind: "project_goal",
+        projectId: project!.id,
+        status: "accepted",
+      })
+      .returning({ id: memorySuggestions.id });
+    await app.db.insert(memories).values({
+      kind: "goal",
+      statement: "Defend by May",
+      note: "accepted from the project goal",
+      source: "suggestion",
+      suggestionId: suggestion!.id,
+      projectId: project!.id,
+      canvasCourseId: course!.id,
+    });
+
+    const response = await get();
+    const body = ExportResponseSchema.parse(response.json());
+    expect(Object.keys(body.memories[0]!).sort()).toEqual([
+      "canvas_course_id",
+      "created_at",
+      "id",
+      "kind",
+      "note",
+      "project_id",
+      "source",
+      "statement",
+      "suggestion_id",
+      "updated_at",
+    ]);
+    expect(body.memories[0]!.suggestion_id).toBe(suggestion!.id);
+    expect(body.memories[0]!.canvas_course_id).toBe(course!.id);
+    // The linked course's Canvas-authored name and code never reach the export.
+    expect(response.body).not.toContain(SECRET_COURSE_NAME);
+    expect(response.body).not.toContain(SECRET_COURSE_CODE);
+    // The item shape's resolved-name keys are not part of the flat row.
+    expect(response.body).not.toContain('"project":');
+    expect(response.body).not.toContain('"course":');
+  });
+
+  it("never exports the decision table or the switch -- only the owner's answer's id survives, on the memory", async () => {
+    const [project] = await app.db
+      .insert(projects)
+      .values({ name: "Thesis", goal: "Defend by May" })
+      .returning({ id: projects.id });
+    await app.db.insert(memorySuggestions).values({
+      suggestionKey: `project_goal:${project!.id}`,
+      suggestionKind: "project_goal",
+      projectId: project!.id,
+      status: "dismissed",
+      askAgainAfter: new Date("2026-10-01T00:00:00Z"),
+    });
+    await app.db.insert(memorySettings).values({ id: "singleton", enabled: false });
+    await app.db.insert(memories).values({ kind: "fact", statement: "mine", source: "user" });
+
+    const response = await get();
+    expect(response.statusCode).toBe(200);
+    // A memory row is present, so a passing assertion below is not an artifact
+    // of an empty response.
+    expect(response.body).toContain('"statement":"mine"');
+    for (const forbidden of [
+      // the decision table
+      "memory_suggestions",
+      "suggestion_key",
+      "suggestion_kind",
+      "project_goal",
+      "ask_again_after",
+      "decided_at",
+      "dismissed",
+      "2026-10-01",
+      // the switch
+      "memory_settings",
+      "singleton",
+      "enabled",
+    ]) {
+      expect(response.body).not.toContain(forbidden);
+    }
+    // The project's goal is user-authored and exported on the PROJECT row
+    // (since 8.3). It must appear exactly once -- there -- and never a second
+    // time through a suggestion row or a memory that does not carry it.
+    expect(countOccurrences(response.body, "Defend by May")).toBe(1);
   });
 
   it("emits only the frozen field set for tasks, notes and projects", async () => {

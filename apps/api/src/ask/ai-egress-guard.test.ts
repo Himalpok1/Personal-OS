@@ -657,8 +657,13 @@ describe("memory never reaches an AI lane, another read model, or the worker (Ch
         if (pattern.test(code)) offenders.push(`${relToRepo(file)}: ${label}`);
       }
       // ADR-077 §6: memory never rides a job or a push. The memory route set
-      // has no reason to touch the queue at all.
-      if (/\bboss\b|pg-boss|\.send\s*\(/.test(code)) offenders.push(`${relToRepo(file)}: queue`);
+      // has no reason to touch the queue at all. Every enqueue in this
+      // codebase goes through `app.boss.*` or a `pg-boss` import, so those
+      // are the tokens denied -- not a bare `.send(`, which would also match
+      // Fastify's `reply.send`.
+      if (/\bboss\b|pg-boss|NOTIFICATIONS_DISPATCH_QUEUE|_QUEUE\b/.test(code)) {
+        offenders.push(`${relToRepo(file)}: queue`);
+      }
     }
     expect(offenders).toEqual([]);
   });

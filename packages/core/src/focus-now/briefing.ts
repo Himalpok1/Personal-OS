@@ -1,4 +1,5 @@
-// The deterministic daily briefing (Checkpoint 10.6, ADR-075) -- a
+// The deterministic daily briefing (Checkpoint 10.6, ADR-075; a
+// working-hours memory added by Checkpoint 10.7, ADR-077 §5) -- a
 // CLIENT-SIDE composition over responses the Today screen has ALREADY
 // fetched, expressed here as pure logic over structural inputs.
 //
@@ -26,7 +27,16 @@
 //              for the first TIMED event starting at or after effectiveNow;
 //              up to two "Free HH:mm–HH:mm (Nh MMm)" lines from
 //              `freeBlocks` (free-blocks.ts). Omitted when there is neither
-//              an event nor a free block
+//              an event nor a free block. When `memory.workingHours` is
+//              supplied (ADR-077 §5: the owner's working-hours `preference`
+//              memory, parsed by `memoryWorkingHours` in memory/match.ts) the
+//              free blocks are computed inside THOSE bounds instead of the
+//              08:00–22:00 defaults, and one line "Working hours HH:mm–HH:mm
+//              — from your preferences" with `source: "memory"` and no `ref`
+//              precedes them, so the reader can see why the free time is
+//              bounded as it is. An invalid pair is ignored (defaults, no
+//              line) -- data never throws. With the memory switch off the
+//              caller passes nothing and the section is the 10.6 one
 //   health     only when the latest sleep, its wake date AND the 7-day
 //              average are all present, the average is positive, and the
 //              wake date is today or yesterday in `tz` -- older sleep is not
@@ -36,7 +46,8 @@
 //   focus      the top BRIEFING_FOCUS_LIMIT (3) already-merged, already-ranked
 //              candidates as "<title> — <primary why>", each carrying a `ref`
 //              so the client can navigate; a candidate with no reason is its
-//              bare title
+//              bare title. A line's `source` is its primary reason's, so a
+//              row whose only reason is a memory reason reads `memory`
 //
 // Every wall-clock string is rendered in the caller's `tz` through the same
 // Intl-backed `toWallClockComponents` the rest of core uses; every count
@@ -48,7 +59,7 @@
 import { addCalendarDays, localDayWindow } from "../actionability.js";
 import { toWallClockComponents } from "../timezone.js";
 import { explainFocusNowCandidate } from "./explain.js";
-import { freeBlocks } from "./free-blocks.js";
+import { freeBlocks, isValidFreeBlockWindow } from "./free-blocks.js";
 import type { FocusNowSource } from "./reasons.js";
 import type { FocusNowCandidate, FocusNowKind } from "./score.js";
 
@@ -91,6 +102,17 @@ export interface BriefingHealthInput {
   sleep7dAverageSeconds: number | null;
 }
 
+/** The one structured preference the briefing reads (ADR-077 §5): `memoryWorkingHours`' result. */
+export interface BriefingWorkingHours {
+  dayStartHour: number;
+  dayEndHour: number;
+}
+
+export interface BriefingMemoryInput {
+  /** Null/absent when no `preference` memory states working hours, or when the memory switch is off. */
+  workingHours?: BriefingWorkingHours | null;
+}
+
 export interface BriefingInput {
   effectiveNow: Date;
   tz: string;
@@ -99,6 +121,8 @@ export interface BriefingInput {
   health?: BriefingHealthInput | null;
   /** Already merged (`mergeLinkedCandidates`) and ranked (`rankFocusNowCandidates`). */
   focus: readonly FocusNowCandidate[];
+  /** Memory-derived inputs (ADR-077 §5); absent ⇒ memories treated as absent. */
+  memory?: BriefingMemoryInput | null;
 }
 
 export const BRIEFING_SECTION_KINDS = ["academic", "schedule", "health", "focus"] as const;
@@ -239,6 +263,18 @@ function nextEvent(
   return best;
 }
 
+/** "HH:mm" for a whole local hour (24 renders as "24:00", the end of the local day). */
+function formatHour(hour: number): string {
+  return `${pad2(hour)}:00`;
+}
+
+/** The memory's working hours when they are a pair `freeBlocks` accepts; otherwise null (defaults). */
+function workingHoursOf(input: BriefingInput): BriefingWorkingHours | null {
+  const hours = input.memory?.workingHours;
+  if (hours === undefined || hours === null) return null;
+  return isValidFreeBlockWindow(hours.dayStartHour, hours.dayEndHour) ? hours : null;
+}
+
 function scheduleSection(input: BriefingInput): BriefingSection | null {
   const { eventsToday } = input.today;
   const lines: BriefingLine[] = [];
@@ -257,11 +293,22 @@ function scheduleSection(input: BriefingInput): BriefingSection | null {
       tone: "neutral",
     });
   }
+  const workingHours = workingHoursOf(input);
   const blocks = freeBlocks({
     events: eventsToday,
     effectiveNow: input.effectiveNow,
     tz: input.tz,
+    ...(workingHours === null
+      ? {}
+      : { dayStartHour: workingHours.dayStartHour, dayEndHour: workingHours.dayEndHour }),
   });
+  if (workingHours !== null && (lines.length > 0 || blocks.length > 0)) {
+    lines.push({
+      text: `Working hours ${formatHour(workingHours.dayStartHour)}–${formatHour(workingHours.dayEndHour)} — from your preferences`,
+      source: "memory",
+      tone: "neutral",
+    });
+  }
   for (const block of blocks.slice(0, BRIEFING_FREE_BLOCK_LIMIT)) {
     lines.push({
       text: `Free ${formatWallTime(block.startUtc, input.tz)}–${formatWallTime(block.endUtc, input.tz)} (${formatDurationShort(block.minutes * 60)})`,

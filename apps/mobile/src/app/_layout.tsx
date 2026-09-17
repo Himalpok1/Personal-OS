@@ -15,6 +15,7 @@ import { useQueryLifecycle } from "@/queries/use-query-lifecycle";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, ThemeProvider } from "expo-router";
 import { AssignmentSheetHost } from "@/components/academic/assignment-sheet";
+import { MemorySuggestionSheetHost } from "@/components/memory/memory-suggestion-sheet";
 import { ToastHost, navigationTheme, useSyncWebColorSchemeClass, useTheme } from "@/components/ui";
 import { View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -62,6 +63,10 @@ export default function RootLayout() {
                   screen, so a host per screen would draw two modals for one
                   record (10.6 review, finding 2). */}
               <AssignmentSheetHost />
+              {/* Checkpoint 10.7 (ADR-077 §4): the explicit-moment memory
+                  suggestion sheet's ONE host, for the same reason as the
+                  assignment sheet's -- a module-global store, one modal. */}
+              <MemorySuggestionSheetHost />
             </ThemeProvider>
           </DeviceIdentityProvider>
         </QueryClientProvider>
@@ -161,6 +166,12 @@ function AppStack() {
           not a sixth tab -- same 480px reasoning as Health and Monitoring. */}
       <Stack.Screen name="search/index" options={{ title: "Search" }} />
       <Stack.Screen name="settings" options={{ title: "Settings" }} />
+      {/* Checkpoint 10.7 (ADR-077). The Memory Center is reached from the
+          Privacy & AI section of Settings, not a tab -- the same 480px
+          reasoning as Health, Monitoring and Academics. */}
+      <Stack.Screen name="memory/index" options={{ title: "Memory" }} />
+      <Stack.Screen name="memory/new" options={{ title: "New memory" }} />
+      <Stack.Screen name="memory/[id]" options={{ title: "Memory" }} />
       <Stack.Screen name="hardware-debug" options={{ title: "Hardware spike" }} />
     </Stack>
   );

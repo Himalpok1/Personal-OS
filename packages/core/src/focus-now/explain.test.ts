@@ -7,8 +7,13 @@ import {
 } from "../academic/urgency.js";
 import {
   FOCUS_NOW_CONTEXT_POINTS,
+  FOCUS_NOW_CONTEXT_POINTS_CAP,
   FOCUS_NOW_CONTEXT_REASONS,
+  FOCUS_NOW_EQUATION_CAP_TERM,
   FOCUS_NOW_EQUATION_TERM,
+  FOCUS_NOW_MEMORY_POINTS,
+  FOCUS_NOW_MEMORY_REASONS,
+  FOCUS_NOW_MEMORY_WHY_MAX_CHARS,
   FOCUS_NOW_REASON_LABEL,
   FOCUS_NOW_REASON_ORDER,
   FOCUS_NOW_REASON_WHY,
@@ -16,6 +21,7 @@ import {
   explainFocusNowCandidate,
   explainFocusNowReason,
   focusNowEquation,
+  memoryWhy,
   sortReasons,
   type FocusNowReason,
 } from "./explain.js";
@@ -51,12 +57,14 @@ function c(overrides: Partial<FocusNowCandidate>): FocusNowCandidate {
 }
 
 describe("the closed vocabulary (reasons.ts, re-exported)", () => {
-  it("is exactly academic's six, then top_priority, then the six context reasons, in that order", () => {
+  it("is exactly academic's six, then top_priority, then the six context reasons, then the two memory reasons, in that order", () => {
     expect(FOCUS_NOW_REASON_ORDER).toEqual([
       ...ACADEMIC_PRIORITY_REASONS,
       "top_priority",
       ...FOCUS_NOW_CONTEXT_REASONS,
     ]);
+    // ADR-075's six, then ADR-077 §5's two -- appended, never interleaved, so
+    // every pre-10.7 relative order is unchanged.
     expect(FOCUS_NOW_CONTEXT_REASONS).toEqual([
       "linked_assignment",
       "project_stalled",
@@ -64,11 +72,15 @@ describe("the closed vocabulary (reasons.ts, re-exported)", () => {
       "no_submission",
       "reminder_set",
       "snoozed",
+      "matches_preference",
+      "supports_goal",
     ]);
+    expect(FOCUS_NOW_MEMORY_REASONS).toEqual(["matches_preference", "supports_goal"]);
+    expect(FOCUS_NOW_CONTEXT_REASONS.slice(-2)).toEqual([...FOCUS_NOW_MEMORY_REASONS]);
     expect(new Set(FOCUS_NOW_REASON_ORDER).size).toBe(FOCUS_NOW_REASON_ORDER.length);
   });
 
-  it("carries the frozen context point table: three +25 bonuses, three zeros", () => {
+  it("carries the frozen context point table: three +25 bonuses, three zeros, two +15 memory bonuses", () => {
     expect(FOCUS_NOW_CONTEXT_POINTS).toEqual({
       linked_assignment: 25,
       project_stalled: 25,
@@ -76,13 +88,24 @@ describe("the closed vocabulary (reasons.ts, re-exported)", () => {
       no_submission: 0,
       reminder_set: 0,
       snoozed: 0,
+      matches_preference: 15,
+      supports_goal: 15,
     });
     // The bonus is one additive reason's worth, never an urgency rung (ADR-071's scale).
     expect(FOCUS_NOW_CONTEXT_POINTS.linked_assignment).toBe(ACADEMIC_PRIORITY_POINTS.marked_late);
     expect(FOCUS_NOW_CONTEXT_POINTS.linked_assignment).toBe(FOCUS_NOW_TOP_PRIORITY_POINTS);
+    // ADR-077 §5: memory sits BELOW the +25 context tier and an order of
+    // magnitude below the 100-point urgency rungs.
+    expect(FOCUS_NOW_MEMORY_POINTS).toBe(15);
+    expect(FOCUS_NOW_CONTEXT_POINTS.matches_preference).toBe(FOCUS_NOW_MEMORY_POINTS);
+    expect(FOCUS_NOW_CONTEXT_POINTS.supports_goal).toBe(FOCUS_NOW_MEMORY_POINTS);
+    expect(FOCUS_NOW_MEMORY_POINTS).toBeLessThan(FOCUS_NOW_CONTEXT_POINTS.linked_assignment);
+    expect(FOCUS_NOW_MEMORY_POINTS * 2).toBeLessThan(
+      ACADEMIC_URGENCY_BASE_POINTS.critical - ACADEMIC_URGENCY_BASE_POINTS.high,
+    );
   });
 
-  it("closes the source vocabulary", () => {
+  it("closes the source vocabulary, with memory last", () => {
     expect(FOCUS_NOW_SOURCES).toEqual([
       "task",
       "reminder",
@@ -90,6 +113,7 @@ describe("the closed vocabulary (reasons.ts, re-exported)", () => {
       "canvas_assignment",
       "course",
       "calendar",
+      "memory",
     ]);
   });
 
@@ -194,6 +218,8 @@ describe("explainFocusNowReason -- labels, sentences and sources", () => {
       course_attention_high: "course",
       reminder_set: "reminder",
       snoozed: "reminder",
+      matches_preference: "memory",
+      supports_goal: "memory",
     };
     for (const [reason, source] of Object.entries(expected)) {
       expect(explainFocusNowReason(reason as FocusNowReason, "task").source).toBe(source);
@@ -218,7 +244,109 @@ describe("explainFocusNowReason -- labels, sentences and sources", () => {
       no_submission: "No submission recorded in Canvas",
       reminder_set: "A reminder is scheduled",
       snoozed: "Snoozed to a later time",
+      matches_preference: "A saved preference is linked to this item",
+      supports_goal: "A saved goal is linked to this item's project",
     });
+  });
+
+  it("labels the two memory reasons", () => {
+    expect(FOCUS_NOW_REASON_LABEL).toMatchObject({
+      matches_preference: "Matches your preference",
+      supports_goal: "Supports a goal",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Checkpoint 10.7 (ADR-077 §5): a memory reason's why NAMES the memory
+// ---------------------------------------------------------------------------
+
+describe("explainFocusNowReason -- memory reasons name the memory", () => {
+  it("reads 'You said: <statement>' when the matched memory is supplied, with source memory", () => {
+    expect(
+      explainFocusNowReason("matches_preference", "task", {
+        memory: { matchesPreference: { statement: "I work best in the evening" } },
+      }),
+    ).toEqual({
+      reason: "matches_preference",
+      label: "Matches your preference",
+      why: "You said: I work best in the evening",
+      source: "memory",
+    });
+    expect(
+      explainFocusNowReason("supports_goal", "academic_assignment", {
+        memory: { supportsGoal: { statement: "Graduate with a 3.8" } },
+      }),
+    ).toEqual({
+      reason: "supports_goal",
+      label: "Supports a goal",
+      why: "You said: Graduate with a 3.8",
+      source: "memory",
+    });
+  });
+
+  it("falls back to the static sentence when no memory, a null one, or an empty statement is supplied", () => {
+    expect(explainFocusNowReason("matches_preference", "task").why).toBe(
+      "A saved preference is linked to this item",
+    );
+    expect(explainFocusNowReason("supports_goal", "task", {}).why).toBe(
+      "A saved goal is linked to this item's project",
+    );
+    expect(explainFocusNowReason("supports_goal", "task", { memory: null }).why).toBe(
+      "A saved goal is linked to this item's project",
+    );
+    expect(
+      explainFocusNowReason("supports_goal", "task", { memory: { supportsGoal: null } }).why,
+    ).toBe("A saved goal is linked to this item's project");
+    expect(
+      explainFocusNowReason("matches_preference", "task", {
+        memory: { matchesPreference: { statement: "   " } },
+      }).why,
+    ).toBe("A saved preference is linked to this item");
+  });
+
+  it("uses each reason's OWN memory -- a goal statement never explains the preference reason", () => {
+    const options = { memory: { supportsGoal: { statement: "Ship the thesis" } } };
+    expect(explainFocusNowReason("matches_preference", "task", options).why).toBe(
+      "A saved preference is linked to this item",
+    );
+    expect(explainFocusNowReason("supports_goal", "task", options).why).toBe(
+      "You said: Ship the thesis",
+    );
+  });
+
+  it("leaves every non-memory why byte-identical whatever memory is supplied", () => {
+    const options = {
+      memory: {
+        matchesPreference: { statement: "Evenings" },
+        supportsGoal: { statement: "A goal" },
+      },
+    };
+    for (const reason of FOCUS_NOW_REASON_ORDER) {
+      if ((FOCUS_NOW_MEMORY_REASONS as readonly string[]).includes(reason)) continue;
+      expect(explainFocusNowReason(reason, "task", options)).toEqual(
+        explainFocusNowReason(reason, "task"),
+      );
+    }
+  });
+
+  it("memoryWhy trims and bounds the statement to 120 code points with an ellipsis, surrogate-safely", () => {
+    expect(FOCUS_NOW_MEMORY_WHY_MAX_CHARS).toBe(120);
+    expect(memoryWhy("  Mornings are for deep work  ")).toBe(
+      "You said: Mornings are for deep work",
+    );
+    const exact = "x".repeat(120);
+    expect(memoryWhy(exact)).toBe(`You said: ${exact}`);
+    const long = "y".repeat(121);
+    const bounded = memoryWhy(long);
+    expect(bounded).toBe(`You said: ${"y".repeat(119)}…`);
+    expect(Array.from(bounded.slice("You said: ".length))).toHaveLength(120);
+    // A statement of astral-plane characters is cut between code points, never through one.
+    const emoji = "😀".repeat(130);
+    const boundedEmoji = memoryWhy(emoji).slice("You said: ".length);
+    expect(Array.from(boundedEmoji)).toHaveLength(120);
+    expect(boundedEmoji.endsWith("…")).toBe(true);
+    expect(boundedEmoji.includes("\uFFFD")).toBe(false);
   });
 });
 
@@ -277,6 +405,105 @@ describe("focusNowEquation -- auditable from the frozen tables", () => {
       submissionUnsubmitted: true,
     });
     expect(focusNowEquation(academic)).toBe("450 Canvas priority + 25 course attention = 475");
+  });
+
+  it("renders the memory terms: '400 overdue + 15 preference = 415', memory last", () => {
+    const preference = focusNowCandidateFromTask(
+      {
+        id: "t",
+        title: "T",
+        dueAt: plus(-1),
+        priority: null,
+        memory: { matchesPreference: true, supportsGoal: false },
+      },
+      NOW,
+      HORIZON,
+    );
+    expect(focusNowEquation(preference)).toBe("400 overdue + 15 preference = 415");
+
+    const both = focusNowCandidateFromTask(
+      {
+        id: "t",
+        title: "T",
+        dueAt: plus(-1),
+        priority: 1,
+        projectStalled: true,
+        remindAt: NOW,
+        memory: { matchesPreference: true, supportsGoal: true },
+      },
+      NOW,
+      HORIZON,
+    );
+    expect(focusNowEquation(both)).toBe(
+      "400 overdue + 25 P1 + 25 project stalled + 15 preference + 15 goal = 480",
+    );
+
+    const academic = focusNowCandidateFromAcademic({
+      id: "a",
+      title: "A",
+      dueAt: plus(HOUR),
+      score: 300,
+      reasons: ["due_within_24h"],
+      courseAttentionHigh: true,
+      memory: { matchesPreference: true, supportsGoal: false },
+    });
+    expect(focusNowEquation(academic)).toBe(
+      "300 Canvas priority + 25 course attention + 15 preference = 340",
+    );
+  });
+
+  it("lists every term and appends ', capped to 75' only when the context cap actually bit", () => {
+    expect(FOCUS_NOW_EQUATION_CAP_TERM).toBe("capped to 75");
+    expect(FOCUS_NOW_CONTEXT_POINTS_CAP).toBe(75);
+    const stacked = mergeLinkedCandidates([
+      focusNowCandidateFromTask(
+        {
+          id: "t",
+          title: "T",
+          dueAt: plus(HOUR),
+          priority: 1,
+          canvasAssignmentId: "a",
+          projectStalled: true,
+          memory: { matchesPreference: true, supportsGoal: true },
+        },
+        NOW,
+        HORIZON,
+      ),
+      focusNowCandidateFromAcademic({
+        id: "a",
+        title: "A",
+        dueAt: plus(2 * HOUR),
+        score: 300,
+        reasons: ["due_within_24h"],
+        courseAttentionHigh: true,
+      }),
+    ])[0]!;
+    expect(stacked.contextPoints).toBe(75);
+    expect(focusNowEquation(stacked)).toBe(
+      "300 due <24h + 25 P1 + 25 linked assignment + 25 project stalled + 25 course attention + 15 preference + 15 goal, capped to 75 = 400",
+    );
+    // Exactly at the cap (25 + 25 + 25 = 75, the 10.6 maximum) nothing was cut, so no cap term.
+    const atCap = c({
+      kind: "task",
+      baseScore: 300,
+      contextPoints: 75,
+      score: 375,
+      reasons: ["due_within_24h", "linked_assignment", "project_stalled", "course_attention_high"],
+    });
+    expect(focusNowEquation(atCap)).toBe(
+      "300 due <24h + 25 linked assignment + 25 project stalled + 25 course attention = 375",
+    );
+    // 25 + 25 + 15 = 65 < 75: no cap term either.
+    const under = c({
+      kind: "task",
+      baseScore: 300,
+      contextPoints: 65,
+      score: 365,
+      reasons: ["due_within_24h", "linked_assignment", "project_stalled", "matches_preference"],
+    });
+    expect(focusNowEquation(under)).toBe(
+      "300 due <24h + 25 linked assignment + 25 project stalled + 15 preference = 365",
+    );
   });
 
   it("omits zero-point reasons from the equation entirely", () => {
@@ -366,6 +593,64 @@ describe("explainFocusNowCandidate", () => {
   it("has a null primary, an empty list and the floor equation for a row with no reason at all", () => {
     const explained = explainFocusNowCandidate(c({ score: 100 }));
     expect(explained).toEqual({ primary: null, explanations: [], equation: "100 base = 100" });
+  });
+
+  it("threads the matched memories through to the candidate's memory explanations", () => {
+    const candidate = focusNowCandidateFromTask(
+      {
+        id: "t",
+        title: "T",
+        dueAt: plus(-1),
+        priority: null,
+        memory: { matchesPreference: true, supportsGoal: true },
+      },
+      NOW,
+      HORIZON,
+    );
+    const explained = explainFocusNowCandidate(candidate, {
+      memory: {
+        matchesPreference: { statement: "I work best in the evening" },
+        supportsGoal: { statement: "Finish the capstone by December" },
+      },
+    });
+    expect(explained.primary?.reason).toBe("overdue");
+    expect(explained.explanations).toEqual([
+      { reason: "overdue", label: "Overdue", why: "Past its due time", source: "task" },
+      {
+        reason: "matches_preference",
+        label: "Matches your preference",
+        why: "You said: I work best in the evening",
+        source: "memory",
+      },
+      {
+        reason: "supports_goal",
+        label: "Supports a goal",
+        why: "You said: Finish the capstone by December",
+        source: "memory",
+      },
+    ]);
+    expect(explained.equation).toBe("400 overdue + 15 preference + 15 goal = 430");
+    // Without the evidence the same candidate explains itself with the static sentences.
+    expect(explainFocusNowCandidate(candidate).explanations.map((e) => e.why)).toEqual([
+      "Past its due time",
+      "A saved preference is linked to this item",
+      "A saved goal is linked to this item's project",
+    ]);
+  });
+
+  it("makes a memory reason primary, with source memory, only when it is the row's sole reason", () => {
+    const only = c({
+      reasons: ["supports_goal"],
+      baseScore: 100,
+      contextPoints: 15,
+      score: 115,
+    });
+    expect(explainFocusNowCandidate(only).primary).toEqual({
+      reason: "supports_goal",
+      label: "Supports a goal",
+      why: "A saved goal is linked to this item's project",
+      source: "memory",
+    });
   });
 
   it("sources an academic row's urgency to Canvas", () => {

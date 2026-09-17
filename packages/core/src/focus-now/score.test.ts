@@ -2,15 +2,19 @@ import { describe, expect, it } from "vitest";
 import { academicTodayWindows } from "../academic/buckets.js";
 import {
   FOCUS_NOW_CAP,
+  FOCUS_NOW_CONTEXT_POINTS,
+  FOCUS_NOW_CONTEXT_POINTS_CAP,
   FOCUS_NOW_TASK_REASON,
   FOCUS_NOW_TOP_PRIORITY,
   FOCUS_NOW_TOP_PRIORITY_POINTS,
   compareFocusNowCandidates,
+  contextPointsFor,
   focusNowCandidateFromAcademic,
   focusNowCandidateFromTask,
   mergeLinkedCandidates,
   rankFocusNowCandidates,
   scoreFocusNowTask,
+  uncappedContextPointsFor,
   type FocusNowCandidate,
 } from "./score.js";
 
@@ -501,5 +505,458 @@ describe("mergeLinkedCandidates -- a task linked to an assignment in the list is
       }),
     ]);
     expect(rankFocusNowCandidates(merged).map((x) => x.id)).toEqual(["task-1", "twin"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Checkpoint 10.7 (ADR-077 §5): the two memory reasons, +15 each, once per row
+// ---------------------------------------------------------------------------
+
+describe("scoreFocusNowTask -- memory flags (ADR-077 §5)", () => {
+  it("adds matches_preference and supports_goal as +15 context reasons, after every other context reason", () => {
+    const result = scoreFocusNowTask(
+      task({
+        dueAt: plus(-1),
+        priority: 1,
+        projectStalled: true,
+        snoozedUntil: plus(HOUR),
+        memory: { matchesPreference: true, supportsGoal: true },
+      }),
+      NOW,
+      HORIZON,
+    );
+    expect(result).toEqual({
+      urgency: "critical",
+      baseScore: 425,
+      contextPoints: 55,
+      score: 480,
+      reasons: [
+        "overdue",
+        "top_priority",
+        "project_stalled",
+        "snoozed",
+        "matches_preference",
+        "supports_goal",
+      ],
+    });
+  });
+
+  it("adds each memory reason independently", () => {
+    expect(
+      scoreFocusNowTask(
+        task({ dueAt: plus(-1), memory: { matchesPreference: true, supportsGoal: false } }),
+        NOW,
+        HORIZON,
+      ),
+    ).toMatchObject({ contextPoints: 15, score: 415, reasons: ["overdue", "matches_preference"] });
+    expect(
+      scoreFocusNowTask(
+        task({ dueAt: plus(-1), memory: { matchesPreference: false, supportsGoal: true } }),
+        NOW,
+        HORIZON,
+      ),
+    ).toMatchObject({ contextPoints: 15, score: 415, reasons: ["overdue", "supports_goal"] });
+  });
+
+  it("treats an absent, undefined, null or all-false memory identically -- memories off ⇒ nothing changes", () => {
+    const absent = scoreFocusNowTask(task({ dueAt: plus(-1) }), NOW, HORIZON);
+    expect(scoreFocusNowTask(task({ dueAt: plus(-1), memory: undefined }), NOW, HORIZON)).toEqual(
+      absent,
+    );
+    expect(scoreFocusNowTask(task({ dueAt: plus(-1), memory: null }), NOW, HORIZON)).toEqual(
+      absent,
+    );
+    expect(
+      scoreFocusNowTask(
+        task({ dueAt: plus(-1), memory: { matchesPreference: false, supportsGoal: false } }),
+        NOW,
+        HORIZON,
+      ),
+    ).toEqual(absent);
+    expect(absent.reasons).toEqual(["overdue"]);
+  });
+
+  it("never touches the base: memory is context only", () => {
+    const withMemory = scoreFocusNowTask(
+      task({ dueAt: null, priority: 1, memory: { matchesPreference: true, supportsGoal: true } }),
+      NOW,
+      HORIZON,
+    );
+    expect(withMemory).toEqual({
+      urgency: "low",
+      baseScore: 125,
+      contextPoints: 30,
+      score: 155,
+      reasons: ["top_priority", "matches_preference", "supports_goal"],
+    });
+  });
+});
+
+describe("focusNowCandidateFromAcademic -- memory on top of a verbatim base", () => {
+  it("adds matches_preference (+15) as context and keeps the server's score as the base, untouched", () => {
+    const candidate = focusNowCandidateFromAcademic({
+      id: "a",
+      title: "t",
+      dueAt: plus(HOUR),
+      score: 325,
+      reasons: ["due_within_24h", "high_points"],
+      submissionUnsubmitted: true,
+      memory: { matchesPreference: true, supportsGoal: false },
+    });
+    expect(candidate).toEqual({
+      id: "a",
+      kind: "academic_assignment",
+      title: "t",
+      dueAt: plus(HOUR),
+      baseScore: 325,
+      contextPoints: 15,
+      score: 340,
+      reasons: ["due_within_24h", "high_points", "no_submission", "matches_preference"],
+      linkedAssignmentId: null,
+    });
+  });
+
+  it("can carry supports_goal too (a course-linked goal is the client's call), still on the verbatim base", () => {
+    const candidate = focusNowCandidateFromAcademic({
+      id: "a",
+      title: "t",
+      dueAt: null,
+      score: 450,
+      reasons: ["overdue", "marked_missing"],
+      memory: { matchesPreference: true, supportsGoal: true },
+    });
+    expect(candidate.baseScore).toBe(450);
+    expect(candidate.contextPoints).toBe(30);
+    expect(candidate.score).toBe(480);
+  });
+});
+
+describe("mergeLinkedCandidates -- a memory bonus is counted ONCE on the merged row (ADR-077 §5)", () => {
+  it("a task and its linked assignment both flagged matchesPreference merge to ONE matches_preference and +15, not +30", () => {
+    const t = focusNowCandidateFromTask(
+      {
+        id: "task-1",
+        title: "Write the lab report",
+        dueAt: plus(-HOUR),
+        priority: null,
+        canvasAssignmentId: "asg-1",
+        memory: { matchesPreference: true, supportsGoal: false },
+      },
+      NOW,
+      HORIZON,
+    );
+    const a = focusNowCandidateFromAcademic({
+      id: "asg-1",
+      title: "Lab report",
+      dueAt: plus(HOUR),
+      score: 300,
+      reasons: ["due_within_24h"],
+      memory: { matchesPreference: true, supportsGoal: false },
+    });
+    expect(t.contextPoints).toBe(15);
+    expect(a.contextPoints).toBe(15);
+    const merged = mergeLinkedCandidates([t, a]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toEqual({
+      id: "task-1",
+      kind: "task",
+      title: "Write the lab report",
+      dueAt: plus(-HOUR),
+      baseScore: 400,
+      contextPoints: 40, // 25 linked_assignment + 15 matches_preference (once)
+      score: 440,
+      reasons: ["overdue", "due_within_24h", "linked_assignment", "matches_preference"],
+      linkedAssignmentId: "asg-1",
+    });
+    expect(merged[0]!.reasons.filter((r) => r === "matches_preference")).toHaveLength(1);
+  });
+
+  it("keeps a memory reason only one side carried, and counts each distinct memory reason once", () => {
+    const t = focusNowCandidateFromTask(
+      {
+        id: "task-1",
+        title: "T",
+        dueAt: plus(-HOUR),
+        priority: null,
+        canvasAssignmentId: "asg-1",
+        projectStalled: true,
+        memory: { matchesPreference: false, supportsGoal: true },
+      },
+      NOW,
+      HORIZON,
+    );
+    const a = focusNowCandidateFromAcademic({
+      id: "asg-1",
+      title: "A",
+      dueAt: plus(HOUR),
+      score: 300,
+      reasons: ["due_within_24h"],
+      courseAttentionHigh: true,
+      memory: { matchesPreference: true, supportsGoal: false },
+    });
+    const merged = mergeLinkedCandidates([t, a]);
+    // 25 project_stalled + 25 course_attention_high + 25 linked + 15 + 15 = 105, capped to 75
+    expect(merged[0]).toMatchObject({
+      baseScore: 400,
+      contextPoints: 75,
+      score: 475,
+      reasons: [
+        "overdue",
+        "due_within_24h",
+        "linked_assignment",
+        "project_stalled",
+        "course_attention_high",
+        "matches_preference",
+        "supports_goal",
+      ],
+    });
+  });
+
+  it("keeps every pre-10.7 merge byte-identical: recomputing over the union equals summing disjoint sides + 25", () => {
+    const t = focusNowCandidateFromTask(
+      {
+        id: "t",
+        title: "T",
+        dueAt: plus(-1),
+        priority: 1,
+        canvasAssignmentId: "a",
+        projectStalled: true,
+      },
+      NOW,
+      HORIZON,
+    );
+    const a = focusNowCandidateFromAcademic({
+      id: "a",
+      title: "A",
+      dueAt: plus(HOUR),
+      score: 350,
+      reasons: ["due_within_24h", "high_points"],
+      courseAttentionHigh: true,
+      submissionUnsubmitted: true,
+    });
+    const merged = mergeLinkedCandidates([t, a])[0]!;
+    expect(merged.contextPoints).toBe(t.contextPoints + a.contextPoints + 25);
+    expect(merged.score).toBe(merged.baseScore + merged.contextPoints);
+  });
+});
+
+describe("ranking with memory -- reorders ties, never crosses an urgency rung on its own (ADR-077 §5)", () => {
+  it("the +15 lifts a row above an otherwise-identical twin", () => {
+    const twinInput = { id: "plain", title: "Same title", dueAt: plus(-HOUR), priority: null };
+    const plain = focusNowCandidateFromTask(twinInput, NOW, HORIZON);
+    const remembered = focusNowCandidateFromTask(
+      { ...twinInput, id: "remembered", memory: { matchesPreference: true, supportsGoal: false } },
+      NOW,
+      HORIZON,
+    );
+    // Without memory the tie falls to id order ("plain" < "remembered").
+    const forgotten = focusNowCandidateFromTask({ ...twinInput, id: "remembered" }, NOW, HORIZON);
+    expect(rankFocusNowCandidates([forgotten, plain]).map((x) => x.id)).toEqual([
+      "plain",
+      "remembered",
+    ]);
+    expect(remembered.score - plain.score).toBe(15);
+    expect(rankFocusNowCandidates([plain, remembered]).map((x) => x.id)).toEqual([
+      "remembered",
+      "plain",
+    ]);
+  });
+
+  it("a row one urgency rung lower never overtakes a bare higher rung on memory alone -- even with P1 and a stalled project", () => {
+    const bareOverdue = focusNowCandidateFromTask(
+      { id: "overdue", title: "Bare overdue", dueAt: plus(-1), priority: null },
+      NOW,
+      HORIZON,
+    );
+    const stackedDueToday = focusNowCandidateFromTask(
+      {
+        id: "due-today",
+        title: "Stacked due today",
+        dueAt: plus(HOUR),
+        priority: 1,
+        projectStalled: true,
+        remindAt: NOW,
+        memory: { matchesPreference: true, supportsGoal: true },
+      },
+      NOW,
+      HORIZON,
+    );
+    expect(stackedDueToday.score).toBe(300 + 25 + 25 + 15 + 15);
+    expect(stackedDueToday.score).toBeLessThan(bareOverdue.score);
+    expect(rankFocusNowCandidates([stackedDueToday, bareOverdue]).map((x) => x.id)).toEqual([
+      "overdue",
+      "due-today",
+    ]);
+
+    const bareAcademicCritical = focusNowCandidateFromAcademic({
+      id: "asg-critical",
+      title: "Bare critical assignment",
+      dueAt: plus(-HOUR),
+      score: 400,
+      reasons: ["overdue"],
+    });
+    const rememberedAcademicHigh = focusNowCandidateFromAcademic({
+      id: "asg-high",
+      title: "Remembered high assignment",
+      dueAt: plus(HOUR),
+      score: 300,
+      reasons: ["due_within_24h"],
+      courseAttentionHigh: true,
+      memory: { matchesPreference: true, supportsGoal: true },
+    });
+    expect(rememberedAcademicHigh.score).toBe(355);
+    expect(
+      rankFocusNowCandidates([rememberedAcademicHigh, bareAcademicCritical]).map((x) => x.id),
+    ).toEqual(["asg-critical", "asg-high"]);
+  });
+});
+
+describe("the context cap -- the whole tier tops out at one urgency rung (ADR-077 §5)", () => {
+  const stack = (priority: number | null) =>
+    mergeLinkedCandidates([
+      focusNowCandidateFromTask(
+        {
+          id: "stacked",
+          title: "Fully stacked",
+          dueAt: plus(HOUR),
+          priority,
+          canvasAssignmentId: "asg-1",
+          projectStalled: true,
+          memory: { matchesPreference: true, supportsGoal: true },
+        },
+        NOW,
+        HORIZON,
+      ),
+      focusNowCandidateFromAcademic({
+        id: "asg-1",
+        title: "Linked assignment",
+        dueAt: plus(2 * HOUR),
+        score: 300,
+        reasons: ["due_within_24h"],
+        courseAttentionHigh: true,
+      }),
+    ])[0]!;
+
+  it("is 75, the pre-10.7 maximum context sum, applied by the one shared function", () => {
+    expect(FOCUS_NOW_CONTEXT_POINTS_CAP).toBe(75);
+    // Exactly the three connection bonuses: no 10.6 row can exceed it.
+    expect(FOCUS_NOW_CONTEXT_POINTS_CAP).toBe(
+      FOCUS_NOW_CONTEXT_POINTS.linked_assignment +
+        FOCUS_NOW_CONTEXT_POINTS.project_stalled +
+        FOCUS_NOW_CONTEXT_POINTS.course_attention_high,
+    );
+    expect(
+      contextPointsFor(["linked_assignment", "project_stalled", "course_attention_high"]),
+    ).toBe(75);
+    expect(
+      contextPointsFor([
+        "linked_assignment",
+        "project_stalled",
+        "course_attention_high",
+        "matches_preference",
+        "supports_goal",
+      ]),
+    ).toBe(75);
+    expect(
+      uncappedContextPointsFor([
+        "linked_assignment",
+        "project_stalled",
+        "course_attention_high",
+        "matches_preference",
+        "supports_goal",
+      ]),
+    ).toBe(105);
+  });
+
+  it("P1 + stalled project + linked assignment in a high-attention course + both memory reasons: contextPoints 75, score 400, BELOW a bare overdue task due earlier", () => {
+    const stacked = stack(1);
+    expect(stacked).toMatchObject({
+      kind: "task",
+      baseScore: 325,
+      contextPoints: 75,
+      score: 400,
+      reasons: [
+        "due_within_24h",
+        "top_priority",
+        "linked_assignment",
+        "project_stalled",
+        "course_attention_high",
+        "matches_preference",
+        "supports_goal",
+      ],
+    });
+    const bareOverdue = focusNowCandidateFromTask(
+      { id: "overdue", title: "Bare overdue", dueAt: plus(-1), priority: null },
+      NOW,
+      HORIZON,
+    );
+    expect(bareOverdue.score).toBe(400);
+    expect(rankFocusNowCandidates([stacked, bareOverdue]).map((x) => x.id)).toEqual([
+      "overdue",
+      "stacked",
+    ]);
+  });
+
+  it("without P1 the same stack is 300 + 75 = 375, strictly below a bare overdue", () => {
+    const stacked = stack(null);
+    expect(stacked).toMatchObject({ baseScore: 300, contextPoints: 75, score: 375 });
+    expect(stacked.reasons).not.toContain("top_priority");
+  });
+
+  it("never bites a pre-10.7 row: the three connection bonuses sum to 75", () => {
+    const pre = mergeLinkedCandidates([
+      focusNowCandidateFromTask(
+        {
+          id: "t",
+          title: "T",
+          dueAt: plus(HOUR),
+          priority: 1,
+          canvasAssignmentId: "a",
+          projectStalled: true,
+        },
+        NOW,
+        HORIZON,
+      ),
+      focusNowCandidateFromAcademic({
+        id: "a",
+        title: "A",
+        dueAt: plus(HOUR),
+        score: 300,
+        reasons: ["due_within_24h"],
+        courseAttentionHigh: true,
+        submissionUnsubmitted: true,
+      }),
+    ])[0]!;
+    expect(pre.contextPoints).toBe(75);
+    expect(pre.contextPoints).toBe(FOCUS_NOW_CONTEXT_POINTS_CAP); // at the cap, nothing cut
+    expect(pre.score).toBe(400);
+    // The 10.6 ceiling and the 10.7 ceiling are the same number.
+    expect(stack(1).score).toBe(pre.score);
+  });
+
+  it("applies on the single-row paths too, not only after a merge", () => {
+    // No single row can reach 75 today (task max 55, assignment max 55), so the
+    // cap is a no-op there -- pinned so a future point-table change is a
+    // conscious decision.
+    const scoredTask = scoreFocusNowTask(
+      task({
+        dueAt: plus(-1),
+        projectStalled: true,
+        memory: { matchesPreference: true, supportsGoal: true },
+      }),
+      NOW,
+      HORIZON,
+    );
+    expect(scoredTask.contextPoints).toBe(55);
+    const academic = focusNowCandidateFromAcademic({
+      id: "a",
+      title: "A",
+      dueAt: null,
+      score: 300,
+      reasons: ["due_within_24h"],
+      courseAttentionHigh: true,
+      memory: { matchesPreference: true, supportsGoal: true },
+    });
+    expect(academic.contextPoints).toBe(55);
   });
 });

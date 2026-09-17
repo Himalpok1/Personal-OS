@@ -31,6 +31,9 @@ import {
   projects,
   reviews,
   tasks,
+  memories,
+  memorySettings,
+  memorySuggestions,
 } from "@personal-os/db";
 import type { FastifyInstance } from "fastify";
 import { buildServer, type BuildServerOptions } from "../server.js";
@@ -63,6 +66,12 @@ export async function buildTestApp(options: BuildServerOptions = {}): Promise<Fa
 // SELECT/INSERT/UPDATE/DELETE, and the app role never needs it in
 // production either, so the test setup shouldn't need it here.
 export async function truncateTestTables(app: FastifyInstance): Promise<void> {
+  // Checkpoint 10.7: memories reference memory_suggestions, projects and
+  // canvas_courses (all set null) -- clear them first so the singleton switch
+  // and any decided suggestion never leak between tests.
+  await app.db.delete(memories);
+  await app.db.delete(memorySuggestions);
+  await app.db.delete(memorySettings);
   await app.db.delete(occurrences);
   // FK order: event_external_links/calendar_event_instances reference
   // events and calendar_connections; calendar_connection_calendars

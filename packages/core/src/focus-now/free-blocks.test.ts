@@ -4,8 +4,10 @@ import {
   FREE_BLOCK_DAY_START_HOUR,
   FREE_BLOCK_MIN_MINUTES,
   freeBlocks,
+  isValidFreeBlockWindow,
   type FreeBlockEventInput,
 } from "./free-blocks.js";
+import { memoryWorkingHours } from "../memory/match.js";
 
 const TZ = "America/Chicago";
 const iso = (value: string): Date => new Date(value);
@@ -215,5 +217,70 @@ describe("freeBlocks -- subtracting events", () => {
     expect(
       freeBlocks({ events: [timed(plus(-HOUR), plus(20 * HOUR))], effectiveNow: NOW, tz: TZ }),
     ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Checkpoint 10.7 (ADR-077 §5): a working-hours preference memory as the bounds
+// ---------------------------------------------------------------------------
+
+describe("freeBlocks -- memory working hours through the existing bounds", () => {
+  const hours = memoryWorkingHours(
+    [
+      {
+        id: "w",
+        kind: "preference",
+        statement: "Working hours 9-18",
+        projectId: null,
+        canvasCourseId: null,
+      },
+    ],
+    { enabled: true },
+  );
+
+  it("memoryWorkingHours' result is a pair freeBlocks accepts, and it narrows the window", () => {
+    expect(hours).toEqual({ dayStartHour: 9, dayEndHour: 18 });
+    expect(isValidFreeBlockWindow(hours!.dayStartHour, hours!.dayEndHour)).toBe(true);
+    // 14:00 CDT now; 18:00 CDT = 23:00Z.
+    expect(freeBlocks({ events: [], effectiveNow: NOW, tz: TZ, ...hours })).toEqual([
+      { startUtc: NOW, endUtc: iso("2026-09-16T23:00:00Z"), minutes: 4 * 60 },
+    ]);
+    // Past the owner's 18:00 but before the 22:00 default: no block under the memory bounds.
+    expect(
+      freeBlocks({ events: [], effectiveNow: iso("2026-09-16T23:30:00Z"), tz: TZ, ...hours }),
+    ).toEqual([]);
+  });
+
+  it("fall-back day 2026-11-01: 09:00–18:00 CST under memory bounds is still 9h, on the wall clock", () => {
+    const early = iso("2026-11-01T05:30:00Z"); // 00:30 CDT
+    expect(freeBlocks({ events: [], effectiveNow: early, tz: TZ, ...hours })).toEqual([
+      {
+        startUtc: iso("2026-11-01T15:00:00Z"), // 09:00 CST (after the fall-back)
+        endUtc: iso("2026-11-02T00:00:00Z"), // 18:00 CST
+        minutes: 9 * 60,
+      },
+    ]);
+  });
+
+  it("spring-forward day 2026-03-08: 09:00–18:00 CDT under memory bounds is 9h", () => {
+    const early = iso("2026-03-08T07:30:00Z"); // 01:30 CST, before the 02:00 jump
+    expect(freeBlocks({ events: [], effectiveNow: early, tz: TZ, ...hours })).toEqual([
+      {
+        startUtc: iso("2026-03-08T14:00:00Z"), // 09:00 CDT
+        endUtc: iso("2026-03-08T23:00:00Z"), // 18:00 CDT
+        minutes: 9 * 60,
+      },
+    ]);
+  });
+
+  it("isValidFreeBlockWindow mirrors freeBlocks' own acceptance", () => {
+    expect(isValidFreeBlockWindow(0, 24)).toBe(true);
+    expect(isValidFreeBlockWindow(8, 22)).toBe(true);
+    expect(isValidFreeBlockWindow(9, 9)).toBe(false);
+    expect(isValidFreeBlockWindow(18, 9)).toBe(false);
+    expect(isValidFreeBlockWindow(-1, 9)).toBe(false);
+    expect(isValidFreeBlockWindow(9, 25)).toBe(false);
+    expect(isValidFreeBlockWindow(8.5, 22)).toBe(false);
+    expect(isValidFreeBlockWindow(Number.NaN, 22)).toBe(false);
   });
 });
