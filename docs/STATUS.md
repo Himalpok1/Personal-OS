@@ -1158,8 +1158,9 @@ is 0 on every screen after the `containsControl`/day-cell fixes; a cache-cleared
 
 **Verification (integrator, serial, on the shared `personalos_test`):** `pnpm build --force` 12/12
 · `pnpm typecheck` 23/23 · `npx eslint apps packages` exit 0 and `apps/mobile` `npx eslint .` **0
-errors, 0 warnings** (the ten pre-existing unused-directive warnings removed with `--fix`; the
-`monitor/index.tsx` purity error is gone — it now reads `overview.dataUpdatedAt`) · root
+errors** (the ten pre-existing unused-directive warnings removed with `--fix`; the
+`monitor/index.tsx` purity error is gone — it now reads `overview.dataUpdatedAt`; one warning
+remains, in the generated, git-ignored `.expo/types/router.d.ts`, confirmed source-free) · root
 `npx prettier --check .` clean · `git diff --check` clean · `gitleaks detect --no-git` no leaks ·
 `pnpm test --force` **23/23 tasks, 6,477 tests across 13 packages, zero failing** (core 1,014
 [+50] · schema 563 [+17] · api 1,496 [+10] · api-client 201 [+1] · mobile 1,574 [+107]; the
@@ -1244,8 +1245,11 @@ only), which the schema test pins.
 
 **Deployment plan (NOT executed — the brief's gate is implementation → tests → independent review
 → migration safety → rollback plan → deployment, and this record closes at the review).** No
-migration, so the frozen order minus its migrate step: commit and push; tag the serving
-api/web images `rollback-pre-10.3` by digest (worker untouched — no rebuild, no tag); `git
+migration, so the frozen order minus its migrate step: **Step 0 — merge:**
+`claude/phase-10-3-academic-mobile-36b57c` (currently `c7d3f53`, PR opened against `main`) is
+fast-forwarded into `main`, matching every prior checkpoint's own "merge before archive" step; the
+archive in the step below is of `main`'s new tip, named explicitly at execution time. Then: tag the
+serving api/web images `rollback-pre-10.3` by digest (worker untouched — no rebuild, no tag); `git
 archive` to `/home/himallinux/personal-os-10.3-release`; build api + web; verify the api image
 carries `priorities`/`workload`/`course_attention` in `dist/read-models/academic.js`; recreate
 `api` then `web` alone (`--no-deps --no-build --force-recreate`, `postgres` and `worker` never
