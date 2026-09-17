@@ -33,10 +33,12 @@ migration `0022` applied, level 23; `api`+`web` recreated in production, `worker
 untouched; the Rabbit R1 accepted on versionCode 29, built locally 2026-09-17 ~08:00Z, zero crash
 lines): one narrow FK (`tasks.canvas_assignment_id`) plus two new `GET /<entity>/:id/context` read
 models and mobile linking UI, live-exercised against real production data and cleaned up after.
-**Checkpoint 10.6 — Intelligence + Mobile Experience Expansion — is IMPLEMENTED, VERIFIED (6,816
+**Checkpoint 10.6 — Intelligence + Mobile Experience Expansion — is IMPLEMENTED, VERIFIED (6,824
 tests, 23/23 tasks), INDEPENDENTLY REVIEWED (safe after fixes, all closed), merged to `main`
-(`3a90c0c`, PR #6) and DEPLOYED** (owner authorized: "Deploy"; no migration; `api`+`web` recreated in
-production 2026-09-17 ~10:08Z, `worker`/`postgres` untouched; Rabbit R1 — see the 10.6 record):
+(`3a90c0c` + the `3928dd3` device fix, PR #6) and DEPLOYED** (owner authorized: "Deploy"; no
+migration; `api`+`web` recreated in production 2026-09-17, `worker`/`postgres` untouched; the Rabbit
+R1 ACCEPTED on versionCode 31 after versionCode 30 crashed on launch and was rolled back and fixed
+the same hour — see the 10.6 record):
 explainable, context-aware Focus Now, a deterministic client-composed daily briefing, and a motion +
 gesture design system on the already-installed Reanimated/gesture-handler stack (ADR-075/076).
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
@@ -87,9 +89,9 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | | |
 |---|---|
 | Migration level | **23** (`0000`–`0022`); local and production agree; unchanged by 10.6 (no migration). 10.5 added `0022_task_canvas_assignment_link` (ADR-074), applied to production 2026-09-17 from the 10.5 api image. |
-| Serving commit | **api and web at `3a90c0c`** (10.6, both recreated 2026-09-17 ~10:08Z from `personal-os-10.6-release`; images api `dccf3ff797df`, web `2732d63f84e3`); **worker at `965900f`** (10.4, untouched since — 10.5 and 10.6 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,web}:rollback-pre-10.6` = the 10.5 images (`d293d6f813d7` / `7e8cce9615b3`), plus every earlier tag, all by resolved digest. |
+| Serving commit | **api at `3a90c0c`, web at `3928dd3`** (10.6; the fix commit changed only `apps/mobile`, so `api`'s image is byte-equivalent to one built from `3928dd3` and was not rebuilt; api recreated 2026-09-17 10:08Z, web 10:19Z, both from `personal-os-10.6-release`); **worker at `965900f`** (10.4, untouched since — 10.5 and 10.6 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,web}:rollback-pre-10.6` = the 10.5 images (`d293d6f813d7` / `7e8cce9615b3`), plus every earlier tag, all by resolved digest. |
 | Containers | all four `RestartCount=0`; api `(healthy)` within 8 s of the 10.6 recreation; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated since); `GET /health` → `ok` / `connected` / `stale:false` (2026-09-17 10:08Z) |
-| Rabbit R1 | `com.himal.personalos` **versionCode 28**, built from `965900f` **locally** (`eas build --local`, profile `production-internal`, the EAS-managed keystore fetched at build time — signer SHA-256 `4601e3a2…` identical to the installed app's, compared with `apksigner` before installing), `adb install -r` → `Success` with `firstInstallTime` 2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS` all preserved — no re-pair. Today/Health/Mail Digest/Settings walked live; the new Focus Now card correctly renders nothing (nothing overdue/due-today/academic-priority on the real account right now); 0 crash lines. |
+| Rabbit R1 | `com.himal.personalos` **versionCode 31**, built from `3928dd3` **locally** (`eas build --local`, profile `production-internal`, the EAS-managed keystore fetched at build time — signer SHA-256 `4601e3a2…` identical to the installed app's, compared with `apksigner` before installing), `adb install -r` → `Success` with `firstInstallTime` 2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS` preserved — no re-pair. versionCode 30 (from `3a90c0c`) **crashed on launch** (a worklet calling a JS-thread function) and was rolled back to 29 within minutes, then fixed; the 10.6 record has the full account. Today (light + dark), the briefing hero and assignment sheet on real data, Settings and Projects walked live; 0 crash lines on 31. |
 | Academic layer (10.2 + ADR-070a) | `GET /academic/today?tz=` · `GET /academic/courses[?include_past_terms=]` · `GET /academic/courses/:id` — a provider-agnostic read model computed over the Canvas tables (ADR-070), **current term only by default** (ADR-070a: the most recently started term, by date — `current_term: 2026 Fall` echoed on the wire), a deterministic Today card and `/academic` course screens, `score`/`grade` synced (ADR-068a; 165 of 355 real assignments carry a grade). **Live and validated**: Today `overdue 2 · due today 1 · due this week 8 · 8 unread` from the 6 Fall 2026 courses (was 11 overdue across 16 courses in 3 terms before the rule); `include_past_terms=true` still lists all 16. |
 | Canvas (10.1/10.1B/10.1C + 10.2 hotfix) | `packages/canvas-providers` + six tables, PAT-authenticated, read-only, hourly `canvas.sync-cron`. Connection `8b8e2cb6…` **reactivated in place by the owner's live disconnect → reconnect** (22:32–22:33Z: same row, `created_at` unchanged, 16/355/22 still linked, manual sync `succeeded`). A pasted token is now trimmed and refused if it carries whitespace/control characters, the client refuses to build a header from one, and the api's error serializer scrubs bearer/PAT shapes (hotfix `4c614db`). **Live-validated against the owner's real UTA account 2026-09-16**: connect → sync (16 courses, 355 assignments, 19 announcements, 0 events) → idempotent resync → disconnect (credential triple NULLed) → invalid token rejected (`400 canvas_auth_failed`) → reconnect → resync, left **active**. **Reconnect path (10.1C) verified live 2026-09-16**: disconnect → `200` · reconnect → **`200` on the same row `8b8e2cb6…`** (`created_at` unchanged at 10:50:30Z, all 16 courses still linked) · second connect on the active row → `409` · manual resync `202` → `succeeded` · hourly cron `succeeded` at 12:00:17Z. Zero PAT-shaped strings and zero warn/error lines in the api and worker logs since the api was recreated. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · notification-shade capture (9.1) — a persistent local "Capture" notification on its own channel; verified live on the Rabbit R1 (9.1). |
@@ -102,7 +104,7 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress. |
 | Backups | **None, by design** (ADR-024). |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE** (re-verified 2026-09-16). No CI, no Actions workflow, no repository secret. **`main` is the canonical branch again as of 2026-09-16** (fast-forwarded to the Phase 10 tip; PR #1 merged). |
-| Test baseline | **6,816 tests across 13 packages** at the 10.6 commit (`3a90c0c`, deployed for api/web): api 1,515 · mobile 1,782 · core 1,111 · worker 738 · schema 563 · health-providers 332 · api-client 206 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25. Was 6,588 at 10.5. |
+| Test baseline | **6,824 tests across 13 packages** at the 10.6 fix commit (`3928dd3`): api 1,515 · mobile 1,790 · core 1,111 · worker 738 · schema 563 · health-providers 332 · api-client 206 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 79 · ai-providers 25. Was 6,588 at 10.5. |
 | pg-boss | **31 queues, 11 schedules** (worker startup log at 10.1B; `pgboss.queue` reads one more with the internal `__pgboss__send-it`). Every retrying queue has a dead-letter queue (9.0): `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues, `occurrences.generate-lazy`, `occurrences.expand-window`. `occurrences.expand-window` has a phase-2 idempotent lazy repair since 9.4. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C) · `health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now` (9.0). First scheduled run 2026-09-13T04:00Z; the job's daily runs have not been individually re-verified since the 9.0 acceptance. |
 | Alert keys | Occurrence-scoped (ADR-058). Producers: health-sync breaker (first live emission 2026-09-12T03:00:14Z), `occurrences.generate-lazy.dead:<occurrenceId>`, `occurrences.expand-window.dead:<UTC date>` (9.0; also covers a failed 9.4 phase-2 repair), `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (9.5). The three 9.x producers are unexercised in production by design. |
@@ -1869,7 +1871,7 @@ root gate.
 **23/23** · `npx eslint apps packages` and `apps/mobile`'s own `eslint .` exit 0 · root
 `prettier --check .` clean; every mobile file that was prettier-clean at HEAD still is, every new file
 formatted · `git diff --check` clean · `gitleaks detect --no-git` no leaks · `pnpm test --force`
-**23/23 tasks, 6,816 tests across 13 packages, zero failing** (core 1,111 [+80] · mobile 1,782
+**23/23 tasks, 6,816 tests across 13 packages, zero failing** at `3a90c0c` (6,824 at the `3928dd3` device fix: +8 in the new worklet guard) (core 1,111 [+80] · mobile 1,782
 [+146] · api 1,515 [+2]; db 79, schema 563, canvas-providers 79, health-providers 332, ai-providers
 25, api-client 206, monitoring 151, calendar-providers 119, mail-providers 116, worker 738 unchanged)
 · cache-cleared `expo export --platform web`: entry bundle 3.36 → **4.50 MB** (+1.1 MB, the price of
@@ -1960,9 +1962,62 @@ observed on live data; it rests on the two route tests, which ran on the identic
 since recreation: **0** warn/error lines, **0** token-shaped strings; 71 pg-boss jobs completed in
 the following window, 0 failed/retry/active.
 
+**Rabbit R1 — the first local build CRASHED ON LAUNCH; fixed, rebuilt, ACCEPTED on versionCode 31
+(2026-09-17 10:13–10:27Z).** `eas build --local --profile production-internal` from `3a90c0c` with
+the production values hardcoded (never from `.env`) → `BUILD SUCCESSFUL in 3m 40s`, versionCode 29 →
+30, 113.7 MB. Verified before installing: `strings` on the Hermes bundle — 0 `localhost:3000`, 1
+tailnet hostname, "Focus Now" / "Why it's here" / "Past its due time" / `GestureHandlerRootView`
+present; `apksigner` SHA-256 `4601e3a2…` identical to the installed app's (pulled live first).
+`adb install -r` → `Success`, `firstInstallTime` 2026-08-19 preserved, exact-alarm appop `allow`,
+`POST_NOTIFICATIONS` granted. **Launched with `monkey` (never `am force-stop`) → `FATAL EXCEPTION:
+main` on the first frame: `[Worklets] Tried to synchronously call a Remote Function. Called
+"anonymous" on the UI Runtime` from `bottomSheetTsx3 → styleUpdater(useAnimatedStyle)`.** Cause:
+`components/ui/bottom-sheet.tsx`'s sheet-style worklet called the exported, non-worklet
+`sheetTranslateY` helper — legal under the vitest mocks (identity `useAnimatedStyle`) and on web
+(no UI runtime), fatal on Android; and because the assignment sheet's host had just been moved to
+the root, the crash was at launch, not on first open. **Containment first:** the versionCode-29
+`base.apk` pulled for the signature check was reinstalled in place (`adb install -r -d`), the app
+relaunched clean (0 crash lines), grants intact. **Fix (`3928dd3`):** the arithmetic inlined in the
+worklet, the helper marked `"worklet"`, and a new source guard
+`apps/mobile/src/__tests__/worklet-safety.test.ts` that reads every `useAnimatedStyle` /
+`useAnimatedProps` / `useDerivedValue` body under `components/` and `app/` and allows only `.get()`,
+`Math.*` and named, directive-checked worklets — shown to FAIL with the bug reintroduced and pass
+with it fixed. Every other worklet in the tree (`PressableScale`, `CompletionCircle`,
+`GradeProgress`, `WorkloadBar`, `AnimatedNumber`'s `formatGroupedInteger`) was audited clean by the
+same guard. Mobile suite 1,790 (+8), typecheck/eslint/prettier clean; pushed to `main`
+(`3a90c0c` → `3928dd3`, a mobile-only diff — `apps/api`/`packages` byte-identical), the release
+directory re-shipped and `web` alone rebuilt and recreated from it (bundle re-verified; `api`,
+`worker`, `postgres` untouched — `api`'s image is unaffected by a mobile file). Rebuilt →
+`BUILD SUCCESSFUL in 3m 27s`, **versionCode 31**, bundle re-verified (0 `localhost:3000`, 0
+`sheetTranslateY(progress` calls), signer identical → `adb install -r` → `Success`,
+`firstInstallTime` preserved, grants intact, `stopped=false`.
+
+**On-device walk (versionCode 31, real production data, screenshots off the device).** Cold launch →
+Today: greeting header, the **briefing hero** with real data — "2 overdue, 1 due today." · Academics
+"2 overdue / 1 due today / 7 due this week / You're behind" each sourced `Canvas assignment`, "8
+unread announcements" sourced `Course` · Schedule "Free 08:00–22:00 (14h 00m)" sourced `Calendar` ·
+Health "Slept 8h 44m — in line with your 7-day average (8h 40m)" sourced `Health` · Focus now lines
+with source pills; every line spoken with its source in the accessibility tree (`uiautomator dump`:
+"2 overdue. Source: Canvas assignment", "Podcast 3 — Past its due time. Source: Canvas assignment.
+Opens details."). **Focus Now** rows: real ACCT/MATH/INSY assignments with `Overdue`/`Missing`/
+`Course needs attention`/`Due <24h`/`High points` chips capped at two with `+N`. Tapping a briefing
+focus line and a Focus Now row each opened the **assignment sheet** (the component that had
+crashed): `Missing` chip, course, due, points, "Why it's here" with four reasons and their source
+chips, the equation `450 Canvas priority + 25 course attention = 475`, "Open in Canvas" — closed
+by its X and by BACK. **Dark mode** (`cmd uimode night yes`): the hero and the Focus Now card fully
+legible, chips in their dark containers; restored to light afterwards. **Settings**: the new
+Integrations summary row (Calendar · connected, Gmail · connected, Health · current, Canvas ·
+connected) and one state chip per card; **Projects** tab renders its empty states. Logcat swept for
+`FATAL EXCEPTION` after every step: **zero** across the whole versionCode-31 session. Not exercised
+on the device (no data or would mutate real data): a completion, a snooze, a swipe panel, the Tasks
+list rows (the account has zero open tasks), the toast; all covered by their suites and the web walk.
+One mis-tap during the walk opened Android's own Settings (a swipe from the top edge pulled the
+shade); nothing there was changed.
+
 **Rollback, if ever needed:** `docker tag personal-os-{api,web}:rollback-pre-10.6
 personal-os-{api,web}:latest` then the frozen `up -d --no-deps --no-build --force-recreate api web`;
-no schema involved.
+no schema involved. The Rabbit rolls back by reinstalling a pulled earlier `base.apk` with
+`adb install -r -d`, as the versionCode-30 incident did within minutes.
 
 ---
 
@@ -2184,6 +2239,20 @@ no schema involved.
   still abort reconcile with a false "unsupported type" rather than actually verifying it. Fixing the
   shared script is its own reviewed decision, not a side effect of adding one column; recorded rather
   than patched in-checkpoint.
+- **A worklet body that calls a JS-thread function is invisible to every local check (found at
+  Checkpoint 10.6, the hard way).** The vitest mocks make `useAnimatedStyle` an identity call and the
+  web target has no UI runtime, so `bottom-sheet.tsx`'s call to a plain helper passed 6,816 tests and a
+  static export and then crashed the versionCode-30 APK on its first frame. `worklet-safety.test.ts`
+  now scans every animated body under `apps/mobile/src/{components,app}` for calls other than
+  `.get()`, `Math.*` and named directive-checked worklets; it is a regex over source, not a type
+  check, so a call hidden behind a member expression or a new hook name (`useAnimatedReaction`,
+  `useAnimatedScrollHandler`) would need the guard extended. Until Reanimated's babel plugin can be
+  exercised under vitest, an on-device launch remains the only real proof.
+- **The Today header's personal subtitle and the briefing's headline can disagree (10.6).** The
+  `ScreenHeader` subtitle ("All clear for today") is computed from `/today`'s personal counts, while
+  the briefing headline ("2 overdue, 1 due today.") adds the academic counts. Both are honest to their
+  own source, but 100px apart they read as a contradiction on a day with only academic work due;
+  worth one shared headline rule in a later pass.
 - **`PATCH /tasks/:id`'s `canvas_assignment_id` link has a TOCTOU gap identical to `project_id`'s
   existing one (found at Checkpoint 10.5, not fixed to avoid a one-off inconsistency).** The
   existence pre-check and the transactional write are not atomic; an assignment deleted in that
@@ -2231,10 +2300,10 @@ first checkpoint since 10.1C to need `api` and `db` touched, not just `worker`/`
 production serves `api`+`web` at `f29418b`, `worker`/`postgres` untouched, Rabbit R1 versionCode 29.
 
 
-**Checkpoint 10.6 — Intelligence + Mobile Experience Expansion — is implemented, verified (6,816
+**Checkpoint 10.6 — Intelligence + Mobile Experience Expansion — is implemented, verified (6,824
 tests, 23/23 tasks), independently reviewed (safe after fixes, all closed in-checkpoint), merged to
-`main` (`3a90c0c`, PR #6), and DEPLOYED** (owner authorized: "Deploy"). See the full entry above. No
-migration; touches `packages/schema/src/today.ts` (one optional key), `apps/api/src/read-models/
+`main` (`3a90c0c`, then the `3928dd3` device fix; PR #6), and DEPLOYED** (owner authorized: "Deploy").
+See the full entry above. No migration; touches `packages/schema/src/today.ts` (one optional key), `apps/api/src/read-models/
 today.ts`, `packages/core/src/focus-now/**` and `apps/mobile/**` — `apps/worker`, `packages/db` and
 the strict academic schemas are untouched. Production serves `api`+`web` at `3a90c0c`;
 `worker`/`postgres` untouched. The Rabbit R1 record is in the 10.6 entry.
@@ -2272,9 +2341,9 @@ phase is in `docs/history/`; the one-line summary is:
 | **10.3** | Academic Intelligence Expansion + Mobile UX Modernization: deterministic urgency / explainable priority scoring / workload status / course attention / grade summary as optional keys on the academic read model (ADR-071, no migration), a token-based mobile design system (`components/ui/`, three new Expo modules, web dark mode fixed) and every screen restyled on it. **Implemented, verified (6,477 tests), independently reviewed (twice — the full adversarial pass and a four-lane final release gate), merged to `main` (`ba23472`) and DEPLOYED 2026-09-16/17** (api/web recreated, worker/postgres untouched); Rabbit R1 accepted on versionCode 27, built locally after catching and fixing a wrong-API-URL build before it ever reached the device. |
 | **10.4** | "Focus Now" — a deterministic, client-side-only unified ranking merging personal urgent items and academic priorities on Today (`packages/core/src/focus-now`, ADR-072, no new route/migration/AI call); Canvas invalid-token alerting gated on two consecutive connection-level auth failures, mirroring Gmail/Health/Calendar's existing alert producers (`apps/worker/src/canvas/alerts.ts`, ADR-073 amending ADR-068 §6); a four-item mobile polish bundle (`SegmentedControl` promoted to the design system, courses-screen skeleton flash fixed, accessible Settings loading states, haptic on destructive confirms). **Implemented, verified (6,530 tests, 23/23 tasks, zero failing), independently reviewed clean, merged to `main` (`965900f`) and DEPLOYED 2026-09-16/17** (worker+web recreated, api/postgres untouched, no migration); Rabbit R1 accepted on versionCode 28, built locally. |
 | **10.5** | Personal Context Layer: exactly one narrow, explicit-write-only FK (`tasks.canvas_assignment_id`, migration `0022`, ADR-074) instead of the generic entity/relationship table a preceding 4-lane architecture review found this codebase already tried once and got zero adoption for (`item_tags`, Checkpoint 10.0); two new `GET /<entity>/:id/context` read models (`related_reminders` on course context, `related_captures`/`recent_activity` on project context) built entirely over existing FKs; a task-detail linking picker and two zero-schema navigation fixes on mobile. **Implemented, verified (6,588 tests, 23/23 tasks, zero failing), independently reviewed clean, merged to `main` (`f29418b`) and DEPLOYED 2026-09-17** (migration `0022` applied, level 23; api/web recreated, worker/postgres untouched); Rabbit R1 accepted on versionCode 29, built locally, the write path and both context routes live-exercised against real production data. |
-| **10.6** | Intelligence + Mobile Experience Expansion: an explainability layer (closed reason vocabulary with sources and deterministic "why"s, frozen context points, linked-task dedupe, an auditable score equation — ADR-075) and a client-composed deterministic daily briefing (academic / schedule with free blocks / sleep vs 7-day average / focus) over already-fetched read models, with one additive optional wire key (`TodayTaskItem.canvas_assignment_id`, opaque, never forwarded to a model); a motion + gesture design system on the already-installed Reanimated 4 / gesture-handler stack (`PressableScale`, `CompletionCircle`, `SwipeableRow`, `Toast`, `AnimatedNumber`, `ClampedText`, `BottomSheet` — ADR-076), Today reorganised actionable-first with a briefing hero and an explanation sheet on every Focus Now row, an in-app assignment sheet before "Open in Canvas", and every major screen polished on the design system. **Implemented, verified (6,816 tests, 23/23 tasks, zero failing), independently reviewed (safe after fixes, all closed), merged to `main` (`3a90c0c`) and DEPLOYED 2026-09-17** (api/web recreated, worker/postgres untouched, no migration); Rabbit R1: see the 10.6 entry. |
+| **10.6** | Intelligence + Mobile Experience Expansion: an explainability layer (closed reason vocabulary with sources and deterministic "why"s, frozen context points, linked-task dedupe, an auditable score equation — ADR-075) and a client-composed deterministic daily briefing (academic / schedule with free blocks / sleep vs 7-day average / focus) over already-fetched read models, with one additive optional wire key (`TodayTaskItem.canvas_assignment_id`, opaque, never forwarded to a model); a motion + gesture design system on the already-installed Reanimated 4 / gesture-handler stack (`PressableScale`, `CompletionCircle`, `SwipeableRow`, `Toast`, `AnimatedNumber`, `ClampedText`, `BottomSheet` — ADR-076), Today reorganised actionable-first with a briefing hero and an explanation sheet on every Focus Now row, an in-app assignment sheet before "Open in Canvas", and every major screen polished on the design system. **Implemented, verified (6,824 tests, 23/23 tasks, zero failing), independently reviewed (safe after fixes, all closed), merged to `main` (`3a90c0c`, then the `3928dd3` device fix) and DEPLOYED 2026-09-17** (api/web recreated, worker/postgres untouched, no migration); Rabbit R1 accepted on versionCode 31 after versionCode 30 crashed on launch (a worklet calling a JS-thread function — fixed, guarded by a new source test, rolled back within minutes). |
 
-**Production is at migration level 23** and serves `api`+`web` built from `3a90c0c` (10.6);
+**Production is at migration level 23** and serves `api` built from `3a90c0c` and `web` from `3928dd3` (10.6);
 `worker`/`postgres` are untouched since 10.4/2026-08-30 respectively (10.5 and 10.6 changed nothing under `apps/worker`). Google Calendar, Gmail, Health
 and Canvas are all **active** (the Canvas PAT was rotated and reconnected by the owner on
 2026-09-17, the same connection row reactivated in place, real data flowing again — closing the
@@ -2296,10 +2365,10 @@ context and a "related capture"/activity trail on its project context. The Rabbi
 
 ## Current work
 
-**Checkpoint 10.6 is implemented, verified (6,816 tests, 23/23 tasks), independently reviewed, merged
-to `main` (`3a90c0c`), and DEPLOYED.** `main` is `3a90c0c` and canonical; PR #6 merged; production
-serves `api`+`web` at that commit (`worker` still on 10.4's `965900f`, `postgres` untouched); no
-migration (level 23). Today now leads with a deterministic briefing and an explainable Focus Now;
+**Checkpoint 10.6 is implemented, verified (6,824 tests, 23/23 tasks), independently reviewed, merged
+to `main` (`3928dd3`), and DEPLOYED.** `main` is `3928dd3` and canonical; PR #6 merged; production
+serves `api` at `3a90c0c` (unaffected by the mobile-only fix) and `web` at `3928dd3` (`worker` still
+on 10.4's `965900f`, `postgres` untouched); no migration (level 23); the Rabbit R1 on versionCode 31. Today now leads with a deterministic briefing and an explainable Focus Now;
 the mobile design system has motion, gestures, sheets and toasts on the already-installed Reanimated
 stack. Android APKs remain built locally (`eas build --local`).
 
@@ -2354,7 +2423,17 @@ bundle verified to carry the 10.6 strings and the tailnet URL, never `localhost:
 `web` recreated alone, `(healthy)` in 8 s, `worker`/`postgres` untouched by their own start
 timestamps · every read route `200` locally and over Tailscale · the real account's academic
 priorities keep the pre-10.6 reason vocabulary (versionCode-29 wire-safe) · 0 warn/error and 0
-token-shaped log lines; 71 jobs completed, 0 failed. Rabbit R1: see the 10.6 entry.
+token-shaped log lines; 71 jobs completed, 0 failed.
+
+**Checkpoint 10.6 device acceptance (2026-09-17 10:13–10:27Z).** versionCode 30 from `3a90c0c`:
+bundle and signer verified, installed in place, **crashed on the first frame** (`[Worklets] Tried to
+synchronously call a Remote Function` from the bottom sheet's style worklet) — rolled back to 29
+within minutes (`adb install -r -d` of the pulled `base.apk`, clean relaunch). Fix `3928dd3`
+(worklet inlined, helper marked `"worklet"`, `worklet-safety.test.ts` source guard proven to fail
+with the bug reintroduced; mobile 1,790, typecheck/eslint/prettier clean) pushed to `main`; `web`
+rebuilt and recreated from it; versionCode 31 built, bundle/signer re-verified, installed in place
+(`firstInstallTime` preserved, grants intact) → Today light + dark, the briefing hero and the
+assignment sheet on real data, Settings, Projects — **0 crash lines** across the session.
 
 **Checkpoint 10.5 gate (2026-09-17), full monorepo, integrator-run.** `pnpm build --force` 12/12 ·
 `pnpm typecheck` 23/23 · `npx eslint apps packages` and `apps/mobile`'s own `eslint .` exit 0 · root
@@ -2471,9 +2550,9 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 ## Next action
 
 1. Nothing is gating. Checkpoint 10.6 is implemented, verified, independently reviewed (all
-   findings closed), merged to `main` (`3a90c0c`), and **DEPLOYED** — no migration, `api`+`web`
-   recreated in production, `worker`/`postgres` untouched; the Rabbit R1 record is in the 10.6
-   entry. Checkpoints 10.4 and 10.5 are likewise deployed and accepted. **No checkpoint after 10.6 is
+   findings closed), merged to `main` (`3928dd3`), and **DEPLOYED** — no migration, `api`+`web`
+   recreated in production, `worker`/`postgres` untouched; the Rabbit R1 accepted on versionCode
+   31 after the versionCode-30 launch crash was rolled back and fixed (the 10.6 entry). Checkpoints 10.4 and 10.5 are likewise deployed and accepted. **No checkpoint after 10.6 is
    selected; Phase 10.7 is not begun.** Two things worth watching on real use before the next
    checkpoint: the first-ever production exercise of Reanimated worklets on the Rabbit (press
    springs, swipe panels, the entering fades — an on-device regression is a rebuild away, never a
