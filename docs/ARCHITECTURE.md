@@ -803,6 +803,31 @@ Rebuild only what changed. Migrations are additive and forward-only, so the
 previous release's images run correctly against the newer schema — that is what
 makes an image rollback real. A schema rollback is never performed.
 
+**The host is shared, and image tags are ephemeral on it (Checkpoint 10.8.5,
+ADR-079).** Since 2026-09-17 the i5 also runs the owner's home-lab stack and an
+AI agent with SSH access; on 2026-09-18 an out-of-band `docker image prune -a`
+deleted every rollback tag mid-deployment. Two steps therefore bracket the
+frozen order above, both in `scripts/homelab/` (installed at
+`~/personal-os-ops/` on the host; procedures in `docs/HOMELAB-RUNBOOK.md`):
+
+0. **Preflight** — `scripts/homelab/preflight.sh` proves a BatchMode login with
+   the deployment key and runs the host watchdog in report mode (rollback tags,
+   saved image set, disk, containers, `/health`, socket mounts, reboot flag).
+   Do not deploy over a RED.
+2b. **Right after step 2** — `save-release-images.sh rollback-pre-<checkpoint>`
+   writes each tagged image to a tarball under `~/personal-os-images/` and
+   creates a stopped keeper container that references it, which is what makes
+   `image prune -a` skip it. A service the checkpoint does not rebuild is
+   tagged from `:latest` first so every service has a rollback tag.
+7. **After the rollout is healthy** — `save-release-images.sh <checkpoint>
+   --from-latest` saves the serving set and retires everything older than the
+   newest two labels (the explicit retention policy). Every Personal OS image
+   also carries `LABEL io.personal-os.protected="true"` so any cleanup on the
+   host can exclude it with `--filter "label!=io.personal-os.protected=true"`.
+
+The durable rollback source is still the per-release directory plus the pushed
+`rollback-pre-<checkpoint>` git tag; the tarball is the fast path.
+
 ## Secrets
 
 Personal OS has no backup system in the current architecture. PostgreSQL uses persistent Docker volume storage on the production server — this is durability against container restarts, not a backup. Backup infrastructure may be added in a future phase only if explicitly requested.

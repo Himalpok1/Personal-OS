@@ -21,6 +21,9 @@ context stays workable:
   present-state sections, including closed debt-ledger entries and earlier verification records.
 - `docs/AGENT-READINESS.md` — the canonical service-boundary inventory (Checkpoint 10.0); read it
   before designing anything an agent would call.
+- `docs/HOMELAB-RUNBOOK.md` — the shared production host: what runs on it, the 2026-09-18 image
+  prune root cause, the standing rules and every recovery procedure (Checkpoint 10.8.5). Read it
+  before any deployment or host work.
 - `docs/SOURCE-DURABILITY.md`, `docs/SOAK-9.2.md`, `docs/PHASE-8-CLOSEOUT.md`,
   `docs/CHECKPOINT-8.6-DECISION.md`, `docs/CHECKPOINT-8.6B-DESIGN.md`, `docs/SOAK-8.5.md`,
   `docs/PHASE-0-CHECKLIST.md` — companion and closed records, retained at their paths because code

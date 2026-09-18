@@ -29,6 +29,12 @@ RUN npx expo export --platform web
 
 FROM base AS runtime
 WORKDIR /app
+# Cooperative prune guard (Checkpoint 10.8.5, ADR-079): any cleanup on the
+# shared production host must exclude this label —
+#   docker image prune -a --filter "label!=io.personal-os.protected=true"
+# It is a marker, not an enforcement; the keeper containers and the saved
+# tarballs in ~/personal-os-images are what actually survive a bare prune.
+LABEL io.personal-os.protected="true"
 COPY --from=build /repo/apps/mobile/dist ./dist
 RUN npm install --global serve
 EXPOSE 8080

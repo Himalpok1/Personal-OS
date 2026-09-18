@@ -63,6 +63,14 @@ lines). Checkpoint 10.8 is CLOSED.** ADR-078; `apps/worker` untouched: a six-act
 three reversible pairs, two write permissions the owner can revoke, per-request approval with
 synchronous single-use execution, the request row as the audit trail, an Action Center and
 approval sheets on mobile, and Guard 7. No external agent is integrated; none can be.
+**Checkpoint 10.8.5 — Home Lab Reliability & Deployment Hardening — is AUDITED and IMPLEMENTED on
+the host side (2026-09-18, ADR-079): the 2026-09-18 image prune and the dropped deploy key are
+ROOT-CAUSED to the owner's own AI agent ("Ray", tailnet node `muse`) acting through an unrestricted
+SSH key; rollback images are now saved as tarballs with keeper containers under an explicit two-
+release retention policy, every Personal OS image carries a protection label, a cron+ntfy host
+watchdog is live, and the runbook is `docs/HOMELAB-RUNBOOK.md`. The root-gated steps (root-owned
+deploy-key file, apt updates, reboot) and the agent-key restriction await the owner — see the
+10.8.5 record.**
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -112,6 +120,7 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 |---|---|
 | Migration level | **25** (`0000`–`0024`); local and production agree. 10.8 added `0024_action_framework` (ADR-078, two tables), applied to production 2026-09-18 06:07Z from the 10.8 api image — 24 → 25 by row count, tracked hash equal to the shipped file's SHA-256. Previously: 10.7 added `0023_personal_memory_layer` (ADR-077, three tables), applied to production 2026-09-17 23:57Z from the 10.7 api image — 23 → 24 by row count, tracked hash equal to the shipped file's SHA-256. |
 | Serving commit | **api and web at `fcb4ea9`** (10.8; recreated 2026-09-18 06:08Z from `personal-os-10.8-release`, images `f3f751c78576` / `42815bbe7c6c`; rollback `personal-os-{api,web}:rollback-pre-10.8` = `57526b512975` / `95e1fff71a1b`, the 10.7 source rebuilt after an out-of-band prune deleted every earlier rollback tag — see the 10.8 deployment record); **worker at `965900f`** (10.4, untouched — 10.5–10.8 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Previous: api and web at `436da0f` (10.7; recreated 2026-09-17 23:58Z from `personal-os-10.7-release`). Previous entry, for provenance: api at `3a90c0c`, web at `3928dd3` (10.6; the fix commit changed only `apps/mobile`, so `api`'s image is byte-equivalent to one built from `3928dd3` and was not rebuilt; api recreated 2026-09-17 10:08Z, web 10:19Z, both from `personal-os-10.6-release`); **worker at `965900f`** (10.4, untouched since — 10.5 and 10.6 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,web}:rollback-pre-10.6` = the 10.5 images (`d293d6f813d7` / `7e8cce9615b3`), plus every earlier tag, all by resolved digest. |
+| Host (10.8.5) | **Shared home-lab box** since 2026-09-17 (`docs/HOMELAB-RUNBOOK.md` §1: dev-ops stack, code-server, Claude Desktop, Immich, ray-dashboard, agents-meetup — 19 containers besides Personal OS's four). Rollback posture: `rollback-pre-10.8` and `10.8` image sets **saved as tarballs** (`~/personal-os-images/`, 636 MB each, sha256) with keeper containers; Docker image *Reclaimable* 88 KB (was 1.17 GB) — `image prune -a` can no longer take a Personal OS image. Watchdog `~/personal-os-ops/check-host.sh` every 30 min → ntfy `personal-os-ops`; first report YELLOW (reboot required; 1,495 NVMe AER errors that day). Deploy key present (2 keys in `authorized_keys`: `himal-mac-to-pi` = deploy, `hatch` = Ray). Disk 21 %. 76 apt updates pending incl. `docker-ce`/`containerd.io`; reboot required (kernel 7.0.0-31, libc6). |
 | Containers | all four `RestartCount=0`; api `(healthy)` within 8 s of the 10.6 recreation; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated since); `GET /health` → `ok` / `connected` / `stale:false` (2026-09-17 10:08Z) |
 | Rabbit R1 | `com.himal.personalos` **versionCode 33**, built from `fcb4ea9` **locally** (10.8; `adb install -r` → `Success` 2026-09-18 01:53 local, `firstInstallTime` 2026-08-19 preserved, exact-alarm `allow`, notifications granted; the approval flow, Action Center, revoke/allow and undo walked on-device in light and dark, 0 crash lines). Previous: **versionCode 32**, built from `436da0f` **locally** (10.7; `adb install -r` → `Success` 2026-09-18 02:41Z, `firstInstallTime` 2026-08-19 preserved, exact-alarm `allow`, notifications granted; Memory Center create/edit/delete/toggle walked on-device in light and dark, 0 crash lines). Previous: **versionCode 31**, built from `3928dd3` **locally** (`eas build --local`, profile `production-internal`, the EAS-managed keystore fetched at build time — signer SHA-256 `4601e3a2…` identical to the installed app's, compared with `apksigner` before installing), `adb install -r` → `Success` with `firstInstallTime` 2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS` preserved — no re-pair. versionCode 30 (from `3a90c0c`) **crashed on launch** (a worklet calling a JS-thread function) and was rolled back to 29 within minutes, then fixed; the 10.6 record has the full account. Today (light + dark), the briefing hero and assignment sheet on real data, Settings and Projects walked live; 0 crash lines on 31. |
 | Academic layer (10.2 + ADR-070a) | `GET /academic/today?tz=` · `GET /academic/courses[?include_past_terms=]` · `GET /academic/courses/:id` — a provider-agnostic read model computed over the Canvas tables (ADR-070), **current term only by default** (ADR-070a: the most recently started term, by date — `current_term: 2026 Fall` echoed on the wire), a deterministic Today card and `/academic` course screens, `score`/`grade` synced (ADR-068a; 165 of 355 real assignments carry a grade). **Live and validated**: Today `overdue 2 · due today 1 · due this week 8 · 8 unread` from the 6 Fall 2026 courses (was 11 overdue across 16 courses in 3 terms before the rule); `include_past_terms=true` still lists all 16. |
@@ -2744,6 +2753,136 @@ production action tables `action_requests 11 · permission_grants 2`.
 
 ---
 
+### Checkpoint 10.8.5 — Home Lab Reliability & Deployment Hardening: AUDITED, HOST-SIDE IMPLEMENTED, ROOT STEPS PENDING OWNER (2026-09-18)
+
+**Objective (owner-directed, 2026-09-18).** An infrastructure checkpoint before 10.9: identify
+what deleted ~163 GB of Docker images (every rollback tag) mid-10.8-deployment and what dropped the
+deployment key from `authorized_keys`; protect production and rollback artifacts; restore reliable
+deployment access; add operational visibility; only then apply the pending OS updates and reboot.
+The brief's first rule — *do not assume the cause* — was followed: nothing on the host was changed
+until the audit was complete. Decision record **ADR-079** (Locked). Runbook
+**`docs/HOMELAB-RUNBOOK.md`**. No application code, no migration, no worker change; three
+Dockerfiles gained a `LABEL`. Branch `claude/home-lab-reliability-audit-9c5880`.
+
+**Audit method (read-only, `himallinux` without `sudo`).** Docker: `ps -a`, `images`, `system
+df`, `info` (containerd image store, live-restore off, no `daemon.json`), the daemon event buffer
+(256 events — seconds on a host with ten health-checking containers, so empty for the window),
+Watchtower config and log, every container's mounts (socket RW: Watchtower only; RO: Dozzle), the
+compose files under `~/docker/*`. Linux: `crontab -l` (empty), `/etc/cron.*` (stock), `systemctl
+list-timers` (stock), user units (none), `.bash_history` (47 lines), the system journal
+(`adm` group) for `dockerd`, `containerd`, `sshd-session`, `sudo` and `systemd-logind`, and
+`sysstat` (`sar -b`/`-d`, 10-minute samples). SSH: `authorized_keys` fingerprints and options,
+every `Accepted publickey` this boot grouped by key and source, session open/close pairs.
+
+**Root cause 1 — the image prune: the owner's AI agent, through an unrestricted SSH key.** The
+host is a shared home-lab box since 2026-09-17; `~/ray-dashboard/README.md` and
+`tools/collect_apps.py` identify the operator as **Ray, Himal's AI agent**, user `hatch` on
+tailnet node **`muse`** (100.84.166.123), whose key (`SHA256:vA8oSk…`, comment `hatch`) sits in
+`himallinux`'s `authorized_keys` with no `command=`/`restrict` — `himallinux` is in `docker`, so
+the key is root-equivalent. Ray polls `docker ps`/`docker stats` every three minutes (487 logins
+this boot) and performs host setup on request (`serve-landing` 01:23, `code-server` 01:44,
+`claude-desktop` 03:03, `openclaw-src` 03:52, Immich 04:15 CDT on 09-18 — every one inside a burst
+of Ray sessions). The deletion itself: `sar -b`'s **01:30–01:40 CDT (06:30–06:40Z) sample reads
+1,686 tps and 15.9 MB/s of reads** — a mass unlink — between two idle samples (6 and 46 tps); the
+only SSH session open across that interval that was not a one-second poll was **Ray's, pid
+`3674631`, 01:29:18–01:40:08 CDT**. The disk was at 87 %. The stopped `hello-world` container from
+Aug 15 survived, so the verb was `docker image prune -a` (plus a builder prune — one in-use cache
+record from two weeks ago survived, everything unused went), not `docker system prune`. Why
+nothing recorded it: a non-interactive `ssh host 'cmd'` writes no bash history, needs no `sudo`,
+and `dockerd` journals image creation but not removal. **Residual uncertainty, stated:** the
+owner's own interactive session (`2362`, deploy key, 01:01:39–01:38:12 CDT, three `ssh`-diagnostic
+commands in history) overlaps the window; Ray's transcript on `muse` for 06:29–06:40Z would make
+the attribution certain and is an owner action. Watchtower is exonerated: label-gated, weekly,
+first run scheduled 2026-09-20, and `--cleanup` only removes the superseded image of a container
+it updates.
+
+**Root cause 2 — the dropped deploy key: the same actor, an overwrite instead of an append.** Last
+deploy-key login before the rewrite 21:58:03 CDT on 09-17; `.ssh`, `.local` and `.venvs` all
+modified at 22:02 inside a burst of ~40 Ray sessions (21:50–22:02); zero deploy-key logins
+succeeded between 22:03 and the owner's `ssh-copy-id` at 01:01 on 09-18 (the failed-password
+lines from the Mac at 00:48–00:50 are the recovery attempt). Password auth being enabled is what
+made recovery possible.
+
+**What was implemented on the host (no root needed; installed by `scripts/homelab/install.sh` to
+`~/personal-os-ops/`, state in `~/.personal-os-ops/`).**
+
+- **`save-release-images.sh`** — per service: `docker save | gzip` + sha256 + manifest under
+  `~/personal-os-images/<label>/`, a stopped keeper container (`docker create … true`, label
+  `io.personal-os.keeper=true`) referencing the image, and retention of the newest two labels
+  (older tarballs, keepers and `:<label>` tags retired; `:latest`, foreign images, running
+  containers and volumes never touched). Run twice: `rollback-pre-10.8` (the worker, untouched by
+  10.8, tagged from `:latest` first — its pre-10.8 image is its serving image) and `10.8
+  --from-latest` (the exact serving set). 636 MB each, sha256 verified, `docker load` of a tarball
+  proven. **Docker's own accounting confirms the mechanism: image Reclaimable fell from 1.173 GB to
+  88.02 KB** — `image prune -a` would now remove nothing of Personal OS's.
+- **`check-host.sh`** — the `himallinux` crontab every 30 minutes: disk (80/90), the four
+  containers, `GET /health` + worker staleness, one `rollback-pre-*` tag per service, a complete
+  saved set, the deploy key's fingerprint, RW socket mounts outside the allowlist (Watchtower),
+  reboot-required; ntfy topic `personal-os-ops` on change only plus a daily heartbeat; `--report`
+  mode (adds `tailscale serve`, the public HTTPS `/health`, the day's NVMe AER count) exits 3 on
+  RED. First cron run posted **YELLOW: reboot required** to ntfy (confirmed by reading the topic
+  back). Every line is a count, a token or a name.
+- **`preflight.sh`** (Mac side) — BatchMode login proof, then the report; the new step 0 of the
+  deployment order. **`ray-poll-wrapper.sh`** — a forced command allowing exactly the two
+  read-only poll commands (plus `docker ps`, `uptime`, `df -h /`), logging command names only —
+  prepared, **not installed** (owner decision, below). **`harden-ssh.sh`** and
+  **`apply-os-updates.sh`** — root steps, prepared, **not run** (need the owner's password).
+- **Repo:** `LABEL io.personal-os.protected="true"` on the api/worker/mobile runtime stages (a
+  cooperative marker for `--filter "label!=…"`; takes effect at the next build);
+  `docs/ARCHITECTURE.md` deployment order gains step 0 (preflight), 2b (save the tagged set) and
+  7 (save the serving set, retire older than two); `AGENTS.md`/`CLAUDE.md` point at the runbook;
+  ADR-079 + index line.
+
+**Security review (adversarial pass over the host).** (1) **HIGH — an autonomous agent holds an
+unrestricted, unaudited, root-equivalent key** to the production host; it caused both incidents.
+Mitigation prepared (forced-command poll key + a separate owner-enabled admin key), applied only on
+the owner's word. (2) **MEDIUM — `sshd` on `0.0.0.0:22` with password authentication enabled**
+(stock config; the LAN is the exposure). Mitigation prepared: `harden-ssh.sh` installs the deploy
+key in root-owned `/etc/ssh/authorized_keys.d/himallinux` via an `sshd_config.d` drop-in
+(validated with `sshd -t`, reload never drops the session); `--disable-password-auth` only after
+the root file is proven from the Mac. (3) **MEDIUM — Watchtower** holds a RW Docker socket and
+auto-pulls `:latest` weekly for the labeled dev-ops containers (supply chain; never a Personal OS
+container — they carry no label). Allowlisted in the watchdog; any new RW socket mount is a
+YELLOW. (4) LOW — plaintext service passwords in the `code-server` and `claude-desktop` compose
+files (owner's stack; ports bind the tailnet IP; not reproduced in any document). (5) LOW —
+`ray-dashboard` binds `0.0.0.0:8080` (LAN kiosk, by its own README); every other home-lab port
+binds `100.117.78.19`; ntfy accepts anonymous writes on the tailnet (what the watchdog relies on).
+(6) INFO — `unattended-upgrades` is active for security origins (installed a set at 06:09 CDT);
+the pending 76 include `docker-ce`/`containerd.io`, whose upgrade restarts every container
+(live-restore off). (7) **HARDWARE — 38,098 correctable PCIe AER errors on the NVMe link since
+the Aug 29 boot (~1,500/day)**, on the only disk of a host with no backup (ADR-024). Recorded in
+the watchdog's report and the ledger; `nvme smart-log`, a reseat or `pcie_aspm=off` after the
+reboot are owner actions. No exposed public service, no privilege escalation path, no credential
+in any log line found.
+
+**Owner-gated steps (NOT executed — each needs the owner's password or is the owner's call).**
+Exact commands in `docs/HOMELAB-RUNBOOK.md` §5–§7:
+
+1. `ssh -t personal-os 'sudo bash ~/personal-os-ops/harden-ssh.sh'` → verify
+   `scripts/homelab/preflight.sh` → later `… harden-ssh.sh --disable-password-auth`.
+2. Restrict Ray's poll key to the forced command (`restrict,command="/home/himallinux/personal-os-ops/ray-poll-wrapper.sh"`
+   on the `hatch` line) and give Ray a separate, revocable key for host work — or decide to keep
+   the current access and accept the watchdog as the only guard.
+3. `ssh -t personal-os 'sudo bash ~/personal-os-ops/apply-os-updates.sh'` (76 packages; ~30 s
+   container restart if `docker-ce` upgrades) → `ssh -t personal-os 'sudo reboot'` →
+   `scripts/homelab/preflight.sh`.
+4. Optional confirmation: Ray's own transcript on `muse` for 2026-09-18 06:29–06:40Z.
+
+**Verification.** On the host: both image sets saved and sha256-clean; `docker load` round-trip;
+keeper references listed by `docker ps -a --filter ancestor=`; `check-host.sh --report` → YELLOW
+(reboot required, NVMe AER) with every RED check green (containers, `/health` ok/connected/
+`stale:false`, rollback tags ×3, saved set, deploy key, sockets); cron installed (`crontab -l`);
+ntfy round-trip read back from the topic. In the repo: `bash -n` on every script, `prettier
+--check` on the changed docs, `gitleaks detect --no-git` (no passwords or keys in any committed
+file). No test count changes — no TypeScript touched.
+
+**Unchanged and reaffirmed:** ADR-018 (nothing new is public), ADR-024 (no backup — the tarballs
+are release artifacts, not data), ADR-029, ADR-055 (Personal OS monitoring not widened; the host
+watchdog is outside the product), ADR-058, the frozen Checkpoint 5.7 order (extended, not
+replaced).
+
+---
+
 ## Remaining warnings / technical debt
 
 > **Open entries only.** Every entry below is verbatim from the pre-2026-09-16 ledger, in its original
@@ -3015,6 +3154,20 @@ production action tables `action_requests 11 · permission_grants 2`.
   `updated_at` with a JS-stamped one and once read 23 ms backwards in a full run (5/5 green in
   isolation, green on the re-run). Not touched by 10.8; a monotonic comparison (or one clock)
   would close it.
+- **NVMe PCIe correctable AER errors, ~1,500/day, 38,098 since the Aug 29 boot (found at
+  10.8.5).** The only disk, no backup (ADR-024). Correctable is not corruption, but the rate is a
+  hardware signal: `sudo nvme smart-log /dev/nvme0` after the reboot, reseat, or `pcie_aspm=off`.
+  The watchdog's `--report` prints the day's count.
+- **Ray's SSH key is unrestricted until the owner applies ADR-079 §4 (10.8.5).** The forced-command
+  wrapper is installed at `~/personal-os-ops/ray-poll-wrapper.sh` but not bound to the key; until
+  it is, the watchdog detects a missing deploy key / rollback set / disk growth within 30 minutes
+  but cannot prevent them.
+- **`sshd` answers on `0.0.0.0:22` with password authentication enabled (10.8.5).** Stock config;
+  the recovery path that worked on 2026-09-18. Close it with `harden-ssh.sh
+  --disable-password-auth` once the root-owned deploy-key file is proven from the Mac.
+- **The `10.8`/`rollback-pre-10.8` tarballs cover images only; `.env` is still a single copy on
+  the host (10.8.5).** `docs/SOURCE-DURABILITY.md` Option 2 remains the open owner action; a host
+  rebuild without it loses every credential.
 - **The study-block builder never proposes a calendar link (10.8).** A target picker is out of
   scope, so every proposed event is local-only ("Not linked"); the action input accepts `calendar`
   and the executor handles the link, so this is a client gap only.
@@ -3024,6 +3177,16 @@ production action tables `action_requests 11 · permission_grants 2`.
 ---
 
 ## Current objective
+
+**Checkpoint 10.8.5 — Home Lab Reliability & Deployment Hardening — is AUDITED and HOST-SIDE
+IMPLEMENTED (2026-09-18, ADR-079); the owner-gated steps are open.** Root cause of both 10.8
+deployment incidents: the owner's own AI agent (Ray, tailnet node `muse`) through an unrestricted
+SSH key — `docker image prune -a` at 01:29–01:40 CDT, and an `authorized_keys` overwrite at 22:02
+the evening before. Done: image sets `rollback-pre-10.8` and `10.8` saved as tarballs with keeper
+containers (Docker Reclaimable 1.17 GB → 88 KB), two-release retention, the
+`io.personal-os.protected` label, the cron+ntfy watchdog, `preflight.sh`, the runbook. **Pending
+the owner (password / decision):** `harden-ssh.sh` (root-owned deploy-key file), the agent-key
+restriction, `apply-os-updates.sh` + reboot + `preflight.sh`. 10.9 is not begun.
 
 **Checkpoint 10.8 — Agent Foundation & Action Framework — is IMPLEMENTED, VERIFIED (7,274
 tests, 23/23 tasks), INDEPENDENTLY REVIEWED (safe after fixes, all closed), merged to `main`
@@ -3138,6 +3301,11 @@ context and a "related capture"/activity trail on its project context. The Rabbi
 
 ## Current work
 
+**Checkpoint 10.8.5 is in flight on branch `claude/home-lab-reliability-audit-9c5880`: audit
+complete, host-side hardening live, docs written; waiting on the owner for the four root/decision
+steps listed in its record above.** The host is watched every 30 minutes; the first report was
+YELLOW (reboot required) — expected until step 3 runs.
+
 **Checkpoint 10.8 is DEPLOYED, ACCEPTED and CLOSED.** `main` carries `fcb4ea9` (PR #8,
 fast-forward) plus the closing docs commit; production serves `api`+`web` at `fcb4ea9`, `worker`
 still at `965900f`, postgres untouched; migration level **25**; the action and permission
@@ -3188,6 +3356,17 @@ removed from the primary checkout.
 ---
 
 ## Last verification
+
+**Checkpoint 10.8.5 host hardening (2026-09-18 ~18:20–18:40Z), read directly from the host.**
+Audit sources: `docker` (ps/images/system df/info/events/inspect), journal (`dockerd`,
+`containerd`, `sshd-session`, `sudo`, `systemd-logind`, kernel), `sar -b`/`-d`, cron/timers/user
+units, `.bash_history`, `authorized_keys`, the home-lab compose files and READMEs. Implemented and
+verified: `install.sh` → `~/personal-os-ops/` + crontab; `save-release-images.sh
+rollback-pre-10.8` and `10.8 --from-latest` → two 636 MB sets, `sha256sum -c` clean, `docker
+load` round-trip, six keeper containers, Reclaimable 1.173 GB → 88.02 KB; `check-host.sh --report`
+YELLOW (reboot required; 1,495 NVMe AER today) with all RED checks green; cron mode posted to ntfy
+and the message was read back from the topic. Repo: `bash -n` ×7, prettier on changed docs,
+gitleaks clean. Not run: the root steps and the reboot (owner).
 
 **Checkpoint 10.8 deployment (2026-09-18 06:05–07:00Z), read directly from production and the
 device.** `main` fast-forwarded to `fcb4ea9`, PR #8 merged · `api`/`web` images tagged
@@ -3396,19 +3575,18 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. Nothing is gating. Checkpoint 10.8 is deployed (level 25, `api`+`web` at `fcb4ea9`), validated
-   on real production data, accepted on the Rabbit R1 (versionCode 33) and **CLOSED**; 10.4–10.7
-   likewise. **No checkpoint after 10.8 is selected; 10.9 is not begun.** **Open owner action from
-   the 10.8 deployment:** something on the production host deleted every Docker image not held by
-   a running container (~163 GB, including every `rollback-pre-10.x` tag) between 06:05Z and
-   06:59Z on 2026-09-18, with no Docker event, journal, cron or shell-history trace; the host now
-   runs a `dev-ops` home-lab stack (`code-server`, Watchtower, dozzle, uptime-kuma, glance, ntfy,
-   it-tools, a `ray-dashboard` updater) beside Personal OS, a second SSH key logs in every three
-   minutes, and the deployment key had been dropped from `authorized_keys`. Identify the pruner and
-   fence it (or move Personal OS's images/volumes out of its reach); until then treat image
-   rollback tags as ephemeral and the per-release directories + git tags as the rollback source
-   (they were, and remain, intact). Also `apt`: 61 pending updates and a required restart. Worth
-   watching on real use: the first real memories the owner adds (the working-hours line will
+1. **Finish Checkpoint 10.8.5 — four owner steps** (`docs/HOMELAB-RUNBOOK.md` §5–§7; the pruner
+   is identified and fenced as far as a non-root session can: ADR-079). (a) `ssh -t personal-os
+   'sudo bash ~/personal-os-ops/harden-ssh.sh'`, then `scripts/homelab/preflight.sh`, then
+   `--disable-password-auth`. (b) Decide Ray's access: bind the `hatch` key to
+   `ray-poll-wrapper.sh` and give Ray a separate revocable admin key — or keep it and accept the
+   watchdog as the only guard. (c) `sudo bash ~/personal-os-ops/apply-os-updates.sh` → `sudo
+   reboot` → `scripts/homelab/preflight.sh` (containers, `/health`, Tailscale, cron all expected
+   back). (d) Subscribe to ntfy topic `personal-os-ops` on the phone. Optional: read Ray's
+   transcript on `muse` for 06:29–06:40Z to make the attribution certain, and `nvme smart-log`
+   for the AER finding. Checkpoint 10.8 itself is deployed (level 25, `api`+`web` at `fcb4ea9`),
+   accepted on the Rabbit R1 (versionCode 33) and **CLOSED**; 10.4–10.7 likewise. **10.9 is not
+   begun.** Worth watching on real use: the first real memories the owner adds (the working-hours line will
    appear on the briefing only on a morning with a free block inside the window; a course-linked
    preference shows on Focus Now the moment that course has a priority item), the Reanimated
    surfaces on the Rabbit, and the briefing's free-block line once real classes are on the

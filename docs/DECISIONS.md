@@ -101,6 +101,7 @@ Ordering below is the original log order: amendments (`ADR-046a`, `ADR-047a`, `A
 | [ADR-076](decisions/ADR-076.md) | Checkpoint 10.6 (Mobile): motion, gesture and interaction primitives on the already-installed Reanimated/gesture-handler stack, no new dependency; Today reorganised actionable-first | Locked |
 | [ADR-077](decisions/ADR-077.md) | Checkpoint 10.7: the Personal Memory & Preference Layer — three flat tables with two narrow FKs (migration 0023), owner-only writes, computed-never-stored suggestions, deterministic link-based influence on Focus Now/briefing, and Guard 6 keeping memory out of every AI lane, job and push | Locked |
 | [ADR-078](decisions/ADR-078.md) | Checkpoint 10.8: the Agent Foundation & Action Framework — a code-defined action registry (six actions, three reversible pairs), an application-level permission layer (`permission_grants`, grants gate requests never execution, app grants ship ON), per-request owner approval with synchronous single-use execution, the request row as the audit trail (migration 0024), and Guard 7 | Locked |
+| [ADR-079](decisions/ADR-079.md) | Checkpoint 10.8.5: the production host is a shared home-lab box — root cause of the 2026-09-18 image prune and the dropped deploy key (the owner's own agent, unrestricted key); saved+referenced+bounded image rollback artifacts, a root-owned deployment-key file, forced-command agent keys, a cron+ntfy host watchdog | Locked |
 
 ## Open later-phase decisions
 

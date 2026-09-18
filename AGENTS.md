@@ -74,6 +74,7 @@ docs/
   AGENT-READINESS.md       # canonical service-boundary inventory (10.0)
   WORKFLOW.md
   SOURCE-DURABILITY.md     # source-durability design; Option 2 still open
+  HOMELAB-RUNBOOK.md       # the shared production host: inventory, incident root cause, recovery (10.8.5)
   SOAK-9.2.md              # owner-terminated adoption soak record
   PHASE-8-CLOSEOUT.md, CHECKPOINT-8.6*.md, SOAK-8.5.md   # closed Phase 8 companion records
   PHASE-0-CHECKLIST.md     # closed Phase 0 artifact
@@ -85,6 +86,7 @@ docs/
 scripts/
   grant-pgboss-runtime.sql # runtime grants for the least-privilege app role
   soak/                    # read-only observer tooling from Checkpoint 9.2 (reusable)
+  homelab/                 # host watchdog, image save/retention, preflight, sshd/apt steps (10.8.5)
 ```
 
 `packages/db`, `packages/ai-providers`, `packages/calendar-providers`, `packages/health-providers`,
