@@ -186,6 +186,11 @@ const EXPECTED_BODY_READERS = new Set([
   "apps/api/src/routes/occurrences.ts",
   "apps/api/src/routes/projects.ts",
   "apps/api/src/routes/tasks.ts",
+  // Checkpoint 10.8 (ADR-078): the task service extracted from routes/tasks.ts
+  // so an approved action and the direct route share one code path. Its only
+  // SELECT (`loadTaskForAction`) reads id/title/status/rrule/archived_at --
+  // never the body; every other statement is an INSERT or UPDATE.
+  "apps/api/src/services/tasks.ts",
   "apps/worker/src/jobs/expand-due-date-window.ts",
   "apps/worker/src/jobs/generate-lazy-occurrence.ts",
   // Checkpoint 9.0: the generate-lazy dead-letter handler reads the parent
@@ -695,5 +700,146 @@ describe("memory never reaches an AI lane, another read model, or the worker (Ch
     expect(all).toContain("@personal-os/db");
     const code = stripLineComments(readFileSync(MEMORY_READ_MODEL, "utf8"));
     for (const binding of MEMORY_TABLE_BINDINGS) expect(code).toContain(binding);
+  });
+});
+
+// ===========================================================================
+// GUARD 7 -- the Action Framework never reaches an AI lane, and the executor
+// never reaches a model, a memory, a credential or a queue (Checkpoint 10.8,
+// ADR-078 §7).
+// ===========================================================================
+//
+// Two directions, plus the worker, like Guards 5 and 6:
+//   (a) no AI lane, AI route file, other read model or worker file may import
+//       an action module or name an action table / registry binding -- so no
+//       model output can become an action request, and no job can execute one;
+//   (b) the action modules (registry types, handlers, service, routes, read
+//       model) import neither the AI SDK, a provider package, a memory module
+//       nor an AI lane, name no credential/consent/device table, and carry no
+//       enqueue token -- the one thing that may leave the process (a linked
+//       calendar push) runs through services/events.ts after commit.
+const ACTIONS_DIR = path.join(API_SRC, "actions");
+const ACTIONS_READ_MODEL = path.join(API_SRC, "read-models/actions.ts");
+const ACTIONS_ROUTES = [
+  path.join(API_SRC, "routes/actions.ts"),
+  path.join(API_SRC, "routes/permissions.ts"),
+];
+const ACTION_TABLE_BINDINGS = ["actionRequests", "permissionGrants"] as const;
+const ACTION_TABLE_NAMES = ["action_requests", "permission_grants"] as const;
+const ACTION_REGISTRY_BINDINGS = ["ACTION_REGISTRY", "ACTION_HANDLERS", "ACTION_IDS"] as const;
+const ACTION_IDENTIFIER = new RegExp(
+  `\\b(?:${[...ACTION_TABLE_BINDINGS, ...ACTION_TABLE_NAMES, ...ACTION_REGISTRY_BINDINGS].join("|")})\\b`,
+);
+const FORBIDDEN_ACTION_SPECIFIERS: readonly [string, RegExp][] = [
+  ["read-models/actions", /(?:^|\/)read-models\/actions(?:\.js)?$/],
+  ["actions/*", /(?:^|\/)actions\/(?:service|handlers|types)(?:\.js)?$/],
+  ["@personal-os/core/actions/*", /^@personal-os\/core\/actions(?:\/|$)/],
+];
+const ACTIONS_RELATIVE_SPECIFIER = /(?:^|\/)actions(?:\.js)?$/;
+// The tables an action must never touch: consent switches, credentials,
+// devices. Bindings and snake_case names both (the Guard 5 lesson).
+const OFF_LIMITS_TABLE_IDENTIFIER =
+  /\b(?:aiTaskRoutes|aiProviderConnections|aiModels|devicePairingCodes|calendarConnections|mailConnections|healthConnections|canvasConnections|ai_task_routes|ai_provider_connections|ai_models|device_pairing_codes|calendar_connections|mail_connections|health_connections|canvas_connections)\b/;
+const OFF_LIMITS_DEVICES_IDENTIFIER =
+  /\.from\(devices\)|\.insert\(devices\)|\.update\(devices\)|\.delete\(devices\)|\bdevices\.[a-z]/;
+
+describe("the action framework never reaches an AI lane, and the executor never reaches a model, a memory, a credential or a queue (Checkpoint 10.8, Guard 7)", () => {
+  const laneFiles = [...AI_LANE_DIRS.flatMap((dir) => walk(dir)), ...AI_ROUTE_FILES];
+  const workerFiles = walk(WORKER_SRC);
+  const actionFiles = [...walk(ACTIONS_DIR), ...ACTIONS_ROUTES, ACTIONS_READ_MODEL];
+
+  it("walks every AI lane, the three AI route files, the worker and the action modules, so an empty directory cannot pass by finding nothing", () => {
+    const rels = laneFiles.map(relToRepo);
+    expect(rels).toContain("apps/api/src/intelligence/today-context.ts");
+    expect(rels).toContain("apps/api/src/routes/ask.ts");
+    expect(workerFiles.map(relToRepo)).toContain("apps/worker/src/jobs/retention-cleanup.ts");
+    const actionRels = actionFiles.map(relToRepo);
+    expect(actionRels).toContain("apps/api/src/actions/service.ts");
+    expect(actionRels).toContain("apps/api/src/actions/handlers.ts");
+    expect(actionRels).toContain("apps/api/src/routes/actions.ts");
+    expect(actionRels).toContain("apps/api/src/read-models/actions.ts");
+  });
+
+  it("no AI-lane file and no worker file imports an action module or names an action table or registry", () => {
+    const offenders: string[] = [];
+    for (const file of [...laneFiles, ...workerFiles]) {
+      const original = readFileSync(file, "utf8");
+      for (const specifier of importSpecifiers(original)) {
+        for (const [label, pattern] of FORBIDDEN_ACTION_SPECIFIERS) {
+          if (pattern.test(specifier)) offenders.push(`${relToRepo(file)}: ${label}`);
+        }
+      }
+      const code = stripLineComments(original);
+      const identifier = ACTION_IDENTIFIER.exec(code);
+      if (identifier) offenders.push(`${relToRepo(file)}: ${identifier[0]}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("no other read model imports, re-exports or names the action module or tables (one-hop evasion)", () => {
+    const offenders: string[] = [];
+    const siblings = walk(READ_MODELS_DIR).filter((f) => f !== ACTIONS_READ_MODEL);
+    expect(siblings.map(relToRepo)).toContain("apps/api/src/read-models/today.ts");
+    for (const file of siblings) {
+      const original = readFileSync(file, "utf8");
+      for (const specifier of importSpecifiers(original)) {
+        if (ACTIONS_RELATIVE_SPECIFIER.test(specifier) || /core\/actions/.test(specifier)) {
+          offenders.push(`${relToRepo(file)}: ${specifier}`);
+        }
+      }
+      const code = stripLineComments(original);
+      const reexport = /export\s+(?:\*|\{[^}]*\})\s+from\s*["'][^"']*actions[^"']*["']/.exec(code);
+      if (reexport) offenders.push(`${relToRepo(file)}: ${reexport[0]}`);
+      // user-export.ts is the ONE sibling allowed to name the table: GET /export
+      // carries the action audit summary (ADR-078 §4), and it does not import
+      // the action read model.
+      if (relToRepo(file) === "apps/api/src/read-models/user-export.ts") continue;
+      const identifier = ACTION_IDENTIFIER.exec(code);
+      if (identifier) offenders.push(`${relToRepo(file)}: ${identifier[0]}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("the action modules import neither the AI SDK, the provider package, a memory module nor an AI lane, name no credential/consent/device table, and carry no enqueue token", () => {
+    const offenders: string[] = [];
+    for (const file of actionFiles) {
+      const original = readFileSync(file, "utf8");
+      const code = stripLineComments(original);
+      for (const [label, pattern] of FORBIDDEN_ACADEMIC_LANE_IMPORTS) {
+        if (pattern.test(code)) offenders.push(`${relToRepo(file)}: ${label}`);
+      }
+      for (const specifier of importSpecifiers(original)) {
+        for (const [label, pattern] of FORBIDDEN_MEMORY_SPECIFIERS) {
+          if (pattern.test(specifier)) offenders.push(`${relToRepo(file)}: ${label}`);
+        }
+      }
+      const memory = MEMORY_TABLE_IDENTIFIER.exec(code);
+      if (memory) offenders.push(`${relToRepo(file)}: ${memory[0]}`);
+      const offLimits =
+        OFF_LIMITS_TABLE_IDENTIFIER.exec(code) ?? OFF_LIMITS_DEVICES_IDENTIFIER.exec(code);
+      if (offLimits) offenders.push(`${relToRepo(file)}: ${offLimits[0]}`);
+      // Every enqueue in this codebase goes through `app.boss.*` or a
+      // `pg-boss` import -- those are the tokens denied, never a bare
+      // `.send(`, which would also match Fastify's `reply.send`.
+      if (/\bboss\b|pg-boss|_QUEUE\b/.test(code)) offenders.push(`${relToRepo(file)}: queue`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("the action read model contains no write verb -- writes live in actions/service.ts", () => {
+    const code = stripLineComments(readFileSync(ACTIONS_READ_MODEL, "utf8"));
+    const offenders: string[] = [];
+    for (const [label, pattern] of FORBIDDEN_INTELLIGENCE_WRITE_VERBS) {
+      if (pattern.test(code)) offenders.push(label);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("actually reads the action read model and the registry contract, so a moved file cannot pass vacuously", () => {
+    const code = stripLineComments(readFileSync(ACTIONS_READ_MODEL, "utf8"));
+    for (const binding of ACTION_TABLE_BINDINGS) expect(code).toContain(binding);
+    const schema = readFileSync(path.join(REPO_ROOT, "packages/schema/src/actions.ts"), "utf8");
+    expect(schema).toContain("ACTION_ID_VERB_PATTERN");
+    expect(schema).toContain("requires_approval: z.literal(true)");
   });
 });

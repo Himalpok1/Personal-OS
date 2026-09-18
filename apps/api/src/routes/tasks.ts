@@ -2,34 +2,44 @@ import {
   canActivateTask,
   canCompleteTaskDirectly,
   canReopenTask,
-  computeNextLazyOccurrence,
-  expandDueDateWindow,
   parseFlexibleDatetime,
   resolveSeriesAnchor,
   TaskDueDateRuleError,
   toWallClockComponents,
   validateCompletionAnchoredRule,
   validateTaskDueDateRule,
-  wallClockToNaiveDate,
-  wallTimeOfNaiveTimestamp,
   type DueDateRecurrenceRule,
 } from "@personal-os/core";
-import { errorToken } from "@personal-os/core/logging/logger";
-import { canvasAssignments, occurrences, tasks, type Db } from "@personal-os/db";
+import { occurrences, tasks, type Db } from "@personal-os/db";
 import {
   TaskCreateSchema,
   TaskListQuerySchema,
   TaskSchema,
   TaskUpdateSchema,
 } from "@personal-os/schema";
-import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { effectiveOccursAt } from "../read-models/occurrence-effective.js";
+import {
+  archiveTask,
+  canvasAssignmentExists,
+  canvasAssignmentValidationIssue,
+  completeTask,
+  createTask,
+  earliestOccurrenceInstant,
+  InvalidEffectiveRuleError,
+  materializeDueDateWindow,
+  reopenTask,
+  resolveLazyOccurrenceTarget,
+  seedLazyOccurrence,
+} from "../services/tasks.js";
 import { normalizeRrule, recurrenceChanged } from "./task-recurrence-diff.js";
 
-type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
-
-const DUE_DATE_WINDOW_DAYS = 90;
+// The create/archive/complete/reopen writes, the occurrence-window and lazy
+// seeding helpers and the canvas link pre-check live in ../services/tasks.ts
+// (Checkpoint 10.8, ADR-078 §2) so an approved action and these routes
+// share one implementation. The routes keep every pre-check and the
+// 404/409 vocabulary.
 
 // The 400 body for a rule the write-time validators reject (Checkpoint 9.4).
 // The message is a closed token, never the validator's own text: every
@@ -41,83 +51,6 @@ const DUE_DATE_WINDOW_DAYS = 90;
 function rruleValidationIssue(err: unknown): { code: "custom"; path: ["rrule"]; message: string } {
   const message = err instanceof TaskDueDateRuleError ? err.code : "invalid_rrule";
   return { code: "custom", path: ["rrule"], message };
-}
-
-// Checkpoint 10.5 (ADR-074): the same 400 validation_failed / `code: "custom"`
-// issue shape rruleValidationIssue already uses -- there is no existing
-// project_id existence check to mirror (an unknown project_id relies on the
-// tasks_project_id_projects_id_fk constraint and would surface as a raw,
-// unhandled 500), so this is the closest reviewed convention in this file
-// rather than a new error shape.
-function canvasAssignmentValidationIssue(): {
-  code: "custom";
-  path: ["canvas_assignment_id"];
-  message: string;
-} {
-  return {
-    code: "custom",
-    path: ["canvas_assignment_id"],
-    message: "canvas_assignment_id does not reference an existing assignment",
-  };
-}
-
-// True only when `id` names a real canvas_assignments row. Read-only --
-// never touches canvas_connections/canvas_courses, never imports
-// @personal-os/canvas-providers.
-async function canvasAssignmentExists(db: Db, id: string): Promise<boolean> {
-  const [row] = await db
-    .select({ id: canvasAssignments.id })
-    .from(canvasAssignments)
-    .where(eq(canvasAssignments.id, id))
-    .limit(1);
-  return row !== undefined;
-}
-
-// min(occurs_at) over ALL of a parent's occurrence rows, any status -- the
-// second input of resolveSeriesAnchor (packages/core), so a due_at-less series
-// is re-expanded from the instant it was first materialised, never from
-// `now`. `.mapWith(occurrences.occursAt)` runs the aggregate through the
-// column's own timestamptz mapper (a bare sql<T> would hand back a string --
-// the trap today.ts's toDateOrNull guards against). Postgres returns a
-// single NULL row for an empty group, which maps to null here.
-async function earliestOccurrenceInstant(tx: Tx, taskId: string): Promise<Date | null> {
-  const [row] = await tx
-    .select({
-      earliest: sql<Date | null>`min(${occurrences.occursAt})`.mapWith(occurrences.occursAt),
-    })
-    .from(occurrences)
-    .where(and(eq(occurrences.parentType, "task"), eq(occurrences.parentId, taskId)));
-  return row?.earliest ?? null;
-}
-
-// Materialises a due_date series' rolling window (DUE_DATE_WINDOW_DAYS from
-// effectiveNow) as non-lazy scheduled rows. Idempotent: the insert targets
-// occurrences_parent_occurs_at_key, so a row already present at an instant --
-// scheduled, done or skipped -- is left exactly as it is. Shared by POST
-// /tasks, PATCH branches A/D and POST /tasks/:id/reopen, so every writer
-// expands from the same anchor rule and the same window length.
-async function materializeDueDateWindow(
-  tx: Tx,
-  taskId: string,
-  rule: DueDateRecurrenceRule,
-  effectiveNow: Date,
-): Promise<void> {
-  const generated = expandDueDateWindow(rule, DUE_DATE_WINDOW_DAYS, effectiveNow);
-  for (const occurrence of generated) {
-    await tx
-      .insert(occurrences)
-      .values({
-        parentType: "task",
-        parentId: taskId,
-        occursAt: occurrence.occursAt,
-        occursLocal: wallClockToNaiveDate(occurrence.occursLocal),
-        status: "scheduled",
-        lazyGenerated: false,
-      })
-      .onConflictDoNothing({
-        target: [occurrences.parentType, occurrences.parentId, occurrences.occursAt],
-      });
-  }
 }
 
 function toTaskResponse(row: typeof tasks.$inferSelect) {
@@ -172,124 +105,6 @@ async function findOpenOccurrenceId(app: FastifyInstance, taskId: string) {
     .orderBy(asc(effectiveOccursAt), asc(occurrences.id))
     .limit(1);
   return row?.id ?? null;
-}
-
-// Wraps the validator's own error (as `cause`) so the route can map it to a
-// token; the wrapper's message is fixed and never carries the rule.
-class InvalidEffectiveRuleError extends Error {
-  constructor(cause: unknown) {
-    super("invalid effective recurrence rule", { cause });
-    this.name = "InvalidEffectiveRuleError";
-  }
-}
-
-// Where a completion_date-anchored task's single open occurrence belongs
-// after a PATCH (branches C and F below) or a task reopen. Precedence:
-//   1. a due_at supplied in this request -- the owner just said when;
-//   2. the most recent done/skipped occurrence's completion instant, run
-//      through the (new) rule -- what generate-lazy would have produced,
-//      which is the honest meaning of "regenerate" for a rule edit and the
-//      repair for a dead-lettered successor (seeding at a due_at that
-//      predates several completions would resurrect an overdue instance);
-//   3. due_at ?? effectiveNow -- the same seed POST /tasks uses when there is
-//      no history to anchor from.
-//
-// Step 2 hands computeNextLazyOccurrence the SAME options every other writer
-// of a lazy successor does (9.4 review): the terminal row's occurs_local
-// time-of-day as `wallTime` and its occurs_at as the exclusive `after` bound.
-// Without them this path computed a successor at the completion's own
-// time-of-day, while POST /occurrences/:id/complete, the worker's re-check
-// and the nightly reconciliation all compute from the row's wall clock -- so
-// a rule edit could move an instance that a plain complete would have left
-// where it was. The computation is wrapped so a rule the engine cannot step
-// -- one stored before write-time validation existed, or a bound it cannot
-// clear -- reaches the route as InvalidEffectiveRuleError (400 invalid_rrule,
-// token only) rather than the 500 handler, which would log the thrown
-// message and with it the rule text. This was the one call site of the
-// engine in this file with no such guard.
-async function resolveLazyOccurrenceTarget(
-  tx: Tx,
-  input: {
-    taskId: string;
-    rrule: string;
-    recurrenceTimezone: string;
-    /** `undefined` when the request did not mention due_at; null when it
-     * cleared it. */
-    explicitDueAt: Date | null | undefined;
-    fallbackDueAt: Date | null;
-    effectiveNow: Date;
-  },
-): Promise<{ occursAt: Date; occursLocal: Date }> {
-  const wall = (instant: Date) =>
-    wallClockToNaiveDate(toWallClockComponents(instant, input.recurrenceTimezone));
-
-  if (input.explicitDueAt) {
-    return { occursAt: input.explicitDueAt, occursLocal: wall(input.explicitDueAt) };
-  }
-
-  const [lastTerminal] = await tx
-    .select({
-      status: occurrences.status,
-      completedAt: occurrences.completedAt,
-      occursAt: occurrences.occursAt,
-      occursLocal: occurrences.occursLocal,
-    })
-    .from(occurrences)
-    .where(
-      and(
-        eq(occurrences.parentType, "task"),
-        eq(occurrences.parentId, input.taskId),
-        ne(occurrences.status, "scheduled"),
-        isNotNull(occurrences.completedAt),
-      ),
-    )
-    .orderBy(desc(occurrences.completedAt), desc(occurrences.occursAt), desc(occurrences.id))
-    .limit(1);
-  if (lastTerminal?.completedAt) {
-    let next;
-    try {
-      next = computeNextLazyOccurrence(
-        { rrule: input.rrule, recurrenceTimezone: input.recurrenceTimezone },
-        lastTerminal.completedAt,
-        lastTerminal.status === "done" ? "completed" : "skipped",
-        {
-          wallTime: wallTimeOfNaiveTimestamp(lastTerminal.occursLocal),
-          after: lastTerminal.occursAt,
-        },
-      );
-    } catch (err: unknown) {
-      throw new InvalidEffectiveRuleError(err);
-    }
-    return { occursAt: next.occursAt, occursLocal: wallClockToNaiveDate(next.occursLocal) };
-  }
-
-  const seed = input.fallbackDueAt ?? input.effectiveNow;
-  return { occursAt: seed, occursLocal: wall(seed) };
-}
-
-// Seeds the single open lazy occurrence of a completion_date parent at
-// `target`. onConflictDoNothing with no target covers both unique indexes
-// (see routes/occurrences.ts): an open lazy row already present, or a
-// done/skipped row already holding that instant. Returns whether a row was
-// written so callers can tell "seeded" from "collided".
-async function seedLazyOccurrence(
-  tx: Tx,
-  taskId: string,
-  target: { occursAt: Date; occursLocal: Date },
-): Promise<boolean> {
-  const inserted = await tx
-    .insert(occurrences)
-    .values({
-      parentType: "task",
-      parentId: taskId,
-      occursAt: target.occursAt,
-      occursLocal: target.occursLocal,
-      status: "scheduled",
-      lazyGenerated: true,
-    })
-    .onConflictDoNothing()
-    .returning({ id: occurrences.id });
-  return inserted.length > 0;
 }
 
 export default function tasksRoutes(app: FastifyInstance): void {
@@ -372,24 +187,14 @@ export default function tasksRoutes(app: FastifyInstance): void {
       }
     }
 
-    // Checkpoint 9.4: a recurring task always persists its series anchor. When
-    // the client omits due_at the anchor is effectiveNow (resolveSeriesAnchor's
-    // last fallback) and it is WRITTEN to due_at, so the nightly job, PATCH and
-    // the capture commit path all re-derive the same DTSTART later instead of
-    // each inventing a fresh `now`. For a completion_date rule the anchor is
-    // also the first seeded occurrence's instant.
-    const seriesAnchor = body.rrule
-      ? resolveSeriesAnchor({ dueAt, earliestOccursAt: null, now: effectiveNow })
-      : null;
-
-    const row = await app.db.transaction(async (tx) => {
-      const [inserted] = await tx
-        .insert(tasks)
-        .values({
+    const row = await app.db.transaction((tx) =>
+      createTask(
+        tx,
+        {
           title: body.title,
           body: body.body,
           status: "active",
-          dueAt: seriesAnchor ?? dueAt,
+          dueAt,
           remindAt,
           timezone: body.timezone,
           priority: body.priority,
@@ -400,38 +205,10 @@ export default function tasksRoutes(app: FastifyInstance): void {
           recurrenceUntil,
           recurrenceCount,
           recurrenceExdates,
-        })
-        .returning();
-      if (!inserted) throw new Error("insert into tasks returned no row");
-
-      if (body.rrule && seriesAnchor) {
-        if (recurrenceAnchor === "completion_date") {
-          const firstOccursAt = seriesAnchor;
-          const occursLocal = toWallClockComponents(firstOccursAt, recurrenceTimezone!);
-          await tx.insert(occurrences).values({
-            parentType: "task",
-            parentId: inserted.id,
-            occursAt: firstOccursAt,
-            occursLocal: wallClockToNaiveDate(occursLocal),
-            status: "scheduled",
-            lazyGenerated: true,
-          });
-        } else {
-          // due_date anchor
-          const rule: DueDateRecurrenceRule = {
-            rrule: body.rrule,
-            recurrenceTimezone: recurrenceTimezone!,
-            dtstart: toWallClockComponents(seriesAnchor, recurrenceTimezone!),
-            recurrenceUntil: recurrenceUntil ?? undefined,
-            recurrenceCount: recurrenceCount ?? undefined,
-            recurrenceExdates: recurrenceExdates ?? undefined,
-          };
-          await materializeDueDateWindow(tx, inserted.id, rule, effectiveNow);
-        }
-      }
-
-      return inserted;
-    });
+        },
+        effectiveNow,
+      ),
+    );
 
     return reply.code(201).send(toTaskResponse(row));
   });
@@ -823,11 +600,8 @@ function registerTaskActionRoutes(app: FastifyInstance): void {
   // item_tags, and inbox_items lineage all stay exactly as they were.
   // Idempotent -- re-archiving an already-archived task is a no-op.
   app.post<{ Params: { id: string } }>("/tasks/:id/archive", async (request, reply) => {
-    const [row] = await app.db
-      .update(tasks)
-      .set({ archivedAt: new Date(), updatedAt: new Date() })
-      .where(eq(tasks.id, request.params.id))
-      .returning();
+    const now = new Date();
+    const row = await app.db.transaction((tx) => archiveTask(tx, request.params.id, now));
     if (!row) return reply.code(404).send({ error: "not_found" });
     return toTaskResponse(row);
   });
@@ -873,11 +647,8 @@ function registerTaskActionRoutes(app: FastifyInstance): void {
         .code(409)
         .send({ error: "recurring_task_use_occurrence", occurrence_id: occurrenceId });
     }
-    const [row] = await app.db
-      .update(tasks)
-      .set({ status: "done", completedAt: new Date(), updatedAt: new Date() })
-      .where(eq(tasks.id, request.params.id))
-      .returning();
+    const now = new Date();
+    const row = await app.db.transaction((tx) => completeTask(tx, request.params.id, now));
     if (!row) throw new Error("update on tasks returned no row for an id that was just found");
     return toTaskResponse(row);
   });
@@ -907,34 +678,10 @@ function registerTaskActionRoutes(app: FastifyInstance): void {
       return reply.code(409).send({ error: "task_not_reopenable", status: existing.status });
     }
     const effectiveNow = new Date();
-    const row = await app.db.transaction(async (tx) => {
-      const [updated] = await tx
-        .update(tasks)
-        .set({ status: "active", completedAt: null, updatedAt: effectiveNow })
-        .where(eq(tasks.id, request.params.id))
-        .returning();
-      if (!updated)
-        throw new Error("update on tasks returned no row for an id that was just found");
-
-      if (updated.rrule && updated.recurrenceTimezone) {
-        // Under a SAVEPOINT, like the successor step in occurrences.ts: a
-        // rule stored before write-time validation existed can still throw
-        // inside computeNextLazyOccurrence/expandDueDateWindow, and that must
-        // not make the task un-reopenable. The flip commits regardless; the
-        // warn line is ids-only with an error token, never the rule text.
-        try {
-          await tx.transaction(async (savepoint) => {
-            await ensureReopenedSeriesHasOccurrences(savepoint, updated, effectiveNow);
-          });
-        } catch (err: unknown) {
-          app.log.warn(
-            { taskId: updated.id, error: errorToken(err) },
-            "tasks.reopen: occurrence seeding failed; task reopened without an open occurrence",
-          );
-        }
-      }
-      return updated;
-    });
+    const row = await app.db.transaction((tx) =>
+      reopenTask(tx, request.params.id, effectiveNow, app.log),
+    );
+    if (!row) throw new Error("update on tasks returned no row for an id that was just found");
     return toTaskResponse(row);
   });
 
@@ -951,52 +698,4 @@ function registerTaskActionRoutes(app: FastifyInstance): void {
     if (!row) return reply.code(404).send({ error: "not_found" });
     return toTaskResponse(row);
   });
-}
-
-async function ensureReopenedSeriesHasOccurrences(
-  tx: Tx,
-  updated: typeof tasks.$inferSelect,
-  effectiveNow: Date,
-): Promise<void> {
-  if (!updated.rrule || !updated.recurrenceTimezone) return;
-  if (updated.recurrenceAnchor === "completion_date") {
-    const [open] = await tx
-      .select({ id: occurrences.id })
-      .from(occurrences)
-      .where(
-        and(
-          eq(occurrences.parentType, "task"),
-          eq(occurrences.parentId, updated.id),
-          eq(occurrences.status, "scheduled"),
-        ),
-      )
-      .limit(1);
-    if (!open) {
-      const target = await resolveLazyOccurrenceTarget(tx, {
-        taskId: updated.id,
-        rrule: updated.rrule,
-        recurrenceTimezone: updated.recurrenceTimezone,
-        explicitDueAt: undefined,
-        fallbackDueAt: updated.dueAt,
-        effectiveNow,
-      });
-      await seedLazyOccurrence(tx, updated.id, target);
-    }
-  } else {
-    const earliestOccursAt = await earliestOccurrenceInstant(tx, updated.id);
-    const dtstartInstant = resolveSeriesAnchor({
-      dueAt: updated.dueAt,
-      earliestOccursAt,
-      now: effectiveNow,
-    });
-    const rule: DueDateRecurrenceRule = {
-      rrule: updated.rrule,
-      recurrenceTimezone: updated.recurrenceTimezone,
-      dtstart: toWallClockComponents(dtstartInstant, updated.recurrenceTimezone),
-      recurrenceUntil: updated.recurrenceUntil ?? undefined,
-      recurrenceCount: updated.recurrenceCount ?? undefined,
-      recurrenceExdates: updated.recurrenceExdates ?? undefined,
-    };
-    await materializeDueDateWindow(tx, updated.id, rule, effectiveNow);
-  }
 }

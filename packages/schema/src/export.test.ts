@@ -14,12 +14,20 @@ function body(overrides: Record<string, unknown> = {}) {
     generated_at: "2026-09-03T12:00:00.000Z",
     scope: "user_authored_core",
     truncated: false,
-    counts: { projects: ZERO, tasks: ZERO, notes: ZERO, inbox_items: ZERO, memories: ZERO },
+    counts: {
+      projects: ZERO,
+      tasks: ZERO,
+      notes: ZERO,
+      inbox_items: ZERO,
+      memories: ZERO,
+      action_requests: ZERO,
+    },
     projects: [],
     tasks: [],
     notes: [],
     inbox_items: [],
     memories: [],
+    action_requests: [],
     ...overrides,
   };
 }

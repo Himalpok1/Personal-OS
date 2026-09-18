@@ -15,6 +15,7 @@ import {
   ActionRequestItemSchema,
   ActionRequestSchema,
   actionsRequiring,
+  parseActionInput,
   reversalActionOf,
 } from "./actions.js";
 import { READ_TOOL_NAMES } from "./intelligence-tools.js";
@@ -182,8 +183,13 @@ describe("ActionRequestSchema / ActionRequestItemSchema", () => {
     finished_at: "2026-09-17T12:00:05.000Z",
   };
 
-  it("types input by action_id and rejects an extra key", () => {
-    expect(ActionRequestSchema.parse(row).action_id).toBe("complete_task");
+  it("carries input loosely, narrows it through parseActionInput, and rejects an extra key", () => {
+    const parsed = ActionRequestSchema.parse(row);
+    expect(parsed.action_id).toBe("complete_task");
+    expect(parseActionInput(parsed)).toEqual({ task_id: "00000000-0000-4000-8000-000000000002" });
+    // A row whose frozen input no longer parses is still LISTABLE (ADR-078 §4).
+    const stale = ActionRequestSchema.parse({ ...row, input: { task_id: "not-a-uuid" } });
+    expect(parseActionInput(stale)).toBeNull();
     expect(ActionRequestSchema.safeParse({ ...row, extra: 1 }).success).toBe(false);
     expect(
       ActionRequestItemSchema.parse({ ...row, reversed_by_request_id: null })

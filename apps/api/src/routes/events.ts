@@ -1,7 +1,6 @@
 import {
   allDayInstanceDates,
   buildEventRecurrenceRule,
-  expandDueDateWindow,
   expandRecurrenceInRange,
   parseFlexibleDatetime,
   resolveInstantToLocalUntil,
@@ -10,7 +9,6 @@ import {
   validateEventRecurrenceRule,
   wallClockToNaiveDate,
 } from "@personal-os/core";
-import { errorToken } from "@personal-os/core/logging/logger";
 import { truncateProviderString } from "@personal-os/core/mail/provider-strings";
 import { eventExternalLinks, events, occurrences } from "@personal-os/db";
 import {
@@ -33,16 +31,23 @@ import {
 import { and, asc, count, desc, eq, gte, inArray, isNull } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { assembleEventRange } from "../read-models/event-range.js";
-import { CALENDAR_PUSH_EVENT_QUEUE } from "../queue-names.js";
+import {
+  archiveLocalEvent,
+  createLocalEvent,
+  enqueuePushIfLinked,
+  insertOccurrenceWindow,
+  loadEventLink as loadLink,
+  markLinkPendingPush,
+  type EventRow,
+  type LinkRow,
+} from "../services/events.js";
 import { resolveWritableCalendar } from "./calendar-targets.js";
 import { recurrenceChanged } from "./task-recurrence-diff.js";
 
-type EventRow = typeof events.$inferSelect;
-type LinkRow = typeof eventExternalLinks.$inferSelect;
+// The create/archive transaction bodies, the occurrence-window insert and the
+// post-commit push enqueue live in ../services/events.ts (Checkpoint 10.8,
+// ADR-078 §2) so an approved action and this route share one implementation.
 type Db = FastifyInstance["db"];
-type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
-
-const DUE_DATE_WINDOW_DAYS = 90;
 
 // The outbound-link projection (Checkpoint 9.5). Strictly the calendar
 // identity the client already knows from /calendar-connections plus the
@@ -95,14 +100,6 @@ function toEventResponse(row: EventRow, link: LinkRow | null | undefined): Event
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
   });
-}
-
-async function loadLink(db: Db, eventId: string): Promise<LinkRow | null> {
-  const [link] = await db
-    .select()
-    .from(eventExternalLinks)
-    .where(eq(eventExternalLinks.eventId, eventId));
-  return link ?? null;
 }
 
 // One query for a whole page of events, never one per row.
@@ -190,79 +187,6 @@ function isClientUuidConflict(err: unknown): boolean {
     pgErrorField(err, "code") === "23505" &&
     pgErrorField(err, "constraint") === "events_client_uuid_idx"
   );
-}
-
-// Durable intent (Checkpoint 9.5): every local mutation of a linked event
-// records `pending_push` on its link INSIDE the mutation's own transaction,
-// so a push that never gets enqueued (queue down, process dies between
-// commit and send) is still visible to the worker's re-drive sweep. Returns
-// whether a link exists so the caller can skip the post-commit enqueue
-// without a second lookup.
-async function markLinkPendingPush(tx: Tx, eventId: string, now: Date): Promise<boolean> {
-  const updated = await tx
-    .update(eventExternalLinks)
-    .set({ syncStatus: "pending_push", updatedAt: now })
-    .where(eq(eventExternalLinks.eventId, eventId))
-    .returning({ id: eventExternalLinks.id });
-  return updated.length > 0;
-}
-
-// Call after the owning transaction has COMMITTED (never from inside it --
-// pg-boss sends are not transactional, so a mid-transaction enqueue could
-// push a mutation that then rolls back). A failed send is a warn, never an
-// error: the link row already carries the pending_push intent durably and
-// the worker's sweep re-drives it, so the local write must not be reported
-// as failed for a push that will still happen. `singletonKey` alone --
-// `singletonSeconds` was dropped in 9.5 because pg-boss keeps a COMPLETED
-// job in its time slot and silently swallowed the next send.
-async function enqueuePushIfLinked(
-  app: FastifyInstance,
-  eventId: string,
-  linked?: boolean,
-): Promise<void> {
-  if (linked === undefined) {
-    linked = (await loadLink(app.db, eventId)) !== null;
-  }
-  if (!linked) return;
-  if (!app.bossReady) {
-    app.log.warn(
-      { eventId },
-      "events: job queue unavailable; calendar push not enqueued (link left pending_push)",
-    );
-    return;
-  }
-  try {
-    await app.boss.send(CALENDAR_PUSH_EVENT_QUEUE, { eventId }, { singletonKey: eventId });
-  } catch (err: unknown) {
-    app.log.warn(
-      { eventId, error: errorToken(err) },
-      "events: calendar push could not be enqueued (link left pending_push)",
-    );
-  }
-}
-
-async function insertOccurrenceWindow(
-  tx: Tx,
-  eventId: string,
-  rule: NonNullable<ReturnType<typeof buildEventRecurrenceRule>>,
-  effectiveNow: Date,
-): Promise<void> {
-  const generated = expandDueDateWindow(rule, DUE_DATE_WINDOW_DAYS, effectiveNow);
-  for (const occurrence of generated) {
-    await tx
-      .insert(occurrences)
-      .values({
-        parentType: "event",
-        parentId: eventId,
-        occursAt: occurrence.occursAt,
-        occursLocal: wallClockToNaiveDate(occurrence.occursLocal),
-        status: "scheduled",
-        lazyGenerated: false,
-      })
-      .onConflictDoNothing({
-        target: [occurrences.parentType, occurrences.parentId, occurrences.occursAt],
-      });
-  }
 }
 
 function isValidOccurrence(parent: EventRow, targetInstant: Date): boolean {
@@ -416,23 +340,12 @@ export default function eventsRoutes(app: FastifyInstance): void {
       calendarTarget = resolved;
     }
 
-    const creationRule = buildEventRecurrenceRule({
-      rrule,
-      recurrenceTimezone,
-      allDay: body.all_day ?? false,
-      startsAt: startsAt ?? null,
-      startDate: body.start_date ?? null,
-      recurrenceUntil,
-      recurrenceCount,
-      recurrenceExdates,
-    });
-
     let created: { row: EventRow; link: LinkRow | null };
     try {
-      created = await app.db.transaction(async (tx) => {
-        const [inserted] = await tx
-          .insert(events)
-          .values({
+      created = await app.db.transaction((tx) =>
+        createLocalEvent(
+          tx,
+          {
             title: body.title,
             description: body.description,
             location: body.location,
@@ -448,38 +361,12 @@ export default function eventsRoutes(app: FastifyInstance): void {
             recurrenceUntil,
             recurrenceCount,
             recurrenceExdates,
-            // Authored here -- editable and cancellable through Personal OS.
-            origin: "local",
             clientUuid: body.client_uuid ?? null,
-          })
-          .returning();
-        if (!inserted) throw new Error("insert into events returned no row");
-
-        if (creationRule) {
-          await insertOccurrenceWindow(tx, inserted.id, creationRule, effectiveNow);
-        }
-
-        let link: LinkRow | null = null;
-        if (calendarTarget) {
-          // The link row is the durable intent to push; it commits with the
-          // event so the sweep can re-drive it even if the enqueue below
-          // never happens.
-          const [insertedLink] = await tx
-            .insert(eventExternalLinks)
-            .values({
-              eventId: inserted.id,
-              connectionId: calendarTarget.connectionId,
-              googleCalendarId: calendarTarget.googleCalendarId,
-              caldavCalendarUrl: calendarTarget.caldavCalendarUrl,
-              syncStatus: "pending_push",
-            })
-            .returning();
-          if (!insertedLink) throw new Error("insert into event_external_links returned no row");
-          link = insertedLink;
-        }
-
-        return { row: inserted, link };
-      });
+            calendarTarget,
+          },
+          effectiveNow,
+        ),
+      );
     } catch (err: unknown) {
       // Idempotency (Checkpoint 9.5): a retry carrying the client_uuid of an
       // event that already committed gets that event back -- 200, same body
@@ -1042,22 +929,9 @@ export default function eventsRoutes(app: FastifyInstance): void {
     if (existing.archivedAt) return respondWithEvent(app, existing);
 
     const now = new Date();
-    const { row, linked } = await app.db.transaction(async (tx) => {
-      const [updated] = await tx
-        .update(events)
-        .set({ archivedAt: now, updatedAt: now })
-        .where(and(eq(events.id, existing.id), isNull(events.archivedAt)))
-        .returning();
-      if (!updated) return { row: null, linked: false };
-
-      await tx
-        .update(events)
-        .set({ archivedAt: now, updatedAt: now })
-        .where(and(eq(events.parentEventId, existing.id), isNull(events.archivedAt)));
-
-      const linked = await markLinkPendingPush(tx, existing.id, now);
-      return { row: updated, linked };
-    });
+    const { row, linked } = await app.db.transaction((tx) =>
+      archiveLocalEvent(tx, existing.id, now),
+    );
 
     if (!row) {
       // Lost a race with a concurrent archive: the row is archived either

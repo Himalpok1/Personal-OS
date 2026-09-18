@@ -160,12 +160,14 @@ describe("export carries the flat memory row (ADR-059 user-authored core)", () =
         notes: { returned: 0, total: 0 },
         inbox_items: { returned: 0, total: 0 },
         memories: { returned: 1, total: 1 },
+        action_requests: { returned: 0, total: 0 },
       },
       projects: [],
       tasks: [],
       notes: [],
       inbox_items: [],
       memories: [row],
+      action_requests: [],
     };
     expect(ExportResponseSchema.safeParse(base).success).toBe(true);
     expect(

@@ -377,28 +377,19 @@ const ActionRequestBase = z.object({
   finished_at: z.string().datetime({ offset: true }).nullable(),
 });
 
-function requestVariant<Id extends ActionId>(id: Id) {
-  return ActionRequestBase.extend({
-    action_id: z.literal(id),
-    input: ACTION_INPUT_SCHEMAS[id],
-  }).strict();
-}
-
 /**
- * Discriminated on `action_id` so `input` is typed per action on the wire.
- * The stored `input` is re-parsed through the same bounded schema both here
- * and at execution -- one tier, on purpose: an action input is never allowed
- * to outgrow its schema, so a row that no longer parses is a defect, not a
- * legacy value to tolerate.
+ * The stored `input` travels LOOSELY typed on the wire and is narrowed by the
+ * consumer through `parseActionInput` -- deliberately, after the first draft
+ * discriminated it per action: a row whose frozen input no longer parses
+ * (a bound tightened while it waited) must still be listable, or one bad
+ * row would blank the entire Action Center. The executor re-parses through
+ * the action's own schema at approval time; the client parses to render
+ * "what will change" and falls back to `input_summary` when it cannot.
  */
-export const ActionRequestSchema = z.discriminatedUnion("action_id", [
-  requestVariant("create_calendar_event"),
-  requestVariant("archive_calendar_event"),
-  requestVariant("create_task"),
-  requestVariant("archive_task"),
-  requestVariant("complete_task"),
-  requestVariant("reopen_task"),
-]);
+export const ActionRequestSchema = ActionRequestBase.extend({
+  action_id: ActionIdSchema,
+  input: z.record(z.string(), z.unknown()),
+}).strict();
 export type ActionRequest = z.infer<typeof ActionRequestSchema>;
 
 /**
@@ -407,11 +398,19 @@ export type ActionRequest = z.infer<typeof ActionRequestSchema>;
  * one, if any. The registry entry itself is not repeated on the wire: the
  * client imports `ACTION_REGISTRY` from this package.
  */
-export const ActionRequestItemSchema = z.intersection(
-  ActionRequestSchema,
-  z.object({ reversed_by_request_id: z.string().uuid().nullable() }),
-);
+export const ActionRequestItemSchema = ActionRequestSchema.extend({
+  reversed_by_request_id: z.string().uuid().nullable(),
+}).strict();
 export type ActionRequestItem = z.infer<typeof ActionRequestItemSchema>;
+
+/** Narrows a request's stored input through its action's own schema; null when it no longer parses. */
+export function parseActionInput<Id extends ActionId>(request: {
+  action_id: Id;
+  input: unknown;
+}): ActionInput<Id> | null {
+  const result = ACTION_INPUT_SCHEMAS[request.action_id].safeParse(request.input);
+  return result.success ? (result.data as ActionInput<Id>) : null;
+}
 
 // ---- Writes ---------------------------------------------------------------
 

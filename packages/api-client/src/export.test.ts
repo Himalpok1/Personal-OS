@@ -15,6 +15,7 @@ const RESPONSE = {
     notes: { returned: 1, total: 1 },
     inbox_items: { returned: 0, total: 0 },
     memories: { returned: 0, total: 0 },
+    action_requests: { returned: 0, total: 0 },
   },
   projects: [],
   tasks: [],
@@ -31,6 +32,7 @@ const RESPONSE = {
   ],
   inbox_items: [],
   memories: [],
+  action_requests: [],
 };
 
 function stubFetch(body: unknown, status = 200) {

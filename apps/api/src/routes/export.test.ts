@@ -141,6 +141,7 @@ describe("GET /export", () => {
     expect(body.notes).toEqual([]);
     expect(body.inbox_items).toEqual([]);
     expect(body.memories).toEqual([]);
+    expect(body.action_requests).toEqual([]);
     for (const counts of Object.values(body.counts)) {
       expect(counts).toEqual({ returned: 0, total: 0 });
     }
@@ -149,6 +150,7 @@ describe("GET /export", () => {
   it("has exactly the declared top-level keys and no others", async () => {
     const response = await get();
     expect(Object.keys(response.json<Record<string, unknown>>()).sort()).toEqual([
+      "action_requests",
       "counts",
       "format_version",
       "generated_at",
@@ -207,6 +209,7 @@ describe("GET /export", () => {
       notes: { returned: 1, total: 1 },
       inbox_items: { returned: 1, total: 1 },
       memories: { returned: 1, total: 1 },
+      action_requests: { returned: 0, total: 0 },
     });
     expect(body.projects[0]!.name).toBe("Roof replacement");
     expect(body.tasks[0]!.title).toBe("Call the roofer");
@@ -375,15 +378,23 @@ describe("GET /export", () => {
     }
   });
 
-  it("keeps the allowlist to exactly five entity arrays", async () => {
+  it("keeps the allowlist to exactly six entity arrays", async () => {
     await seedForbiddenNeighbours();
     const body = await exportBody();
     const arrayKeys = Object.entries(body)
       .filter(([, value]) => Array.isArray(value))
       .map(([key]) => key)
       .sort();
-    expect(arrayKeys).toEqual(["inbox_items", "memories", "notes", "projects", "tasks"]);
+    expect(arrayKeys).toEqual([
+      "action_requests",
+      "inbox_items",
+      "memories",
+      "notes",
+      "projects",
+      "tasks",
+    ]);
     expect(Object.keys(body.counts).sort()).toEqual([
+      "action_requests",
       "inbox_items",
       "memories",
       "notes",

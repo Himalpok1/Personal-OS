@@ -34,6 +34,8 @@ import {
   memories,
   memorySettings,
   memorySuggestions,
+  actionRequests,
+  permissionGrants,
 } from "@personal-os/db";
 import type { FastifyInstance } from "fastify";
 import { buildServer, type BuildServerOptions } from "../server.js";
@@ -66,6 +68,11 @@ export async function buildTestApp(options: BuildServerOptions = {}): Promise<Fa
 // SELECT/INSERT/UPDATE/DELETE, and the app role never needs it in
 // production either, so the test setup shouldn't need it here.
 export async function truncateTestTables(app: FastifyInstance): Promise<void> {
+  // Checkpoint 10.8: action_requests self-references (set null) and carries
+  // non-FK target pointers, so it clears first; permission_grants has no FK.
+  // A grant left behind would flip a default-ON permission for the next test.
+  await app.db.delete(actionRequests);
+  await app.db.delete(permissionGrants);
   // Checkpoint 10.7: memories reference memory_suggestions, projects and
   // canvas_courses (all set null) -- clear them first so the singleton switch
   // and any decided suggestion never leak between tests.

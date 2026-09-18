@@ -14,7 +14,7 @@ import type { FastifyInstance } from "fastify";
 //   owner   --approve------->  claim row  -->  execute() inside ONE transaction
 //                                          -->  completed | failed, afterCommit()
 //
-// One handler per registered action, bound in ./executors.ts as a map whose
+// One handler per registered action, bound in ./handlers.ts as a map whose
 // completeness is checked at the type level (`ActionHandlerMap`) and by a
 // test. A handler is the ONLY way an action mutates anything: it calls the
 // same service functions the direct routes call (services/events.ts,
@@ -25,7 +25,7 @@ import type { FastifyInstance } from "fastify";
 // Rules every handler obeys:
 //   - `prepare` runs at REQUEST time, outside any transaction, and may only
 //     read: it checks the input's targets exist (a missing target is a 400
-//     validation issue, the memories.ts link pre-check idiom) and composes
+//     validation issue, the routes/tasks.ts link pre-check idiom) and composes
 //     the bounded `inputSummary` the owner will approve. It never writes.
 //   - `execute` runs at APPROVAL time INSIDE the approve request's
 //     transaction, with the STORED input re-parsed through the action's own
@@ -48,7 +48,7 @@ export interface ActionTarget {
   id: string;
 }
 
-/** The 400 `validation_failed` issue shape the tasks/memories routes already use. */
+/** The 400 `validation_failed` issue shape the tasks routes already use. */
 export interface ActionValidationIssue {
   code: "custom";
   path: string[];

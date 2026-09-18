@@ -1,4 +1,12 @@
-import { inboxItems, memories, notes, projects, tasks, type Db } from "@personal-os/db";
+import {
+  actionRequests,
+  inboxItems,
+  memories,
+  notes,
+  projects,
+  tasks,
+  type Db,
+} from "@personal-os/db";
 import {
   EXPORT_ENTITY_MAX_ROWS,
   EXPORT_FORMAT_VERSION,
@@ -139,6 +147,37 @@ function toMemoryPayload(row: typeof memories.$inferSelect) {
 }
 
 /**
+ * Checkpoint 10.8 (ADR-078 §4): the action audit row, summary columns only.
+ * `input` (the frozen executor payload) and `client_uuid` are plumbing and
+ * are not read. The stored status is exported as stored -- a pending row
+ * past its expiry still reads `pending` here; the read model's presented
+ * `expired` is a view, and the export is the record. This file deliberately
+ * does NOT import read-models/actions.ts (Guard 7 forbids any other read
+ * model from doing so): the export allowlist stays readable here.
+ */
+function toActionRequestPayload(row: typeof actionRequests.$inferSelect) {
+  return {
+    id: row.id,
+    action_id: row.actionId,
+    principal: row.principal,
+    status: row.status,
+    source: row.source,
+    source_ref: row.sourceRef,
+    reason: row.reason,
+    input_summary: row.inputSummary,
+    result_summary: row.resultSummary,
+    target_type: row.targetType,
+    target_id: row.targetId,
+    error_class: row.errorClass,
+    reverses_request_id: row.reversesRequestId,
+    requested_at: row.requestedAt.toISOString(),
+    expires_at: row.expiresAt.toISOString(),
+    approved_at: row.approvedAt ? row.approvedAt.toISOString() : null,
+    finished_at: row.finishedAt ? row.finishedAt.toISOString() : null,
+  };
+}
+
+/**
  * Assembles the export.
  *
  * `generatedAt` is injected rather than read from the clock here, so the route
@@ -157,6 +196,8 @@ export async function buildUserExport(db: Db, generatedAt: Date): Promise<Export
     inboxTotals,
     memoryRows,
     memoryTotals,
+    actionRows,
+    actionTotals,
   ] = await Promise.all([
     db
       .select()
@@ -180,6 +221,12 @@ export async function buildUserExport(db: Db, generatedAt: Date): Promise<Export
       .orderBy(asc(memories.createdAt), asc(memories.id))
       .limit(ENTITY_LIMIT),
     db.select({ total: count() }).from(memories),
+    db
+      .select()
+      .from(actionRequests)
+      .orderBy(asc(actionRequests.requestedAt), asc(actionRequests.id))
+      .limit(ENTITY_LIMIT),
+    db.select({ total: count() }).from(actionRequests),
   ]);
 
   const counts = {
@@ -188,6 +235,7 @@ export async function buildUserExport(db: Db, generatedAt: Date): Promise<Export
     notes: { returned: noteRows.length, total: noteTotals[0]?.total ?? 0 },
     inbox_items: { returned: inboxRows.length, total: inboxTotals[0]?.total ?? 0 },
     memories: { returned: memoryRows.length, total: memoryTotals[0]?.total ?? 0 },
+    action_requests: { returned: actionRows.length, total: actionTotals[0]?.total ?? 0 },
   };
 
   return ExportResponseSchema.parse({
@@ -201,5 +249,6 @@ export async function buildUserExport(db: Db, generatedAt: Date): Promise<Export
     notes: noteRows.map(toNotePayload),
     inbox_items: inboxRows.map(toInboxItemPayload),
     memories: memoryRows.map(toMemoryPayload),
+    action_requests: actionRows.map(toActionRequestPayload),
   });
 }

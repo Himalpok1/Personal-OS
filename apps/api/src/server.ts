@@ -40,6 +40,8 @@ import mailDigestsRoutes from "./routes/mail-digests.js";
 import memoriesRoutes from "./routes/memories.js";
 import memorySettingsRoutes from "./routes/memory-settings.js";
 import memorySuggestionsRoutes from "./routes/memory-suggestions.js";
+import actionsRoutes from "./routes/actions.js";
+import permissionsRoutes from "./routes/permissions.js";
 import monitorRoutes from "./routes/monitor.js";
 import captureRoutes from "./routes/capture.js";
 import devicesRoutes from "./routes/devices.js";
@@ -270,6 +272,8 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await app.register(memorySettingsRoutes);
   await app.register(memoriesRoutes);
   await app.register(memorySuggestionsRoutes);
+  await app.register(actionsRoutes);
+  await app.register(permissionsRoutes);
   await app.register(aiConfigRoutes);
   await app.register(askRoutes);
   await app.register(focusRoutes);

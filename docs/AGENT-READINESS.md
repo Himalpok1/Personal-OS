@@ -1,8 +1,9 @@
 # Agent Readiness Inventory
 
 **Produced:** Phase 10, Checkpoint 10.0 (2026-09-15). **Amended 2026-09-16** with §1a (the Canvas
-boundary added by Checkpoint 10.1, which post-dates this inventory); §1–§5 are otherwise as
-produced at 10.0 and their file:line references were not re-derived. **Purpose:** inventory the Personal OS
+boundary added by Checkpoint 10.1) and **2026-09-17** with §6 (the Action Framework added by
+Checkpoint 10.8, ADR-078 — the write-side counterpart of §2); §1–§5 are otherwise as produced at
+10.0 and their file:line references were not re-derived. **Purpose:** inventory the Personal OS
 service boundaries that a future read-only or write-capable agent (Hermes/OpenClaw or otherwise)
 would call, and name which of today's exports are canonical versus incidental. This is not a tool
 design document and does not authorize building an agent — no agent runtime, tool loop, or
@@ -122,3 +123,27 @@ place at zero cost.
 | Notifications | Enqueue via the existing dispatch job with an occurrence-scoped `dedupeKey` — never a new push path |
 | Canvas | `GET /canvas-assignments/upcoming` (read-only); never the connection or sync routes, never the tables |
 | AI | `POST /ask` (already composes context building + provider resolution + citation validation) — no write-capable AI path exists, and building one needs its own ADR plus a `posops_readonly` role |
+
+---
+
+## 6. The Action Framework — the WRITE surface a future agent goes through (Checkpoint 10.8, ADR-078)
+
+§2 is the read-only tool contract. Writes have their own, disjoint contract: an **action** is a
+registered, permission-gated, owner-approved, audited mutation. A future agent may *call* a read
+tool; it may only *request* an action, and the owner approves or cancels it. Nothing in 10.8 lets
+an agent exist — the `agent` principal is a reserved CHECK member with no write path and no grant.
+
+| Piece | Where | What a future agent binding must honour |
+|---|---|---|
+| Registry | `packages/schema/src/actions.ts` — `ACTION_IDS` (six: `create_calendar_event` ↔ `archive_calendar_event`, `create_task` ↔ `archive_task`, `complete_task` ↔ `reopen_task`), `ACTION_REGISTRY` (name, description, category, permission, risk, reversibility, `requires_approval: true` literal), `ACTION_INPUT_SCHEMAS` / `ACTION_OUTPUT_SCHEMAS` | Verbs are pinned `^(create\|archive\|complete\|reopen)_` and tested disjoint from `READ_TOOL_NAMES`. Inputs are `.strict()` and narrower than the direct routes' create schemas (no recurrence, no all-day). |
+| Permissions | `ACTION_PERMISSIONS` = `tasks.write`, `calendar.write` — the only members with an enforcement site; `permission_grants` table (principal `app\|agent`, `revoked_at` soft-revoke, stored `disclosure_version`); `GET /permissions`, `PATCH /permissions/:permission` (`app` only) | A grant gates whether a principal may **request**; it never permits execution without approval. No write member will ever exist for health, mail, academic or memory; no member of any kind for AI config, devices or credentials. An agent's grants are `agent`-principal rows the owner must create explicitly — none ship. |
+| Request lifecycle | `apps/api/src/actions/service.ts` — `createActionRequest` (grant check → handler `prepare` → `pending` row with the validated input frozen as jsonb), `approveActionRequest` (single-use conditional claim → handler `execute` in a savepoint inside one transaction → `completed\|failed`, `afterCommit` after commit), `cancelActionRequest`, `setPermissionGrant`; routes `apps/api/src/routes/actions.ts`, `permissions.ts`; read model `apps/api/src/read-models/actions.ts` | Synchronous in the API request, never pg-boss. A replayed approval is `409 action_not_pending`; a pending row expires after `ACTION_REQUEST_TTL_HOURS` (24). The **stored** input is what executes, re-parsed through its own schema. A failure is recorded (`error_class`, token-shaped), never retried. |
+| Handlers | `apps/api/src/actions/handlers.ts` (`ACTION_HANDLERS: ActionHandlerMap`, completeness type- and test-checked) over `apps/api/src/services/events.ts` / `services/tasks.ts` — the same functions the direct routes now call | The only way an action mutates anything. `prepare` is read-only (existence checks + the bounded `input_summary`); `execute` re-checks its target under `FOR UPDATE`. |
+| Audit trail | The `action_requests` row itself: `principal`, `source` (`focus_now\|briefing\|academic\|manual`) + bounded client-authored `reason`, `input_summary`, `result_summary`, `target_type/target_id`, `error_class`, `reverses_request_id`, per-state timestamps. Never swept by retention; summary columns in `GET /export`. | "Who" is `app` — the owner through a client; the API has no principal abstraction beyond `/devices/*` device tokens (ADR-029). Binding approval to a device token is deferred with the agent ADR. |
+| Guard 7 | `apps/api/src/ask/ai-egress-guard.test.ts` | No AI lane, AI route file, other read model or worker file may name the action tables or registry; the action modules import no `ai`, provider, memory module or AI lane, name no credential/consent/device table, and carry no enqueue token. |
+
+**What an agent ADR would still have to add:** the `agent` principal's own consent surface and
+disclosure; a `posops_readonly` role (§2); enforcement of the `READ_TOOL_MAX_*` budgets; a device- or
+token-bound approval if approval by an unverified perimeter caller is judged insufficient; and any
+read permissions, which 10.8 deliberately did not define because nothing reads through the
+framework yet.
