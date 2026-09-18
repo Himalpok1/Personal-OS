@@ -53,11 +53,16 @@ delete / toggle walked on-device in light and dark, 0 crash lines). Checkpoint 1
 **Checkpoint 10.8 — Agent Foundation & Action Framework — is IMPLEMENTED, VERIFIED (7,274 tests,
 23/23 tasks), LIVE-VERIFIED IN THE BROWSER against the local database, and INDEPENDENTLY REVIEWED
 (safe after fixes; the one MINOR and three notes closed in-checkpoint) on branch
-`claude/agent-foundation-action-framework-b7a356` — NOT DEPLOYED, awaiting owner authorization**
-(ADR-078; migration `0024`, level 24 → 25; `apps/worker` untouched): a six-action registry in three
-reversible pairs, two write permissions the owner can revoke, per-request approval with synchronous
-single-use execution, the request row as the audit trail, an Action Center and approval sheets on
-mobile, and Guard 7. No external agent is integrated; none can be.
+`claude/agent-foundation-action-framework-b7a356`, merged to `main` (`fcb4ea9`, PR #8) and
+**DEPLOYED** (owner authorized 2026-09-18; migration `0024` applied, level **25**; `api`+`web`
+recreated in production 06:08Z, `worker`/`postgres` untouched; the action and permission
+lifecycles, a real Focus Now proposal, its undo and the privacy boundary validated live on
+production data) **and ACCEPTED ON THE RABBIT R1 (versionCode 33, built locally, installed in
+place, the approval flow / Action Center / revoke walked on-device in light and dark, 0 crash
+lines). Checkpoint 10.8 is CLOSED.** ADR-078; `apps/worker` untouched: a six-action registry in
+three reversible pairs, two write permissions the owner can revoke, per-request approval with
+synchronous single-use execution, the request row as the audit trail, an Action Center and
+approval sheets on mobile, and Guard 7. No external agent is integrated; none can be.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -105,10 +110,10 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 
 | | |
 |---|---|
-| Migration level | **24** (`0000`–`0023`); local and production agree. 10.7 added `0023_personal_memory_layer` (ADR-077, three tables), applied to production 2026-09-17 23:57Z from the 10.7 api image — 23 → 24 by row count, tracked hash equal to the shipped file's SHA-256. |
-| Serving commit | **api and web at `436da0f`** (10.7; recreated 2026-09-17 23:58Z from `personal-os-10.7-release`; rollback `personal-os-{api,web}:rollback-pre-10.7` = the 10.6 images `dccf3ff797df` / `c6e390875f7b`); **worker at `965900f`** (10.4, untouched — 10.5–10.7 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Previous entry, for provenance: api at `3a90c0c`, web at `3928dd3` (10.6; the fix commit changed only `apps/mobile`, so `api`'s image is byte-equivalent to one built from `3928dd3` and was not rebuilt; api recreated 2026-09-17 10:08Z, web 10:19Z, both from `personal-os-10.6-release`); **worker at `965900f`** (10.4, untouched since — 10.5 and 10.6 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,web}:rollback-pre-10.6` = the 10.5 images (`d293d6f813d7` / `7e8cce9615b3`), plus every earlier tag, all by resolved digest. |
+| Migration level | **25** (`0000`–`0024`); local and production agree. 10.8 added `0024_action_framework` (ADR-078, two tables), applied to production 2026-09-18 06:07Z from the 10.8 api image — 24 → 25 by row count, tracked hash equal to the shipped file's SHA-256. Previously: 10.7 added `0023_personal_memory_layer` (ADR-077, three tables), applied to production 2026-09-17 23:57Z from the 10.7 api image — 23 → 24 by row count, tracked hash equal to the shipped file's SHA-256. |
+| Serving commit | **api and web at `fcb4ea9`** (10.8; recreated 2026-09-18 06:08Z from `personal-os-10.8-release`, images `f3f751c78576` / `42815bbe7c6c`; rollback `personal-os-{api,web}:rollback-pre-10.8` = `57526b512975` / `95e1fff71a1b`, the 10.7 source rebuilt after an out-of-band prune deleted every earlier rollback tag — see the 10.8 deployment record); **worker at `965900f`** (10.4, untouched — 10.5–10.8 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Previous: api and web at `436da0f` (10.7; recreated 2026-09-17 23:58Z from `personal-os-10.7-release`). Previous entry, for provenance: api at `3a90c0c`, web at `3928dd3` (10.6; the fix commit changed only `apps/mobile`, so `api`'s image is byte-equivalent to one built from `3928dd3` and was not rebuilt; api recreated 2026-09-17 10:08Z, web 10:19Z, both from `personal-os-10.6-release`); **worker at `965900f`** (10.4, untouched since — 10.5 and 10.6 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,web}:rollback-pre-10.6` = the 10.5 images (`d293d6f813d7` / `7e8cce9615b3`), plus every earlier tag, all by resolved digest. |
 | Containers | all four `RestartCount=0`; api `(healthy)` within 8 s of the 10.6 recreation; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated since); `GET /health` → `ok` / `connected` / `stale:false` (2026-09-17 10:08Z) |
-| Rabbit R1 | `com.himal.personalos` **versionCode 32**, built from `436da0f` **locally** (10.7; `adb install -r` → `Success` 2026-09-18 02:41Z, `firstInstallTime` 2026-08-19 preserved, exact-alarm `allow`, notifications granted; Memory Center create/edit/delete/toggle walked on-device in light and dark, 0 crash lines). Previous: **versionCode 31**, built from `3928dd3` **locally** (`eas build --local`, profile `production-internal`, the EAS-managed keystore fetched at build time — signer SHA-256 `4601e3a2…` identical to the installed app's, compared with `apksigner` before installing), `adb install -r` → `Success` with `firstInstallTime` 2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS` preserved — no re-pair. versionCode 30 (from `3a90c0c`) **crashed on launch** (a worklet calling a JS-thread function) and was rolled back to 29 within minutes, then fixed; the 10.6 record has the full account. Today (light + dark), the briefing hero and assignment sheet on real data, Settings and Projects walked live; 0 crash lines on 31. |
+| Rabbit R1 | `com.himal.personalos` **versionCode 33**, built from `fcb4ea9` **locally** (10.8; `adb install -r` → `Success` 2026-09-18 01:53 local, `firstInstallTime` 2026-08-19 preserved, exact-alarm `allow`, notifications granted; the approval flow, Action Center, revoke/allow and undo walked on-device in light and dark, 0 crash lines). Previous: **versionCode 32**, built from `436da0f` **locally** (10.7; `adb install -r` → `Success` 2026-09-18 02:41Z, `firstInstallTime` 2026-08-19 preserved, exact-alarm `allow`, notifications granted; Memory Center create/edit/delete/toggle walked on-device in light and dark, 0 crash lines). Previous: **versionCode 31**, built from `3928dd3` **locally** (`eas build --local`, profile `production-internal`, the EAS-managed keystore fetched at build time — signer SHA-256 `4601e3a2…` identical to the installed app's, compared with `apksigner` before installing), `adb install -r` → `Success` with `firstInstallTime` 2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS` preserved — no re-pair. versionCode 30 (from `3a90c0c`) **crashed on launch** (a worklet calling a JS-thread function) and was rolled back to 29 within minutes, then fixed; the 10.6 record has the full account. Today (light + dark), the briefing hero and assignment sheet on real data, Settings and Projects walked live; 0 crash lines on 31. |
 | Academic layer (10.2 + ADR-070a) | `GET /academic/today?tz=` · `GET /academic/courses[?include_past_terms=]` · `GET /academic/courses/:id` — a provider-agnostic read model computed over the Canvas tables (ADR-070), **current term only by default** (ADR-070a: the most recently started term, by date — `current_term: 2026 Fall` echoed on the wire), a deterministic Today card and `/academic` course screens, `score`/`grade` synced (ADR-068a; 165 of 355 real assignments carry a grade). **Live and validated**: Today `overdue 2 · due today 1 · due this week 8 · 8 unread` from the 6 Fall 2026 courses (was 11 overdue across 16 courses in 3 terms before the rule); `include_past_terms=true` still lists all 16. |
 | Canvas (10.1/10.1B/10.1C + 10.2 hotfix) | `packages/canvas-providers` + six tables, PAT-authenticated, read-only, hourly `canvas.sync-cron`. Connection `8b8e2cb6…` **reactivated in place by the owner's live disconnect → reconnect** (22:32–22:33Z: same row, `created_at` unchanged, 16/355/22 still linked, manual sync `succeeded`). A pasted token is now trimmed and refused if it carries whitespace/control characters, the client refuses to build a header from one, and the api's error serializer scrubs bearer/PAT shapes (hotfix `4c614db`). **Live-validated against the owner's real UTA account 2026-09-16**: connect → sync (16 courses, 355 assignments, 19 announcements, 0 events) → idempotent resync → disconnect (credential triple NULLed) → invalid token rejected (`400 canvas_auth_failed`) → reconnect → resync, left **active**. **Reconnect path (10.1C) verified live 2026-09-16**: disconnect → `200` · reconnect → **`200` on the same row `8b8e2cb6…`** (`created_at` unchanged at 10:50:30Z, all 16 courses still linked) · second connect on the active row → `409` · manual resync `202` → `succeeded` · hourly cron `succeeded` at 12:00:17Z. Zero PAT-shaped strings and zero warn/error lines in the api and worker logs since the api was recreated. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · notification-shade capture (9.1) — a persistent local "Capture" notification on its own channel; verified live on the Rabbit R1 (9.1). |
@@ -121,9 +126,9 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress. |
 | Backups | **None, by design** (ADR-024). |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE** (re-verified 2026-09-16). No CI, no Actions workflow, no repository secret. **`main` is the canonical branch again as of 2026-09-16** (fast-forwarded to the Phase 10 tip; PR #1 merged). |
-| Test baseline | **7,274 tests across 13 packages** at `572bc91` (10.8, branch tip, NOT deployed): api 1,640 · mobile 1,991 · core 1,172 · worker 738 · schema 589 · health-providers 332 · api-client 213 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 109 · ai-providers 25. Deployed baseline: **7,089 tests** at `436da0f` (10.7): api 1,568 · mobile 1,903 · core 1,172 · worker 738 · schema 574 · health-providers 332 · api-client 213 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 99 · ai-providers 25. Was 6,824 at 10.6 (`3928dd3`). |
+| Test baseline | **7,274 tests across 13 packages** at `fcb4ea9` (10.8, deployed): api 1,640 · mobile 1,991 · core 1,172 · worker 738 · schema 589 · health-providers 332 · api-client 213 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 109 · ai-providers 25. Deployed baseline: **7,089 tests** at `436da0f` (10.7): api 1,568 · mobile 1,903 · core 1,172 · worker 738 · schema 574 · health-providers 332 · api-client 213 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 99 · ai-providers 25. Was 6,824 at 10.6 (`3928dd3`). |
 | Personal memory (10.7) | **LIVE** since 2026-09-17 23:58Z (level 24); validated against real production data the same hour (lifecycle, Focus Now "You said" explanation on a real ACCT assignment, privacy) and left with 0 rows. Shipped: three tables (`memories`, `memory_suggestions`, `memory_settings`; migration `0023`), `GET/PATCH /memory-settings`, `GET/POST/PATCH/DELETE /memories`, `POST /memories/delete-all`, `GET /memory-suggestions`, `POST /memory-suggestions/:key/decide`, memories in `GET /export`; a Memory Center at `/memory`; Focus Now `matches_preference`/`supports_goal` (+15, capped at the pre-10.7 context ceiling of 75) and a briefing working-hours line, all client-composed by typed link; Guard 6 keeps memory out of every AI lane, the three AI route files, every other read model and the worker. |
-| Action framework (10.8) | **Implemented on the branch, NOT deployed.** Registry `packages/schema/src/actions.ts` (`create_calendar_event ↔ archive_calendar_event`, `create_task ↔ archive_task`, `complete_task ↔ reopen_task`; permissions `tasks.write`, `calendar.write`); tables `permission_grants` + `action_requests` (migration `0024`, additive); `GET/POST /actions`, `GET /actions/summary`, `GET /actions/:id`, `POST /actions/:id/approve|cancel`, `GET /permissions`, `PATCH /permissions/:permission`; audit summary rows in `GET /export`; Guard 7. Mobile: `/actions`, `/actions/[id]`, one approval-sheet host, a Settings card, a Today "Needs your approval" card, "Plan study block" / "Add a task for this" on the assignment sheet. Production holds none of it until the deployment plan in the 10.8 record runs. |
+| Action framework (10.8) | **LIVE** since 2026-09-18 06:08Z (level 25); validated against real production data the same hour (lifecycle, permissions, a real Focus Now proposal and its undo, privacy) and left with the 11 validation audit rows as the record. Registry `packages/schema/src/actions.ts` (`create_calendar_event ↔ archive_calendar_event`, `create_task ↔ archive_task`, `complete_task ↔ reopen_task`; permissions `tasks.write`, `calendar.write`); tables `permission_grants` + `action_requests` (migration `0024`, additive); `GET/POST /actions`, `GET /actions/summary`, `GET /actions/:id`, `POST /actions/:id/approve|cancel`, `GET /permissions`, `PATCH /permissions/:permission`; audit summary rows in `GET /export`; Guard 7. Mobile: `/actions`, `/actions/[id]`, one approval-sheet host, a Settings card, a Today "Needs your approval" card, "Plan study block" / "Add a task for this" on the assignment sheet. |
 | pg-boss | **31 queues, 11 schedules** (worker startup log at 10.1B; `pgboss.queue` reads one more with the internal `__pgboss__send-it`). Every retrying queue has a dead-letter queue (9.0): `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues, `occurrences.generate-lazy`, `occurrences.expand-window`. `occurrences.expand-window` has a phase-2 idempotent lazy repair since 9.4. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C) · `health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now` (9.0). First scheduled run 2026-09-13T04:00Z; the job's daily runs have not been individually re-verified since the 9.0 acceptance. |
 | Alert keys | Occurrence-scoped (ADR-058). Producers: health-sync breaker (first live emission 2026-09-12T03:00:14Z), `occurrences.generate-lazy.dead:<occurrenceId>`, `occurrences.expand-window.dead:<UTC date>` (9.0; also covers a failed 9.4 phase-2 repair), `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (9.5). The three 9.x producers are unexercised in production by design. |
@@ -2561,6 +2566,181 @@ sweep logcat for `FATAL EXCEPTION` (`worklet-safety.test.ts` green; no new workl
 **Rollback:** `docker tag personal-os-{api,web}:rollback-pre-10.8 personal-os-{api,web}:latest` +
 the frozen recreate; `0024` is additive-only, so the pre-10.8 images run against the
 post-migration schema; no schema rollback.
+#### Deployment — COMPLETE for api/web (2026-09-18 06:08Z); Rabbit R1 ACCEPTED on versionCode 33 (2026-09-18 01:53–02:00 local)
+
+**Owner authorization received 2026-09-18** ("Proceed with the frozen Phase 10.8 deployment plan").
+Everything below was read directly from the host, the containers, the database, the logs and the
+device; nothing is inferred from the plan.
+
+**Pre-deployment.** Branch clean at `fcb4ea9`, six commits on `5c2bf52`, a strict fast-forward of
+`origin/main`; `git diff origin/main..HEAD -- apps/worker` empty; `gitleaks` over the six commits:
+no leaks. **The production host refused the deployment key** (`Permission denied (publickey)`; the
+host reports `OpenSSH_10.2p1 Ubuntu-2ubuntu3.6` on Ubuntu 26.04 with "restart required") — the
+owner re-installed it with `ssh-copy-id` (password auth was still allowed); `authorized_keys` had
+been rewritten at 22:02Z the previous evening and now carries a second `ray-dashboard-deploy` key
+that logs in from `100.84.166.123` every ~3 minutes. Recorded, not diagnosed — the host has become
+a shared home-lab box (see the prune finding below). Production preflight: `/health` ok, worker
+`stale:false`; `drizzle.__drizzle_migrations` **24 rows, `max(created_at) 1789379000000`, 0
+future-dated rows**; 0 action tables; api (`2f496334a7d9`) and web (`53db74fc9619`) on the 10.7
+images from `personal-os-10.7-release`, worker (`4cf1639685fa`, 10.4), postgres since 2026-08-30;
+Canvas/Gmail/Health/GCal all `active`; the one `failed` pg-boss job the documented 2026-09-16
+mail-sync timeout; `ai_task_routes` has no `ask` row; disk 87 % (30 GB free).
+
+**Rollback references, before anything changed.** `personal-os-api:rollback-pre-10.8` =
+`2f496334a7d9`, `personal-os-web:rollback-pre-10.8` = `53db74fc9619` (by image id, equal to the
+running containers); git tag `rollback-pre-10.8` at `5c2bf52`, pushed. `worker` untouched — no
+tag, no rebuild.
+
+**Merge.** Branch pushed; **PR #8** opened (`MERGEABLE`/`CLEAN`); `git push origin HEAD:main` — a
+true fast-forward, `5c2bf52` → **`fcb4ea9`**; PR #8 auto-closed `MERGED` (merge commit =
+`fcb4ea9`, i.e. none). `main` is `fcb4ea9` and canonical; the primary checkout fast-forwarded to
+it.
+
+**Frozen order, executed.** `git archive` of `fcb4ea9` shipped to
+`/home/himallinux/personal-os-10.8-release` (1,402 tracked files; 0 `.env`/`google-services.json`;
+25 migration files, `0024_action_framework.sql` last; ADR-078 SHA-256 `b82b6db42705b8c8…`
+identical to the worktree's). Built `api`+`web` (`build_exit=0`; running containers confirmed
+still on the old image ids afterwards). **Verified the new images before anything ran:** api
+carries 25 `.sql` files with `0024` last and a journal whose last entry is idx 24 /
+`1789380000000`, `dist/actions/{handlers,service,types}.js`, `dist/read-models/actions.js`,
+`dist/routes/{actions,permissions}.js`, `dist/services/{events,tasks}.js`, `actionRequests` in
+`dist/read-models/user-export.js`, and no `.env`/`google-services.json`; the web bundle carries
+"Nothing runs until you approve it", "Needs your approval", "Plan study block", "Open Action
+Center" ×2, the tailnet hostname once and `localhost:3000` never. **Migration** from the new api
+image via `docker compose run --rm --no-deps -e MIGRATIONS_DATABASE_URL=… --entrypoint sh api`
+(`node_modules/.bin/drizzle-kit migrate`): **24 → 25 by row count**, new row `id 25 · created_at
+1789380000000 · hash c36badf58bc701d1…` — identical to the shipped file's SHA-256. **Direct schema
+inspection:** `action_requests` (21 columns) and `permission_grants` (8) present; constraints
+`action_requests_{principal,status,source,target_type,target_pair,no_self_reversal}` and
+`permission_grants_principal` (CHECK), the self-FK
+`action_requests_reverses_request_id_action_requests_id_fk`, both PKs; indexes
+`action_requests_{action_id_requested_at,client_uuid,reverses_request_id,status_requested_at,target}_idx`,
+`permission_grants_live_unique`, `permission_grants_permission_idx`; `posops_app` holds
+`DELETE,INSERT,SELECT,UPDATE` on both through the migrator's default privileges — no GRANT in the
+migration, as designed; 0 rows. **Rollout:** `api` recreated alone → `(healthy)` in 7 s, `/health`
+ok; `web` recreated alone → `200` on `:8081`. `worker` (`StartedAt` 2026-09-17 03:57Z) and
+`postgres` (2026-08-30) untouched by their own timestamps; all four `RestartCount=0`; api
+`f3f751c78576`, web `42815bbe7c6c`, provenance `personal-os-10.8-release`.
+
+**Production validation — read routes.** `/permissions`, `/actions/summary`, `/actions`, `/today`,
+`/academic/today`, `/reminders`, `/health-summary`, `/export` all `200` locally; `/permissions`
+and the web root `200` over the Tailscale HTTPS route. `GET /permissions` → `tasks.write` and
+`calendar.write` both `granted: true` with `granted_at: null` and **0 `permission_grants` rows
+written** (the lazy default, ADR-078 §3); `GET /actions/summary` → zeros with `2 / 2`; `GET
+/export` carries `action_requests {returned:0,total:0}` among exactly eleven top-level keys.
+
+**Production validation — the action lifecycle, over real routes (a clearly-named verification
+task).** `POST /actions create_task` → 201 `pending`, `principal app`, summary `Create task “10.8
+deploy verification task”`; `GET /actions?status=pending` → 1, summary `pending_total 1`;
+**approve** → `completed`, `target task`, a live `tasks` row `active`; a **replayed approve → 409**
+(`action_not_pending`/`completed`); a second proposal **cancelled** (`finished_at` set); cancel on
+the completed row and approve on the cancelled row both `409 action_not_pending` with the honest
+status; **failed handling** — `complete_task` proposed, the task completed through the direct
+route first, approve → `failed` / `task_not_open` (recorded, not retried); **expired handling** —
+a `reopen_task` request's `expires_at` moved into the past, listed under `?status=expired` before
+anything touched it, approve → `409 action_expired`, the row flipped to `expired` with
+`finished_at`. **Permission lifecycle:** view (`tasks.write` usage 1); a pending task request then
+`PATCH /permissions/tasks.write {granted:false}` → `granted false`, `revoked_at` set,
+`cancelled_pending 1`, the request `cancelled` with "Cancelled: permission revoked"; a proposal
+while revoked → **403**; `calendar.write` untouched; re-grant → `granted true`,
+`disclosure_version 2026-09-17`, `needs_reconsent false`; `permission_grants` holds two rows
+(the default-then-revoked row and the live re-grant). **Undo:** `archive_task` with
+`reverses_request_id` → the original's `reversed_by_request_id` set, the verification task
+archived (invisible; left as lineage), the row `completed` "Archived". **Security:** api log
+since recreation 0 warn/error, **0** title-/reason-/statement-shaped strings, only the ids-only
+`action.requested` ×6 / `action.completed` ×2 / `action.failed` ×1 / `action.cancelled` ×1 /
+`permission.updated` ×2 events; the worker log names no action table; `POST /ask` → 409 (no
+consent row — no model call can be built in production); both Tailscale Serve routes tailnet-only;
+Postgres publishes no host port; 99 pg-boss jobs completed in the window, 0 failed.
+
+**Focus Now integration, in the production web client** (paired as `10.8 deploy verification
+browser` with a single-use code — the first code expired unused during a slow browser step;
+revoked afterwards, 0 live codes). The real ACCT "Podcast 3" Focus Now row → the assignment sheet
+with "Why it's here" (`450 Canvas priority + 25 course attention = 475`) still visible above the
+new **Propose** rows → **Plan study block** → the approval sheet (Calendar · Reversible · Medium
+risk; Why "Due Sep 9 · 11:59 PM · from your Focus Now list" with a *Focus Now* chip; Title / When
+/ Calendar "Not linked"), Today reading **"Needs your approval · 1"** behind it → **Approve** →
+toast "Created event “Study: Podcast 3”", an `origin='local'`, unlinked, non-recurring event in
+production and a `completed` row sourced `focus_now` / `canvas_assignment` → `/actions/[id]` →
+**Undo** → the reversal's own sheet ("Archive calendar event", *Hard to undo*, source *You*) →
+Approve → the event `archived_at` set, the original showing **Undone** → `/actions` History
+(Completed / Cancelled / Expired / Failed chips under Today) and Permissions ("Used 2 times · last
+Sep 18" on both). Console: only the pre-existing unpaired `/devices` 401 and `/briefs/current`
+404.
+
+**Rabbit R1 — built locally, verified, installed in place, walked.** Main checkout fast-forwarded
+to `fcb4ea9`; `schema`/`core`/`api-client`/`db` rebuilt; `eas build --local --profile
+production-internal` with the production values hardcoded (never from `apps/mobile/.env`) →
+`BUILD SUCCESSFUL in 4m 8s`, **versionCode 32 → 33**, 113.8 MB. Verified before installing:
+`strings` on the Hermes bundle — 0 `localhost:3000`, 1 tailnet hostname, "Nothing runs until you
+approve it" / "Needs your approval" / "Plan study block" / "Open Action Center" / "Review and
+approve" each present; `aapt` `com.himal.personalos` `versionCode='33'`; `apksigner` V2 signer
+`4601e3a2…` identical to the installed app's (pulled live first). Pre-install: versionCode 32,
+`firstInstallTime` 2026-08-19 16:26:10, exact-alarm `allow`, `POST_NOTIFICATIONS` granted. `adb
+install -r` → `Success`; post-install **versionCode 33**, `firstInstallTime` preserved (no
+re-pair), exact-alarm `allow`, notifications granted, `stopped=false`. Launched with `am start`,
+logcat cleared first. **On-device walk, real production data, screenshots off the device
+(480 × 640):** Today (light) → the "Podcast 3" briefing line → the assignment sheet with the
+explanation and the Propose rows → **Plan study block** → the approval sheet (the bottom-sheet
+worklet on the real UI runtime) → **Approve** → toast and the briefing recomposed at once ("2
+overdue, 2 due today, **1 event**", Schedule "Next: Study: Podcast 3 at 03:00") → **Add a task for
+this** → the task sheet (Tasks · Reversible · Low risk; source *Academics*) → **Cancel** (server
+row `cancelled`) → Settings → Privacy & AI: the **Actions** card first ("Up to date", the trust
+line, "Open Action Center", "2 of 2 capabilities allowed") → the **Action Center**: `calm` hero
+"Nothing waiting" (0 · 5 · 2), Pending / **History** (Cancelled, Completed rows under Today) /
+**Permissions** (Tasks "Used 2 times · last Sep 18", the action chips) → **Revoke Tasks** through
+the native confirm ("Revoke Tasks access? Pending Tasks actions will be cancelled." · CANCEL /
+REVOKE) → "Off" chip, Allow button, "Tasks revoked" toast, server `tasks.write false` → **Allow**
+→ server `true` → **dark mode** (`cmd uimode night yes`): the permission cards, History and the
+detail screen fully legible → the completed event's detail → **Undo** → the reversal's own
+approval sheet in dark ("Hard to undo", source "You") → Approve → **Undone** chip, the event
+archived server-side; restored to light afterwards. `enterRise` rows, the toast, both sheet
+hosts and the haptic-bearing buttons all ran on the real runtime. Logcat swept after every step:
+**0 `FATAL EXCEPTION`/`AndroidRuntime` lines and 0 uncaught JS errors across the whole
+versionCode-33 session.** Not exercised on the device: swipe actions (the walk used taps).
+
+**A host finding, discovered at the post-deployment read — recorded, not caused by this
+checkpoint.** Between the rollback tagging (06:05Z) and the post-deployment read (06:59Z)
+**every Docker image not held by a running container was deleted on the host** — the
+`rollback-pre-10.8` tags this deployment placed AND every earlier `rollback-pre-10.x` tag, plus
+the build cache: disk went from 87 % to 14 % used (~163 GB freed). No Docker event, journal line,
+cron entry or shell history records it; Watchtower (`nickfedor/watchtower`, `--cleanup
+--label-enable`, weekly) is present but label-gated with an empty log. The host is now a shared
+home-lab box: `code-server` (started during this deployment), `dozzle`, `uptime-kuma`, `glance`,
+`ntfy`, `it-tools`, `ray-dashboard` + an `alpine/git` updater, all under
+`/home/himallinux/docker/dev-ops`. **Production data was untouched** (postgres volume
+`personal-os_postgres_data` 122 MB; 27 tasks / 110 events / 355 assignments / 11 action rows read
+back; every release directory 10.0–10.8 intact). The image rollback posture was **restored by
+rebuilding the 10.7 `api`/`web` from `personal-os-10.7-release`** (ADR-077 hash checked) and
+re-tagging: `personal-os-api:rollback-pre-10.8` = `57526b512975`, `personal-os-web:rollback-pre-10.8`
+= `95e1fff71a1b` (24 migrations, no action routes — functionally the 10.7 images, not
+byte-identical to the pruned ones); running containers untouched. **The durable rollback source
+was never the image tag: it is the per-release directory plus the git tag.** An owner action
+(below): find and fence whatever pruned, or accept that image tags on this host are ephemeral.
+
+**Post-deployment state (read 06:59Z).** `/health` ok/connected/`stale:false`; all four
+`RestartCount=0`; api log 864 lines, 0 warn/error, 0 title-shaped; 273 pg-boss jobs completed in
+the prior 45 minutes, 0 failed/retry/active; all four integrations `active`; migration **25**;
+`action_requests` 11 rows (the validation record), `permission_grants` 2 rows (`tasks.write`
+revoked-then-re-granted history; `calendar.write` still the row-less default); one archived
+verification task and one archived study event left as lineage.
+
+**Final verification on `fcb4ea9`** (the deployed commit): `pnpm build --force` 12/12 · `pnpm
+typecheck` 23/23 · `npx eslint apps packages` exit 0 · root `prettier --check .` clean · `git diff
+--check` clean · `gitleaks detect --no-git` no leaks · `pnpm test --force` **23/23 tasks, 7,274
+tests across 13 packages, zero failing**.
+
+**Rollback, if ever needed:** `docker tag personal-os-{api,web}:rollback-pre-10.8
+personal-os-{api,web}:latest` then the frozen `up -d --no-deps --no-build --force-recreate api
+web` from `personal-os-10.8-release`; or rebuild from `personal-os-10.7-release` if the tags have
+been pruned again. `0024` is additive-only, so the pre-10.8 images run against the
+post-migration schema; no schema rollback. The Rabbit rolls back by reinstalling the pulled
+versionCode-32 `base.apk` with `adb install -r -d`.
+
+**Checkpoint 10.8 is CLOSED (2026-09-18):** deployed, production-validated, and accepted on the
+device. Final state: `main` at `fcb4ea9` plus this docs commit; production `api`+`web` at
+`fcb4ea9`, `worker` at `965900f`, migration level **25**; Rabbit R1 versionCode **33**;
+production action tables `action_requests 11 · permission_grants 2`.
 
 ---
 
@@ -2846,11 +3026,12 @@ post-migration schema; no schema rollback.
 ## Current objective
 
 **Checkpoint 10.8 — Agent Foundation & Action Framework — is IMPLEMENTED, VERIFIED (7,274
-tests, 23/23 tasks), LIVE-VERIFIED in the browser and INDEPENDENTLY REVIEWED (safe after fixes, all
-closed) on `claude/agent-foundation-action-framework-b7a356` (tip `572bc91`, five commits on
-`5c2bf52`). NOT merged, NOT deployed: the deployment plan in the 10.8 record awaits the owner's
-explicit authorization, and the Rabbit R1 has not been rebuilt.** No external agent is integrated
-and 10.9 is not begun.
+tests, 23/23 tasks), INDEPENDENTLY REVIEWED (safe after fixes, all closed), merged to `main`
+(`fcb4ea9`, PR #8), DEPLOYED (owner authorized; migration `0024` applied, level 25, `api`+`web`
+recreated, `worker`/`postgres` untouched, the action/permission lifecycles and a real Focus Now
+proposal validated live on production data) and ACCEPTED ON THE RABBIT R1 (versionCode 33).
+CLOSED 2026-09-18.** No external agent is integrated; no checkpoint after 10.8 is selected; 10.9
+is not begun.
 
 **Phase 10 — Codebase Consolidation & Agent Readiness — is open.** Checkpoints 10.0, 10.1/10.1B and
 10.1C are closed: 10.1C (implemented, tested 6,054/6,054, independently reviewed with zero
@@ -2957,10 +3138,13 @@ context and a "related capture"/activity trail on its project context. The Rabbi
 
 ## Current work
 
-**Checkpoint 10.8 is implemented, verified, live-verified and reviewed — awaiting deployment
-authorization.** The branch carries the migration, the registry, the API, the mobile Action Center
-and ADR-078; the local dev and test databases are at level 25; production is untouched at level 24.
-Nothing is in flight beyond the owner's decision to deploy.
+**Checkpoint 10.8 is DEPLOYED, ACCEPTED and CLOSED.** `main` carries `fcb4ea9` (PR #8,
+fast-forward) plus the closing docs commit; production serves `api`+`web` at `fcb4ea9`, `worker`
+still at `965900f`, postgres untouched; migration level **25**; the action and permission
+lifecycles, a real Focus Now proposal and its undo were validated live against real production
+data; the Rabbit R1 runs versionCode 33 with the approval flow and the Action Center walked
+on-device. Nothing is in flight. One host observation is open for the owner (the out-of-band image
+prune and the shared home-lab stack — see the 10.8 deployment record and *Next action*).
 
 **Checkpoint 10.7 is DEPLOYED, ACCEPTED and CLOSED.** `main` carries `436da0f` (PR #7,
 fast-forward) plus the closing docs commits; production serves `api`+`web` at `436da0f`, `worker`
@@ -3004,6 +3188,27 @@ removed from the primary checkout.
 ---
 
 ## Last verification
+
+**Checkpoint 10.8 deployment (2026-09-18 06:05–07:00Z), read directly from production and the
+device.** `main` fast-forwarded to `fcb4ea9`, PR #8 merged · `api`/`web` images tagged
+`rollback-pre-10.8` by id, git tag at `5c2bf52` pushed · `git archive` (1,402 files, no
+`.env`/`google-services.json`) · new api image verified to carry 25 migrations (`0024` last), the
+action handlers/service/routes/read model, the extracted services and the export rows; the web
+bundle verified to carry the 10.8 strings and the tailnet URL, never `localhost:3000` · migration
+**24 → 25** by row count, tracked hash = file SHA-256, both tables inspected column/constraint/
+index/grant by name · `api` then `web` recreated alone, `(healthy)` in 7 s, `worker`/`postgres`
+untouched by their own start timestamps · every read route `200` locally and over Tailscale ·
+the full action lifecycle (propose → approve → replay 409 → cancel → failed → expired), the
+permission lifecycle (revoke cancels pending → 403 → re-grant) and the undo run over real routes ·
+a real Focus Now proposal approved and undone in the production web client · 0 warn/error and 0
+title-shaped strings in the api log; Cloud Ask 409; Serve tailnet-only · **Rabbit R1:** installed
+signer pulled and matched, `adb install -r` → `Success`, versionCode 33, `firstInstallTime`/grants
+preserved, `am start`, propose → approve → cancel → Action Center (three segments) → revoke/allow
+→ dark mode → undo walked on real data, 0 crash lines, 0 uncaught JS errors · **an out-of-band
+image prune on the host deleted every rollback tag mid-deployment; data intact; the 10.7 images
+were rebuilt from their retained release directory and re-tagged** · final gate on `fcb4ea9`:
+build 12/12, typecheck 23/23, eslint 0, prettier clean, gitleaks clean, **7,274 tests / 23 tasks,
+zero failing**.
 
 **Checkpoint 10.8 gate (2026-09-17), full monorepo, integrator-run, at `572bc91`.** `pnpm build
 --force` 12/12 · `pnpm typecheck` 23/23 · `npx eslint apps packages` and `apps/mobile`'s own
@@ -3191,11 +3396,18 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. **Owner decision: deploy Checkpoint 10.8.** The branch is complete and reviewed; the frozen-order
-   plan (WITH the migrate step, `api`+`web` only, then the local Rabbit build → versionCode 33) is
-   in the 10.8 record and runs only on explicit authorization. Checkpoint 10.7 is deployed (level
-   24, `api`+`web` at `436da0f`), validated on real production data, accepted on the Rabbit R1
-   (versionCode 32) and **CLOSED**; 10.4–10.6 likewise. Worth
+1. Nothing is gating. Checkpoint 10.8 is deployed (level 25, `api`+`web` at `fcb4ea9`), validated
+   on real production data, accepted on the Rabbit R1 (versionCode 33) and **CLOSED**; 10.4–10.7
+   likewise. **No checkpoint after 10.8 is selected; 10.9 is not begun.** **Open owner action from
+   the 10.8 deployment:** something on the production host deleted every Docker image not held by
+   a running container (~163 GB, including every `rollback-pre-10.x` tag) between 06:05Z and
+   06:59Z on 2026-09-18, with no Docker event, journal, cron or shell-history trace; the host now
+   runs a `dev-ops` home-lab stack (`code-server`, Watchtower, dozzle, uptime-kuma, glance, ntfy,
+   it-tools, a `ray-dashboard` updater) beside Personal OS, a second SSH key logs in every three
+   minutes, and the deployment key had been dropped from `authorized_keys`. Identify the pruner and
+   fence it (or move Personal OS's images/volumes out of its reach); until then treat image
+   rollback tags as ephemeral and the per-release directories + git tags as the rollback source
+   (they were, and remain, intact). Also `apt`: 61 pending updates and a required restart. Worth
    watching on real use: the first real memories the owner adds (the working-hours line will
    appear on the briefing only on a morning with a free block inside the window; a course-linked
    preference shows on Focus Now the moment that course has a priority item), the Reanimated
