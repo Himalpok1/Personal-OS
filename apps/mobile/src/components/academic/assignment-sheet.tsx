@@ -19,14 +19,30 @@
 // `__tests__/academic-assignment-sheet.test.ts` pins that no screen mounts
 // one.
 //
+// Checkpoint 10.8 (ADR-078 §6): the first product moment. Above "Open in
+// Canvas" the sheet offers "Plan study block" and "Add a task for this".
+// Neither WRITES anything: each composes an action REQUEST (pure builders in
+// components/actions/build-assignment-requests.ts), the host proposes it
+// (`POST /actions` -> a pending row), and on success this sheet closes and
+// the root-mounted approval sheet opens on the returned row, where the
+// owner approves or cancels. A failed proposal stays here as an inert
+// danger row, never a toast.
+//
 // `AssignmentSheetHost` is the leaf (a React hook); `AssignmentDetail` and
 // `AssignmentSheetContent` are hookless and are what the tests render.
 import type { FocusNowCandidateExplanation } from "@personal-os/core/focus-now/explain";
-import type { AcademicAssignment } from "@personal-os/schema";
-import { useSyncExternalStore } from "react";
+import type { AcademicAssignment, ActionRequestCreate } from "@personal-os/schema";
+import { useState, useSyncExternalStore } from "react";
 import { View } from "react-native";
+import { openActionApprovalSheet } from "@/components/actions/action-approval-sheet";
+import {
+  buildAssignmentTaskRequest,
+  buildStudyBlockRequest,
+} from "@/components/actions/build-assignment-requests";
 import { FocusNowExplanationBlock } from "@/components/today/focus-now-explanation";
-import { AppText, BottomSheet, ListRow, StatusChip } from "@/components/ui";
+import { AppText, BottomSheet, ListRow, SheetRow, StatusChip } from "@/components/ui";
+import { useCreateActionRequest } from "@/queries/actions";
+import { deviceTimezone } from "@/queries/today";
 import {
   courseLabel,
   formatDueLabel,
@@ -168,12 +184,91 @@ export function OpenInCanvasRow({ assignment }: { assignment: AcademicAssignment
   );
 }
 
-/** Everything inside the sheet frame. Hookless. */
-export function AssignmentSheetContent({ record }: { record: AssignmentSheetRecord }) {
+/** The host's proposer: composes a request and POSTs it; the sheet only asks. */
+export interface AssignmentProposer {
+  onPropose: (request: ActionRequestCreate) => void;
+  pending: boolean;
+  /** The failure line of the last proposal, shown inline. */
+  error: string | null;
+}
+
+/** The line for a proposal the API refused or a request that never landed. */
+export const ASSIGNMENT_PROPOSE_FAILED = "Couldn't propose that. Try again.";
+
+/**
+ * The two proposals (Checkpoint 10.8, ADR-078 §6). Each row composes a
+ * request through a pure builder and hands it to the host; nothing is
+ * written until the owner approves it on the approval sheet. `now` is read
+ * inside the press handler, never in render.
+ */
+export function AssignmentProposalRows({
+  assignment,
+  propose,
+}: {
+  assignment: AcademicAssignment;
+  propose: AssignmentProposer;
+}) {
+  return (
+    <View testID="assignment-proposals">
+      <AppText variant="overline" tone="muted" className="pb-1">
+        Propose
+      </AppText>
+      <SheetRow
+        icon="calendar-clock"
+        tone="info"
+        label="Plan study block"
+        subtitle="A 60-minute event, for you to approve"
+        onPress={() =>
+          propose.onPropose(
+            buildStudyBlockRequest({ assignment, now: new Date(), tz: deviceTimezone() }),
+          )
+        }
+        disabled={propose.pending}
+        accessibilityLabel={`Plan a study block for ${assignment.title}`}
+        testID="assignment-plan-study-block"
+      />
+      <SheetRow
+        icon="checkbox-marked-outline"
+        tone="primary"
+        label="Add a task for this"
+        subtitle="Linked to the assignment, for you to approve"
+        onPress={() =>
+          propose.onPropose(buildAssignmentTaskRequest({ assignment, tz: deviceTimezone() }))
+        }
+        disabled={propose.pending}
+        accessibilityLabel={`Add a task for ${assignment.title}`}
+        last
+        testID="assignment-add-task"
+      />
+      {propose.error ? (
+        <ListRow
+          title={propose.error}
+          titleTone="danger"
+          icon="alert-circle-outline"
+          iconTone="danger"
+          accessibilityLabel={`${assignment.title}: ${propose.error}`}
+          inset
+          last
+          testID="assignment-propose-error"
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/** Everything inside the sheet frame. Hookless. The proposals render only when the host supplies a proposer. */
+export function AssignmentSheetContent({
+  record,
+  propose,
+}: {
+  record: AssignmentSheetRecord;
+  propose?: AssignmentProposer;
+}) {
   return (
     <View className="gap-3 pb-2" testID="assignment-sheet-content">
       <AssignmentDetail assignment={record.assignment} />
       {record.explanation ? <FocusNowExplanationBlock explanation={record.explanation} /> : null}
+      {propose ? <AssignmentProposalRows assignment={record.assignment} propose={propose} /> : null}
       <OpenInCanvasRow assignment={record.assignment} />
     </View>
   );
@@ -181,21 +276,44 @@ export function AssignmentSheetContent({ record }: { record: AssignmentSheetReco
 
 // --- the host --------------------------------------------------------------
 
-/** Mounted ONCE per screen that has assignment rows. The leaf. */
+/** Mounted ONCE, at the root. The leaf. */
 export function AssignmentSheetHost() {
   const current = useSyncExternalStore(
     subscribeAssignmentSheet,
     getAssignmentSheet,
     getAssignmentSheet,
   );
+  const createRequest = useCreateActionRequest();
+  const [proposeError, setProposeError] = useState<string | null>(null);
+
+  const propose: AssignmentProposer = {
+    pending: createRequest.isPending,
+    error: proposeError,
+    onPropose: (request) => {
+      setProposeError(null);
+      createRequest.mutate(request, {
+        onSuccess: (item) => {
+          // This sheet first, then the approval sheet -- two hosts, one modal
+          // at a time.
+          closeAssignmentSheet();
+          openActionApprovalSheet(item);
+        },
+        onError: () => setProposeError(ASSIGNMENT_PROPOSE_FAILED),
+      });
+    },
+  };
+
   return (
     <BottomSheet
       open={current.visible}
-      onClose={closeAssignmentSheet}
+      onClose={() => {
+        setProposeError(null);
+        closeAssignmentSheet();
+      }}
       title={current.record?.assignment.title}
       testID="assignment-sheet"
     >
-      {current.record ? <AssignmentSheetContent record={current.record} /> : null}
+      {current.record ? <AssignmentSheetContent record={current.record} propose={propose} /> : null}
     </BottomSheet>
   );
 }

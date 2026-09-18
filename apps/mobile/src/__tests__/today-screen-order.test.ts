@@ -22,12 +22,13 @@ function positions(markers: readonly string[]): number[] {
   });
 }
 
-describe("Today's order (Checkpoint 10.6, ADR-076 §4)", () => {
-  it("is header → briefing → reminder notice → Focus Now → Suggested Focus → Overdue → Due today → Events → Brief → Health → Mail → Academics → reviews → Upcoming → Inbox → Projects", () => {
+describe("Today's order (Checkpoint 10.6, ADR-076 §4; the approval card 10.8, ADR-078 §8)", () => {
+  it("is header → briefing → reminder notice → Needs your approval → Focus Now → Suggested Focus → Overdue → Due today → Events → Brief → Health → Mail → Academics → reviews → Upcoming → Inbox → Projects", () => {
     const order = positions([
       "<ScreenHeader",
       "<BriefingCard>",
       "<ReminderNoticeCard />",
+      "<ActionsNeedsApprovalCard />",
       "<FocusNowCard />",
       "<SuggestedFocusCard",
       'title="Overdue"',
@@ -97,5 +98,10 @@ describe("Today's order (Checkpoint 10.6, ADR-076 §4)", () => {
 
   it("mounts no assignment sheet host of its own -- the one host lives at the root (ADR-076 §3, 10.6 review finding 2)", () => {
     expect(today.match(/<AssignmentSheetHost \/>/g)).toBeNull();
+  });
+
+  it("mounts the approval card exactly once and no approval sheet host of its own (ADR-078 §8)", () => {
+    expect(today.match(/<ActionsNeedsApprovalCard \/>/g)).toHaveLength(1);
+    expect(today.match(/<ActionApprovalSheetHost \/>/g)).toBeNull();
   });
 });

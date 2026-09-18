@@ -2,6 +2,7 @@ import { useKeyboardHeight } from "@/components/use-keyboard-height";
 import { useBusyPress } from "@/components/use-busy-press";
 import { FLOATING_CLEARANCE_PX } from "@/components/floating-layout";
 import { calendarSyncErrorCopy } from "@/components/calendar/sync-error-copy";
+import { ActionsSettingsCard } from "@/components/actions/actions-settings-card";
 import { CloudAskCard } from "@/components/ask/cloud-ask-card";
 import { MemorySettingsCard } from "@/components/memory/memory-settings-card";
 import {
@@ -1933,6 +1934,10 @@ export default function SettingsScreen() {
           <OutboxDiagnostics />
 
           <SectionHeader title="Privacy & AI" icon="shield-outline" />
+          {/* Checkpoint 10.8 (ADR-078 §8): what is waiting for approval and the
+              way into the Action Center -- first, because nothing runs until
+              the owner approves it here. */}
+          <ActionsSettingsCard />
           {/* Checkpoint 10.7 (ADR-077): the memory switch and the way into the
               Memory Center -- before Cloud Ask, because nothing here leaves. */}
           <MemorySettingsCard />

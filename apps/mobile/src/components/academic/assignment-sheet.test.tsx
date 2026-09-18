@@ -12,6 +12,7 @@ import { explainFocusNowCandidate } from "@personal-os/core/focus-now/explain";
 import { Pressable, Text, View } from "react-native";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ASSIGNMENT_PROPOSE_FAILED,
   AssignmentDetail,
   AssignmentSheetContent,
   closeAssignmentSheet,
@@ -21,6 +22,10 @@ import {
   subscribeAssignmentSheet,
 } from "./assignment-sheet";
 import { assignment, SOURCE_BASE_URL } from "./fixtures.test-support";
+
+// The host's hooks reach the API client (expo at import); mocked whole --
+// the content under test proposes through the prop the host passes.
+vi.mock("@/queries/actions", () => ({ useCreateActionRequest: vi.fn() }));
 
 const HOST_TYPES = new Set<unknown>([View, Text, Pressable]);
 
@@ -190,5 +195,80 @@ describe("AssignmentSheetContent -- the same-origin gate, moved from the rows", 
       deepRender(<AssignmentSheetContent record={{ assignment: assignment() }} />),
     );
     expect(text).not.toContain("Why it's here");
+  });
+});
+
+describe("AssignmentSheetContent -- the two proposals (Checkpoint 10.8, ADR-078 §6)", () => {
+  const propose = () => ({ onPropose: vi.fn(), pending: false, error: null });
+
+  it("renders no proposal rows unless the host supplies a proposer", () => {
+    const text = getTextContent(
+      deepRender(<AssignmentSheetContent record={{ assignment: assignment() }} />),
+    );
+    expect(text).not.toContain("Plan study block");
+    expect(text).not.toContain("Add a task for this");
+  });
+
+  it("draws Plan study block and Add a task ABOVE Open in Canvas, each a button", () => {
+    const tree = deepRender(
+      <AssignmentSheetContent
+        record={{
+          assignment: assignment({ html_url: `${SOURCE_BASE_URL}/courses/1/assignments/1001` }),
+        }}
+        propose={propose()}
+      />,
+    );
+    const text = getTextContent(tree);
+    expect(text.indexOf("Plan study block")).toBeLessThan(text.indexOf("Add a task for this"));
+    expect(text.indexOf("Add a task for this")).toBeLessThan(text.indexOf("Open in Canvas"));
+    const rows = pressables(tree);
+    expect(rows.map((row) => row.props.accessibilityRole)).toEqual(["button", "button", "link"]);
+  });
+
+  it("Plan study block proposes a create_calendar_event from Focus Now; Add a task proposes a linked create_task from Academics", () => {
+    const proposer = propose();
+    const tree = deepRender(
+      <AssignmentSheetContent record={{ assignment: assignment() }} propose={proposer} />,
+    );
+    findAll(tree, (n) => n.props?.testID === "assignment-plan-study-block")[0].props.onPress();
+    expect(proposer.onPropose).toHaveBeenCalledTimes(1);
+    const study = proposer.onPropose.mock.calls[0]![0];
+    expect(study).toMatchObject({
+      action_id: "create_calendar_event",
+      source: "focus_now",
+      source_ref: "canvas_assignment",
+      input: { title: "Study: Project milestone 2" },
+    });
+    expect(study.input.calendar).toBeUndefined();
+    expect(study.reason).toMatch(/^Due .* · from your Focus Now list$/);
+
+    findAll(tree, (n) => n.props?.testID === "assignment-add-task")[0].props.onPress();
+    const task = proposer.onPropose.mock.calls[1]![0];
+    expect(task).toMatchObject({
+      action_id: "create_task",
+      source: "academic",
+      source_ref: "canvas_assignment",
+      reason: "Track this assignment as a task",
+      input: {
+        title: "Project milestone 2",
+        due_at: "2026-09-23T04:59:00Z",
+        canvas_assignment_id: assignment().id,
+      },
+    });
+  });
+
+  it("disables both rows while a proposal is in flight and shows a failed proposal as an inert danger row", () => {
+    const tree = deepRender(
+      <AssignmentSheetContent
+        record={{ assignment: assignment() }}
+        propose={{ onPropose: vi.fn(), pending: true, error: ASSIGNMENT_PROPOSE_FAILED }}
+      />,
+    );
+    for (const testID of ["assignment-plan-study-block", "assignment-add-task"]) {
+      expect(findAll(tree, (n) => n.props?.testID === testID)[0].props.disabled).toBe(true);
+    }
+    const error = findAll(tree, (n) => n.props?.testID === "assignment-propose-error")[0];
+    expect(getTextContent(error)).toContain("Couldn't propose that");
+    expect(error.props.onPress).toBeUndefined();
   });
 });

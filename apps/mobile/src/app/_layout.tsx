@@ -15,6 +15,7 @@ import { useQueryLifecycle } from "@/queries/use-query-lifecycle";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, ThemeProvider } from "expo-router";
 import { AssignmentSheetHost } from "@/components/academic/assignment-sheet";
+import { ActionApprovalSheetHost } from "@/components/actions/action-approval-sheet";
 import { MemorySuggestionSheetHost } from "@/components/memory/memory-suggestion-sheet";
 import { ToastHost, navigationTheme, useSyncWebColorSchemeClass, useTheme } from "@/components/ui";
 import { View } from "react-native";
@@ -67,6 +68,11 @@ export default function RootLayout() {
                   suggestion sheet's ONE host, for the same reason as the
                   assignment sheet's -- a module-global store, one modal. */}
               <MemorySuggestionSheetHost />
+              {/* Checkpoint 10.8 (ADR-078 §8): the approval sheet's ONE host.
+                  Opened by the Action Center rows, the Today card and the
+                  assignment sheet's proposals -- a module-global store, one
+                  modal, for the same reason as the two hosts above. */}
+              <ActionApprovalSheetHost />
             </ThemeProvider>
           </DeviceIdentityProvider>
         </QueryClientProvider>
@@ -172,6 +178,11 @@ function AppStack() {
       <Stack.Screen name="memory/index" options={{ title: "Memory" }} />
       <Stack.Screen name="memory/new" options={{ title: "New memory" }} />
       <Stack.Screen name="memory/[id]" options={{ title: "Memory" }} />
+      {/* Checkpoint 10.8 (ADR-078). The Action Center is reached from the
+          Privacy & AI section of Settings and from the Today card's "See
+          all", not a tab -- the same 480px reasoning as Memory. */}
+      <Stack.Screen name="actions/index" options={{ title: "Actions" }} />
+      <Stack.Screen name="actions/[id]" options={{ title: "Action" }} />
       <Stack.Screen name="hardware-debug" options={{ title: "Hardware spike" }} />
     </Stack>
   );

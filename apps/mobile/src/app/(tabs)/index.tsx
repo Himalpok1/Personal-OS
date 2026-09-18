@@ -13,6 +13,7 @@ import { BriefCard } from "@/components/brief/brief-card";
 import { HealthTodayCard } from "@/components/health/health-today-card";
 import { MailDigestCard } from "@/components/mail/digest-today-card";
 import { ReminderNoticeCard } from "@/components/reminder-notice-card";
+import { ActionsNeedsApprovalCard } from "@/components/today/actions-needs-approval-card";
 import { BriefingCard } from "@/components/today/briefing-card";
 import { FocusNowCard } from "@/components/today/focus-now-card";
 import { useTodayTaskActions } from "@/components/today/use-today-task-actions";
@@ -767,6 +768,12 @@ export default function TodayScreen() {
             points at the screen that can fix it. Placed first because "your
             reminders are not running" outranks anything below it. */}
         <ReminderNoticeCard />
+
+        {/* Checkpoint 10.8 (ADR-078 §8): "Needs your approval" -- rendered
+            ONLY when an action request is pending, between the reminder
+            notice and Focus Now. Nothing runs until the owner approves it on
+            the sheet each row opens. */}
+        <ActionsNeedsApprovalCard />
 
         {/* Checkpoint 10.4 (ADR-072; explanations and quick actions 10.6,
             ADR-075): the one merged, ranked "what should I focus on right
