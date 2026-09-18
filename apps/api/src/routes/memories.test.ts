@@ -525,22 +525,22 @@ describe("memory routes never log a statement (ADR-077 §6)", () => {
     // ORM would throw -- and prove the statement never reaches the stream.
     const { DrizzleQueryError } = await import("drizzle-orm/errors");
     const originalInsert = app.db.insert.bind(app.db);
-    const insertSpy = vi.spyOn(app.db, "insert").mockImplementation(((table: unknown) => {
+    const insertSpy = vi.spyOn(app.db, "insert").mockImplementation((table: unknown) => {
       const builder = originalInsert(table as never);
       const originalValues = builder.values.bind(builder);
-      builder.values = ((rows: unknown) => {
+      builder.values = (rows: unknown) => {
         const chain = originalValues(rows as never);
-        chain.returning = (() => {
+        chain.returning = () => {
           throw new DrizzleQueryError(
             'insert into "memories" ("kind", "statement") values ($1, $2) returning *',
             ["fact", "Zanzibar failing insert"],
             Object.assign(new Error("connection terminated unexpectedly"), { code: "57P01" }),
           );
-        });
+        };
         return chain;
-      });
+      };
       return builder;
-    }));
+    });
     try {
       const res = await app.inject({
         method: "POST",

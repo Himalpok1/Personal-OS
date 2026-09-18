@@ -47,8 +47,9 @@ gesture design system on the already-installed Reanimated/gesture-handler stack 
 `claude/personal-memory-preference-layer-45c590`, merged to `main` (`436da0f`, PR #7) and
 **DEPLOYED** (owner authorized; migration `0023` applied, level **24**; `api`+`web` recreated in
 production 2026-09-17 23:58Z, `worker`/`postgres` untouched; the memory lifecycle, Focus Now
-influence and privacy boundary validated live against real production data). **The Rabbit R1
-versionCode-32 APK is built and verified but NOT yet installed — the device was off the USB bus.**
+influence and privacy boundary validated live against real production data) **and ACCEPTED ON THE
+RABBIT R1 (versionCode 32, built locally, installed in place 2026-09-18 02:41Z, create / edit /
+delete / toggle walked on-device in light and dark, 0 crash lines). Checkpoint 10.7 is CLOSED.**
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -99,7 +100,7 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | Migration level | **24** (`0000`–`0023`); local and production agree. 10.7 added `0023_personal_memory_layer` (ADR-077, three tables), applied to production 2026-09-17 23:57Z from the 10.7 api image — 23 → 24 by row count, tracked hash equal to the shipped file's SHA-256. |
 | Serving commit | **api and web at `436da0f`** (10.7; recreated 2026-09-17 23:58Z from `personal-os-10.7-release`; rollback `personal-os-{api,web}:rollback-pre-10.7` = the 10.6 images `dccf3ff797df` / `c6e390875f7b`); **worker at `965900f`** (10.4, untouched — 10.5–10.7 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Previous entry, for provenance: api at `3a90c0c`, web at `3928dd3` (10.6; the fix commit changed only `apps/mobile`, so `api`'s image is byte-equivalent to one built from `3928dd3` and was not rebuilt; api recreated 2026-09-17 10:08Z, web 10:19Z, both from `personal-os-10.6-release`); **worker at `965900f`** (10.4, untouched since — 10.5 and 10.6 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,web}:rollback-pre-10.6` = the 10.5 images (`d293d6f813d7` / `7e8cce9615b3`), plus every earlier tag, all by resolved digest. |
 | Containers | all four `RestartCount=0`; api `(healthy)` within 8 s of the 10.6 recreation; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated since); `GET /health` → `ok` / `connected` / `stale:false` (2026-09-17 10:08Z) |
-| Rabbit R1 | `com.himal.personalos` **versionCode 31**, built from `3928dd3` **locally** (`eas build --local`, profile `production-internal`, the EAS-managed keystore fetched at build time — signer SHA-256 `4601e3a2…` identical to the installed app's, compared with `apksigner` before installing), `adb install -r` → `Success` with `firstInstallTime` 2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS` preserved — no re-pair. versionCode 30 (from `3a90c0c`) **crashed on launch** (a worklet calling a JS-thread function) and was rolled back to 29 within minutes, then fixed; the 10.6 record has the full account. Today (light + dark), the briefing hero and assignment sheet on real data, Settings and Projects walked live; 0 crash lines on 31. |
+| Rabbit R1 | `com.himal.personalos` **versionCode 32**, built from `436da0f` **locally** (10.7; `adb install -r` → `Success` 2026-09-18 02:41Z, `firstInstallTime` 2026-08-19 preserved, exact-alarm `allow`, notifications granted; Memory Center create/edit/delete/toggle walked on-device in light and dark, 0 crash lines). Previous: **versionCode 31**, built from `3928dd3` **locally** (`eas build --local`, profile `production-internal`, the EAS-managed keystore fetched at build time — signer SHA-256 `4601e3a2…` identical to the installed app's, compared with `apksigner` before installing), `adb install -r` → `Success` with `firstInstallTime` 2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS` preserved — no re-pair. versionCode 30 (from `3a90c0c`) **crashed on launch** (a worklet calling a JS-thread function) and was rolled back to 29 within minutes, then fixed; the 10.6 record has the full account. Today (light + dark), the briefing hero and assignment sheet on real data, Settings and Projects walked live; 0 crash lines on 31. |
 | Academic layer (10.2 + ADR-070a) | `GET /academic/today?tz=` · `GET /academic/courses[?include_past_terms=]` · `GET /academic/courses/:id` — a provider-agnostic read model computed over the Canvas tables (ADR-070), **current term only by default** (ADR-070a: the most recently started term, by date — `current_term: 2026 Fall` echoed on the wire), a deterministic Today card and `/academic` course screens, `score`/`grade` synced (ADR-068a; 165 of 355 real assignments carry a grade). **Live and validated**: Today `overdue 2 · due today 1 · due this week 8 · 8 unread` from the 6 Fall 2026 courses (was 11 overdue across 16 courses in 3 terms before the rule); `include_past_terms=true` still lists all 16. |
 | Canvas (10.1/10.1B/10.1C + 10.2 hotfix) | `packages/canvas-providers` + six tables, PAT-authenticated, read-only, hourly `canvas.sync-cron`. Connection `8b8e2cb6…` **reactivated in place by the owner's live disconnect → reconnect** (22:32–22:33Z: same row, `created_at` unchanged, 16/355/22 still linked, manual sync `succeeded`). A pasted token is now trimmed and refused if it carries whitespace/control characters, the client refuses to build a header from one, and the api's error serializer scrubs bearer/PAT shapes (hotfix `4c614db`). **Live-validated against the owner's real UTA account 2026-09-16**: connect → sync (16 courses, 355 assignments, 19 announcements, 0 events) → idempotent resync → disconnect (credential triple NULLed) → invalid token rejected (`400 canvas_auth_failed`) → reconnect → resync, left **active**. **Reconnect path (10.1C) verified live 2026-09-16**: disconnect → `200` · reconnect → **`200` on the same row `8b8e2cb6…`** (`created_at` unchanged at 10:50:30Z, all 16 courses still linked) · second connect on the active row → `409` · manual resync `202` → `succeeded` · hourly cron `succeeded` at 12:00:17Z. Zero PAT-shaped strings and zero warn/error lines in the api and worker logs since the api was recreated. |
 | Capture front doors | Quick Capture · PTT · Siri/Assistant · Android share sheet (8.4) · launcher shortcut (8.4) · notification-shade capture (9.1) — a persistent local "Capture" notification on its own channel; verified live on the Rabbit R1 (9.1). |
@@ -2303,7 +2304,47 @@ fast-forwarded to `436da0f`, `schema`/`core`/`api-client`/`db` rebuilt; `eas bui
 preference" / "Never sent to an AI model" each present; `apksigner` V2 signer SHA-256 `4601e3a2…`
 (the certificate every prior checkpoint recorded for the installed app); `aapt` package
 `com.himal.personalos`, `versionCode 32`. `adb devices` and `ioreg -p IOUSB` showed no Rabbit on the
-bus at build time, so the in-place install and the on-device Memory Center walk are the open steps.
+bus at build time, so the install waited for the owner to plug the device in.
+
+**Rabbit R1 — INSTALLED AND ACCEPTED on versionCode 32 (2026-09-18 02:41–02:47Z, owner plugged the
+device in).** Pre-install read: versionCode 31, `firstInstallTime` 2026-08-19 16:26:10, exact-alarm
+appop `allow`, `POST_NOTIFICATIONS` granted; the installed `base.apk` pulled and its V2 signer
+`4601e3a2…` compared equal to the new APK's before anything was installed. `adb install -r` →
+`Success`; post-install: **versionCode 32**, `firstInstallTime` preserved (no re-pair), exact-alarm
+`allow`, notifications granted, `stopped=false`. Launched with `am start` (never `am force-stop`),
+logcat cleared first. **On-device walk, real production data, screenshots off the device
+(480 × 640):** Today renders the briefing hero (2 overdue · academics · sleep line · Focus Now
+lines, every line spoken with its source in the accessibility tree); Settings → Privacy & AI shows
+the **Memory** card ("On — 0 memories. Focus Now and your briefing use them.", the privacy line,
+"Open Memory", "Turn off") above Cloud Ask; the **Memory Center** first-run state (hero "remembers
+nothing yet", On chip, counts, privacy line, the empty state, "Add a memory"); **create** through
+the editor (kind segmented control, statement typed, Save) → hero "remembers 1 thing", the row
+"I work best in the evening · Added by you · 17 Sep 2026" spoken as "Preference: … Added by you 17
+September", the "Remembered" toast, and the row present on the production server (`source: user`);
+**edit** on the detail screen (provenance row, a note added, "Save changes") → the note persisted
+server-side with `updated_at` advanced; **delete** through the native `Alert` ("Delete this memory?
+This can't be undone. Export first if you want a copy." · CANCEL / DELETE) → back to the empty
+state, server at 0; **settings toggle** → "Off — 0 memories kept, not used by Focus Now or your
+briefing." with the server at `enabled:false`, then back on (`enabled:true` — this upsert is what
+created production's `memory_settings` singleton row); **dark mode** (`cmd uimode night yes`): the
+`soft` hero, chips and empty state fully legible; restored to light afterwards. `enterRise` rows,
+the toast and both sheets' hosts all ran on the real UI runtime. Logcat swept after every step:
+**0 `FATAL EXCEPTION`/`AndroidRuntime` lines and 0 uncaught JS errors across the whole
+versionCode-32 session.** Not exercised on the device (no data, or would mutate real data): the
+project-goal suggestion sheet (the account's only project is archived), a course-linked memory's
+Focus Now chip (validated in the production web client instead, above), swipe-to-delete. Rollback:
+the pulled versionCode-31 `base.apk` with `adb install -r -d`.
+
+**One formatting slip, fixed after the fact.** `436da0f`'s `apps/api/src/routes/memories.test.ts`
+was left prettier-unclean by an `eslint --fix` that ran AFTER the gate's prettier pass (three
+`as never` casts removed); `npx prettier --check .` on that commit therefore fails on one file. The
+whitespace-only fix (6 lines) landed in the closing docs commit; tests, lint and behaviour are
+identical, and the deployed images were built from `436da0f`'s source, which compiles the same.
+
+**Checkpoint 10.7 is CLOSED (2026-09-18):** deployed, production-validated, and accepted on the
+device. Final state: `main` at the closing docs commit; production `api`+`web` at `436da0f`,
+`worker` at `965900f`, migration level **24**; Rabbit R1 versionCode **32**; production memory
+tables `memories 0 · memory_suggestions 0 · memory_settings 1 (enabled)`.
 
 ---
 
@@ -2602,9 +2643,10 @@ production serves `api`+`web` at `f29418b`, `worker`/`postgres` untouched, Rabbi
 
 **Checkpoint 10.7 — Personal Memory & Preference Layer — is implemented, verified (7,089 tests,
 23/23 tasks), independently reviewed (safe after fixes, all closed), merged to `main` (`436da0f`,
-PR #7) and DEPLOYED** (owner authorized): migration `0023` applied (level 24), `api`+`web` recreated,
-`worker`/`postgres` untouched, lifecycle/influence/privacy validated live on production data. The
-Rabbit R1 versionCode-32 APK is built and verified; its install awaits the device on USB.
+PR #7), DEPLOYED (owner authorized: migration `0023` applied, level 24, `api`+`web` recreated,
+`worker`/`postgres` untouched, lifecycle/influence/privacy validated live on production data) and
+ACCEPTED ON THE RABBIT R1 (versionCode 32). CLOSED 2026-09-18.** No checkpoint after 10.7 is
+selected; Phase 10.8 is not begun.
 
 **Checkpoint 10.6 — Intelligence + Mobile Experience Expansion — is implemented, verified (6,824
 tests, 23/23 tasks), independently reviewed (safe after fixes, all closed in-checkpoint), merged to
@@ -2671,12 +2713,12 @@ context and a "related capture"/activity trail on its project context. The Rabbi
 
 ## Current work
 
-**Checkpoint 10.7 is DEPLOYED.** `main` is `436da0f` (PR #7, fast-forward); production serves
-`api`+`web` at `436da0f`, `worker` still at `965900f`, postgres untouched; migration level **24**;
-the memory lifecycle, the Focus Now "You said" explanation and the privacy boundary were validated
-live against real production data and every verification row deleted afterwards. The Rabbit R1
-still runs versionCode 31; the versionCode-32 APK (`/tmp/personal-os-10.7-vc32.apk`) is built,
-bundle- and signer-verified, and waits for the device to appear on the USB bus.
+**Checkpoint 10.7 is DEPLOYED, ACCEPTED and CLOSED.** `main` carries `436da0f` (PR #7,
+fast-forward) plus the closing docs commits; production serves `api`+`web` at `436da0f`, `worker`
+still at `965900f`, postgres untouched; migration level **24**; the memory lifecycle, the Focus Now
+"You said" explanation and the privacy boundary were validated live against real production data
+and every verification row deleted afterwards; the Rabbit R1 runs versionCode 32 with the Memory
+Center walked on-device. Nothing is in flight.
 
 **Checkpoint 10.6 is implemented, verified (6,824 tests, 23/23 tasks), independently reviewed, merged
 to `main` (`3928dd3`), and DEPLOYED.** `main` is `3928dd3` and canonical; PR #6 merged; production
@@ -2725,7 +2767,10 @@ three tables inspected column/constraint/index/grant by name · `api` then `web`
 `200` locally and over Tailscale · the full memory lifecycle, a real-course "You said" explanation
 in the production web client, and the privacy boundary validated on real data, 0 rows left · 0
 statement text / 0 warn/error / 0 `DrizzleQueryError` in the api log · versionCode-32 APK built and
-verified, install pending the device.
+verified · **Rabbit R1 (2026-09-18 02:41–02:47Z):** installed signer pulled and matched, `adb
+install -r` → `Success`, versionCode 32, `firstInstallTime`/grants preserved, `am start`, Today +
+Settings + Memory Center (create → edit → native-confirm delete → toggle off/on) walked on real
+data in light and dark, 0 crash lines, 0 uncaught JS errors.
 
 **Checkpoint 10.7 gate (2026-09-17), full monorepo, integrator-run, at the branch tip.** `pnpm build
 --force` 12/12 · `pnpm typecheck` 23/23 · `npx eslint apps packages` and `apps/mobile`'s own
@@ -2886,16 +2931,14 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. **Install the Rabbit R1 versionCode-32 APK and walk the Memory Center on the device.** The
-   server side of Checkpoint 10.7 is deployed and validated; the APK is built and verified
-   (`/tmp/personal-os-10.7-vc32.apk`, signer `4601e3a2…`, 0 `localhost:3000`). Needs the device
-   on USB with a data cable: `adb install -r` (in-place; expect `firstInstallTime` 2026-08-19,
-   exact-alarm appop `allow` and `POST_NOTIFICATIONS` preserved), launch with `am start`, sweep
-   logcat for `FATAL EXCEPTION`, then Settings → Memory → create / edit / delete / toggle, light
-   and dark. Only after that can 10.7 be recorded as ACCEPTED on the device and the checkpoint
-   closed. Checkpoints 10.4–10.6 are deployed and accepted. Two things worth watching on real use:
-   the first production exercise of Reanimated worklets on the Rabbit, and the briefing's
-   free-block line once real classes are on the calendar.
+1. Nothing is gating. Checkpoint 10.7 is deployed (level 24, `api`+`web` at `436da0f`),
+   validated on real production data, accepted on the Rabbit R1 (versionCode 32) and **CLOSED**;
+   10.4–10.6 likewise. **No checkpoint after 10.7 is selected; Phase 10.8 is not begun.** Worth
+   watching on real use: the first real memories the owner adds (the working-hours line will
+   appear on the briefing only on a morning with a free block inside the window; a course-linked
+   preference shows on Focus Now the moment that course has a priority item), the Reanimated
+   surfaces on the Rabbit, and the briefing's free-block line once real classes are on the
+   calendar.
 
 2. **Choose the next checkpoint — a product-direction decision for the owner.** Candidates
    carried forward: widen the Canvas integration further (device-token auth on the academic routes;
