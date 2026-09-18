@@ -50,6 +50,14 @@ production 2026-09-17 23:58Z, `worker`/`postgres` untouched; the memory lifecycl
 influence and privacy boundary validated live against real production data) **and ACCEPTED ON THE
 RABBIT R1 (versionCode 32, built locally, installed in place 2026-09-18 02:41Z, create / edit /
 delete / toggle walked on-device in light and dark, 0 crash lines). Checkpoint 10.7 is CLOSED.**
+**Checkpoint 10.8 — Agent Foundation & Action Framework — is IMPLEMENTED, VERIFIED (7,274 tests,
+23/23 tasks), LIVE-VERIFIED IN THE BROWSER against the local database, and INDEPENDENTLY REVIEWED
+(safe after fixes; the one MINOR and three notes closed in-checkpoint) on branch
+`claude/agent-foundation-action-framework-b7a356` — NOT DEPLOYED, awaiting owner authorization**
+(ADR-078; migration `0024`, level 24 → 25; `apps/worker` untouched): a six-action registry in three
+reversible pairs, two write permissions the owner can revoke, per-request approval with synchronous
+single-use execution, the request row as the audit trail, an Action Center and approval sheets on
+mobile, and Guard 7. No external agent is integrated; none can be.
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -113,8 +121,9 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress. |
 | Backups | **None, by design** (ADR-024). |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE** (re-verified 2026-09-16). No CI, no Actions workflow, no repository secret. **`main` is the canonical branch again as of 2026-09-16** (fast-forwarded to the Phase 10 tip; PR #1 merged). |
-| Test baseline | **7,089 tests across 13 packages** at `436da0f` (10.7, deployed): api 1,568 · mobile 1,903 · core 1,172 · worker 738 · schema 574 · health-providers 332 · api-client 213 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 99 · ai-providers 25. Was 6,824 at 10.6 (`3928dd3`). |
+| Test baseline | **7,274 tests across 13 packages** at `572bc91` (10.8, branch tip, NOT deployed): api 1,640 · mobile 1,991 · core 1,172 · worker 738 · schema 589 · health-providers 332 · api-client 213 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 109 · ai-providers 25. Deployed baseline: **7,089 tests** at `436da0f` (10.7): api 1,568 · mobile 1,903 · core 1,172 · worker 738 · schema 574 · health-providers 332 · api-client 213 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 99 · ai-providers 25. Was 6,824 at 10.6 (`3928dd3`). |
 | Personal memory (10.7) | **LIVE** since 2026-09-17 23:58Z (level 24); validated against real production data the same hour (lifecycle, Focus Now "You said" explanation on a real ACCT assignment, privacy) and left with 0 rows. Shipped: three tables (`memories`, `memory_suggestions`, `memory_settings`; migration `0023`), `GET/PATCH /memory-settings`, `GET/POST/PATCH/DELETE /memories`, `POST /memories/delete-all`, `GET /memory-suggestions`, `POST /memory-suggestions/:key/decide`, memories in `GET /export`; a Memory Center at `/memory`; Focus Now `matches_preference`/`supports_goal` (+15, capped at the pre-10.7 context ceiling of 75) and a briefing working-hours line, all client-composed by typed link; Guard 6 keeps memory out of every AI lane, the three AI route files, every other read model and the worker. |
+| Action framework (10.8) | **Implemented on the branch, NOT deployed.** Registry `packages/schema/src/actions.ts` (`create_calendar_event ↔ archive_calendar_event`, `create_task ↔ archive_task`, `complete_task ↔ reopen_task`; permissions `tasks.write`, `calendar.write`); tables `permission_grants` + `action_requests` (migration `0024`, additive); `GET/POST /actions`, `GET /actions/summary`, `GET /actions/:id`, `POST /actions/:id/approve|cancel`, `GET /permissions`, `PATCH /permissions/:permission`; audit summary rows in `GET /export`; Guard 7. Mobile: `/actions`, `/actions/[id]`, one approval-sheet host, a Settings card, a Today "Needs your approval" card, "Plan study block" / "Add a task for this" on the assignment sheet. Production holds none of it until the deployment plan in the 10.8 record runs. |
 | pg-boss | **31 queues, 11 schedules** (worker startup log at 10.1B; `pgboss.queue` reads one more with the internal `__pgboss__send-it`). Every retrying queue has a dead-letter queue (9.0): `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues, `occurrences.generate-lazy`, `occurrences.expand-window`. `occurrences.expand-window` has a phase-2 idempotent lazy repair since 9.4. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C) · `health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now` (9.0). First scheduled run 2026-09-13T04:00Z; the job's daily runs have not been individually re-verified since the 9.0 acceptance. |
 | Alert keys | Occurrence-scoped (ADR-058). Producers: health-sync breaker (first live emission 2026-09-12T03:00:14Z), `occurrences.generate-lazy.dead:<occurrenceId>`, `occurrences.expand-window.dead:<UTC date>` (9.0; also covers a failed 9.4 phase-2 repair), `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (9.5). The three 9.x producers are unexercised in production by design. |
@@ -2346,6 +2355,213 @@ device. Final state: `main` at the closing docs commit; production `api`+`web` a
 `worker` at `965900f`, migration level **24**; Rabbit R1 versionCode **32**; production memory
 tables `memories 0 · memory_suggestions 0 · memory_settings 1 (enabled)`.
 
+### Checkpoint 10.8 — Agent Foundation & Action Framework: IMPLEMENTED, VERIFIED, LIVE-VERIFIED, INDEPENDENTLY REVIEWED (2026-09-17) — NOT DEPLOYED
+
+**Objective (owner-directed, 2026-09-17).** Move Personal OS from "understands and recommends"
+toward "can safely prepare and execute controlled actions" — an Action Registry, an
+application-level Permission Framework, an Action Approval Flow, an Action Execution Log and an
+agent-ready tool interface — under the brief's principles (local-first, explicit user control,
+deterministic, explainable, minimal exposure) and its prohibitions (no autonomous action without
+approval, no hidden automation, no unrestricted tool access, **no external agent** — OpenClaw,
+Hermes and every other framework stay out; Personal OS owns identity, permissions, context,
+memory, actions and audit history, and any future agent operates through this layer). Decision
+record: **ADR-078** (Locked). One migration, **`0024_action_framework`** (two tables, level 24 →
+25). Branch `claude/agent-foundation-action-framework-b7a356`, five commits on `5c2bf52`;
+`apps/worker` byte-untouched.
+
+**A bounded architecture review preceded any code** — five parallel read-only lanes (the
+write-surface inventory, identity/permissions/security, data model and migration methodology,
+mobile UX, future-agent compatibility). Its decisive findings: the API has **no principal
+abstraction** (device-token auth exists only on `/devices/*`; every other route is
+Tailscale-perimeter-only), so "who requested it" can honestly be only *the owner through a
+client*; writes cannot join `READ_TOOL_NAMES` (Guard 4 pins its verbs), so the registry is a
+**sibling** contract; every audit-shaped precedent keeps its lifecycle on the entity row, so the
+request row **is** the audit trail; owner-initiated request-scoped work runs synchronously in the
+API (ADR-041/066/067), so execution never touches pg-boss; task/event creation was inline in
+route handlers, so the first executor needed a behaviour-preserving services extraction; and the
+inventory of ~60 mutating routes fixed what can never be an action (credentials, consent
+switches, devices, hard deletes, every model-calling route). **Two scope decisions were put to
+the owner and decided:** the `app` principal's grants **ship ON** (lazily materialised, the
+`memory_settings` idiom, nothing seeded by the migration); the registry starts with **three
+reversible pairs**.
+
+**Execution model.** Round 0 (integrator): the frozen contract — migration, Drizzle schema, the
+Zod registry and wire shapes, api-client bindings, the handler interface, ADR-078 — proven on a
+disposable clone (24 → 25 by row count, every CHECK/FK/index by name, `posops_app` DML through
+default privileges, `db:reconcile` clean, each constraint bite-tested) and applied to both local
+databases before any lane started. Round 1: two parallel lanes with disjoint ownership — **A**
+(services extraction + the six handlers, on its own clone) and **C** (the whole mobile surface) —
+while the integrator wrote the request/grant service, the read model, the routes, the export rows
+and Guard 7. Then the root gate, a live browser walk, and an independent adversarial review whose
+one MINOR and three of its notes were closed in-checkpoint.
+
+**What shipped:**
+
+- **Schema (`0024`).** `permission_grants` (`principal` CHECKed `app|agent`, `permission`
+  Zod-enforced, `disclosure_version` stored on the row, `granted_at`, `revoked_at` soft-revoke,
+  partial unique on live pairs) and `action_requests` (`action_id`, `principal` CHECKed, `status`
+  CHECKed `pending|executing|completed|failed|cancelled|expired`, `source` CHECKed
+  `focus_now|briefing|academic|manual`, bounded `source_ref`/`reason`, the validated `input`
+  frozen as jsonb, `input_summary`/`result_summary`, a non-FK `target_type/target_id` pair with a
+  both-or-neither CHECK, token-shaped `error_class`, a self-FK `reverses_request_id` `set null`
+  with a no-self-reversal CHECK, `client_uuid` partial-unique, `requested_at`/`expires_at`/
+  `approved_at`/`finished_at`). Purely additive; image-only rollback.
+- **Registry (`packages/schema/src/actions.ts`).** `ACTION_IDS` — `create_calendar_event ↔
+  archive_calendar_event`, `create_task ↔ archive_task`, `complete_task ↔ reopen_task` — with
+  `ACTION_REGISTRY` (name, description, category, permission, risk, reversibility,
+  `requires_approval: true` as a literal), `.strict()` per-action input/output schemas narrowed
+  from the create schemas (no recurrence, no all-day; `create_task` accepts
+  `canvas_assignment_id`, the second explicit write path for the ADR-074 link), verbs pinned
+  `^(create|archive|complete|reopen)_` and tested disjoint from `READ_TOOL_NAMES`.
+  `ACTION_PERMISSIONS` = `tasks.write`, `calendar.write` — only members with an enforcement site.
+  The wire `input` is loose (`parseActionInput` narrows it) so one stale row can never blank a
+  list. `ACTION_REQUEST_TTL_HOURS = 24`.
+- **API.** `services/events.ts` and `services/tasks.ts` extracted from the route handlers
+  (`createLocalEvent`, `archiveLocalEvent`, `enqueuePushIfLinked`, `createTask`, `archiveTask`,
+  `completeTask`, `reopenTask`, `loadTaskForAction`; the three route suites unchanged at
+  64/59/58); `actions/handlers.ts` (`ACTION_HANDLERS: ActionHandlerMap`, `prepare` read-only with
+  existence checks and the bounded summary, `execute` re-checking its target `FOR UPDATE`, the
+  calendar push returned as `afterCommit`); `actions/service.ts` (`POST /actions` → grant check →
+  prepare → pending row; `POST /actions/:id/approve` → one conditional `UPDATE … WHERE status =
+  'pending' AND expires_at > now() RETURNING` claim → grant re-check → stored input re-parsed →
+  handler in a SAVEPOINT → `completed | failed` before commit → `afterCommit` after; cancel; a
+  revoke cancels the pending requests that need it in the same transaction; an expired row is
+  flipped by the next approve/cancel and returned, never thrown, so the flip commits);
+  `read-models/actions.ts` (list newest-first with honest totals, presented `expired`, permissions
+  with usage counts, the summary); routes `/actions`, `/actions/summary`, `/actions/:id`,
+  `/actions/:id/approve|cancel`, `/permissions`, `PATCH /permissions/:permission`; the audit
+  summary rows join `GET /export` (never `input`). Every log line is ids/action ids/classes only.
+- **Guard 7** (`ai-egress-guard.test.ts`): no AI lane, AI route file, other read model or worker
+  file imports an action module or names an action table/registry binding; the action modules
+  import neither the AI SDK, a provider, a memory module nor an AI lane, name no credential/
+  consent/device table and carry no enqueue token; `services/{events,tasks}.ts` may READ the two
+  calendar tables and write none of the off-limits set (mutation-checked); non-vacuity pinned.
+- **Mobile.** `/actions` (a `warm` hero while something is pending, `calm` otherwise, with
+  `AnimatedNumber` counts and the byte-pinned `ACTIONS_TRUST_LINE` "Nothing runs until you approve
+  it. You can revoke any permission."; Pending / History (grouped by day) / Permissions via
+  `SegmentedControl` and `?tab=`), `/actions/[id]` (the summary blocks, a Requested/Approved/
+  Finished timeline, **Undo** creating a new request with `reverses_request_id` that opens its
+  own approval sheet — never automatic — and an "Undone" chip afterwards), one root-mounted
+  `ActionApprovalSheetHost` (capability/reversibility/risk chips → Why with a source chip → What
+  will change → inert error row → Approve primary / Cancel outline, no confirm on either; a
+  `failed` row keeps the sheet open), `PermissionCard`s (Revoke through `confirmDestructive`
+  naming the cancellation consequence, Allow direct, no `Switch`), an `ActionsSettingsCard` first
+  under Privacy & AI, a Today "Needs your approval" card rendered only when pending > 0 (a plain
+  `Card` between the reminder notice and Focus Now, pinned), and the first product moment: the
+  Focus Now assignment sheet's **"Plan study block"** (`create_calendar_event`, a 60-minute block
+  on the next whole hour ≥ 15 min ahead, DST-tested) and **"Add a task for this"** (`create_task`
+  linked via `canvas_assignment_id`). Existing one-tap mutations stay direct. Swipe on a pending
+  row is "Review" (opens the sheet), never a blind approve. No new `Linking` call site
+  (`actions-no-linking.test.ts`), no `Alert.alert`.
+- **Docs.** ADR-078; `docs/AGENT-READINESS.md` §6 (the write surface and what an agent ADR would
+  still have to add); `docs/DECISIONS.md` index line.
+
+**Verification (integrator, serial, full monorepo, at `572bc91`).** `pnpm build --force` 12/12 ·
+`pnpm typecheck` 23/23 · `npx eslint apps packages` and `apps/mobile`'s own `eslint .` exit 0
+(the one pre-existing warning in the generated `.expo/types/router.d.ts`) · root
+`prettier --check .` clean · `git diff --check` clean · `gitleaks detect --no-git` no leaks ·
+`pnpm test --force` **23/23 tasks, 7,274 tests across 13 packages, zero failing** (api
+1,640 · mobile 1,991 · schema 589 · db 109 · api-client 213; core 1,172, worker 738 and
+the six provider packages unchanged; was 7,089 at 10.7). Migration invariant: `0024` proven on a
+clone and applied to both local databases (24 → 25 by row count), `db:reconcile` clean,
+`packages/db/test/action-constraints.test.ts` proves every CHECK, the partial unique indexes,
+the self-FK `set null` and the runtime role's DML against a real Postgres.
+
+**Live browser verification (local dev API + Expo web at 480 × 800, dark and light, seeded data
+removed after).** A synthetic Canvas connection, one Fall 2026 course and two assignments (one
+overdue and missing) were seeded so Focus Now had a priority item; a throwaway web device was
+paired with a single-use code and revoked afterwards. Walked: Today (no approval card while
+nothing is pending) → the Focus Now assignment sheet's new **Propose** rows → "Plan study block"
+→ the approval sheet (Calendar · Reversible · Medium risk; Why "Due Sep 17 · 8:35 PM · from your
+Focus Now list" with a *Focus Now* chip; Title / When / Calendar "Not linked"; Approve / Cancel)
+with Today already showing **"Needs your approval · 1"** behind it → **Approve** → toast "Created
+event …", an `origin='local'` event in the database and a `completed` audit row carrying
+principal `app`, source `focus_now`, `source_ref canvas_assignment`, both summaries and the event
+target → "Add a task for this" → the task sheet (Tasks · Reversible · Low risk; source
+*Academics*; Due; "Linked to an assignment") → **Cancel** (row `cancelled`, the Today card gone)
+→ a second task proposal left pending → `/actions`: the `warm` hero "1 action needs you" (1 · 1 ·
+2), the pending row, History grouped under Today with Cancelled/Completed chips, Permissions with
+Tasks "Not used yet" and Calendar "Used once · last Sep 17" → **Revoke Tasks** through the
+confirm ("Revoke Tasks access? Pending Tasks actions will be cancelled.") → hero to `calm` (0 · 1
+· 1), Tasks "Off" with Allow, toast "Tasks revoked · 1 pending action cancelled", the pending row
+`cancelled` with "Cancelled: permission revoked" → **Allow** again → the completed event's detail
+(timeline, **Undo**) → the undo's own approval sheet ("Archive calendar event", *Hard to undo*,
+source *You*, reason "Undo: …") → **Approve** → toast "Archived", the event `archived_at` set, the
+original showing an **Undone** chip, the undo row `completed` with `reverses_request_id` →
+Settings → Privacy & AI: the Actions card first ("Up to date", the trust line, "Open Action
+Center", "2 of 2 capabilities allowed") → light mode: `/actions?tab=permissions` legible. Every
+`/actions*` and `/permissions*` request 200/201; console: only the pre-existing `/briefs/current`
+404. The grant history read "default grant revoked at T, re-granted 20 s later" — two rows, one
+live.
+
+**Independent adversarial review (a separate agent, read-only, no implementation context, nine
+lenses, every claim re-run on its own clone).** Verdict **SAFE AFTER FIXES — no BLOCKER, no MAJOR.**
+**One MINOR, CONFIRMED, closed:** `nextStudyBlockStart` floored to the FIRST 01:00 in the
+fall-back repeated hour and added exactly one hour, so at 01:10 CST it proposed a block that had
+already begun — now advances in whole hours until it clears the 15-minute lead, pinned on the
+reviewer's 07:10Z/06:50Z cases. **Notes closed:** Guard 7 was direct-file only (the services the
+handlers call now fall under an explicit read-only allowlist for the two calendar tables, any
+write aimed at an off-limits table denied — shown to fail with a probe); the log-capture test
+did not exercise failure paths (it now drives a Zod 400, a prepare-time refusal and an
+execute-time failure and asserts no title/reason leaks); a revoke relabelled an already-expired
+row "Cancelled: permission revoked" (excluded); the revoke-vs-approve comment overstated the
+outcome (rewritten: linearizable, both owner taps). Lenses re-run and CLEAN: **A** (the only
+`execute` call site is inside the claimed transaction's savepoint; no route/worker/read model
+names `ACTION_HANDLERS`), **B** (every create schema `.strict()` without `principal`/`status`;
+`app` hard-coded; no route writes `agent`; handlers touch only tasks/events/occurrences/links),
+**C** (6 concurrent approves → one 200 and five 409s, one task; 8 rounds of approve-vs-cancel
+always exactly one winner; every target handler re-loads `FOR UPDATE`; the expired flip commits),
+**D** (the stored jsonb is the Zod output; a handler that inserts then throws — or aborts the
+statement — leaves 0 rows and a `failed` audit row via `ROLLBACK TO SAVEPOINT`), **E** (driver
+errors in `execute` and `prepare` leak nothing; `error_class` is regex-validated; export carries
+no `input`), **F** (non-vacuous; verbs and disjointness asserted by test; worker diff empty),
+**G** (swipe opens the sheet; one host; no Linking/Alert; Today card a plain `Card`; no clock read
+in render), **H** (`0024` additive; CHECK lists equal the Zod enums; journal `when` contiguous
+and not future-dated; retention untouched), **I** (no pin loosened).
+
+**Unchanged and reaffirmed:** ADR-018, ADR-024, ADR-029, ADR-041/043, ADR-046, ADR-050, ADR-054,
+ADR-056/066/067 (no new AI call site; Guards 1–6 green, Guard 7 added), ADR-058 (no new alert
+producer), ADR-059 (export widened by the action summary rows), ADR-064 (an action-created linked
+event would use the same durable `pending_push` link; 10.8's builder never proposes a link),
+ADR-068, ADR-074, ADR-075/076, ADR-077 (memory is never an action input and never reaches the
+executor).
+
+**Recorded, not fixed:** `needs_reconsent` is advisory — `isPermissionGranted` ignores
+`disclosure_version` and a row-less default grant can never read `needs_reconsent`, so a widened
+disclosure is shown, not enforced (blocking would mean storing the version at first
+materialisation and comparing it in the grant check); a concurrent double *grant* PATCH can hit
+`permission_grants_live_unique` as a raw 500 (an owner double-tap; the 10.7 decide-race class);
+`input_summary` freezes the target's title at request time, so a renamed task shows the old
+title on the sheet; `client_uuid` idempotency returns the existing row even if a retried body
+names a different action (the `POST /events` idiom); `action-constraints.test.ts` hard-codes the
+vocabularies rather than importing them (hand-compared equal); approval is not bound to a device
+token (deferred with the agent ADR); the study-block builder never proposes a calendar link (a
+target picker is out of scope, so the "What will change" row reads "Not linked"); History hides
+`executing` rows (never visible — execution is synchronous); the Rabbit R1 has NOT been rebuilt.
+
+**Deployment plan (NOT executed; awaits owner authorization).** Frozen order WITH the migrate step:
+merge the branch to `main` by fast-forward (PR as the review surface); tag the serving `api`/`web`
+images `rollback-pre-10.8` by digest (`worker` untouched — no rebuild, no tag); `git archive` the
+new `main` tip to `/home/himallinux/personal-os-10.8-release`; build `api` + `web`; verify the api
+image carries 25 migration files with `0024_action_framework.sql` last, `dist/actions/service.js`,
+`dist/routes/actions.js`, `dist/routes/permissions.js` and `dist/read-models/actions.js`, and that
+production's watermark is `1789379000000` with 24 rows and no future-dated row; migrate from the
+new image with `--no-deps` and the `MIGRATIONS_DATABASE_URL` pass-through, asserting **24 → 25 by
+row count** and both tables present with their constraints; recreate `api` then `web` alone
+(`postgres` and `worker` never named); validate `GET /permissions` → both granted with no row
+written, `GET /actions/summary` → zeros, `GET /export` carries `action_requests`, `/today` and
+`/academic/today` unchanged, then one real proposal from a Focus Now row on the production web
+client — approve, undo, and delete nothing (the audit rows are the record); 0 warn/error and 0
+title-shaped log lines; then `eas build --local --profile production-internal` with the production
+env values passed explicitly (never from `apps/mobile/.env`), `strings`-check the bundle (0
+`localhost:3000`, the tailnet host, "Nothing runs until you approve it"), `apksigner` continuity,
+`adb install -r` → versionCode 33, launch with `am start`, walk Today → the assignment sheet →
+Propose → the approval sheet → `/actions` (all three segments, light and dark) → Settings, and
+sweep logcat for `FATAL EXCEPTION` (`worklet-safety.test.ts` green; no new worklet).
+**Rollback:** `docker tag personal-os-{api,web}:rollback-pre-10.8 personal-os-{api,web}:latest` +
+the frozen recreate; `0024` is additive-only, so the pre-10.8 images run against the
+post-migration schema; no schema rollback.
+
 ---
 
 ## Remaining warnings / technical debt
@@ -2602,11 +2818,39 @@ tables `memories 0 · memory_suggestions 0 · memory_settings 1 (enabled)`.
   `memory-form.tsx` can be listed; the two hosting screens pin their banners separately, but a future
   entry can now omit one silently.
 
+- **`needs_reconsent` is advisory, not enforced (10.8).** `isPermissionGranted` ignores
+  `disclosure_version`, and a row-less default grant can never read `needs_reconsent`, so a widened
+  disclosure is shown on the permission card but does not gate a request. Blocking would mean
+  storing the version at first materialisation and comparing it in the grant check.
+- **A concurrent double *grant* PATCH can hit `permission_grants_live_unique` as a raw 500 (10.8).**
+  An owner double-tap on Allow; the 10.7 decide-race class, not reproduced.
+- **`action_requests.input_summary` freezes the target's title at request time (10.8).** A task
+  renamed between proposal and approval shows the old title on the sheet; the executor re-loads
+  the row, so the write is correct.
+- **Approval is not bound to a device token (10.8).** `POST /actions/:id/approve` is
+  Tailscale-perimeter-only like every other write (ADR-029); binding it to `/devices/*`'s bearer
+  would be stronger than any existing write and is deferred to the agent ADR.
+- **`routes/memory-settings.test.ts` can flake on Docker-VM clock skew (found at 10.8, a 10.7
+  test).** Its "PATCH upserts the singleton both ways" case compares a Postgres-stamped
+  `updated_at` with a JS-stamped one and once read 23 ms backwards in a full run (5/5 green in
+  isolation, green on the re-run). Not touched by 10.8; a monotonic comparison (or one clock)
+  would close it.
+- **The study-block builder never proposes a calendar link (10.8).** A target picker is out of
+  scope, so every proposed event is local-only ("Not linked"); the action input accepts `calendar`
+  and the executor handles the link, so this is a client gap only.
+
 ---
 
 ---
 
 ## Current objective
+
+**Checkpoint 10.8 — Agent Foundation & Action Framework — is IMPLEMENTED, VERIFIED (7,274
+tests, 23/23 tasks), LIVE-VERIFIED in the browser and INDEPENDENTLY REVIEWED (safe after fixes, all
+closed) on `claude/agent-foundation-action-framework-b7a356` (tip `572bc91`, five commits on
+`5c2bf52`). NOT merged, NOT deployed: the deployment plan in the 10.8 record awaits the owner's
+explicit authorization, and the Rabbit R1 has not been rebuilt.** No external agent is integrated
+and 10.9 is not begun.
 
 **Phase 10 — Codebase Consolidation & Agent Readiness — is open.** Checkpoints 10.0, 10.1/10.1B and
 10.1C are closed: 10.1C (implemented, tested 6,054/6,054, independently reviewed with zero
@@ -2713,6 +2957,11 @@ context and a "related capture"/activity trail on its project context. The Rabbi
 
 ## Current work
 
+**Checkpoint 10.8 is implemented, verified, live-verified and reviewed — awaiting deployment
+authorization.** The branch carries the migration, the registry, the API, the mobile Action Center
+and ADR-078; the local dev and test databases are at level 25; production is untouched at level 24.
+Nothing is in flight beyond the owner's decision to deploy.
+
 **Checkpoint 10.7 is DEPLOYED, ACCEPTED and CLOSED.** `main` carries `436da0f` (PR #7,
 fast-forward) plus the closing docs commits; production serves `api`+`web` at `436da0f`, `worker`
 still at `965900f`, postgres untouched; migration level **24**; the memory lifecycle, the Focus Now
@@ -2755,6 +3004,17 @@ removed from the primary checkout.
 ---
 
 ## Last verification
+
+**Checkpoint 10.8 gate (2026-09-17), full monorepo, integrator-run, at `572bc91`.** `pnpm build
+--force` 12/12 · `pnpm typecheck` 23/23 · `npx eslint apps packages` and `apps/mobile`'s own
+`eslint .` exit 0 · root `prettier --check .` clean · `git diff --check` clean · `gitleaks detect
+--no-git` no leaks · `pnpm test --force` **23/23 tasks, 7,274 tests across 13 packages, zero
+failing** · migration `0024` proven on a clone (24 → 25 by row count; `db:reconcile` clean; every
+constraint bite-tested) and applied to both local databases · live browser walk at 480 × 800, dark
+and light, against seeded local data (propose → approve → cancel → revoke-cancels-pending → allow
+→ undo-as-a-new-approved-request → Settings; record in the 10.8 entry) · independent adversarial
+review (nine lenses, concurrency reproduced on a clone): SAFE AFTER FIXES, the MINOR and three
+notes closed and re-gated. Production not touched.
 
 **Checkpoint 10.7 deployment (2026-09-17 23:52–00:35Z), read directly from production.** `main`
 fast-forwarded to `436da0f`, PR #7 merged · `api`/`web` images tagged `rollback-pre-10.7` by id,
@@ -2931,9 +3191,11 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. Nothing is gating. Checkpoint 10.7 is deployed (level 24, `api`+`web` at `436da0f`),
-   validated on real production data, accepted on the Rabbit R1 (versionCode 32) and **CLOSED**;
-   10.4–10.6 likewise. **No checkpoint after 10.7 is selected; Phase 10.8 is not begun.** Worth
+1. **Owner decision: deploy Checkpoint 10.8.** The branch is complete and reviewed; the frozen-order
+   plan (WITH the migrate step, `api`+`web` only, then the local Rabbit build → versionCode 33) is
+   in the 10.8 record and runs only on explicit authorization. Checkpoint 10.7 is deployed (level
+   24, `api`+`web` at `436da0f`), validated on real production data, accepted on the Rabbit R1
+   (versionCode 32) and **CLOSED**; 10.4–10.6 likewise. Worth
    watching on real use: the first real memories the owner adds (the working-hours line will
    appear on the briefing only on a morning with a free block inside the window; a course-linked
    preference shows on Focus Now the moment that course has a priority item), the Reanimated
