@@ -197,7 +197,7 @@ if [ "$MODE" = "--report" ]; then
   pub="$(curl -s -m 8 "$PUBLIC_HEALTH_URL" 2>/dev/null | head -c 200)"
   [ -n "$pub" ] && info "public https /health: ${pub:0:80}" || yellow "public https /health: no answer from $PUBLIC_HEALTH_URL"
   aer="$(journalctl -k --since today --no-pager 2>/dev/null | grep -c 'AER: Correctable error' || true)"
-  [ "${aer:-0}" -gt 0 ] && yellow "nvme: $aer PCIe correctable errors today (hardware signal; no backups exist — ADR-024)"
+  [ "${aer:-0}" -gt 0 ] && yellow "nvme: $aer PCIe correctable errors today (link-layer signal; SMART clean at 10.8.5 — runbook §8)"
   info "uptime: $(uptime -p 2>/dev/null)"
 fi
 
