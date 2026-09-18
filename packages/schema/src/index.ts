@@ -33,3 +33,4 @@ export * from "./focus.js";
 export * from "./canvas.js";
 export * from "./academic.js";
 export * from "./memories.js";
+export * from "./actions.js";

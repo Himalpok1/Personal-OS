@@ -44,3 +44,5 @@ export * from "./canvas-sync-runs.js";
 export * from "./memory-settings.js";
 export * from "./memory-suggestions.js";
 export * from "./memories.js";
+export * from "./permission-grants.js";
+export * from "./action-requests.js";

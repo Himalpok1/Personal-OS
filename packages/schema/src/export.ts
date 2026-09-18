@@ -41,6 +41,14 @@ import { NoteSchema } from "./notes.js";
 import { ProjectSchema } from "./projects.js";
 import { CaptureSourceSchema } from "./capture.js";
 import { TaskSchema } from "./tasks.js";
+import {
+  ActionErrorClassSchema,
+  ActionIdSchema,
+  ActionPrincipalSchema,
+  ActionRequestStatusSchema,
+  ActionSourceSchema,
+  ActionTargetTypeSchema,
+} from "./actions.js";
 import { MemorySchema } from "./memories.js";
 
 /**
@@ -88,6 +96,36 @@ export const ProjectExportSchema = ProjectSchema;
  * plumbing, like `client_uuid`, and stay out.
  */
 export const MemoryExportSchema = MemorySchema;
+
+/**
+ * Checkpoint 10.8 (ADR-078 §4): the audit row of every action the owner
+ * proposed, approved, cancelled or let expire -- the SUMMARY columns only.
+ * `input` (the frozen jsonb the executor ran) and `client_uuid` are plumbing
+ * and stay out; `input_summary`/`result_summary` are the human record. Rows
+ * are never deleted and never swept, so this is the complete history.
+ */
+export const ActionRequestExportSchema = z
+  .object({
+    id: z.string().uuid(),
+    action_id: ActionIdSchema,
+    principal: ActionPrincipalSchema,
+    status: ActionRequestStatusSchema,
+    source: ActionSourceSchema,
+    source_ref: z.string().nullable(),
+    reason: z.string().nullable(),
+    input_summary: z.string(),
+    result_summary: z.string().nullable(),
+    target_type: ActionTargetTypeSchema.nullable(),
+    target_id: z.string().uuid().nullable(),
+    error_class: ActionErrorClassSchema.nullable(),
+    reverses_request_id: z.string().uuid().nullable(),
+    requested_at: z.string().datetime({ offset: true }),
+    expires_at: z.string().datetime({ offset: true }),
+    approved_at: z.string().datetime({ offset: true }).nullable(),
+    finished_at: z.string().datetime({ offset: true }).nullable(),
+  })
+  .strict();
+export type ActionRequestExport = z.infer<typeof ActionRequestExportSchema>;
 
 /**
  * Inbox items are the one NARROWED shape, and the narrowing is deliberate.
@@ -144,6 +182,7 @@ export const ExportCountsSchema = z
     notes: ExportEntityCountSchema,
     inbox_items: ExportEntityCountSchema,
     memories: ExportEntityCountSchema,
+    action_requests: ExportEntityCountSchema,
   })
   .strict();
 export type ExportCounts = z.infer<typeof ExportCountsSchema>;
@@ -177,6 +216,7 @@ export const ExportResponseSchema = z
     notes: z.array(NoteExportSchema),
     inbox_items: z.array(InboxItemExportSchema),
     memories: z.array(MemoryExportSchema),
+    action_requests: z.array(ActionRequestExportSchema),
   })
   .strict();
 export type ExportResponse = z.infer<typeof ExportResponseSchema>;

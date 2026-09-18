@@ -152,6 +152,16 @@ import {
   updateMemory,
   updateMemorySettings,
 } from "./memories.js";
+import {
+  approveAction,
+  cancelAction,
+  createActionRequest,
+  getAction,
+  getActionsSummary,
+  listActions,
+  listPermissions,
+  updatePermission,
+} from "./actions.js";
 import { transcribe } from "./transcribe.js";
 
 export { ApiClientError, type ZodLikeSchema } from "./client.js";
@@ -257,6 +267,19 @@ export type {
   MemorySuggestionDecideResponse,
   MemoryUpdate,
 } from "./memories.js";
+export type {
+  ActionListParams,
+  ActionListQuery,
+  ActionListResponse,
+  ActionPermission,
+  ActionRequestCreate,
+  ActionRequestItem,
+  ActionsSummary,
+  PermissionGrantItem,
+  PermissionUpdate,
+  PermissionUpdateResponse,
+  PermissionsResponse,
+} from "./actions.js";
 export type {
   MonitorIncidentListParams,
   MonitorTarget,
@@ -410,6 +433,16 @@ export function createApiClient(baseUrl: string) {
     deleteAllMemories: deleteAllMemories.bind(null, baseUrl),
     listMemorySuggestions: listMemorySuggestions.bind(null, baseUrl),
     decideMemorySuggestion: decideMemorySuggestion.bind(null, baseUrl),
+    // Checkpoint 10.8 (ADR-078) -- the Action Framework. Propose, then the
+    // owner approves or cancels; execution happens inside approve.
+    listActions: listActions.bind(null, baseUrl),
+    getActionsSummary: getActionsSummary.bind(null, baseUrl),
+    getAction: getAction.bind(null, baseUrl),
+    createActionRequest: createActionRequest.bind(null, baseUrl),
+    approveAction: approveAction.bind(null, baseUrl),
+    cancelAction: cancelAction.bind(null, baseUrl),
+    listPermissions: listPermissions.bind(null, baseUrl),
+    updatePermission: updatePermission.bind(null, baseUrl),
 
     getMonitorOverview: getMonitorOverview.bind(null, baseUrl),
     listMonitorIncidents: listMonitorIncidents.bind(null, baseUrl),
