@@ -44,19 +44,24 @@ function boundedReason(reason: string): string {
 /**
  * The next whole hour in `tz` that is at least `STUDY_BLOCK_LEAD_MINUTES`
  * after `now`. Deterministic and simple on purpose: the hour is floored on
- * the zone's wall clock, then advanced by one absolute hour when the floor
- * is not itself far enough ahead -- so a study block proposed at 14:10
- * starts at 15:00, one proposed at 14:50 starts at 16:00, and one proposed
- * on the hour exactly starts one hour later. An assignment already due
+ * the zone's wall clock, then advanced in whole absolute hours until it is
+ * far enough ahead -- so a study block proposed at 14:10 starts at 15:00, one
+ * proposed at 14:50 starts at 16:00, and one proposed on the hour exactly
+ * starts one hour later. The loop, not a single +1h: in the fall-back
+ * repeated hour the wall-clock floor resolves to the FIRST 01:00, which can
+ * sit up to two hours behind `earliest` (10.8 review finding), so one hour
+ * would propose a block that had already begun. An assignment already due
  * before that instant still gets the same proposal (the owner reads the
  * due line on the sheet and decides).
  */
 export function nextStudyBlockStart(now: Date, tz: string): Date {
   const earliest = new Date(now.getTime() + STUDY_BLOCK_LEAD_MINUTES * 60_000);
   const components = toWallClockComponents(earliest, tz);
-  const floor = resolveWallClockToInstant({ ...components, minute: 0, second: 0 }, tz);
-  if (floor.getTime() >= earliest.getTime()) return floor;
-  return new Date(floor.getTime() + 60 * 60_000);
+  let start = resolveWallClockToInstant({ ...components, minute: 0, second: 0 }, tz);
+  while (start.getTime() < earliest.getTime()) {
+    start = new Date(start.getTime() + 60 * 60_000);
+  }
+  return start;
 }
 
 /** "Due Sep 22 · 11:59 PM · from your Focus Now list", bounded to the reason limit. */

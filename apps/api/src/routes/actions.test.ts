@@ -518,6 +518,37 @@ describe("action routes never log a title, a summary or a reason (ADR-078 §4)",
       await revoke(app, "tasks.write");
       // Refusals go through the error path too.
       await app.inject({ method: "POST", url: "/actions", payload: createTaskBody() });
+      await app.inject({
+        method: "PATCH",
+        url: "/permissions/tasks.write",
+        payload: { granted: true },
+      });
+      // A Zod 400 (the body echoes issues, never the input) ...
+      await app.inject({
+        method: "POST",
+        url: "/actions",
+        payload: createTaskBody({ input: { title: "Zanzibar bad", timezone: "Not/AZone" } }),
+      });
+      // ... a prepare-time refusal (unknown target) ...
+      await app.inject({
+        method: "POST",
+        url: "/actions",
+        payload: {
+          action_id: "complete_task",
+          input: { task_id: crypto.randomUUID() },
+          source: "manual",
+        },
+      });
+      // ... and an execution failure: the target vanishes between request and approval.
+      const taskId = await seedTask(app, { title: "Zanzibar target" });
+      const doomed = await propose(app, {
+        action_id: "complete_task",
+        input: { task_id: taskId },
+        source: "manual",
+      });
+      await app.db.delete(tasks).where(eq(tasks.id, taskId));
+      const failed = ActionRequestItemSchema.parse((await approve(app, doomed.id)).json());
+      expect(failed.status).toBe("failed");
     } finally {
       restore();
     }
@@ -526,6 +557,7 @@ describe("action routes never log a title, a summary or a reason (ADR-078 §4)",
     expect(joined).toContain("action.completed");
     expect(joined).toContain("action.cancelled");
     expect(joined).toContain("permission.updated");
+    expect(joined).toContain("action.failed");
     expect(joined).not.toContain("Zanzibar");
     expect(joined).not.toContain(TITLE);
   });

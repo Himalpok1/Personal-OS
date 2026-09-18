@@ -826,6 +826,37 @@ describe("the action framework never reaches an AI lane, and the executor never 
     expect(offenders).toEqual([]);
   });
 
+  it("the services the handlers call never WRITE a credential, consent or device table (one-hop evasion)", () => {
+    // handlers.ts reaches its writes through apps/api/src/services/*, which
+    // the walk above does not cover (10.8 review finding). services/events.ts
+    // legitimately READS calendar_connections and calendar_connection_calendars
+    // to resolve a write-eligible target; that is the whole allowlist, and a
+    // write verb aimed at any off-limits table is denied outright.
+    const servicesDir = path.join(API_SRC, "services");
+    const files = walk(servicesDir).filter((f) => /\/services\/(?:events|tasks)\.ts$/.test(f));
+    expect(files.map(relToRepo)).toEqual([
+      "apps/api/src/services/events.ts",
+      "apps/api/src/services/tasks.ts",
+    ]);
+    const READ_ALLOWED = new Set(["calendarConnections", "calendarConnectionCalendars"]);
+    const offenders: string[] = [];
+    for (const file of files) {
+      const code = stripLineComments(readFileSync(file, "utf8"));
+      const writeAimed =
+        /\.(?:insert|update|delete)\(\s*(?:aiTaskRoutes|aiProviderConnections|aiModels|devices|devicePairingCodes|calendarConnections|calendarConnectionCalendars|mailConnections|healthConnections|canvasConnections|permissionGrants|actionRequests)\b/.exec(
+          code,
+        );
+      if (writeAimed) offenders.push(`${relToRepo(file)}: ${writeAimed[0]}`);
+      for (const match of code.matchAll(
+        /\b(?:aiTaskRoutes|aiProviderConnections|aiModels|devicePairingCodes|calendarConnections|calendarConnectionCalendars|mailConnections|healthConnections|canvasConnections|permissionGrants|actionRequests)\b/g,
+      )) {
+        if (!READ_ALLOWED.has(match[0])) offenders.push(`${relToRepo(file)}: ${match[0]}`);
+      }
+      if (OFF_LIMITS_DEVICES_IDENTIFIER.test(code)) offenders.push(`${relToRepo(file)}: devices`);
+    }
+    expect([...new Set(offenders)]).toEqual([]);
+  });
+
   it("the action read model contains no write verb -- writes live in actions/service.ts", () => {
     const code = stripLineComments(readFileSync(ACTIONS_READ_MODEL, "utf8"));
     const offenders: string[] = [];

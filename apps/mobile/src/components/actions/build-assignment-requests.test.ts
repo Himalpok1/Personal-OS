@@ -47,6 +47,17 @@ describe("nextStudyBlockStart", () => {
     expect(nextStudyBlockStart(new Date("2026-11-01T05:50:00Z"), TZ).toISOString()).toBe(
       "2026-11-01T07:00:00.000Z",
     );
+    // 01:10 CST (07:10Z, the SECOND pass through 01:xx): the wall-clock floor
+    // resolves to the first 01:00 (06:00Z), an hour and ten minutes in the
+    // past -- the block must land on 02:00 CST (08:00Z), never before now.
+    expect(nextStudyBlockStart(new Date("2026-11-01T07:10:00Z"), TZ).toISOString()).toBe(
+      "2026-11-01T08:00:00.000Z",
+    );
+    // 00:50 CST (06:50Z): the first 01:00 is in the past and the second 01:00
+    // (07:00Z) is only ten minutes ahead, so 02:00 CST again.
+    expect(nextStudyBlockStart(new Date("2026-11-01T06:50:00Z"), TZ).toISOString()).toBe(
+      "2026-11-01T08:00:00.000Z",
+    );
   });
 });
 

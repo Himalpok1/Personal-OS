@@ -290,9 +290,13 @@ async function runHandler(
   const actionId = row.actionId as ActionId;
   const definition = ACTION_REGISTRY[actionId];
 
-  // The grant is re-checked under the transaction: a revoke that landed after
-  // the request was made cancels pending rows, but a revoke racing this very
-  // approval must still lose.
+  // The grant is re-checked inside the transaction: a revoke that landed
+  // after the request was made (around the route, which cancels pending
+  // rows) is refused here. A revoke racing this very approval is a plain
+  // SELECT under READ COMMITTED, so the two owner taps serialise on the row
+  // lock in whichever order they arrive -- approve-then-revoke completes the
+  // action and revokes afterwards; revoke-then-approve fails it here. Either
+  // outcome is linearizable; neither escalates.
   if (!(await isPermissionGranted(tx, "app", definition.permission))) {
     return {
       status: "failed",
@@ -488,6 +492,9 @@ export async function setPermissionGrant(
       .where(
         and(
           eq(actionRequests.status, "pending"),
+          // A stale pending row is already expired in every read; it is not
+          // "cancelled because the permission was revoked".
+          gt(actionRequests.expiresAt, now),
           inArray(actionRequests.actionId, actionsRequiring(permission)),
         ),
       )
