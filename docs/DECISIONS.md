@@ -39,7 +39,7 @@ Ordering below is the original log order: amendments (`ADR-046a`, `ADR-047a`, `A
 | [ADR-021](decisions/ADR-021.md) | Raw capture persisted before AI parsing | Locked |
 | [ADR-022](decisions/ADR-022.md) | Phase 0 requires encrypted backups and a verified manual restore | Superseded by ADR-024 |
 | [ADR-023](decisions/ADR-023.md) | Python only as later sidecars for ML/data-heavy workloads | Locked |
-| [ADR-024](decisions/ADR-024.md) | No backup/restore system; persistent Docker storage is not a backup (supersedes ADR-022) | Locked |
+| [ADR-024](decisions/ADR-024.md) | No backup/restore system; persistent Docker storage is not a backup (supersedes ADR-022) | Locked; amended by ADR-080 |
 | [ADR-025](decisions/ADR-025.md) | Production host is native Ubuntu Desktop (hostname `personal-os`), Tailscale installed directly on the OS | Locked |
 | [ADR-026](decisions/ADR-026.md) | Provider-agnostic AI layer over user-supplied, DB-stored, encrypted API keys; no hardcoded provider, no silent fallback | Locked |
 | [ADR-027](decisions/ADR-027.md) | `notes` table added to the Phase 1 data model | Locked |
@@ -101,7 +101,8 @@ Ordering below is the original log order: amendments (`ADR-046a`, `ADR-047a`, `A
 | [ADR-076](decisions/ADR-076.md) | Checkpoint 10.6 (Mobile): motion, gesture and interaction primitives on the already-installed Reanimated/gesture-handler stack, no new dependency; Today reorganised actionable-first | Locked |
 | [ADR-077](decisions/ADR-077.md) | Checkpoint 10.7: the Personal Memory & Preference Layer — three flat tables with two narrow FKs (migration 0023), owner-only writes, computed-never-stored suggestions, deterministic link-based influence on Focus Now/briefing, and Guard 6 keeping memory out of every AI lane, job and push | Locked |
 | [ADR-078](decisions/ADR-078.md) | Checkpoint 10.8: the Agent Foundation & Action Framework — a code-defined action registry (six actions, three reversible pairs), an application-level permission layer (`permission_grants`, grants gate requests never execution, app grants ship ON), per-request owner approval with synchronous single-use execution, the request row as the audit trail (migration 0024), and Guard 7 | Locked |
-| [ADR-079](decisions/ADR-079.md) | Checkpoint 10.8.5: the production host is a shared home-lab box — root cause of the 2026-09-18 image prune and the dropped deploy key (the owner's own agent, unrestricted key); saved+referenced+bounded image rollback artifacts, a root-owned deployment-key file, forced-command agent keys, a cron+ntfy host watchdog | Locked |
+| [ADR-079](decisions/ADR-079.md) | Checkpoint 10.8.5: the production host is a shared home-lab box — root cause of the 2026-09-18 image prune and the dropped deploy key (the owner's own agent Ray, a TRUSTED OPERATOR by decision); saved+referenced+bounded image rollback artifacts, a root-owned deployment-key file, an agent audit shell (visibility, not restriction), a docker event watcher and a cron+ntfy host watchdog with change detection | Locked |
+| [ADR-080](decisions/ADR-080.md) | Checkpoint 10.8.5: a minimal backup — daily `pg_dump` + globals + a configuration bundle on the host, pulled to the owner's Mac daily; restore tested (amends ADR-024) | Locked |
 
 ## Open later-phase decisions
 

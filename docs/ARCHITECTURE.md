@@ -28,7 +28,7 @@ Single-user, self-hosted life dashboard. Notes, reminders, tasks, calendar, proj
 | Offline | App outbox queues writes — no full offline read sync |
 | Network | Tailscale only, VPN On Demand on iOS |
 | First module | Capture: notes / reminders / tasks + voice |
-| Backups | **None** — persistent Docker storage is not a backup (ADR-024) |
+| Backups | **Minimal, since 10.8.5 (ADR-080, amending ADR-024):** daily `pg_dump` + globals + config bundle on the host, pulled to the owner's Mac daily; restore tested. Persistent Docker storage is still not a backup |
 | AI providers | Provider-agnostic Vercel AI SDK layer over user-supplied, DB-stored, encrypted keys; no silent fallback (ADR-026) |
 | Health | Read-only, server-side Google Health cloud sync; passive, never fed to the AI layer (ADR-046) |
 | Mail | Gmail only, `gmail.metadata` only, read-only, polled; the app never acts on mail (ADR-052/053/054) |
@@ -830,7 +830,7 @@ The durable rollback source is still the per-release directory plus the pushed
 
 ## Secrets
 
-Personal OS has no backup system in the current architecture. PostgreSQL uses persistent Docker volume storage on the production server — this is durability against container restarts, not a backup. Backup infrastructure may be added in a future phase only if explicitly requested.
+PostgreSQL uses persistent Docker volume storage on the production server — durability against container restarts, not a backup. Since Checkpoint 10.8.5 (ADR-080) a minimal backup exists: a daily `pg_dump` + globals + configuration bundle under `~/personal-os-backups/` on the host, pulled daily to the owner's Mac by `scripts/homelab/pull-backup.sh`; restore procedure and test record in `docs/HOMELAB-RUNBOOK.md` §5.
 
 - `.env` files are gitignored; `.env.example` with dummy values is committed.
 - Config that must live in the repo goes through SOPS + age.

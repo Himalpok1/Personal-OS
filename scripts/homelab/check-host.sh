@@ -20,6 +20,14 @@
 # WRITABLE Docker socket outside the allowlist; the reboot-required flag.
 # --report adds tailscale serve, the public HTTPS health and today's NVMe AER
 # count. Everything is a count, a status token or a name — no user data.
+#
+# Change detection (10.8.5 finalisation, "visibility not restriction"): a
+# fingerprint manifest of authorized_keys, the production .env, every compose
+# file under ~/docker and the current release dir, the crontab, `tailscale
+# serve status`, the personal-os image-tag inventory and the container set is
+# compared with the previous run; any difference is pushed to ntfy as an EVENT
+# (then becomes the new baseline). The docker event watcher is restarted if it
+# died, and the agent audit shell's presence and binding are checked.
 set -uo pipefail
 
 OPS_DIR="${OPS_DIR:-$HOME/.personal-os-ops}"
@@ -37,6 +45,8 @@ PUBLIC_HEALTH_URL="${PUBLIC_HEALTH_URL:-https://personal-os.tail62a68f.ts.net/he
 [ -f "$CONFIG" ] && . "$CONFIG"
 
 MODE="${1:-cron}"
+now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+CHANGE_EVENT=""
 problems=()   # "RED name: message" / "YELLOW name: message"
 infos=()
 red()    { problems+=("RED $1"); }
@@ -88,6 +98,17 @@ else
   info "image-store: newest=$newest labels=$(ls -1 "$IMAGE_STORE" | tr '\n' ' ')"
 fi
 
+# --- backups (ADR-080) ------------------------------------------------------
+BACKUP_DIR="${BACKUP_DIR:-$HOME/personal-os-backups}"
+nd="$(ls -t "$BACKUP_DIR"/db/personalos-*.dump 2>/dev/null | head -1 || true)"
+if [ -z "$nd" ]; then
+  yellow "backup: no database dump under $BACKUP_DIR (backup-personal-os.sh has not run)"
+else
+  age_h=$(( ( $(date +%s) - $(stat -c %Y "$nd") ) / 3600 ))
+  [ "$age_h" -le 36 ] || yellow "backup: newest dump is ${age_h}h old (daily cron missed?)"
+  info "backup: newest dump ${age_h}h old, $(ls "$BACKUP_DIR"/db/personalos-*.dump | wc -l | tr -d ' ') dumps, $(du -sh "$BACKUP_DIR" | cut -f1)"
+fi
+
 # --- API health -------------------------------------------------------------
 h="$(curl -s -m 5 http://127.0.0.1:3000/health 2>/dev/null || true)"
 if [ -z "$h" ]; then
@@ -116,6 +137,60 @@ fi
 # --- OS ---------------------------------------------------------------------
 [ -f /var/run/reboot-required ] && yellow "os: reboot required ($(tr '\n' ' ' < /var/run/reboot-required.pkgs 2>/dev/null))"
 
+# --- agent audit shell + docker event watcher -------------------------------
+AUDIT_SHELL="$HOME/personal-os-ops/agent-audit-shell.sh"
+if [ -x "$AUDIT_SHELL" ]; then
+  if grep -q '^command="[^"]*agent-audit-shell.sh' "$HOME/.ssh/authorized_keys" 2>/dev/null; then
+    today_cmds="$(grep -c "^$(date -u +%F)" "$OPS_DIR/agent-ssh.log" 2>/dev/null || true)"
+    today_flag="$(grep "^$(date -u +%F)" "$OPS_DIR/agent-ssh.log" 2>/dev/null | awk '$4=="!"' | wc -l | tr -d ' ')"
+    info "agent audit: ${today_cmds:-0} commands today, ${today_flag:-0} flagged (~/.personal-os-ops/agent-ssh.log)"
+  else
+    yellow "agent: no key in authorized_keys is bound to the audit shell (visibility lost — re-add command= to the agent line)"
+  fi
+else
+  red "agent: audit shell $AUDIT_SHELL missing or not executable — a key bound to it cannot log in"
+fi
+if ! "$HOME/personal-os-ops/docker-events-watch.sh" status >/dev/null 2>&1; then
+  if "$HOME/personal-os-ops/docker-events-watch.sh" start >/dev/null 2>&1; then
+    info "docker events watcher restarted"
+  else
+    yellow "docker events watcher not running and failed to start"
+  fi
+fi
+
+# --- change detection (events, not states) ----------------------------------
+manifest_file="$OPS_DIR/manifest"
+build_manifest() {
+  local f
+  for f in "$HOME/.ssh/authorized_keys" "$HOME/personal-os/.env"; do
+    [ -f "$f" ] && printf 'file %s %s\n' "$f" "$(sha256sum "$f" | cut -c1-16)"
+  done
+  find "$HOME/docker" -maxdepth 2 \( -name 'docker-compose*.yml' -o -name '*.yml' -o -name '.env' -o -name 'Dockerfile' \) -type f 2>/dev/null | sort | while read -r f; do
+    printf 'file %s %s\n' "$f" "$(sha256sum "$f" | cut -c1-16)"
+  done
+  rel="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' personal-os-api-1 2>/dev/null || true)"
+  if [ -n "$rel" ] && [ -d "$rel" ]; then
+    for f in "$rel"/docker-compose.yml "$rel"/docker-compose.prod.yml; do
+      [ -f "$f" ] && printf 'file %s %s\n' "$f" "$(sha256sum "$f" | cut -c1-16)"
+    done
+  fi
+  printf 'crontab - %s\n' "$(crontab -l 2>/dev/null | sha256sum | cut -c1-16)"
+  printf 'tailscale-serve - %s\n' "$(tailscale serve status 2>/dev/null | sha256sum | cut -c1-16)"
+  docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null | grep '^personal-os-' | sort | sed 's/^/image /'
+  docker ps -a --format '{{.Names}}' 2>/dev/null | grep -v -- '-run-' | sort | sed 's/^/container /'
+}
+cur_manifest="$(build_manifest)"
+if [ -f "$manifest_file" ]; then
+  changes="$(diff <(cat "$manifest_file") <(printf '%s\n' "$cur_manifest") | grep -E '^[<>]' | sed -E 's/^< /- /; s/^> /+ /' || true)"
+  if [ -n "$changes" ]; then
+    changed_summary="$(printf '%s\n' "$changes" | awk '{print $1" "$2" "$3}' | sort -u | tr '\n' ';' | cut -c1-900)"
+    info "changes since last run: $changed_summary"
+    printf '%s CHANGES %s\n' "$now_iso" "$changed_summary" >> "$OPS_DIR/changes.log" 2>/dev/null || true
+    CHANGE_EVENT="$changes"
+  fi
+fi
+printf '%s\n' "$cur_manifest" > "$manifest_file"
+
 # --- report-only extras -----------------------------------------------------
 if [ "$MODE" = "--report" ]; then
   info "tailscale serve: $(tailscale serve status 2>/dev/null | grep -cE 'tailnet only|https://') route lines"
@@ -135,6 +210,7 @@ if [ "$MODE" = "--report" ]; then
   echo "personal-os host check $now — $worst"
   for p in "${problems[@]:-}"; do [ -n "$p" ] && echo "  $p"; done
   for i in "${infos[@]}"; do echo "  info $i"; done
+  [ -n "$CHANGE_EVENT" ] && { echo "  changes:"; printf '%s\n' "$CHANGE_EVENT" | sed "s/^/    /"; }
   [ "$worst" = RED ] && exit 3 || exit 0
 fi
 
@@ -153,6 +229,10 @@ if [ "$cur" != "$prev" ]; then
     YELLOW) notify "personal-os host: YELLOW" default warning "$cur";;
     GREEN)  notify "personal-os host: all clear" low white_check_mark "$(printf '%s\n' "${infos[@]}")";;
   esac
+fi
+if [ -n "$CHANGE_EVENT" ]; then
+  pr=default; printf '%s\n' "$CHANGE_EVENT" | grep -qE '^- (image personal-os-|file .*(authorized_keys|personal-os/\.env)|container personal-os-)' && pr=high
+  notify "personal-os host: changes detected" "$pr" eyes "$(printf '%s\n' "$CHANGE_EVENT" | cut -c1-1500)"
 fi
 hb="$OPS_DIR/heartbeat-$(date +%Y-%m-%d)"
 if [ "$(date +%H)" = "$HEARTBEAT_HOUR" ] && [ ! -f "$hb" ]; then
