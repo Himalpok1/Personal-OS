@@ -44,9 +44,11 @@ gesture design system on the already-installed Reanimated/gesture-handler stack 
 **Checkpoint 10.7 — Personal Memory & Preference Layer — is IMPLEMENTED, VERIFIED (7,089 tests,
 23/23 tasks), LIVE-VERIFIED IN THE BROWSER against the local database, and INDEPENDENTLY REVIEWED
 (safe after fixes; every required fix closed in-checkpoint) on branch
-`claude/personal-memory-preference-layer-45c590` — NOT MERGED, NOT DEPLOYED** (ADR-077; one additive
-migration, `0023`, level 23 → 24; `apps/worker` untouched). Deployment and the Rabbit build await the
-owner's authorization — see the 10.7 entry and *Next action*.
+`claude/personal-memory-preference-layer-45c590`, merged to `main` (`436da0f`, PR #7) and
+**DEPLOYED** (owner authorized; migration `0023` applied, level **24**; `api`+`web` recreated in
+production 2026-09-17 23:58Z, `worker`/`postgres` untouched; the memory lifecycle, Focus Now
+influence and privacy boundary validated live against real production data). **The Rabbit R1
+versionCode-32 APK is built and verified but NOT yet installed — the device was off the USB bus.**
 **Canonical architecture:** `docs/ARCHITECTURE.md` · **Canonical decisions:** `docs/DECISIONS.md` (one-line
 index) with the verbatim text of each ADR in `docs/decisions/ADR-NNN.md` · **Historical record:**
 `docs/history/` · **Agent-readiness inventory:** `docs/AGENT-READINESS.md`
@@ -94,8 +96,8 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 
 | | |
 |---|---|
-| Migration level | **23** (`0000`–`0022`); local and production agree; unchanged by 10.6 (no migration). 10.5 added `0022_task_canvas_assignment_link` (ADR-074), applied to production 2026-09-17 from the 10.5 api image. |
-| Serving commit | **api at `3a90c0c`, web at `3928dd3`** (10.6; the fix commit changed only `apps/mobile`, so `api`'s image is byte-equivalent to one built from `3928dd3` and was not rebuilt; api recreated 2026-09-17 10:08Z, web 10:19Z, both from `personal-os-10.6-release`); **worker at `965900f`** (10.4, untouched since — 10.5 and 10.6 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,web}:rollback-pre-10.6` = the 10.5 images (`d293d6f813d7` / `7e8cce9615b3`), plus every earlier tag, all by resolved digest. |
+| Migration level | **24** (`0000`–`0023`); local and production agree. 10.7 added `0023_personal_memory_layer` (ADR-077, three tables), applied to production 2026-09-17 23:57Z from the 10.7 api image — 23 → 24 by row count, tracked hash equal to the shipped file's SHA-256. |
+| Serving commit | **api and web at `436da0f`** (10.7; recreated 2026-09-17 23:58Z from `personal-os-10.7-release`; rollback `personal-os-{api,web}:rollback-pre-10.7` = the 10.6 images `dccf3ff797df` / `c6e390875f7b`); **worker at `965900f`** (10.4, untouched — 10.5–10.7 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Previous entry, for provenance: api at `3a90c0c`, web at `3928dd3` (10.6; the fix commit changed only `apps/mobile`, so `api`'s image is byte-equivalent to one built from `3928dd3` and was not rebuilt; api recreated 2026-09-17 10:08Z, web 10:19Z, both from `personal-os-10.6-release`); **worker at `965900f`** (10.4, untouched since — 10.5 and 10.6 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,web}:rollback-pre-10.6` = the 10.5 images (`d293d6f813d7` / `7e8cce9615b3`), plus every earlier tag, all by resolved digest. |
 | Containers | all four `RestartCount=0`; api `(healthy)` within 8 s of the 10.6 recreation; postgres `postgres:17-alpine` up since 2026-08-30 (never recreated since); `GET /health` → `ok` / `connected` / `stale:false` (2026-09-17 10:08Z) |
 | Rabbit R1 | `com.himal.personalos` **versionCode 31**, built from `3928dd3` **locally** (`eas build --local`, profile `production-internal`, the EAS-managed keystore fetched at build time — signer SHA-256 `4601e3a2…` identical to the installed app's, compared with `apksigner` before installing), `adb install -r` → `Success` with `firstInstallTime` 2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS` preserved — no re-pair. versionCode 30 (from `3a90c0c`) **crashed on launch** (a worklet calling a JS-thread function) and was rolled back to 29 within minutes, then fixed; the 10.6 record has the full account. Today (light + dark), the briefing hero and assignment sheet on real data, Settings and Projects walked live; 0 crash lines on 31. |
 | Academic layer (10.2 + ADR-070a) | `GET /academic/today?tz=` · `GET /academic/courses[?include_past_terms=]` · `GET /academic/courses/:id` — a provider-agnostic read model computed over the Canvas tables (ADR-070), **current term only by default** (ADR-070a: the most recently started term, by date — `current_term: 2026 Fall` echoed on the wire), a deterministic Today card and `/academic` course screens, `score`/`grade` synced (ADR-068a; 165 of 355 real assignments carry a grade). **Live and validated**: Today `overdue 2 · due today 1 · due this week 8 · 8 unread` from the 6 Fall 2026 courses (was 11 overdue across 16 courses in 3 terms before the rule); `include_past_terms=true` still lists all 16. |
@@ -110,8 +112,8 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 | Network | Tailscale-only; Postgres publishes no host port; no Funnel, no public ingress. |
 | Backups | **None, by design** (ADR-024). |
 | Source durability | `origin` = `https://github.com/Himalpok1/Personal-OS` — **PRIVATE** (re-verified 2026-09-16). No CI, no Actions workflow, no repository secret. **`main` is the canonical branch again as of 2026-09-16** (fast-forwarded to the Phase 10 tip; PR #1 merged). |
-| Test baseline | **7,089 tests across 13 packages** at the 10.7 branch tip (not yet deployed): api 1,568 · mobile 1,903 · core 1,172 · worker 738 · schema 574 · health-providers 332 · api-client 213 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 99 · ai-providers 25. Was 6,824 at 10.6 (`3928dd3`). |
-| Personal memory (10.7) | **Not in production yet.** Implemented on the branch: three tables (`memories`, `memory_suggestions`, `memory_settings`; migration `0023`), `GET/PATCH /memory-settings`, `GET/POST/PATCH/DELETE /memories`, `POST /memories/delete-all`, `GET /memory-suggestions`, `POST /memory-suggestions/:key/decide`, memories in `GET /export`; a Memory Center at `/memory`; Focus Now `matches_preference`/`supports_goal` (+15, capped at the pre-10.7 context ceiling of 75) and a briefing working-hours line, all client-composed by typed link; Guard 6 keeps memory out of every AI lane, the three AI route files, every other read model and the worker. |
+| Test baseline | **7,089 tests across 13 packages** at `436da0f` (10.7, deployed): api 1,568 · mobile 1,903 · core 1,172 · worker 738 · schema 574 · health-providers 332 · api-client 213 · canvas-providers 79 · monitoring 151 · calendar-providers 119 · mail-providers 116 · db 99 · ai-providers 25. Was 6,824 at 10.6 (`3928dd3`). |
+| Personal memory (10.7) | **LIVE** since 2026-09-17 23:58Z (level 24); validated against real production data the same hour (lifecycle, Focus Now "You said" explanation on a real ACCT assignment, privacy) and left with 0 rows. Shipped: three tables (`memories`, `memory_suggestions`, `memory_settings`; migration `0023`), `GET/PATCH /memory-settings`, `GET/POST/PATCH/DELETE /memories`, `POST /memories/delete-all`, `GET /memory-suggestions`, `POST /memory-suggestions/:key/decide`, memories in `GET /export`; a Memory Center at `/memory`; Focus Now `matches_preference`/`supports_goal` (+15, capped at the pre-10.7 context ceiling of 75) and a briefing working-hours line, all client-composed by typed link; Guard 6 keeps memory out of every AI lane, the three AI route files, every other read model and the worker. |
 | pg-boss | **31 queues, 11 schedules** (worker startup log at 10.1B; `pgboss.queue` reads one more with the internal `__pgboss__send-it`). Every retrying queue has a dead-letter queue (9.0): `capture.parse`, `ptt.transcribe`, `notifications.dispatch`, the three calendar queues, `occurrences.generate-lazy`, `occurrences.expand-window`. `occurrences.expand-window` has a phase-2 idempotent lazy repair since 9.4. |
 | Retention cleanup | `retention.cleanup`, daily `0 4 * * *` UTC: **seven** independent DELETEs — `monitor_checks` 30d · `mail_messages`/`mail_digests` 45d · `mail_sync_runs`/`health_sync_runs` 30d (8.6C) · `health_oauth_states` / `mail_oauth_states` on the row's own `expires_at < now` (9.0). First scheduled run 2026-09-13T04:00Z; the job's daily runs have not been individually re-verified since the 9.0 acceptance. |
 | Alert keys | Occurrence-scoped (ADR-058). Producers: health-sync breaker (first live emission 2026-09-12T03:00:14Z), `occurrences.generate-lazy.dead:<occurrenceId>`, `occurrences.expand-window.dead:<UTC date>` (9.0; also covers a failed 9.4 phase-2 repair), `calendar.push-event.dead:<eventId>:<link updated_at ISO>` (9.5). The three 9.x producers are unexercised in production by design. |
@@ -2218,6 +2220,91 @@ no custom worklet (`worklet-safety.test.ts` green). **Rollback:** `docker tag
 personal-os-{api,web}:rollback-pre-10.7 personal-os-{api,web}:latest` + the frozen recreate; `0023`
 is additive-only, so the pre-10.7 images run against the post-migration schema; no schema rollback.
 
+#### Deployment — COMPLETE for api/web (2026-09-17 23:52–23:58Z), owner-authorized ("Proceed with deployment only")
+
+**Pre-deployment (read-only).** Branch clean at `436da0f`, pushed, a strict fast-forward of
+`origin/main` (`5e51606`); PR #7 `MERGEABLE`/`CLEAN`; `gitleaks` over the four branch commits: no
+leaks. Production: `/health` ok/connected/`stale:false`; `drizzle.__drizzle_migrations` **23 rows,
+`max(created_at) 1789378000000`, 0 future-dated rows**; 0 `memor%` tables; api (`dccf3ff797df`,
+started 10:08Z) and web (`c6e390875f7b`, 10:19Z) on the 10.6 images, worker (03:57Z) on 10.4,
+postgres up since 2026-08-30, all `RestartCount=0`; Canvas/Gmail/Health/GCal all `active`; the one
+`failed` pg-boss job the documented 2026-09-16 mail-sync timeout; `ai_task_routes` has no `ask` row
+(Cloud Ask OFF).
+
+**Rollback references, before anything changed.** `personal-os-api:rollback-pre-10.7` =
+`dccf3ff797df`, `personal-os-web:rollback-pre-10.7` = `c6e390875f7b` (both by image id, both
+confirmed equal to the running containers' `.Image`); git tag `rollback-pre-10.7` at `5e51606`,
+pushed. `worker` untouched — no tag, no rebuild.
+
+**Merge.** `git push origin HEAD:main` — a true fast-forward, `5e51606` → **`436da0f`**; PR #7
+auto-closed `MERGED` (merge commit = `436da0f`, i.e. none). `main` is `436da0f` and canonical; the
+primary checkout fast-forwarded to it.
+
+**Frozen order, executed.** `git archive` of `436da0f` shipped to
+`/home/himallinux/personal-os-10.7-release` (1,359 tracked files; 0 `.env`/`google-services.json`;
+24 migration files; ADR-077 SHA-256 identical to the worktree's). Built `api`+`web` (`build_exit=0`;
+running containers confirmed still on the old image ids afterwards). **Verified the new images
+before anything ran:** api carries 24 `.sql` files with `0023_personal_memory_layer.sql` last and
+a journal whose last entry is idx 23 / `1789379000000`, `dist/read-models/memories.js`, the three
+memory route files, the `[DrizzleQueryError message withheld]` serializer marker, `memories` in
+`dist/read-models/user-export.js`, and no `.env`/`google-services.json`; the web bundle carries
+"Personal OS remembers" ×2, "Remember this?", "Matches your preference" ×2, "from your preferences",
+the tailnet hostname once and `localhost:3000` never. **Migration** from the new api image via
+`docker compose run --rm --no-deps -e MIGRATIONS_DATABASE_URL=… --entrypoint sh api`
+(`node_modules/.bin/drizzle-kit migrate`): **23 → 24 by row count**, new row `id 24 · created_at
+1789379000000 · hash b2c670dbd1dde4fd…` — identical to the shipped file's SHA-256. **Direct schema
+inspection:** `memories` (10 columns), `memory_suggestions` (9), `memory_settings` (4) present with
+the exact nullability and defaults; constraints `memories_kind`, `memories_source`,
+`memory_settings_singleton`, `memory_suggestions_status`, `memory_suggestions_suggestion_kind`
+(CHECK), the four `ON DELETE SET NULL` FKs and three PKs; indexes `memories_{project_id,
+canvas_course_id,suggestion_id,kind_updated_at}_idx`, `memory_suggestions_key_unique`,
+`memory_suggestions_project_id_idx`; `posops_app` holds `DELETE,INSERT,SELECT,UPDATE` on all three
+through the migrator's default privileges — no GRANT in the migration, as designed; 0 rows.
+**Rollout:** `api` recreated alone → `(healthy)` in 6 s, `/health` ok; `web` recreated alone →
+`200` on `:8081`. `worker` (`StartedAt` 03:57Z) and `postgres` (2026-08-30) untouched by their own
+timestamps; all four `RestartCount=0`.
+
+**Production validation (real routes, real data).** `GET /memory-settings` →
+`{enabled:true, memory_count:0}` (the singleton is answered lazily; no row written); `GET /memories`
+empty; `GET /memory-suggestions` → 0 pending (the account's one project is archived); `GET /export`
+carries `memories` with `{returned:0,total:0}`; `/today`, `/academic/today`, `/reminders`,
+`/health-summary`, `/mail-digests/current`, `/search`, `/projects`, `/tasks` all `200`; `/today`,
+`/memory-settings` and the web root `200` over the Tailscale HTTPS route. **Memory lifecycle,
+end to end:** `POST /memories` → 201 (`source: user`); `PATCH` note + kind → 200 with `updated_at`
+advanced; `PATCH` linking to a real course (`2268-BIOL-1442-002`) AND the real (archived) project
+→ 200 with both names resolved; `PATCH {source}` → 400 (provenance immutable); `GET /memories/:id`,
+`GET /memories?kind=&canvas_course_id=` (total 1) and `GET /export` (1 flat row with exactly the
+ten `MemorySchema` keys) all read it back; `POST` with a bogus course id → 400; `DELETE` → 204;
+`GET` → 404 afterwards; export back to 0; all three tables 0 rows. **Memory influence, in the
+production web client (paired as `10.7 deploy verification browser` with a single-use code,
+revoked after):** a course-linked preference on the real ACCT course made Focus Now's "Podcast 3"
+row carry a third hidden chip and its assignment sheet read **"Matches your preference — You said:
+… · Memory"** with the equation `450 Canvas priority + 25 course attention + 15 preference = 490`
+(the server's academic score verbatim plus the explained bonus); a "Working hours 9-18" preference
+produced **no** briefing line — correctly, because at 19:00 local no ≥ 60-minute free block remained
+inside the preference window, so no unsupported line was invented; the production Memory Center
+rendered both rows with the real course chip. **Privacy:** Cloud Ask has no consent row, so
+`POST /ask` and `POST /focus/suggestion` answer 409 — no model call can be built at all in
+production; `/today`'s body contains no `memor` key; the api log since recreation holds 0 statement
+text, 0 warn/error lines and 0 `DrizzleQueryError`; the worker log names no memory table; 190
+pg-boss jobs completed in the following 30 minutes, the same one pre-existing `failed`; both
+Tailscale Serve routes `tailnet only`. Guard 6 passed in the gate on `436da0f`, the exact commit
+deployed. Both verification memories deleted (204, 204) → all three tables 0 rows; the browser
+device revoked; 0 live pairing codes. One expired pairing code from this session remains
+unconsumed (minted, then 15 minutes passed during the lifecycle run before pairing — the retention
+sweep does not cover `device_pairing_codes`; harmless, expired).
+
+**Rabbit R1 — APK built and verified; INSTALL PENDING (device not on the USB bus).** Main checkout
+fast-forwarded to `436da0f`, `schema`/`core`/`api-client`/`db` rebuilt; `eas build --local
+--profile production-internal` with the production values hardcoded (never from `apps/mobile/.env`)
+→ `BUILD SUCCESSFUL in 4m 15s`, **versionCode 31 → 32**, 113.7 MB at
+`/tmp/personal-os-10.7-vc32.apk`. Verified before installing: `strings` on the Hermes bundle — 0
+`localhost:3000`, 1 tailnet hostname, "Personal OS remembers" / "Remember this?" / "Matches your
+preference" / "Never sent to an AI model" each present; `apksigner` V2 signer SHA-256 `4601e3a2…`
+(the certificate every prior checkpoint recorded for the installed app); `aapt` package
+`com.himal.personalos`, `versionCode 32`. `adb devices` and `ioreg -p IOUSB` showed no Rabbit on the
+bus at build time, so the in-place install and the on-device Memory Center walk are the open steps.
+
 ---
 
 ## Remaining warnings / technical debt
@@ -2514,9 +2601,10 @@ production serves `api`+`web` at `f29418b`, `worker`/`postgres` untouched, Rabbi
 
 
 **Checkpoint 10.7 — Personal Memory & Preference Layer — is implemented, verified (7,089 tests,
-23/23 tasks), live-verified in the browser, independently reviewed (safe after fixes, all closed),
-and committed on `claude/personal-memory-preference-layer-45c590` — NOT merged, NOT deployed.** See
-the full entry above; the deployment plan there is awaiting the owner's authorization.
+23/23 tasks), independently reviewed (safe after fixes, all closed), merged to `main` (`436da0f`,
+PR #7) and DEPLOYED** (owner authorized): migration `0023` applied (level 24), `api`+`web` recreated,
+`worker`/`postgres` untouched, lifecycle/influence/privacy validated live on production data. The
+Rabbit R1 versionCode-32 APK is built and verified; its install awaits the device on USB.
 
 **Checkpoint 10.6 — Intelligence + Mobile Experience Expansion — is implemented, verified (6,824
 tests, 23/23 tasks), independently reviewed (safe after fixes, all closed in-checkpoint), merged to
@@ -2583,12 +2671,12 @@ context and a "related capture"/activity trail on its project context. The Rabbi
 
 ## Current work
 
-**Checkpoint 10.7 is implemented, verified (7,089 tests, 23/23 tasks), live-verified in the browser
-against the local database, independently reviewed (one MAJOR log-path finding and three MINORs,
-all closed in-checkpoint), and committed on `claude/personal-memory-preference-layer-45c590`
-(four commits on `5e51606`). NOT merged to `main`, NOT deployed; the Rabbit R1 still runs
-versionCode 31.** Migration `0023` is applied to the local `personalos` and `personalos_test`
-databases only (both at 24); production is at 23. The next step is the owner's deploy decision.
+**Checkpoint 10.7 is DEPLOYED.** `main` is `436da0f` (PR #7, fast-forward); production serves
+`api`+`web` at `436da0f`, `worker` still at `965900f`, postgres untouched; migration level **24**;
+the memory lifecycle, the Focus Now "You said" explanation and the privacy boundary were validated
+live against real production data and every verification row deleted afterwards. The Rabbit R1
+still runs versionCode 31; the versionCode-32 APK (`/tmp/personal-os-10.7-vc32.apk`) is built,
+bundle- and signer-verified, and waits for the device to appear on the USB bus.
 
 **Checkpoint 10.6 is implemented, verified (6,824 tests, 23/23 tasks), independently reviewed, merged
 to `main` (`3928dd3`), and DEPLOYED.** `main` is `3928dd3` and canonical; PR #6 merged; production
@@ -2625,6 +2713,19 @@ removed from the primary checkout.
 ---
 
 ## Last verification
+
+**Checkpoint 10.7 deployment (2026-09-17 23:52–00:35Z), read directly from production.** `main`
+fast-forwarded to `436da0f`, PR #7 merged · `api`/`web` images tagged `rollback-pre-10.7` by id,
+git tag at `5e51606` · `git archive` (1,359 files, no `.env`/`google-services.json`) · new api
+image verified to carry 24 migrations (`0023` last), the memory routes/read model, the serializer
+fix and memories in the export; the web bundle verified to carry the 10.7 strings and the tailnet
+URL, never `localhost:3000` · migration **23 → 24** by row count, tracked hash = file SHA-256,
+three tables inspected column/constraint/index/grant by name · `api` then `web` recreated alone,
+`(healthy)` in 6 s, `worker`/`postgres` untouched by their own start timestamps · every read route
+`200` locally and over Tailscale · the full memory lifecycle, a real-course "You said" explanation
+in the production web client, and the privacy boundary validated on real data, 0 rows left · 0
+statement text / 0 warn/error / 0 `DrizzleQueryError` in the api log · versionCode-32 APK built and
+verified, install pending the device.
 
 **Checkpoint 10.7 gate (2026-09-17), full monorepo, integrator-run, at the branch tip.** `pnpm build
 --force` 12/12 · `pnpm typecheck` 23/23 · `npx eslint apps packages` and `apps/mobile`'s own
@@ -2785,16 +2886,16 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 
 ## Next action
 
-1. **Checkpoint 10.7 awaits the owner's deploy decision.** It is implemented, verified (7,089
-   tests), live-verified in the browser, independently reviewed with every required fix closed,
-   and committed on `claude/personal-memory-preference-layer-45c590`. On "deploy": open the PR,
-   fast-forward `main`, and run the frozen order recorded in the 10.7 entry — this one HAS a
-   migration (`0023`, 23 → 24, additive), so the migrate step and its row-count assertion are back
-   on the path; `api` + `web` rebuilt, `worker`/`postgres` untouched; then the local Rabbit build
-   (versionCode 32) with the on-device launch sweep, since the Memory Center adds two sheets the
-   vitest mocks cannot exercise. Checkpoints 10.4–10.6 are deployed and accepted. Two things worth
-   watching on real use: the first production exercise of Reanimated worklets on the Rabbit, and
-   the briefing's free-block line once real classes are on the calendar.
+1. **Install the Rabbit R1 versionCode-32 APK and walk the Memory Center on the device.** The
+   server side of Checkpoint 10.7 is deployed and validated; the APK is built and verified
+   (`/tmp/personal-os-10.7-vc32.apk`, signer `4601e3a2…`, 0 `localhost:3000`). Needs the device
+   on USB with a data cable: `adb install -r` (in-place; expect `firstInstallTime` 2026-08-19,
+   exact-alarm appop `allow` and `POST_NOTIFICATIONS` preserved), launch with `am start`, sweep
+   logcat for `FATAL EXCEPTION`, then Settings → Memory → create / edit / delete / toggle, light
+   and dark. Only after that can 10.7 be recorded as ACCEPTED on the device and the checkpoint
+   closed. Checkpoints 10.4–10.6 are deployed and accepted. Two things worth watching on real use:
+   the first production exercise of Reanimated worklets on the Rabbit, and the briefing's
+   free-block line once real classes are on the calendar.
 
 2. **Choose the next checkpoint — a product-direction decision for the owner.** Candidates
    carried forward: widen the Canvas integration further (device-token auth on the academic routes;
