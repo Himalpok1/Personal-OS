@@ -125,7 +125,9 @@ describeIf("migration 0024 constraints", () => {
       await expectSqlState(() => insertGrant(), SQLSTATE.uniqueViolation);
       await db.query("update permission_grants set revoked_at = now()");
       await expect(insertGrant({ disclosure_version: "2026-10-01" })).resolves.toBeTruthy();
-      const { rows } = await db.query("select count(*)::int as n from permission_grants");
+      const { rows } = await db.query<{ n: number }>(
+        "select count(*)::int as n from permission_grants",
+      );
       expect(rows[0]!.n).toBe(2);
     });
 
