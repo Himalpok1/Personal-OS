@@ -2855,6 +2855,11 @@ the watchdog's report and the ledger; `nvme smart-log`, a reseat or `pcie_aspm=o
 reboot are owner actions. No exposed public service, no privilege escalation path, no credential
 in any log line found.
 
+**Owner decisions (2026-09-18, in-session).** (i) **Ray's key stays as it is for now** — the
+owner chose not to bind the forced command yet; the wrapper is installed and ready, the ledger
+entry stays open, and the watchdog is the only guard. (ii) **The root steps will be run by the
+owner later** with the commands below; this session ran none of them.
+
 **Owner-gated steps (NOT executed — each needs the owner's password or is the owner's call).**
 Exact commands in `docs/HOMELAB-RUNBOOK.md` §5–§7:
 
@@ -3158,10 +3163,10 @@ replaced).
   10.8.5).** The only disk, no backup (ADR-024). Correctable is not corruption, but the rate is a
   hardware signal: `sudo nvme smart-log /dev/nvme0` after the reboot, reseat, or `pcie_aspm=off`.
   The watchdog's `--report` prints the day's count.
-- **Ray's SSH key is unrestricted until the owner applies ADR-079 §4 (10.8.5).** The forced-command
-  wrapper is installed at `~/personal-os-ops/ray-poll-wrapper.sh` but not bound to the key; until
-  it is, the watchdog detects a missing deploy key / rollback set / disk growth within 30 minutes
-  but cannot prevent them.
+- **Ray's SSH key is unrestricted — an explicit owner decision at 10.8.5 ("keep as is for
+  now").** The forced-command wrapper is installed at `~/personal-os-ops/ray-poll-wrapper.sh` but
+  not bound to the key; until it is, the watchdog detects a missing deploy key / rollback set /
+  disk growth within 30 minutes but cannot prevent them. Revisit before any agent ADR.
 - **`sshd` answers on `0.0.0.0:22` with password authentication enabled (10.8.5).** Stock config;
   the recovery path that worked on 2026-09-18. Close it with `harden-ssh.sh
   --disable-password-auth` once the root-owned deploy-key file is proven from the Mac.
@@ -3578,9 +3583,8 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
 1. **Finish Checkpoint 10.8.5 — four owner steps** (`docs/HOMELAB-RUNBOOK.md` §5–§7; the pruner
    is identified and fenced as far as a non-root session can: ADR-079). (a) `ssh -t personal-os
    'sudo bash ~/personal-os-ops/harden-ssh.sh'`, then `scripts/homelab/preflight.sh`, then
-   `--disable-password-auth`. (b) Decide Ray's access: bind the `hatch` key to
-   `ray-poll-wrapper.sh` and give Ray a separate revocable admin key — or keep it and accept the
-   watchdog as the only guard. (c) `sudo bash ~/personal-os-ops/apply-os-updates.sh` → `sudo
+   `--disable-password-auth`. (b) Ray's access: the owner chose "keep as is for now" — bind
+   the `hatch` key to `ray-poll-wrapper.sh` whenever that changes. (c) `sudo bash ~/personal-os-ops/apply-os-updates.sh` → `sudo
    reboot` → `scripts/homelab/preflight.sh` (containers, `/health`, Tailscale, cron all expected
    back). (d) Subscribe to ntfy topic `personal-os-ops` on the phone. Optional: read Ray's
    transcript on `muse` for 06:29–06:40Z to make the attribution certain, and `nvme smart-log`
