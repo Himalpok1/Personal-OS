@@ -34,6 +34,7 @@ Single-user, self-hosted life dashboard. Notes, reminders, tasks, calendar, proj
 | Mail | Gmail only, `gmail.metadata` only, read-only, polled; the app never acts on mail (ADR-052/053/054) |
 | Intelligence | Read-only before write-capable; request-scoped, cited, nothing stored; no pgvector or Postgres image change without its own ADR (ADR-056/066/067) |
 | Canvas | Read-only, PAT-authenticated Canvas LMS sync (ADR-068) |
+| Agents | A gateway with identity, trust levels, permissioned read tools, budgeted and audited calls, and proposals through the Action Framework; no runtime selected (ADR-081/082/070b) |
 
 ---
 
@@ -631,6 +632,61 @@ entirely outside both of `ai-egress-guard.test.ts`'s pinned surfaces by construc
 the full discovery record (verified live against the owner's real account, not assumed from
 documentation) and the complete field-by-field storage decision.
 
+## Agent Gateway — the boundary a future agent operates through (Checkpoint 10.9, ADR-081/082/070b)
+
+Personal OS owns identity, context, memory, permissions, tools, actions, approvals and audit; an
+agent — internal or external, OpenClaw, Hermes or otherwise — is replaceable and operates only
+through this boundary. **No runtime is selected or integrated**; the gateway exists so that one
+can be, later, without bypassing anything below.
+
+```
+Owner ──► Personal OS ──► Agent Gateway ──► Context / read tools ──► Permission layer ──► Action registry ──► Approval ──► Execution ──► Audit
+                            (/agent/*)       (six READ_TOOL_NAMES)    (permission_grants,     (six ACTION_IDS,     (owner's       (synchronous,   (agent_tool_calls,
+                                                                        principal = agent)      requires_approval)   device tap)    single-use)     action_requests)
+Future: an external agent on the tailnet, or an internal runtime ──► the same gateway, the same manifest, nothing else
+```
+
+**Standing rules, each with an enforcement site.** The agent never touches Postgres, credentials,
+OAuth tokens, Docker, the filesystem, secrets or any unrestricted API — it holds a `posa_` bearer
+that authenticates `/agent/*` and nothing else (`plugins/agent-auth.ts`; a device token and an
+agent token are never interchangeable, Guard 8(d)). *Reads are tools, writes are actions*
+(ADR-078 §1): an agent may CALL one of the six read tools — `search_personal_items`,
+`get_item_context`, `get_today_context`, `get_calendar_context`, `get_task_context`,
+`get_academic_context` — each behind a per-principal permission (`context.read`, `items.read` for
+the one body-bearing tool, `academic.read` for the third-party-text one; all OFF until the owner
+grants them from a paired device) and each returning a `.strict()`, bounded, description-free
+output; it may only REQUEST one of the six registered actions, which lands as a `pending`
+`action_requests` row (`principal = 'agent'`, `source = 'agent'`, `source_ref = agent.id`) that
+the owner approves or cancels in the Action Center. *Grants gate requests, never execution*
+(ADR-078 §3); approval is bound to the paired device's bearer (ADR-082), and **no `/agent/*`
+route can approve**. *Trust levels*: `none` (registered, paused) · `read` · `propose`; the
+trusted-operator level ADR-079 §4 grants Ray is host access outside the product and has no
+member here. *Budgets*: ≤ 6 calls and ≤ 30 000 characters per agent-supplied `correlation_id`,
+≤ 60 calls per minute per agent, enforced before dispatch and returned on every response.
+*Audit*: every tool call — including a refusal — is an `agent_tool_calls` row (tool name, status,
+error class, characters returned; never the input or output); every proposal is its
+`action_requests` row; the owner reads both, grouped by `correlation_id`, as "Read: Today ·
+Calendar → Proposed: Create calendar event → Approved → Result". *Memory never reaches an agent*
+(`memory.read` is reserved, not bound; Guard 6 unchanged). *Nothing reaches a model through the
+gateway*: it hands data to a registered principal, and the `generateText` call-site set Guard 1
+pins is unchanged. **Guard 8** in `ai-egress-guard.test.ts` holds the gateway to all of this and
+keeps every AI lane, other read model and worker file from importing it back. Academic data may
+leave through the gateway and nowhere else, as a link-free, grade-free, third-party-flagged
+projection, only under `academic.read` (ADR-070b). Until every remaining mutating route is also
+device-bound, connecting an external agent to the tailnet is not safe — ADR-082 §6 records that
+as the hard precondition for 10.10.
+
+**The 10.8 Action Framework, which had no section of its own here (ADR-078).** An action is a
+registered, permission-gated, owner-approved, audited mutation: a closed six-member registry in
+three reversible pairs (`create_calendar_event ↔ archive_calendar_event`, `create_task ↔
+archive_task`, `complete_task ↔ reopen_task`) with `.strict()` inputs narrower than the direct
+routes and `requires_approval: true` as a literal. A request row (`action_requests`) is created
+`pending` with its validated input frozen, executed synchronously and single-use inside the
+owner's approve request (one conditional claim, the handler in a savepoint, `completed | failed`
+before commit, never pg-boss), and is itself the audit trail — never edited after terminal, never
+swept, exported as summary. Grants (`permission_grants`, `tasks.write` | `calendar.write`, per
+principal `app | agent`) gate whether a principal may request, never whether it may run.
+
 ## The parse pipeline
 
 1. `POST /capture` → insert `inbox_items` row, status `pending`, return 202.
@@ -750,7 +806,7 @@ prove FCM or the device received it; receipt polling remains outside the MVP.
 - Run `tailscale serve` on the i5 for **real HTTPS certs** on `https://hub.<tailnet>.ts.net`. iOS is increasingly hostile to plain HTTP and Shortcuts is picky; this makes the problem disappear.
 - Enable **MagicDNS** so nothing hardcodes an IP.
 - Enable **VPN On Demand** in the Tailscale iOS app so the tunnel is up before Shortcuts fires. Android: enable Always-on VPN in system settings.
-- Tailscale ACLs remain the perimeter for the general API. Device registration requires a short-lived, atomically single-use pairing code generated via trusted server CLI access; the raw code and raw bearer token are never stored server-side. The bearer token in `expo-secure-store` protects only device/notification-specific endpoints. Revoking its row does **not** revoke `/tasks`, `/capture`, the web UI, or other Tailscale-perimeter routes; a lost device must also be removed from the tailnet for full access revocation.
+- Tailscale ACLs remain the perimeter for the general API. Device registration requires a short-lived, atomically single-use pairing code generated via trusted server CLI access; the raw code and raw bearer token are never stored server-side. The bearer token in `expo-secure-store` protects the device/notification-specific endpoints and, since ADR-082 (Checkpoint 10.9), the routes that close the agent loop — `POST /actions/:id/approve|cancel`, `PATCH /permissions/**` and every `/agents/*` owner route. Revoking its row does **not** revoke `/tasks`, `/capture`, the web UI, or other Tailscale-perimeter routes; a lost device must also be removed from the tailnet for full access revocation.
 - **PostgreSQL is never published.** No `ports:` entry in compose — it exists only on the internal Docker network. Admin access goes over Tailscale SSH or a tunnel, never a bound public port.
 - The app connects as a **least-privilege role**, not `postgres`. No superuser, no `CREATE`, migrations run as a separate role.
 
@@ -896,7 +952,7 @@ Phase 8 as approved: **make Personal OS a daily driver.** Make failures visible,
 
 **Phase 9 — Reliability, daily-use and read-only intelligence (2026-09-12 → 2026-09-15; ADR-062 … ADR-067; closed under ADR-069).** Ran under an accelerated operating model — audit → implementation lanes → adversarial review → deploy, with no soak wait between checkpoints. 9.0 reliability and privacy housekeeping (every retrying queue has a dead-letter queue, unknown routes drop their query string, OAuth state swept by retention); 9.1 daily-use (notification-shade capture, the `alerts`/`updates`/`capture` channels); 9.2 a 21-day adoption soak, **owner-terminated after 25 minutes with no adoption conclusion permitted** (`docs/SOAK-9.2.md`); 9.3 close the capture→task loop (`/inbox/[id]`, inbox archive, migration `0017`); 9.4 dependable recurring tasks and reminders (one successor rule for every writer, occurrence snooze, per-occurrence reminders; migration `0018`); 9.5 calendar as an authoring surface (explicit `events.origin`, durable outbound push; migration `0019`); 9.6 content bounds at every write plus six-entity, date-aware, explainably ranked lexical search; 9.7 read-only "Ask about today" over a bounded, cited `TodayContext`; 9.8 Suggested Focus. No phase-level product claim was made — the soak that would have supported one was terminated. Record: `docs/history/phase-9.md`.
 
-**Phase 10 — Codebase Consolidation & Agent Readiness (opened 2026-09-15; OPEN).** 10.0 a behavior-preserving cleanup pass plus `docs/AGENT-READINESS.md`, the canonical-boundary inventory a future read-only or write-capable agent would build from (no agent runtime, tool loop or `posops_readonly` role exists yet); 10.1 the read-only, PAT-authenticated Canvas LMS integration (ADR-068, migration `0020`, the section above); 10.1B its production deployment and live validation; 10.1C the reconnect-after-disconnect fix, deployed (api only) and validated live the same day. Current state and next action: `docs/STATUS.md`.
+**Phase 10 — Codebase Consolidation & Agent Readiness (opened 2026-09-15; OPEN).** 10.0 a behavior-preserving cleanup pass plus `docs/AGENT-READINESS.md`, the canonical-boundary inventory a future read-only or write-capable agent would build from (no agent runtime, tool loop or `posops_readonly` role exists yet); 10.1 the read-only, PAT-authenticated Canvas LMS integration (ADR-068, migration `0020`, the section above); 10.1B its production deployment and live validation; 10.1C the reconnect-after-disconnect fix, deployed (api only) and validated live the same day; 10.2–10.8 the academic, Focus Now, context, intelligence, memory and action layers (ADR-070–078) and 10.8.5 the home-lab hardening (ADR-079/080); 10.9 the Agent Gateway — identity, trust levels, the six read tools bound behind per-principal permissions, budgets, audit, device-bound approval and Guard 8, with no runtime selected (ADR-081/082/070b, migration `0025`, the section above). Current state and next action: `docs/STATUS.md`.
 
 ---
 

@@ -32,7 +32,7 @@ function collectObjectKeys(schema: z.ZodTypeAny): string[] {
     }
     const record = node as Record<string, unknown>;
     if (typeof record["properties"] === "object" && record["properties"] !== null) {
-      keys.push(...Object.keys(record["properties"] as object));
+      keys.push(...Object.keys(record["properties"]));
     }
     Object.values(record).forEach(visit);
   };
