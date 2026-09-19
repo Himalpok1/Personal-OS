@@ -1,4 +1,5 @@
 import {
+  agentToolCalls,
   canvasSyncRuns,
   healthOauthStates,
   healthSyncRuns,
@@ -19,13 +20,19 @@ import { resolveDigestTimezone } from "../mail/digest/run.js";
 // explicit and every window is the owner-approved number, never invented).
 //
 // ===========================================================================
-// ONE CENTRAL EXECUTION PATH, EIGHT INDEPENDENT TABLES.
+// ONE CENTRAL EXECUTION PATH, NINE INDEPENDENT TABLES.
 // ===========================================================================
 //
 // Five age-windowed tables from Checkpoint 8.6C (D3-D6), the two OAuth
-// state tables added by Checkpoint 9.0 Part D (see the section below), and
+// state tables added by Checkpoint 9.0 Part D (see the section below),
 // `canvas_sync_runs` added by Checkpoint 10.1 (ADR-068 §5) on the same
-// 30-day `finished_at` window as `mail_sync_runs`/`health_sync_runs`.
+// 30-day `finished_at` window as `mail_sync_runs`/`health_sync_runs`, and
+// `agent_tool_calls` added by Checkpoint 10.9 (ADR-081 §7) on the same
+// 30-day window keyed on `called_at`. The agent read-audit rows are
+// operational metadata of the *_sync_runs class -- they hold no input, no
+// output, no title -- so they join the same sweep. This is the ONE worker
+// file allowed to name that table (Guard 8 (b)); `agents` itself and
+// `action_requests` are never swept, by source pin.
 //
 // Each table gets its own single bounded DELETE, tried independently of the
 // others: one table's failure must not stop the rest (a Postgres error on
@@ -142,6 +149,14 @@ const HEALTH_SYNC_RUNS_RETENTION_DAYS = 30;
  * 30-day finished_at window ... no new cron, no new schedule."
  */
 const CANVAS_SYNC_RUNS_RETENTION_DAYS = 30;
+/**
+ * Checkpoint 10.9 (ADR-081 §7): one row per agent read-tool call, refusals
+ * included -- ids, a tool name, a status, an error class, a char count and
+ * a duration, never a payload. Operational audit of the *_sync_runs class,
+ * on the identical 30-day window. `called_at` is set at insert (never NULL),
+ * so no in-flight guard is needed: a row exists only once the call is over.
+ */
+export const AGENT_TOOL_CALLS_RETENTION_DAYS = 30;
 
 function daysAgo(now: Date, days: number): Date {
   return new Date(now.getTime() - days * DAY_MS);
@@ -290,6 +305,19 @@ async function deleteCanvasSyncRuns(db: Db, now: Date): Promise<RetentionTableRe
   };
 }
 
+async function deleteAgentToolCalls(db: Db, now: Date): Promise<RetentionTableResult> {
+  const cutoff = daysAgo(now, AGENT_TOOL_CALLS_RETENTION_DAYS);
+  const start = Date.now();
+  const result = await db.delete(agentToolCalls).where(lt(agentToolCalls.calledAt, cutoff));
+  return {
+    table: "agent_tool_calls",
+    cutoff: cutoff.toISOString(),
+    deleted: result.rowCount ?? 0,
+    durationMs: Date.now() - start,
+    ok: true,
+  };
+}
+
 /**
  * Checkpoint 9.0 Part D. The row's own `expires_at` is the whole predicate
  * -- see the module comment for why there is no window constant and why
@@ -336,6 +364,7 @@ export const TABLE_CLEANERS: readonly RetentionTableCleaner[] = [
   { table: "health_oauth_states", clean: deleteHealthOauthStates },
   { table: "mail_oauth_states", clean: deleteMailOauthStates },
   { table: "canvas_sync_runs", clean: deleteCanvasSyncRuns },
+  { table: "agent_tool_calls", clean: deleteAgentToolCalls },
 ];
 
 /**

@@ -1,4 +1,7 @@
 import {
+  actionRequests,
+  agentToolCalls,
+  agents,
   aiProviderConnections,
   canvasConnections,
   canvasCourses,
@@ -573,5 +576,97 @@ describe("GET /export", () => {
     const generated = Date.parse(body.generated_at);
     expect(generated).toBeGreaterThanOrEqual(before - 1000);
     expect(generated).toBeLessThanOrEqual(Date.now() + 1000);
+  });
+});
+
+describe("GET /export and the Agent Gateway (Checkpoint 10.9, ADR-081 §7)", () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    app = await buildTestApp();
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(async () => {
+    await truncateTestTables(app);
+  });
+
+  it("carries no agents or agent_tool_calls key, and an agent-attributed action row keeps the 10.8 shape (no agent_id, no correlation_id, no token)", async () => {
+    const [agent] = await app.db
+      .insert(agents)
+      .values({
+        name: "Export fixture agent",
+        trustLevel: "propose",
+        tokenHash: "deadbeef-token-hash-do-not-export",
+        disclosureVersion: "2026-09-18",
+      })
+      .returning({ id: agents.id });
+    const correlation = crypto.randomUUID();
+    await app.db.insert(agentToolCalls).values({
+      agentId: agent!.id,
+      correlationId: correlation,
+      toolName: "get_today_context",
+      status: "completed",
+      errorClass: null,
+      charsReturned: 10,
+      durationMs: 1,
+    });
+    const now = new Date();
+    await app.db.insert(actionRequests).values({
+      actionId: "create_task",
+      principal: "agent",
+      status: "pending",
+      source: "agent",
+      sourceRef: agent!.id,
+      reason: "agent-authored reason",
+      input: { title: "Agent task", timezone: "UTC" },
+      inputSummary: "Create task “Agent task”",
+      agentId: agent!.id,
+      correlationId: correlation,
+      requestedAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    });
+
+    const response = await app.inject({ method: "GET", url: "/export" });
+    expect(response.statusCode).toBe(200);
+    const body = ExportResponseSchema.parse(response.json());
+    const keys = Object.keys(body);
+    expect(keys).not.toContain("agents");
+    expect(keys).not.toContain("agent_tool_calls");
+    expect(body.action_requests).toHaveLength(1);
+    const row = body.action_requests[0]!;
+    expect(row.principal).toBe("agent");
+    expect(row.source).toBe("agent");
+    expect(row.source_ref).toBe(agent!.id);
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        "id",
+        "action_id",
+        "principal",
+        "status",
+        "source",
+        "source_ref",
+        "reason",
+        "input_summary",
+        "result_summary",
+        "target_type",
+        "target_id",
+        "error_class",
+        "reverses_request_id",
+        "requested_at",
+        "expires_at",
+        "approved_at",
+        "finished_at",
+      ].sort(),
+    );
+    expect(response.body).not.toContain("agent_id");
+    expect(response.body).not.toContain("correlation_id");
+    expect(response.body).not.toContain(correlation);
+    expect(response.body).not.toContain("do-not-export");
+    expect(response.body).not.toContain("Export fixture agent");
   });
 });

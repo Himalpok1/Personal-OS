@@ -10,6 +10,7 @@ import {
   createActionRequest,
 } from "../actions/service.js";
 import { ActionValidationError } from "../actions/types.js";
+import { deviceAuthPreHandler } from "../plugins/device-auth.js";
 import {
   getActionRequestItem,
   getActionsSummary,
@@ -19,11 +20,18 @@ import {
 // The Action Framework's request lifecycle (Checkpoint 10.8, ADR-078 §4).
 //
 //   POST /actions              propose  -> 201 pending (200 for a repeated client_uuid)
-//   POST /actions/:id/approve  approve  -> 200 completed | failed   (executes HERE, one tx)
-//   POST /actions/:id/cancel   cancel   -> 200 cancelled
+//   POST /actions/:id/approve  approve  -> 200 completed | failed   (executes HERE, one tx)  DEVICE-bound
+//   POST /actions/:id/cancel   cancel   -> 200 cancelled                                     DEVICE-bound
 //   GET  /actions[?status=]    the audit trail, newest first
 //   GET  /actions/summary      counts for the Settings and Today cards
 //   GET  /actions/:id          one row
+//
+// Since Checkpoint 10.9 (ADR-082) approve and cancel are bound to a paired
+// device's bearer token, inside one sub-context with `deviceAuthPreHandler`
+// exactly as routes/devices.ts binds its own: a process on the tailnet --
+// an agent included -- can PROPOSE (that is what proposing is for; it still
+// waits for approval) but can never approve its own proposal or withdraw
+// the owner's. The GETs and `POST /actions` stay perimeter-only.
 //
 // `principal` is never client-supplied (ActionRequestCreateSchema has no such
 // field; the service writes `app`). A failed execution is a 200 with the
@@ -75,22 +83,26 @@ export default function actionsRoutes(app: FastifyInstance): void {
     }
   });
 
-  app.post<{ Params: { id: string } }>("/actions/:id/approve", async (request, reply) => {
-    const params = IdParamsSchema.parse(request.params);
-    try {
-      return await approveActionRequest(app, params.id, new Date());
-    } catch (err: unknown) {
-      return lifecycleError(err, reply);
-    }
-  });
+  app.register((authed) => {
+    authed.addHook("preHandler", deviceAuthPreHandler);
 
-  app.post<{ Params: { id: string } }>("/actions/:id/cancel", async (request, reply) => {
-    const params = IdParamsSchema.parse(request.params);
-    try {
-      return await cancelActionRequest(app, params.id, new Date());
-    } catch (err: unknown) {
-      return lifecycleError(err, reply);
-    }
+    authed.post<{ Params: { id: string } }>("/actions/:id/approve", async (request, reply) => {
+      const params = IdParamsSchema.parse(request.params);
+      try {
+        return await approveActionRequest(app, params.id, new Date());
+      } catch (err: unknown) {
+        return lifecycleError(err, reply);
+      }
+    });
+
+    authed.post<{ Params: { id: string } }>("/actions/:id/cancel", async (request, reply) => {
+      const params = IdParamsSchema.parse(request.params);
+      try {
+        return await cancelActionRequest(app, params.id, new Date());
+      } catch (err: unknown) {
+        return lifecycleError(err, reply);
+      }
+    });
   });
 }
 

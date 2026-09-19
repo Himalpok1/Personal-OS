@@ -11,6 +11,7 @@ import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { agentHeaders, pairTestDevice } from "../test/agents.test-support.js";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
 import type { ErrorBody } from "../test/types.js";
 
@@ -18,6 +19,13 @@ import type { ErrorBody } from "../test/types.js";
 // real routes, the real service and the real handlers: propose -> approve
 // (executes) | cancel, the single-use claim, expiry, the permission gate,
 // undo, idempotency and the audit row's contents.
+//
+// Since Checkpoint 10.9 (ADR-082) approve, cancel and the permission PATCH
+// are DEVICE-bound: every call to them below carries a paired device's
+// bearer (`deviceToken`, paired fresh in beforeEach); the assertions are
+// otherwise the 10.8 ones, unchanged.
+
+let deviceToken = "";
 
 const TITLE = "Read chapter 4 of the biology textbook";
 
@@ -71,7 +79,11 @@ async function propose(
 }
 
 async function approve(app: FastifyInstance, id: string, expectedStatus = 200) {
-  const response = await app.inject({ method: "POST", url: `/actions/${id}/approve` });
+  const response = await app.inject({
+    method: "POST",
+    url: `/actions/${id}/approve`,
+    headers: agentHeaders(deviceToken),
+  });
   expect(response.statusCode, response.body).toBe(expectedStatus);
   return response;
 }
@@ -80,6 +92,7 @@ async function revoke(app: FastifyInstance, permission: string) {
   const response = await app.inject({
     method: "PATCH",
     url: `/permissions/${permission}`,
+    headers: agentHeaders(deviceToken),
     payload: { granted: false },
   });
   expect(response.statusCode).toBe(200);
@@ -99,6 +112,7 @@ describe("actions routes", () => {
 
   beforeEach(async () => {
     await truncateTestTables(app);
+    deviceToken = await pairTestDevice(app);
   });
 
   // ---- propose ----------------------------------------------------------
@@ -273,7 +287,11 @@ describe("actions routes", () => {
 
   it("approving a cancelled request is refused and writes nothing", async () => {
     const item = await propose(app, createTaskBody());
-    const cancel = await app.inject({ method: "POST", url: `/actions/${item.id}/cancel` });
+    const cancel = await app.inject({
+      method: "POST",
+      url: `/actions/${item.id}/cancel`,
+      headers: agentHeaders(deviceToken),
+    });
     expect(cancel.statusCode).toBe(200);
     expect(ActionRequestItemSchema.parse(cancel.json()).status).toBe("cancelled");
     const replay = await approve(app, item.id, 409);
@@ -496,6 +514,7 @@ describe("action routes never log a title, a summary or a reason (ADR-078 §4)",
 
   beforeEach(async () => {
     await truncateTestTables(app);
+    deviceToken = await pairTestDevice(app);
     chunks.length = 0;
   });
 
@@ -513,7 +532,11 @@ describe("action routes never log a title, a summary or a reason (ADR-078 §4)",
         app,
         createTaskBody({ input: { title: "Zanzibar title", timezone: "UTC" } }),
       );
-      await app.inject({ method: "POST", url: `/actions/${other.id}/cancel` });
+      await app.inject({
+        method: "POST",
+        url: `/actions/${other.id}/cancel`,
+        headers: agentHeaders(deviceToken),
+      });
       await propose(app, createTaskBody({ input: { title: "Zanzibar again", timezone: "UTC" } }));
       await revoke(app, "tasks.write");
       // Refusals go through the error path too.
@@ -521,6 +544,7 @@ describe("action routes never log a title, a summary or a reason (ADR-078 §4)",
       await app.inject({
         method: "PATCH",
         url: "/permissions/tasks.write",
+        headers: agentHeaders(deviceToken),
         payload: { granted: true },
       });
       // A Zod 400 (the body echoes issues, never the input) ...

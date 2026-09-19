@@ -9,7 +9,11 @@ import { buildTestApp } from "../test/build-test-app.js";
 
 let app: FastifyInstance;
 
-const NOW = new Date("2026-09-16T12:00:00Z");
+// The route buckets against the REAL clock, so the fixture must too: a fixed
+// instant here went stale on 2026-09-18 and made every "upcoming" assertion
+// false (found at Checkpoint 10.9's root gate; the other seeds already used
+// Date.now()).
+const NOW = new Date();
 
 beforeAll(async () => {
   app = await buildTestApp();

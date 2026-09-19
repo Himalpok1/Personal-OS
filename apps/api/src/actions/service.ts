@@ -6,19 +6,25 @@ import {
   ACTION_REGISTRY,
   ACTION_REQUEST_TTL_HOURS,
   ACTION_SUMMARY_MAX_CHARS,
+  ActionPrincipalSchema,
   actionsRequiring,
+  isActionPermission,
   reversalActionOf,
   type ActionErrorClass,
   type ActionId,
   type ActionPermission,
+  type ActionPrincipal,
   type ActionRequestCreate,
   type ActionRequestItem,
+  type AgentPermission,
+  type AgentPermissionUpdateResponse,
   type PermissionUpdateResponse,
 } from "@personal-os/schema";
 import { and, eq, gt, inArray, isNull, lte } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
   getActionRequestItem,
+  getAgentPermissionGrantItem,
   isPermissionGranted,
   listPermissionGrants,
   type ActionReader,
@@ -50,6 +56,17 @@ import {
 //
 // Log lines carry ids, action ids and error classes only -- never a title,
 // a summary or the input.
+//
+// Checkpoint 10.9 (ADR-081 §6) generalises three entry points over the
+// PRINCIPAL without a new import: `createActionRequest` takes an optional
+// agent attribution (the gateway is the only caller that passes one; the
+// owner route never can), `cancelActionRequest` takes an optional agent
+// scope so an agent can cancel only its own pending row, and
+// `setPermissionGrant` takes the principal so the owner can grant or revoke
+// the `agent` principal's read and write permissions. `runHandler` re-checks
+// the grant under the ROW'S principal, so an agent proposal whose agent
+// grant was revoked after the fact fails at approval even while the app
+// grant is live. Nothing here approves on an agent's behalf.
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 type ActionRequestRow = typeof actionRequests.$inferSelect;
@@ -171,17 +188,34 @@ export interface CreateActionRequestResult {
 }
 
 /**
+ * The `agent` principal's attribution, supplied ONLY by the Agent Gateway
+ * (routes/agent.ts) for an authenticated agent. `principal` is a literal so
+ * no caller can attribute a request to `app` through this parameter, and the
+ * owner route (`POST /actions`) never passes one at all.
+ */
+export interface AgentAttribution {
+  principal: "agent";
+  agentId: string;
+  correlationId: string;
+}
+
+/**
  * Throws `ActionPermissionDeniedError` (403), `ActionValidationError` (400)
- * or returns the pending row. `principal` is always `app` in 10.8 -- the
- * route never lets a client choose it.
+ * or returns the pending row. `principal` is `app` unless the gateway passes
+ * an agent attribution -- the owner route never lets a client choose it.
+ * With an attribution the row is written `source: "agent"` and
+ * `source_ref: <agent id>` (the projection of `agent_id` onto the wire shape
+ * the deployed client already parses), whatever the body says.
  */
 export async function createActionRequest(
   app: FastifyInstance,
   body: ActionRequestCreate,
   now: Date,
+  attribution?: AgentAttribution,
 ): Promise<CreateActionRequestResult> {
   const definition = ACTION_REGISTRY[body.action_id];
-  if (!(await isPermissionGranted(app.db, "app", definition.permission))) {
+  const principal: ActionPrincipal = attribution?.principal ?? "app";
+  if (!(await isPermissionGranted(app.db, principal, definition.permission))) {
     throw new ActionPermissionDeniedError(definition.permission);
   }
 
@@ -198,16 +232,18 @@ export async function createActionRequest(
       .values({
         clientUuid: body.client_uuid ?? null,
         actionId: body.action_id,
-        principal: "app",
+        principal,
         status: "pending",
-        source: body.source,
-        sourceRef: body.source_ref ?? null,
+        source: attribution ? "agent" : body.source,
+        sourceRef: attribution ? attribution.agentId : (body.source_ref ?? null),
         reason: body.reason ? stripControls(body.reason) || null : null,
         input: body.input,
         inputSummary: boundSummary(preparation.inputSummary),
         targetType: preparation.target?.type ?? null,
         targetId: preparation.target?.id ?? null,
         reversesRequestId: body.reverses_request_id ?? null,
+        agentId: attribution?.agentId ?? null,
+        correlationId: attribution?.correlationId ?? null,
         requestedAt: now,
         expiresAt,
         createdAt: now,
@@ -216,7 +252,14 @@ export async function createActionRequest(
       .returning({ id: actionRequests.id });
     if (!row) throw new Error("insert into action_requests returned no row");
     app.log.info(
-      { requestId: row.id, actionId: body.action_id, source: body.source },
+      {
+        requestId: row.id,
+        actionId: body.action_id,
+        source: attribution ? "agent" : body.source,
+        principal,
+        agentId: attribution?.agentId,
+        correlationId: attribution?.correlationId,
+      },
       "action.requested",
     );
     return { item: await requireItem(app.db, row.id, now), created: true };
@@ -237,19 +280,27 @@ export async function createActionRequest(
   }
 }
 
+/** An agent may touch only its own rows: a foreign id reads as absent (404), never as forbidden. */
+export interface AgentScope {
+  agentId: string;
+}
+
 /**
  * Called only when the claim found nothing to claim. Flips a stale pending
  * row to `expired` and RETURNS the status to report -- it must not throw,
  * because a throw would roll back that very flip with the transaction.
- * `null` means the row does not exist.
+ * `null` means the row does not exist -- or, under an agent scope, is not
+ * that agent's row.
  */
 async function resolveUnclaimable(
   tx: Tx,
   id: string,
   now: Date,
+  scope?: AgentScope,
 ): Promise<ActionRequestRow["status"] | null> {
   const [row] = await tx.select().from(actionRequests).where(eq(actionRequests.id, id));
   if (!row) return null;
+  if (scope && row.agentId !== scope.agentId) return null;
   if (row.status === "pending") {
     // The claim failed only because expires_at has passed: record it.
     const flipped = await tx
@@ -290,14 +341,17 @@ async function runHandler(
   const actionId = row.actionId as ActionId;
   const definition = ACTION_REGISTRY[actionId];
 
-  // The grant is re-checked inside the transaction: a revoke that landed
-  // after the request was made (around the route, which cancels pending
-  // rows) is refused here. A revoke racing this very approval is a plain
-  // SELECT under READ COMMITTED, so the two owner taps serialise on the row
-  // lock in whichever order they arrive -- approve-then-revoke completes the
-  // action and revokes afterwards; revoke-then-approve fails it here. Either
-  // outcome is linearizable; neither escalates.
-  if (!(await isPermissionGranted(tx, "app", definition.permission))) {
+  // The grant is re-checked inside the transaction UNDER THE ROW'S OWN
+  // PRINCIPAL: a revoke that landed after the request was made (around the
+  // route, which cancels pending rows) is refused here, and an agent
+  // proposal is checked against the agent grant, never the app's. A revoke
+  // racing this very approval is a plain SELECT under READ COMMITTED, so the
+  // two owner taps serialise on the row lock in whichever order they arrive
+  // -- approve-then-revoke completes the action and revokes afterwards;
+  // revoke-then-approve fails it here. Either outcome is linearizable;
+  // neither escalates.
+  const principal = ActionPrincipalSchema.parse(row.principal);
+  if (!(await isPermissionGranted(tx, principal, definition.permission))) {
     return {
       status: "failed",
       errorClass: "permission_revoked",
@@ -401,10 +455,16 @@ export async function approveActionRequest(
   return requireItem(app.db, id, now);
 }
 
+/**
+ * The owner's cancel -- or, with an agent `scope`, an agent's cancel of ITS
+ * OWN pending row: the scope joins the conditional UPDATE's predicate, so a
+ * foreign id cancels nothing and reads back as not found.
+ */
 export async function cancelActionRequest(
   app: FastifyInstance,
   id: string,
   now: Date,
+  scope?: AgentScope,
 ): Promise<ActionRequestItem> {
   const unclaimable = await app.db.transaction(async (tx) => {
     const [cancelled] = await tx
@@ -415,37 +475,66 @@ export async function cancelActionRequest(
           eq(actionRequests.id, id),
           eq(actionRequests.status, "pending"),
           gt(actionRequests.expiresAt, now),
+          scope ? eq(actionRequests.agentId, scope.agentId) : undefined,
         ),
       )
       .returning({ id: actionRequests.id });
-    if (!cancelled) return resolveUnclaimable(tx, id, now);
+    if (!cancelled) return resolveUnclaimable(tx, id, now, scope);
     return undefined;
   });
   if (unclaimable !== undefined) throwUnclaimable(unclaimable);
-  app.log.info({ requestId: id }, "action.cancelled");
+  app.log.info({ requestId: id, agentId: scope?.agentId }, "action.cancelled");
   return requireItem(app.db, id, now);
 }
 
 /**
- * PATCH /permissions/:permission for the `app` principal. Materialises the
- * row lazily (ADR-078 §3): granting when no live row exists inserts one;
- * revoking sets `revoked_at` on the live row -- or, when no row was ever
- * written (the default grant), inserts a row already revoked, so the history
- * says "granted by default, revoked at T". A revoke cancels every pending
- * request that needs the permission in the same transaction.
+ * PATCH /permissions/:permission for the `app` principal, and (Checkpoint
+ * 10.9) PATCH /permissions/agent/:permission for the `agent` principal.
+ * Materialises the row lazily (ADR-078 §3): granting when no live row exists
+ * inserts one; revoking sets `revoked_at` on the live row -- or, when no row
+ * was ever written (the default grant), inserts a row already revoked, so
+ * the history says "granted by default, revoked at T". A revoke of a WRITE
+ * permission cancels every pending request OF THAT PRINCIPAL that needs it,
+ * in the same transaction; a read permission has no pending rows to cancel
+ * (no action needs one), and the loop is skipped rather than run vacuously.
+ *
+ * The `app` overload returns the 10.8 `PermissionUpdateResponse` byte-for-
+ * byte; the `agent` overload returns the agent grant item, which has its own
+ * wire shape (a read permission cannot ride on the deployed client's strict
+ * `PermissionGrantItemSchema`).
  */
 export async function setPermissionGrant(
   app: FastifyInstance,
   permission: ActionPermission,
   granted: boolean,
   now: Date,
-): Promise<PermissionUpdateResponse> {
+  principal?: "app",
+): Promise<PermissionUpdateResponse>;
+export async function setPermissionGrant(
+  app: FastifyInstance,
+  permission: AgentPermission,
+  granted: boolean,
+  now: Date,
+  principal: "agent",
+): Promise<AgentPermissionUpdateResponse>;
+export async function setPermissionGrant(
+  app: FastifyInstance,
+  permission: AgentPermission,
+  granted: boolean,
+  now: Date,
+  principal: ActionPrincipal = "app",
+): Promise<PermissionUpdateResponse | AgentPermissionUpdateResponse> {
+  if (principal === "app" && !isActionPermission(permission)) {
+    // Unreachable through the routes (the app param schema is the two-member
+    // ActionPermissionSchema); a programming error, never user input.
+    throw new RangeError("the app principal has no read permissions");
+  }
   const cancelledPending = await app.db.transaction(async (tx) => {
-    const live = await isPermissionGranted(tx, "app", permission);
+    const live = await isPermissionGranted(tx, principal, permission);
     if (granted) {
       if (!live) {
         await tx.insert(permissionGrants).values({
-          principal: "app",
+          principal,
           permission,
           disclosureVersion: ACTION_PERMISSION_DISCLOSURE_VERSION,
           grantedAt: now,
@@ -462,7 +551,7 @@ export async function setPermissionGrant(
         .set({ revokedAt: now, updatedAt: now })
         .where(
           and(
-            eq(permissionGrants.principal, "app"),
+            eq(permissionGrants.principal, principal),
             eq(permissionGrants.permission, permission),
             isNull(permissionGrants.revokedAt),
           ),
@@ -470,7 +559,7 @@ export async function setPermissionGrant(
         .returning({ id: permissionGrants.id });
       if (revoked.length === 0) {
         await tx.insert(permissionGrants).values({
-          principal: "app",
+          principal,
           permission,
           disclosureVersion: ACTION_PERMISSION_DISCLOSURE_VERSION,
           grantedAt: now,
@@ -480,6 +569,11 @@ export async function setPermissionGrant(
         });
       }
     }
+
+    // A read permission gates tool calls, not requests: nothing pending
+    // needs it, so there is nothing to cancel. Explicit rather than relying
+    // on `actionsRequiring` being empty for it.
+    if (!isActionPermission(permission)) return 0;
 
     const cancelled = await tx
       .update(actionRequests)
@@ -492,6 +586,11 @@ export async function setPermissionGrant(
       .where(
         and(
           eq(actionRequests.status, "pending"),
+          // Only THIS principal's rows: revoking the agent's tasks.write must
+          // leave the owner's own pending task requests untouched, and vice
+          // versa (Checkpoint 10.9 -- a cross-principal cancel once two
+          // principals exist).
+          eq(actionRequests.principal, principal),
           // A stale pending row is already expired in every read; it is not
           // "cancelled because the permission was revoked".
           gt(actionRequests.expiresAt, now),
@@ -502,7 +601,11 @@ export async function setPermissionGrant(
     return cancelled.length;
   });
 
-  app.log.info({ permission, granted, cancelledPending }, "permission.updated");
+  app.log.info({ permission, principal, granted, cancelledPending }, "permission.updated");
+  if (principal === "agent") {
+    const item = await getAgentPermissionGrantItem(app.db, permission);
+    return { item, cancelled_pending: cancelledPending };
+  }
   const permissions = await listPermissionGrants(app.db, "app");
   const item = permissions.items.find((entry) => entry.permission === permission);
   if (!item) throw new Error("permission vanished from the vocabulary between write and read-back");

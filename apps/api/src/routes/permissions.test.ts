@@ -6,10 +6,15 @@ import {
 } from "@personal-os/schema";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { agentHeaders, pairTestDevice } from "../test/agents.test-support.js";
 import { buildTestApp, truncateTestTables } from "../test/build-test-app.js";
 import type { ErrorBody } from "../test/types.js";
 
-// Checkpoint 10.8 (ADR-078 §3) -- the owner-facing permission layer.
+// Checkpoint 10.8 (ADR-078 §3) -- the owner-facing permission layer. Since
+// Checkpoint 10.9 (ADR-082) the PATCH is DEVICE-bound, so `patch` carries a
+// paired device's bearer; the assertions are the 10.8 ones, unchanged.
+
+let deviceToken = "";
 
 async function list(app: FastifyInstance) {
   const response = await app.inject({ method: "GET", url: "/permissions" });
@@ -21,6 +26,7 @@ async function patch(app: FastifyInstance, permission: string, granted: boolean)
   const response = await app.inject({
     method: "PATCH",
     url: `/permissions/${permission}`,
+    headers: agentHeaders(deviceToken),
     payload: { granted },
   });
   return response;
@@ -39,6 +45,7 @@ describe("permissions routes", () => {
 
   beforeEach(async () => {
     await truncateTestTables(app);
+    deviceToken = await pairTestDevice(app);
   });
 
   it("ships every permission granted to the app by default, with no row written (ADR-078 §3)", async () => {
@@ -108,19 +115,33 @@ describe("permissions routes", () => {
     const bad = await app.inject({
       method: "PATCH",
       url: "/permissions/tasks.write",
+      headers: agentHeaders(deviceToken),
       payload: { granted: "no" },
     });
     expect(bad.statusCode).toBe(400);
   });
 
-  it("never exposes a grant path for the agent principal", async () => {
+  it("never lets the app PATCH name a principal -- the agent principal has its own device-bound path", async () => {
     const body = await list(app);
     expect(body.items.every((item) => item.principal === "app")).toBe(true);
     const forged = await app.inject({
       method: "PATCH",
       url: "/permissions/tasks.write",
+      headers: agentHeaders(deviceToken),
       payload: { granted: true, principal: "agent" },
     });
     expect(forged.statusCode).toBe(400);
+  });
+
+  it("refuses the PATCH without a device token (401 unauthorized) and writes nothing (ADR-082)", async () => {
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/permissions/tasks.write",
+      payload: { granted: false },
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.json<ErrorBody>().error).toBe("unauthorized");
+    expect(await app.db.select().from(permissionGrants)).toHaveLength(0);
+    expect((await list(app)).items.every((item) => item.granted)).toBe(true);
   });
 });

@@ -131,29 +131,27 @@ describe("Cloud Ask authorization (Checkpoint 8.6B)", () => {
     it("mints a grant for a live read or propose agent whose permission is granted -- without an ask row", async () => {
       expect(await askRouteEnabled(app.db)).toBe(false);
       for (const trustLevel of ["read", "propose"]) {
-        const grant = await authorizeAgentRead(fakeRequest(), { ...live, trustLevel }, true);
+        const grant = authorizeAgentRead(fakeRequest(), { ...live, trustLevel }, true);
         expect(grant).not.toBeNull();
         expect(() => assertGrant(grant)).not.toThrow();
         expect(Object.isFrozen(grant)).toBe(true);
       }
     });
 
-    it("returns null for a paused, revoked or ungranted agent, and for a request without an id", async () => {
+    it("returns null for a paused, revoked or ungranted agent, and for a request without an id", () => {
+      expect(authorizeAgentRead(fakeRequest(), { ...live, trustLevel: "none" }, true)).toBeNull();
       expect(
-        await authorizeAgentRead(fakeRequest(), { ...live, trustLevel: "none" }, true),
+        authorizeAgentRead(fakeRequest(), { ...live, trustLevel: "operator" }, true),
       ).toBeNull();
       expect(
-        await authorizeAgentRead(fakeRequest(), { ...live, trustLevel: "operator" }, true),
+        authorizeAgentRead(fakeRequest(), { ...live, revokedAt: new Date() }, true),
       ).toBeNull();
-      expect(
-        await authorizeAgentRead(fakeRequest(), { ...live, revokedAt: new Date() }, true),
-      ).toBeNull();
-      expect(await authorizeAgentRead(fakeRequest(), live, false)).toBeNull();
-      expect(await authorizeAgentRead(fakeRequest(""), live, true)).toBeNull();
+      expect(authorizeAgentRead(fakeRequest(), live, false)).toBeNull();
+      expect(authorizeAgentRead(fakeRequest(""), live, true)).toBeNull();
     });
 
-    it("a structural look-alike of an agent grant still fails assertGrant", async () => {
-      const real = await authorizeAgentRead(fakeRequest(), live, true);
+    it("a structural look-alike of an agent grant still fails assertGrant", () => {
+      const real = authorizeAgentRead(fakeRequest(), live, true);
       expect(real).not.toBeNull();
       const forged = { requestId: real!.requestId, grantedAt: real!.grantedAt };
       expect(() => assertGrant(forged)).toThrow(AskUnauthorizedError);

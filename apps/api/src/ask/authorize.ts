@@ -114,11 +114,11 @@ export interface AgentReadSubject {
  * `assertGrant`, and the forged-cast shape Guard 3 denies stays the
  * only forge shape to deny.
  */
-export async function authorizeAgentRead(
+export function authorizeAgentRead(
   request: FastifyRequest,
   subject: AgentReadSubject,
   permissionGranted: boolean,
-): Promise<CloudAskGrant | null> {
+): CloudAskGrant | null {
   if (subject.revokedAt !== null) return null;
   if (subject.trustLevel !== "read" && subject.trustLevel !== "propose") return null;
   if (!permissionGranted) return null;

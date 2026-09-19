@@ -42,6 +42,8 @@ import memorySettingsRoutes from "./routes/memory-settings.js";
 import memorySuggestionsRoutes from "./routes/memory-suggestions.js";
 import actionsRoutes from "./routes/actions.js";
 import permissionsRoutes from "./routes/permissions.js";
+import agentsRoutes from "./routes/agents.js";
+import agentRoutes from "./routes/agent.js";
 import monitorRoutes from "./routes/monitor.js";
 import captureRoutes from "./routes/capture.js";
 import devicesRoutes from "./routes/devices.js";
@@ -274,6 +276,8 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await app.register(memorySuggestionsRoutes);
   await app.register(actionsRoutes);
   await app.register(permissionsRoutes);
+  await app.register(agentsRoutes);
+  await app.register(agentRoutes);
   await app.register(aiConfigRoutes);
   await app.register(askRoutes);
   await app.register(focusRoutes);

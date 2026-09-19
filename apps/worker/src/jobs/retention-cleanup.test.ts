@@ -1,4 +1,6 @@
 import {
+  agentToolCalls,
+  agents,
   aiProviderConnections,
   aiTaskRoutes,
   healthConnections,
@@ -25,6 +27,7 @@ import { env } from "../env.js";
 import { buildTestDb, truncateTestTables } from "../test/build-test-db.js";
 import { seedMailConnection, seedMailCursor, seedMailMessage } from "../test/mail-fixtures.js";
 import {
+  AGENT_TOOL_CALLS_RETENTION_DAYS,
   retentionCleanupJob,
   RetentionCleanupError,
   TABLE_CLEANERS,
@@ -691,6 +694,83 @@ describe("retentionCleanupJob (Checkpoint 8.6C)", () => {
       expect(
         await db.select().from(mailConnections).where(eq(mailConnections.id, mailConnection.id)),
       ).toHaveLength(1);
+    });
+  });
+
+  describe("agent_tool_calls (Checkpoint 10.9, ADR-081 §7, 30 days on called_at)", () => {
+    // The worker's shared truncation helper deliberately never names the
+    // agent tables (Guard 8 (b) walks it), so this block clears its own rows.
+    async function clearAgentTables(): Promise<void> {
+      await db.delete(agentToolCalls);
+      await db.delete(agents);
+    }
+
+    async function seedAgent(): Promise<string> {
+      const [row] = await db
+        .insert(agents)
+        .values({
+          name: "retention fixture",
+          trustLevel: "read",
+          tokenHash: `sha256-${Math.random().toString(16).slice(2)}`,
+          disclosureVersion: "2026-09-18",
+        })
+        .returning({ id: agents.id });
+      return row!.id;
+    }
+
+    async function seedToolCall(agentId: string, calledAt: Date): Promise<string> {
+      const [row] = await db
+        .insert(agentToolCalls)
+        .values({
+          agentId,
+          correlationId: crypto.randomUUID(),
+          toolName: "get_today_context",
+          status: "completed",
+          errorClass: null,
+          charsReturned: 1200,
+          durationMs: 12,
+          calledAt,
+        })
+        .returning({ id: agentToolCalls.id });
+      return row!.id;
+    }
+
+    beforeEach(clearAgentTables);
+    afterEach(clearAgentTables);
+
+    it("registers the table with a 30-day window", () => {
+      expect(AGENT_TOOL_CALLS_RETENTION_DAYS).toBe(30);
+      expect(TABLE_CLEANERS.map((c) => c.table)).toContain("agent_tool_calls");
+    });
+
+    it("deletes a 31-day-old call, keeps a 29-day-old one, and never touches the agents row", async () => {
+      const agentId = await seedAgent();
+      const old = await seedToolCall(agentId, daysAgo(31));
+      const recent = await seedToolCall(agentId, daysAgo(29));
+
+      const results = await retentionCleanupJob(db, NOW);
+      expect(results.find((r) => r.table === "agent_tool_calls")!.deleted).toBe(1);
+
+      const remaining = (await db.select({ id: agentToolCalls.id }).from(agentToolCalls)).map(
+        (r) => r.id,
+      );
+      expect(remaining).toEqual([recent]);
+      expect(remaining).not.toContain(old);
+      expect(await db.select().from(agents).where(eq(agents.id, agentId))).toHaveLength(1);
+    });
+
+    it("the job's source names agent_tool_calls and NEVER the agents table, action_requests or permission_grants (Guard 8 (b) exemption is exactly one table)", async () => {
+      const source = await import("node:fs/promises").then((fs) =>
+        fs.readFile(new URL("./retention-cleanup.ts", import.meta.url), "utf8"),
+      );
+      const code = source
+        .split("\n")
+        .map((line) => line.replace(/(^|[^:])\/\/.*$/, "$1"))
+        .join("\n");
+      expect(code).toMatch(/\bagentToolCalls\b/);
+      expect(code).not.toMatch(
+        /\bagents\b(?!_tool)|actionRequests|action_requests|permissionGrants/,
+      );
     });
   });
 
