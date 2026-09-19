@@ -100,11 +100,15 @@ export async function listToolCallsForAgent(
 }
 
 /**
- * What one correlation has already spent. Only `completed` and `failed`
- * rows count: a refusal returned nothing and ran nothing.
+ * What one (agent, correlation) has already spent. Only `completed` and
+ * `failed` rows count: a refusal returned nothing and ran nothing. Keyed on
+ * the agent as well as the correlation id (10.9 adversarial review, R2): a
+ * correlation id is agent-supplied, so two agents naming the same uuid must
+ * each get their own budget rather than starving one another.
  */
 export async function budgetForCorrelation(
   db: AgentReader,
+  agentId: string,
   correlationId: string,
 ): Promise<{ calls: number; chars: number }> {
   const [row] = await db
@@ -112,6 +116,7 @@ export async function budgetForCorrelation(
     .from(agentToolCalls)
     .where(
       and(
+        eq(agentToolCalls.agentId, agentId),
         eq(agentToolCalls.correlationId, correlationId),
         inArray(agentToolCalls.status, ["completed", "failed"]),
       ),

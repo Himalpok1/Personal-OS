@@ -246,6 +246,35 @@ export const READ_TOOL_DESCRIPTIONS: Record<ReadToolName, { name: string; descri
   },
 };
 
+/**
+ * The entity types an agent may search or open. `mail_message` (ADR-054:
+ * attacker-authored subjects and sender names) and `inbox_item` (a capture's
+ * raw text, which may carry anything the owner said aloud) are NOT members:
+ * the registration disclosure says an agent never sees mail, and a capture
+ * is not "a task or note". `searchPersonalItems` and `getItemContext` accept
+ * six types for the trusted client; the gateway narrows to these four
+ * before either is called and refuses any other request as `input_invalid`
+ * (10.9 adversarial review, finding B).
+ */
+export const AGENT_SEARCHABLE_TYPES = ["task", "note", "event", "project"] as const;
+export const AgentSearchableTypeSchema = z.enum(AGENT_SEARCHABLE_TYPES);
+export type AgentSearchableType = z.infer<typeof AgentSearchableTypeSchema>;
+
+/**
+ * Actions that name an EXISTING row as their target. An agent may propose one
+ * only when it also holds `context.read`: the proposal's `input_summary`
+ * echoes the target's title, so without a read grant a bare `task_id` would
+ * otherwise read a title the agent may not read (10.9 adversarial review,
+ * finding R11). A create action names no existing row and needs only its
+ * write permission.
+ */
+export const AGENT_TARGET_ACTION_IDS = [
+  "archive_calendar_event",
+  "archive_task",
+  "complete_task",
+  "reopen_task",
+] as const satisfies readonly ActionId[];
+
 export function toolsRequiring(permission: ReadPermission): ReadToolName[] {
   return READ_TOOL_NAMES.filter((name) => READ_TOOL_PERMISSION[name] === permission);
 }

@@ -9,6 +9,7 @@ import {
   canvasConnections,
   canvasCourses,
   events,
+  inboxItems,
   notes,
   permissionGrants,
   tasks,
@@ -439,6 +440,63 @@ describe("the agent gateway (/agent/*)", () => {
   // ---- budgets --------------------------------------------------------------------
 
   describe("budgets", () => {
+    it("admission is atomic: twenty concurrent calls on one correlation_id yield exactly six 200s and fourteen 429s (adversarial review, finding A)", async () => {
+      const { agent, token } = await registerTestAgent(app, deviceToken, { trust_level: "read" });
+      await grantAgentPermission(app, deviceToken, "context.read");
+      const correlation = crypto.randomUUID();
+      const responses = await Promise.all(
+        Array.from({ length: 20 }, () =>
+          callTool(app, token, "get_today_context", { tz: TZ }, correlation),
+        ),
+      );
+      const codes = responses.map((r) => r.statusCode).sort();
+      expect(codes.filter((c) => c === 200)).toHaveLength(READ_TOOL_MAX_CALLS_PER_REQUEST);
+      expect(codes.filter((c) => c === 429)).toHaveLength(20 - READ_TOOL_MAX_CALLS_PER_REQUEST);
+      for (const r of responses.filter((r) => r.statusCode === 429)) {
+        expect(AgentRefusalSchema.parse(r.json()).error_class).toBe("budget_calls_exceeded");
+      }
+      const rows = await auditRows(app, agent.id);
+      expect(rows.filter((r) => r.status === "completed")).toHaveLength(
+        READ_TOOL_MAX_CALLS_PER_REQUEST,
+      );
+      expect(rows.filter((r) => r.status === "refused")).toHaveLength(
+        20 - READ_TOOL_MAX_CALLS_PER_REQUEST,
+      );
+    });
+
+    it("the rate limit is atomic too: 100 concurrent calls across fresh correlations never exceed 60 in the window", async () => {
+      const { token } = await registerTestAgent(app, deviceToken, { trust_level: "read" });
+      await grantAgentPermission(app, deviceToken, "context.read");
+      const responses = await Promise.all(
+        Array.from({ length: 100 }, () => callTool(app, token, "get_today_context", { tz: TZ })),
+      );
+      const ok = responses.filter((r) => r.statusCode === 200).length;
+      const limited = responses.filter((r) => r.statusCode === 429);
+      expect(ok).toBe(AGENT_TOOL_CALLS_PER_MINUTE);
+      expect(limited).toHaveLength(100 - AGENT_TOOL_CALLS_PER_MINUTE);
+      for (const r of limited) {
+        expect(AgentRefusalSchema.parse(r.json()).error_class).toBe("rate_limited");
+      }
+    });
+
+    it("the budget is keyed on (agent, correlation): another agent naming the same correlation id starts from zero (adversarial review, R2)", async () => {
+      const a = await registerTestAgent(app, deviceToken, { name: "A", trust_level: "read" });
+      const b = await registerTestAgent(app, deviceToken, { name: "B", trust_level: "read" });
+      await grantAgentPermission(app, deviceToken, "context.read");
+      const shared = crypto.randomUUID();
+      for (let i = 0; i < READ_TOOL_MAX_CALLS_PER_REQUEST; i += 1) {
+        expect(
+          (await callTool(app, a.token, "get_today_context", { tz: TZ }, shared)).statusCode,
+        ).toBe(200);
+      }
+      expect(
+        (await callTool(app, a.token, "get_today_context", { tz: TZ }, shared)).statusCode,
+      ).toBe(429);
+      const first = await callTool(app, b.token, "get_today_context", { tz: TZ }, shared);
+      expect(first.statusCode).toBe(200);
+      expect(first.json<AgentToolCallResponse>().budget.calls_used).toBe(1);
+    });
+
     it("the seventh completed call on one correlation_id is 429 budget_calls_exceeded; an interleaved refusal does not count", async () => {
       const { agent, token } = await registerTestAgent(app, deviceToken, { trust_level: "read" });
       await grantAgentPermission(app, deviceToken, "context.read");
@@ -529,6 +587,31 @@ describe("the agent gateway (/agent/*)", () => {
   // ---- the other tools ------------------------------------------------------------
 
   describe("get_item_context", () => {
+    it("refuses a mail or capture ref as input_invalid even with items.read (adversarial review, finding B)", async () => {
+      const { token } = await registerTestAgent(app, deviceToken, { trust_level: "read" });
+      await grantAgentPermission(app, deviceToken, "items.read");
+      const [capture] = await app.db
+        .insert(inboxItems)
+        .values({
+          clientUuid: crypto.randomUUID(),
+          rawText: "Zebrafish capture with the card ending 4242",
+          source: "web",
+          capturedAt: new Date(),
+          timezone: TZ,
+          status: "pending",
+        })
+        .returning({ id: inboxItems.id });
+      for (const ref of [
+        { type: "inbox_item", id: capture!.id },
+        { type: "mail_message", id: crypto.randomUUID() },
+      ]) {
+        const response = await callTool(app, token, "get_item_context", ref);
+        expect(response.statusCode, ref.type).toBe(400);
+        expect(AgentRefusalSchema.parse(response.json()).error_class).toBe("input_invalid");
+        expect(response.body).not.toContain("4242");
+      }
+    });
+
     it("needs items.read (403 with only context.read); with it a note's body is returned; an unknown ref is 404 target_not_found audited failed", async () => {
       const noteId = await seedNote(app);
       const { agent, token } = await registerTestAgent(app, deviceToken, { trust_level: "read" });
@@ -562,6 +645,37 @@ describe("the agent gateway (/agent/*)", () => {
   });
 
   describe("search_personal_items", () => {
+    it("never returns mail or a capture, and an explicit request for either type is input_invalid (adversarial review, finding B)", async () => {
+      const { agent, token } = await registerTestAgent(app, deviceToken, { trust_level: "read" });
+      await grantAgentPermission(app, deviceToken, "context.read");
+      await app.db.insert(inboxItems).values({
+        clientUuid: crypto.randomUUID(),
+        rawText: "Zebrafish capture with the card ending 4242",
+        source: "web",
+        capturedAt: new Date(),
+        timezone: TZ,
+        status: "pending",
+      });
+      await seedNote(app);
+      const implicit = await callTool(app, token, "search_personal_items", { q: "zebrafish" });
+      expect(implicit.statusCode).toBe(200);
+      const output = SearchPersonalItemsOutputSchema.parse(
+        implicit.json<AgentToolCallResponse>().output,
+      );
+      expect(output.results.map((r) => r.type)).not.toContain("inbox_item");
+      expect(JSON.stringify(output)).not.toContain("4242");
+      for (const type of ["mail_message", "inbox_item"]) {
+        const explicit = await callTool(app, token, "search_personal_items", {
+          q: "zebrafish",
+          types: [type],
+        });
+        expect(explicit.statusCode, type).toBe(400);
+        expect(AgentRefusalSchema.parse(explicit.json()).error_class).toBe("input_invalid");
+      }
+      const rows = await auditRows(app, agent.id);
+      expect(rows.filter((r) => r.errorClass === "input_invalid")).toHaveLength(2);
+    });
+
     it("returns ids, titles and previews under context.read and parses through its output schema", async () => {
       await seedNote(app); // does not match the query; proves a body never rides along
       const taskId = await seedTask(app, { title: "Quokka reading" });
@@ -680,6 +794,47 @@ describe("the agent gateway (/agent/*)", () => {
   // ---- proposals ---------------------------------------------------------------------
 
   describe("POST /agent/actions", () => {
+    it("a target-bearing action needs context.read as well as its write permission -- a bare id cannot read a title through input_summary (adversarial review, R11)", async () => {
+      const { token } = await registerTestAgent(app, deviceToken, { trust_level: "propose" });
+      await grantAgentPermission(app, deviceToken, "tasks.write");
+      const taskId = await seedTask(app, { title: "SECRET: call the oncologist" });
+      const refused = await app.inject({
+        method: "POST",
+        url: "/agent/actions",
+        headers: agentHeaders(token),
+        payload: proposalBody({ action_id: "complete_task", input: { task_id: taskId } }),
+      });
+      expect(refused.statusCode).toBe(403);
+      expect(refused.json<{ error_class: string }>().error_class).toBe("permission_not_granted");
+      expect(refused.body).not.toContain("oncologist");
+      // A create action names no existing row and needs only its write grant.
+      await propose(app, token, proposalBody());
+      // With context.read the same proposal is admitted.
+      await grantAgentPermission(app, deviceToken, "context.read");
+      const admitted = await propose(
+        app,
+        token,
+        proposalBody({ action_id: "complete_task", input: { task_id: taskId } }),
+      );
+      expect(admitted.input_summary).toContain("oncologist");
+    });
+
+    it("a malformed tool envelope is the same token-shaped refusal as a bad input, never echoed issues", async () => {
+      const { token } = await registerTestAgent(app, deviceToken, { trust_level: "read" });
+      const response = await app.inject({
+        method: "POST",
+        url: "/agent/tools/get_today_context",
+        headers: agentHeaders(token),
+        payload: { input: "not-an-object", correlation_id: "not-a-uuid" },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({
+        error: "agent_tool_refused",
+        error_class: "input_invalid",
+      });
+      expect(response.body).not.toContain("issues");
+    });
+
     it("a read agent is 403 trust_insufficient before the body is parsed", async () => {
       const { token } = await registerTestAgent(app, deviceToken, { trust_level: "read" });
       await grantAgentPermission(app, deviceToken, "tasks.write");
@@ -719,7 +874,7 @@ describe("the agent gateway (/agent/*)", () => {
         app,
         token,
         proposalBody({
-          reason: "Chapter 5 is due\nThursday",
+          reason: "Chapter 5\u0000is due\nThursday",
           correlation_id: correlation,
         }),
       );

@@ -944,7 +944,14 @@ const HEALTH_MAIL_READ_MODEL_SPECIFIER = /(?:^|\/)read-models\/(?:health|mail)[\
 const APPROVE_OR_GRANT = /\b(?:approveActionRequest|setPermissionGrant)\b/;
 // A write verb whose argument is anything but the two agent tables.
 const WRITE_VERB_ARGUMENT = /\.(insert|update|delete)\(\s*([A-Za-z_]+)/g;
-const AGENT_WRITE_ALLOWED = new Set(["insert:agents", "insert:agentToolCalls", "update:agents"]);
+// `update:agentToolCalls` is the one settlement of a RESERVED audit row after
+// the tool ran (agent/service.ts finishToolCall); no row is ever deleted.
+const AGENT_WRITE_ALLOWED = new Set([
+  "insert:agents",
+  "insert:agentToolCalls",
+  "update:agents",
+  "update:agentToolCalls",
+]);
 
 describe("the Agent Gateway is a boundary, not a lane (Checkpoint 10.9, Guard 8)", () => {
   const laneFiles = [...AI_LANE_DIRS.flatMap((dir) => walk(dir)), ...AI_ROUTE_FILES];
@@ -1025,6 +1032,15 @@ describe("the Agent Gateway is a boundary, not a lane (Checkpoint 10.9, Guard 8)
     const tools = stripLineComments(readFileSync(AGENT_TOOLS, "utf8"));
     expect(tools).toContain("READ_TOOL_PERMISSION");
     expect(tools).toContain("isPermissionGranted(");
+    // Mail and captures never reach an agent (10.9 adversarial review,
+    // finding B): the dispatcher narrows search and item reads to
+    // AGENT_SEARCHABLE_TYPES and refuses anything else as input_invalid.
+    expect(tools).toContain("AGENT_SEARCHABLE_TYPES");
+    expect(tools).toContain("agentInputAllowed(");
+    // Admission is atomic (finding A): the two advisory locks, agent then
+    // correlation, are taken in the dispatcher before any count.
+    expect(tools).toMatch(/pg_advisory_xact_lock\(hashtext\(\$\{agent\.id\}\)\)/);
+    expect(tools).toMatch(/pg_advisory_xact_lock\(hashtext\(\$\{correlationId\}\)\)/);
   });
 
   it("(a) the agent read model contains no write verb -- writes live in agent/service.ts", () => {

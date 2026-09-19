@@ -1,6 +1,7 @@
 import { errorToken } from "@personal-os/core/logging/logger";
 import type { agents } from "@personal-os/db";
 import {
+  AGENT_SEARCHABLE_TYPES,
   AgentRefusalSchema,
   AgentToolCallResponseSchema,
   READ_TOOL_INPUT_SCHEMAS,
@@ -18,6 +19,7 @@ import {
   type ReadToolInput,
   type ReadToolName,
 } from "@personal-os/schema";
+import { sql } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { authorizeAgentRead } from "../ask/authorize.js";
 import { buildCalendarContext } from "../intelligence/calendar-context.js";
@@ -29,7 +31,7 @@ import { isPermissionGranted } from "../read-models/actions.js";
 import { getItemContext, searchPersonalItems } from "../search/service.js";
 import { buildAcademicContext } from "./academic-tool.js";
 import { checkBudget, refusalStatus } from "./budget.js";
-import { recordToolCall } from "./service.js";
+import { finishToolCall, recordToolCall } from "./service.js";
 
 // The read-tool dispatcher (Checkpoint 10.9, ADR-081 §5): one call, in this
 // order, every outcome audited.
@@ -48,6 +50,14 @@ import { recordToolCall } from "./service.js";
 // never consults `ai_task_routes`: an agent reading through the gateway is
 // not Cloud Ask, and the owner's Cloud Ask switch being OFF does not stop a
 // granted agent from reading -- the agent's own grant is its consent.
+//
+// Steps 2-3 run under two Postgres advisory locks -- the agent's id, then
+// the correlation id, always in that order -- inside one SHORT transaction
+// that also writes the audit row, so the count-then-insert is atomic (10.9
+// adversarial review, finding A): a fan-out of concurrent calls serialises
+// on the lock and the seventh sees six rows, never zero. The tool itself
+// (step 4) runs after the lock is released, against a reserved row that is
+// settled with its real outcome in step 5.
 //
 // A refusal is audited (`refused`, never charged); a missing target is
 // audited `failed` with `target_not_found` (charged as a call, 0 chars); a
@@ -87,6 +97,25 @@ function typedInput<Name extends ReadToolName>(name: Name, value: unknown): Read
 }
 
 /**
+ * The gateway's own narrowing on top of the tool input schema (finding B):
+ * the search and item-context schemas admit the trusted client's six entity
+ * types, but an agent may name only `AGENT_SEARCHABLE_TYPES` -- never
+ * `mail_message` (ADR-054) or `inbox_item` (a capture's raw text). A request
+ * outside the set is `input_invalid`, refused before anything is read.
+ */
+function agentInputAllowed(toolName: ReadToolName, input: unknown): boolean {
+  const allowed = AGENT_SEARCHABLE_TYPES as readonly string[];
+  if (toolName === "search_personal_items") {
+    const types = (input as ReadToolInput<"search_personal_items">).types;
+    return types === undefined || types.every((type) => allowed.includes(type));
+  }
+  if (toolName === "get_item_context") {
+    return allowed.includes((input as ReadToolInput<"get_item_context">).type);
+  }
+  return true;
+}
+
+/**
  * Mints the intelligence read context for this call. `authorizeAgentRead`
  * returns null on a revoked agent, a trust level below `read` or an absent
  * grant -- every one of which `checkBudget` has already refused, so a null
@@ -118,23 +147,29 @@ async function dispatch(
   switch (toolName) {
     case "search_personal_items": {
       const input = typedInput("search_personal_items", rawInput);
+      // Mail and captures are never searchable through the gateway (finding
+      // B): the step-1 narrowing already refused an explicit request for
+      // them, and an absent `types` means the four agent-visible types, not
+      // the service's six.
       const response = await searchPersonalItems(app.db, {
         q: input.q,
-        types: input.types,
+        types: input.types ?? [...AGENT_SEARCHABLE_TYPES],
         limit: input.limit,
         tz: null,
         includeArchived: false,
         order: "score",
         now,
       });
-      const results = response.results.map((result) => ({
-        type: result.type,
-        id: result.id,
-        title: result.title,
-        preview: result.preview,
-        timestamp: result.timestamp,
-        score: result.score,
-      }));
+      const results = response.results
+        .filter((result) => (AGENT_SEARCHABLE_TYPES as readonly string[]).includes(result.type))
+        .map((result) => ({
+          type: result.type,
+          id: result.id,
+          title: result.title,
+          preview: result.preview,
+          timestamp: result.timestamp,
+          score: result.score,
+        }));
       return {
         output: SearchPersonalItemsOutputSchema.parse({
           results,
@@ -189,91 +224,155 @@ export async function runReadTool(
   const startedAt = Date.now();
   const correlationId = body.correlation_id;
 
-  const audit = async (
-    status: "completed" | "refused" | "failed",
-    errorClass: AgentToolErrorClass | null,
-    charsReturned: number,
-  ): Promise<void> => {
-    await recordToolCall(app.db, {
-      agentId: agent.id,
-      correlationId,
-      toolName,
-      status,
-      errorClass,
-      charsReturned,
-      durationMs: Math.max(0, Date.now() - startedAt),
-      calledAt: now,
-    });
+  type AuditStatus = "completed" | "refused" | "failed";
+  const durationMs = (): number => Math.max(0, Date.now() - startedAt);
+  const logOutcome = (status: AuditStatus, errorClass: AgentToolErrorClass | null): void => {
     app.log.info(
       { agentId: agent.id, toolName, correlationId, status, errorClass: errorClass ?? undefined },
       status === "completed" ? "agent.tool.completed" : `agent.tool.${status}`,
     );
   };
-
-  const refuse = async (
+  const refusalBody = (
     errorClass: AgentToolErrorClass,
     used: { calls: number; chars: number },
-    auditStatus: "refused" | "failed" = "refused",
-  ): Promise<ReadToolResult> => {
-    await audit(auditStatus, errorClass, 0);
-    return {
-      status: refusalStatus(errorClass),
-      body: AgentRefusalSchema.parse({
-        error: "agent_tool_refused",
-        error_class: errorClass,
-        budget: budgetView(correlationId, used),
-      }),
-    };
-  };
+  ): ReadToolResult => ({
+    status: refusalStatus(errorClass),
+    body: AgentRefusalSchema.parse({
+      error: "agent_tool_refused",
+      error_class: errorClass,
+      budget: budgetView(correlationId, used),
+    }),
+  });
 
   // 1. The input, before anything is read: a malformed call is refused with
   //    a token, and the schema's own issues are never echoed to the agent.
+  //    The gateway's own narrowing (mail/captures) is part of the same step.
   const parsed = READ_TOOL_INPUT_SCHEMAS[toolName].safeParse(body.input);
+  const inputOk = parsed.success && agentInputAllowed(toolName, parsed.data);
 
-  // 2 + 3. The owner's decisions, then the gateway's limits.
-  const permission = READ_TOOL_PERMISSION[toolName];
-  const granted = await isPermissionGranted(app.db, "agent", permission);
-  const [used, lastMinute] = await Promise.all([
-    budgetForCorrelation(app.db, correlationId),
-    callsInLastMinute(app.db, agent.id, now),
-  ]);
-  const level = agent.trustLevel as AgentTrustLevel;
+  // 2 + 3. Admission, ATOMICALLY: one short transaction takes two advisory
+  //    locks (the agent's id, then the correlation id -- one fixed order, so
+  //    two calls can never deadlock), counts what is already spent, decides,
+  //    and writes the audit row before the lock is released. A refusal is
+  //    written as `refused` and the call ends here. An admitted call is
+  //    RESERVED as a `completed` row with zero chars, so a concurrent call
+  //    that takes the lock next already sees it counted; the tool then runs
+  //    OUTSIDE the lock (holding a lock through a tool would pin a pool
+  //    connection per waiter and starve the dispatch of its own), and the
+  //    row is settled with its real chars or its failure class afterwards.
+  //    The char budget therefore counts settled output; the overshoot is
+  //    bounded by the call cap times one output, never by concurrency.
+  type Admission =
+    | { kind: "refused"; result: ReadToolResult }
+    | {
+        kind: "admitted";
+        auditId: string;
+        used: { calls: number; chars: number };
+        granted: boolean;
+      };
 
-  if (!parsed.success) return refuse("input_invalid", used);
+  const admission: Admission = await app.db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${agent.id}))`);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${correlationId}))`);
 
-  const refusal = checkBudget({
-    trustLevel: level,
-    requiredTrust: READ_TOOL_REQUIRED_TRUST,
-    permissionGranted: granted,
-    calls: used.calls,
-    chars: used.chars,
-    lastMinute,
+    const permission = READ_TOOL_PERMISSION[toolName];
+    const granted = await isPermissionGranted(tx, "agent", permission);
+    const [used, lastMinute] = await Promise.all([
+      budgetForCorrelation(tx, agent.id, correlationId),
+      callsInLastMinute(tx, agent.id, now),
+    ]);
+
+    const refuse = async (errorClass: AgentToolErrorClass): Promise<Admission> => {
+      await recordToolCall(tx, {
+        agentId: agent.id,
+        correlationId,
+        toolName,
+        status: "refused",
+        errorClass,
+        charsReturned: 0,
+        durationMs: durationMs(),
+        calledAt: now,
+      });
+      logOutcome("refused", errorClass);
+      return { kind: "refused", result: refusalBody(errorClass, used) };
+    };
+
+    if (!inputOk) return refuse("input_invalid");
+    const refusal = checkBudget({
+      trustLevel: agent.trustLevel as AgentTrustLevel,
+      requiredTrust: READ_TOOL_REQUIRED_TRUST,
+      permissionGranted: granted,
+      calls: used.calls,
+      chars: used.chars,
+      lastMinute,
+    });
+    if (refusal !== null) return refuse(refusal);
+
+    const auditId = await recordToolCall(tx, {
+      agentId: agent.id,
+      correlationId,
+      toolName,
+      status: "completed",
+      errorClass: null,
+      charsReturned: 0,
+      durationMs: null,
+      calledAt: now,
+    });
+    return { kind: "admitted", auditId, used, granted };
   });
-  if (refusal !== null) return refuse(refusal, used);
+  if (admission.kind === "refused") return admission.result;
+  const { auditId, used, granted } = admission;
+
+  const settle = async (
+    status: AuditStatus,
+    errorClass: AgentToolErrorClass | null,
+    charsReturned: number,
+  ): Promise<void> => {
+    await finishToolCall(app.db, auditId, {
+      status,
+      errorClass,
+      charsReturned,
+      durationMs: durationMs(),
+    });
+    logOutcome(status, errorClass);
+  };
 
   // 4. Dispatch. A missing target is a recorded failure (charged as a call,
   //    0 chars); any other throw is recorded as `tool_failed` and rethrown.
   let result: Awaited<ReturnType<typeof dispatch>>;
   try {
-    result = await dispatch(app, request, agent, toolName, parsed.data, granted, now);
+    // `parsed.success` is implied by `inputOk`, which admission required.
+    result = await dispatch(
+      app,
+      request,
+      agent,
+      toolName,
+      (parsed as { data: unknown }).data,
+      granted,
+      now,
+    );
   } catch (err: unknown) {
     if (err instanceof TargetNotFoundError) {
-      return refuse("target_not_found", used, "failed");
+      await settle("failed", "target_not_found", 0);
+      return refusalBody("target_not_found", used);
     }
-    await audit("failed", "tool_failed", 0);
+    await settle("failed", "tool_failed", 0);
     app.log.error(
       { agentId: agent.id, toolName, correlationId, error: errorToken(err) },
       "agent.tool.failed: unexpected failure",
     );
     throw err;
   }
-  if ("refusal" in result) return refuse(result.refusal, used);
+  if ("refusal" in result) {
+    await settle("refused", result.refusal, 0);
+    return refusalBody(result.refusal, used);
+  }
 
   // 5. The output is re-validated through its own strict schema before it
   //    leaves, so a builder change can never widen what an agent receives.
   const output: unknown = READ_TOOL_OUTPUT_SCHEMAS[toolName].parse(result.output);
   const charsReturned = JSON.stringify(output).length;
-  await audit("completed", null, charsReturned);
+  await settle("completed", null, charsReturned);
   return {
     status: 200,
     body: AgentToolCallResponseSchema.parse({

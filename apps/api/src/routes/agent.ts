@@ -1,5 +1,6 @@
 import {
   ACTION_REGISTRY,
+  AGENT_TARGET_ACTION_IDS,
   AgentActionCreateSchema,
   AgentActionListQuerySchema,
   AgentRefusalSchema,
@@ -72,7 +73,15 @@ export default function agentRoutes(app: FastifyInstance): void {
           reply.code(404);
           return { error: "tool_unknown" };
         }
-        const body = AgentToolCallRequestSchema.parse(request.body);
+        // A malformed envelope (not an object, a bad correlation id) is the
+        // same token-shaped refusal a bad input gets -- never echoed issues.
+        // It cannot be audited: the audit row needs the correlation uuid.
+        const envelope = AgentToolCallRequestSchema.safeParse(request.body);
+        if (!envelope.success) {
+          reply.code(400);
+          return { error: "agent_tool_refused", error_class: "input_invalid" };
+        }
+        const body = envelope.data;
         const result = await runReadTool(
           app,
           request,
@@ -97,6 +106,16 @@ export default function agentRoutes(app: FastifyInstance): void {
       const body = AgentActionCreateSchema.parse(request.body);
       const definition = ACTION_REGISTRY[body.action_id];
       if (!(await isPermissionGranted(app.db, "agent", definition.permission))) {
+        reply.code(403);
+        return actionRefusal("permission_not_granted");
+      }
+      // An action that names an EXISTING row needs `context.read` too: its
+      // `input_summary` echoes the target's title, which a bare id must not
+      // be able to read past a missing read grant (adversarial review R11).
+      if (
+        (AGENT_TARGET_ACTION_IDS as readonly string[]).includes(body.action_id) &&
+        !(await isPermissionGranted(app.db, "agent", "context.read"))
+      ) {
         reply.code(403);
         return actionRefusal("permission_not_granted");
       }

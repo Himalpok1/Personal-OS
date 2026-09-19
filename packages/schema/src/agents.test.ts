@@ -15,6 +15,8 @@ import {
   AGENT_TOKEN_PREFIX,
   AGENT_TOOL_CALLS_PER_MINUTE,
   AGENT_TOOL_ERROR_CLASSES,
+  AGENT_SEARCHABLE_TYPES,
+  AGENT_TARGET_ACTION_IDS,
   AGENT_TRUST_LEVELS,
   AgentActionCreateSchema,
   AgentActionItemSchema,
@@ -39,6 +41,7 @@ import {
   trustLevelAtLeast,
 } from "./agents.js";
 import { READ_TOOL_NAMES } from "./intelligence-tools.js";
+import { SearchResultTypeSchema } from "./search.js";
 
 // Checkpoint 10.9 (ADR-081). The gateway contract is pinned the way the
 // action registry is: closed vocabularies, disjoint read/write permissions,
@@ -356,5 +359,25 @@ describe("the agent's wire", () => {
         .success,
     ).toBe(false);
     expect(AgentManifestSchema.safeParse({ ...manifest, secrets: {} }).success).toBe(false);
+  });
+});
+
+describe("the narrowed entity and target vocabularies (adversarial review, 10.9)", () => {
+  it("an agent may search or open tasks, notes, events and projects -- never mail or a capture", () => {
+    expect([...AGENT_SEARCHABLE_TYPES]).toEqual(["task", "note", "event", "project"]);
+    for (const t of AGENT_SEARCHABLE_TYPES)
+      expect(SearchResultTypeSchema.safeParse(t).success).toBe(true);
+    for (const never of ["mail_message", "inbox_item"]) {
+      expect(SearchResultTypeSchema.safeParse(never).success).toBe(true);
+      expect((AGENT_SEARCHABLE_TYPES as readonly string[]).includes(never)).toBe(false);
+    }
+  });
+
+  it("the target-bearing actions are exactly those whose input names an existing row", () => {
+    const targeting = ACTION_IDS.filter((id) => {
+      const shape = (ACTION_INPUT_SCHEMAS[id] as z.ZodObject<z.ZodRawShape>).shape;
+      return Object.keys(shape).some((key) => key === "task_id" || key === "event_id");
+    });
+    expect([...AGENT_TARGET_ACTION_IDS].sort()).toEqual([...targeting].sort());
   });
 });

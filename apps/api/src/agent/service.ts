@@ -124,7 +124,8 @@ export interface ToolCallRecord {
   errorClass: AgentToolErrorClass | null;
   /** The serialized output's length; 0 for a refusal or a failure. */
   charsReturned: number;
-  durationMs: number;
+  /** Null while a reserved row awaits its settlement (finishToolCall). */
+  durationMs: number | null;
   calledAt: Date;
 }
 
@@ -132,15 +133,47 @@ export interface ToolCallRecord {
  * One audit row per outcome -- completed, refused or failed. Records THAT a
  * read happened and how much left, never what: no input, no output.
  */
-export async function recordToolCall(db: AgentWriter, record: ToolCallRecord): Promise<void> {
-  await db.insert(agentToolCalls).values({
-    agentId: record.agentId,
-    correlationId: record.correlationId,
-    toolName: record.toolName,
-    status: record.status,
-    errorClass: record.errorClass,
-    charsReturned: record.charsReturned,
-    durationMs: record.durationMs,
-    calledAt: record.calledAt,
-  });
+export async function recordToolCall(db: AgentWriter, record: ToolCallRecord): Promise<string> {
+  const [row] = await db
+    .insert(agentToolCalls)
+    .values({
+      agentId: record.agentId,
+      correlationId: record.correlationId,
+      toolName: record.toolName,
+      status: record.status,
+      errorClass: record.errorClass,
+      charsReturned: record.charsReturned,
+      durationMs: record.durationMs,
+      calledAt: record.calledAt,
+    })
+    .returning({ id: agentToolCalls.id });
+  return row!.id;
+}
+
+/**
+ * Completes a RESERVED audit row after the tool ran (10.9 adversarial
+ * review, finding A): admission inserts the row as `completed` with zero
+ * chars under the budget lock, so the call is counted before the tool runs;
+ * this settles its real outcome afterwards -- the chars it returned, or the
+ * failure class. The only UPDATE the gateway ever makes to the audit table.
+ */
+export async function finishToolCall(
+  db: AgentWriter,
+  id: string,
+  patch: {
+    status: "completed" | "refused" | "failed";
+    errorClass: string | null;
+    charsReturned: number;
+    durationMs: number;
+  },
+): Promise<void> {
+  await db
+    .update(agentToolCalls)
+    .set({
+      status: patch.status,
+      errorClass: patch.errorClass,
+      charsReturned: patch.charsReturned,
+      durationMs: patch.durationMs,
+    })
+    .where(eq(agentToolCalls.id, id));
 }
