@@ -25,6 +25,7 @@ import {
   Screen,
 } from "@/components/ui";
 import { coerceActionIdParam, useAction, useCreateActionRequest } from "@/queries/actions";
+import { useAgents } from "@/queries/agents";
 import { formatShortDateTime } from "@/utils/format-datetime";
 
 // One action request (Checkpoint 10.8, ADR-078 §4/§8): the registry entry,
@@ -34,6 +35,10 @@ import { formatShortDateTime } from "@/utils/format-datetime";
 // has not already run -- "Undo", which creates a NEW request carrying
 // `reverses_request_id` and opens the approval sheet on it. The undo is
 // itself approved by the owner; nothing here runs on its own.
+//
+// Checkpoint 10.9 (ADR-081 §9): the agent list is read here and passed to
+// the summary so an agent-sourced request names its agent on the source
+// chip and shows its reason quoted under "Agent says".
 
 function TimelineRow({
   label,
@@ -69,6 +74,7 @@ export default function ActionDetailScreen() {
   const id = coerceActionIdParam(params.id);
   const { data: item, isLoading, isError, error, refetch, isRefetching } = useAction(id);
   const createRequest = useCreateActionRequest();
+  const agents = useAgents();
 
   if (id === null) {
     return (
@@ -142,7 +148,11 @@ export default function ActionDetailScreen() {
           {definition.description}
         </AppText>
         <View className="mt-4">
-          <ActionRequestSummary item={item} testID="action-detail-summary" />
+          <ActionRequestSummary
+            item={item}
+            agents={agents.data?.items}
+            testID="action-detail-summary"
+          />
         </View>
       </Card>
 

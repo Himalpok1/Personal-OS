@@ -89,6 +89,12 @@ const SCREENS: Record<string, { inputs: string[]; unbounded?: number; banner?: R
     inputs: [],
     banner: /onError: \(err\) =>\s*setSaveError\(\s*describeValidationError\(err\) \?\?/,
   },
+  // Checkpoint 10.9 (ADR-081 §9): the agent's name is the one bounded field
+  // on the registration screen.
+  "../app/agents/new.tsx": {
+    inputs: ["AGENT_NAME_MAX_CHARS"],
+    banner: /describeValidationError\(registerAgent\.error\) \?\?/,
+  },
 };
 
 describe("every user text field is bounded at the schema's constant (Checkpoint 9.6)", () => {

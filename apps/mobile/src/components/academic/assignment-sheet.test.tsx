@@ -26,6 +26,10 @@ import { assignment, SOURCE_BASE_URL } from "./fixtures.test-support";
 // The host's hooks reach the API client (expo at import); mocked whole --
 // the content under test proposes through the prop the host passes.
 vi.mock("@/queries/actions", () => ({ useCreateActionRequest: vi.fn() }));
+// Checkpoint 10.9 (ADR-082): the approval sheet's host reads the paired
+// device identity, whose provider module reaches SecureStore at import; the
+// hookless content rendered here never calls it, so the provider is stubbed.
+vi.mock("@/device-identity/provider", () => ({ useDeviceIdentity: vi.fn() }));
 
 const HOST_TYPES = new Set<unknown>([View, Text, Pressable]);
 

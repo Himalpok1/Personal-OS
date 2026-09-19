@@ -3,15 +3,19 @@ import { describe, expect, it } from "vitest";
 import {
   ACTION_REASON_FALLBACK,
   ACTION_SOURCE_LABEL,
+  AGENT_WHY_LINE,
   actionChipStrip,
   actionErrorLabel,
   actionReasonText,
   actionSourceChip,
+  actionSourceChipFor,
   actionStatusChip,
+  agentReasonPresentation,
   reversibilityChip,
   riskChip,
   whatWillChangeRows,
   whatWillChangeSpoken,
+  whyLineText,
 } from "./action-approval-sheet-state";
 import {
   completeTaskRequest,
@@ -55,6 +59,39 @@ describe("why", () => {
     expect(actionSourceChip("briefing")).toEqual({ label: "Briefing", tone: "info" });
     expect(actionSourceChip("academic")).toEqual({ label: "Academics", tone: "info" });
     expect(actionSourceChip("manual")).toEqual({ label: "You", tone: "neutral" });
+    expect(actionSourceChip("agent")).toEqual({ label: "Agent", tone: "info" });
+  });
+
+  it("names the agent on the source chip when the attribution resolves, and leaves every other source alone (10.9)", () => {
+    expect(actionSourceChipFor("agent", { name: "Ray", revoked: false })).toEqual({
+      label: "Agent · Ray",
+      tone: "info",
+    });
+    expect(actionSourceChipFor("agent", { name: "Ray", revoked: true })).toEqual({
+      label: "Agent (revoked)",
+      tone: "info",
+    });
+    expect(actionSourceChipFor("agent", null)).toEqual({ label: "Agent", tone: "info" });
+    expect(actionSourceChipFor("manual", { name: "Ray", revoked: false })).toEqual({
+      label: "You",
+      tone: "neutral",
+    });
+  });
+
+  it("an agent's reason is quoted under Agent says and never becomes the Why line (ADR-081 §6)", () => {
+    const item = { source: "agent" as const, reason: "  Free hour before the lecture  " };
+    expect(whyLineText(item)).toBe(AGENT_WHY_LINE);
+    expect(AGENT_WHY_LINE).toBe("An agent proposed this. Review it as you would any request.");
+    expect(agentReasonPresentation(item)).toEqual({
+      label: "Agent says",
+      quote: "Free hour before the lecture",
+    });
+    expect(agentReasonPresentation({ source: "agent", reason: null })).toEqual({
+      label: "Agent says",
+      quote: "(no reason given)",
+    });
+    expect(agentReasonPresentation({ source: "focus_now", reason: "x" })).toBeNull();
+    expect(whyLineText({ source: "manual", reason: null })).toBe(ACTION_REASON_FALLBACK);
   });
 
   it("renders the client-authored reason verbatim, and the honest fallback when there is none", () => {

@@ -42,6 +42,10 @@ import {
 } from "./fixtures.test-support";
 
 vi.mock("@/queries/academic", () => ({ useAcademicToday: vi.fn() }));
+// Checkpoint 10.9 (ADR-082): the approval sheet's host reads the paired
+// device identity, whose provider module reaches SecureStore at import; the
+// hookless content rendered here never calls it, so the provider is stubbed.
+vi.mock("@/device-identity/provider", () => ({ useDeviceIdentity: vi.fn() }));
 
 // The workload bar is an animated leaf (a React effect), listed as a host
 // so the walk asserts on its props (docs/MOBILE-DESIGN-SYSTEM.md → Testing).

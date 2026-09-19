@@ -8,9 +8,12 @@
 
 import { Pressable, Text, View } from "react-native";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { agent, agentRequest, revokedAgent } from "@/components/agents/fixtures.test-support";
 import { showToast } from "@/components/ui";
 import { triggerHaptic } from "@/components/ui/haptics";
+import { useDeviceIdentity } from "@/device-identity/provider";
 import { useApproveAction, useCancelAction } from "@/queries/actions";
+import { useAgents } from "@/queries/agents";
 import {
   ACTION_CALL_FAILED,
   ACTION_NOT_PENDING,
@@ -42,6 +45,11 @@ vi.mock("@/queries/actions", () => ({
   useApproveAction: vi.fn(),
   useCancelAction: vi.fn(),
 }));
+
+// Checkpoint 10.9: the host reads the paired identity (approve is
+// device-bound) and the agent list (attribution); both are stubbed.
+vi.mock("@/device-identity/provider", () => ({ useDeviceIdentity: vi.fn() }));
+vi.mock("@/queries/agents", () => ({ useAgents: vi.fn() }));
 
 // Mocked at its own module so the Button's import (./haptics) and the
 // host's barrel import both land on the same spy.
@@ -116,10 +124,19 @@ function mockMutations(overrides: { approvePending?: boolean; cancelPending?: bo
   } as never);
 }
 
+function mockPaired(paired: boolean) {
+  vi.mocked(useDeviceIdentity).mockReturnValue({
+    identity: paired ? { token: "posd_x", deviceId: "d" } : null,
+    isLoading: false,
+  } as never);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   resetActionApprovalSheetForTests();
   mockMutations();
+  mockPaired(true);
+  vi.mocked(useAgents).mockReturnValue({ data: { items: [agent(), revokedAgent()] } } as never);
 });
 
 describe("the store", () => {
@@ -184,6 +201,48 @@ describe("ActionRequestSummary", () => {
     );
     expect(getTextContent(why)).toContain("You asked for this");
     expect(getTextContent(why)).toContain("You");
+    expect(
+      findByTestId(
+        deepRender(<ActionRequestSummary item={completeTaskRequest()} />),
+        "action-agent-says",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("an agent-sourced request shows the fixed Why line, names the agent on the chip, and quotes its reason under Agent says as inert text (10.9)", () => {
+    const tree = deepRender(
+      <ActionRequestSummary item={agentRequest()} agents={[agent(), revokedAgent()]} />,
+    );
+    const why = findByTestId(tree, "action-why");
+    expect(getTextContent(why)).toContain(
+      "An agent proposed this. Review it as you would any request.",
+    );
+    expect(getTextContent(why)).toContain("Agent · Ray");
+    expect(getTextContent(why)).not.toContain("free hour");
+    const says = findByTestId(tree, "action-agent-says");
+    expect(getTextContent(says)).toContain("Agent says");
+    expect(getTextContent(says)).toContain(
+      "\u201cYou have a free hour before the lecture and this is due tonight\u201d",
+    );
+    expect(says.props.accessibilityLabel).toBe(
+      "Agent says: You have a free hour before the lecture and this is due tonight",
+    );
+    expect(says.props.onPress).toBeUndefined();
+    expect(says.props.accessibilityRole).toBeUndefined();
+  });
+
+  it("reads Agent (revoked) for a revoked agent and plain Agent with no list", () => {
+    const revoked = deepRender(
+      <ActionRequestSummary
+        item={agentRequest({ source_ref: revokedAgent().id })}
+        agents={[agent(), revokedAgent()]}
+      />,
+    );
+    expect(getTextContent(findByTestId(revoked, "action-why"))).toContain("Agent (revoked)");
+    const bare = deepRender(<ActionRequestSummary item={agentRequest()} />);
+    const why = getTextContent(findByTestId(bare, "action-why"));
+    expect(why).toContain("Agent");
+    expect(why).not.toContain("Ray");
   });
 });
 
@@ -254,6 +313,30 @@ describe("ActionApprovalSheetContent", () => {
     expect(getTextContent(row)).toContain("no longer exists");
     expect(row.props.onPress).toBeUndefined();
     expect(showToast).not.toHaveBeenCalled();
+  });
+
+  it("an unpaired device sees an inert Pair-this-device row instead of Approve, with Cancel disabled (ADR-082)", () => {
+    const onApprove = vi.fn();
+    const onCancel = vi.fn();
+    const tree = deepRender(
+      <ActionApprovalSheetContent
+        item={createEventRequest()}
+        error={null}
+        pending={false}
+        onApprove={onApprove}
+        onCancel={onCancel}
+        paired={false}
+      />,
+    );
+    expect(findByTestId(tree, "action-approve")).toBeUndefined();
+    const row = findByTestId(tree, "action-pair-to-approve");
+    expect(getTextContent(row)).toContain("Pair this device to approve");
+    expect(row.props.onPress).toBeUndefined();
+    const cancel = findByTestId(tree, "action-cancel");
+    expect(cancel.props.accessibilityState).toEqual({ disabled: true, busy: false });
+    cancel.props.onPress();
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(onApprove).not.toHaveBeenCalled();
   });
 
   it("offers no buttons on a row that is no longer pending", () => {
@@ -354,5 +437,18 @@ describe("ActionApprovalSheetHost", () => {
     openActionApprovalSheet(createEventRequest());
     const approve = findByTestId(renderedContent(), "action-approve");
     expect(approve.props.accessibilityState.busy).toBe(true);
+  });
+
+  it("passes the paired state and the agent list down: unpaired hides Approve, an agent request is attributed", () => {
+    mockPaired(false);
+    openActionApprovalSheet(agentRequest());
+    const content = renderedContent();
+    expect(findByTestId(content, "action-approve")).toBeUndefined();
+    expect(findByTestId(content, "action-pair-to-approve")).toBeDefined();
+    expect(approveMutate).not.toHaveBeenCalled();
+    mockPaired(true);
+    const paired = renderedContent();
+    expect(findByTestId(paired, "action-approve")).toBeDefined();
+    expect(getTextContent(findByTestId(paired, "action-why"))).toContain("Agent · Ray");
   });
 });

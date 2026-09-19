@@ -1,4 +1,9 @@
-import type { ActionPermission, ActionRequestItem, ActionsSummary } from "@personal-os/schema";
+import type {
+  ActionPermission,
+  ActionRequestItem,
+  ActionsSummary,
+  Agent,
+} from "@personal-os/schema";
 import { useLocalSearchParams, useRouter, type Href } from "expo-router";
 import { useState } from "react";
 import { View } from "react-native";
@@ -38,6 +43,7 @@ import {
   usePermissions,
   useUpdatePermission,
 } from "@/queries/actions";
+import { useAgents } from "@/queries/agents";
 import { deviceTimezone } from "@/queries/today";
 
 // The Action Center (Checkpoint 10.8, ADR-078 §8): every action request
@@ -52,6 +58,11 @@ import { deviceTimezone } from "@/queries/today";
 // approval sheet; history rows open /actions/[id]; permission cards carry
 // the rule-9 toggle. Loading is a skeleton; an error is an error, never the
 // empty state.
+//
+// Checkpoint 10.9 (ADR-081 §9): the screen reads the agent list once and
+// hands it to the rows, so a request an agent proposed names that agent in
+// its subtitle. The list is optional to every row -- a missing list means a
+// plain "Agent" word, never a blank row.
 
 const PAGE_LIMIT = 50;
 
@@ -106,7 +117,15 @@ function ActionsHero({ summary }: { summary: ActionsSummary }) {
   );
 }
 
-function PendingTab({ onCancel }: { onCancel: (item: ActionRequestItem) => void }) {
+type AgentList = readonly Pick<Agent, "id" | "name" | "revoked_at">[] | undefined;
+
+function PendingTab({
+  onCancel,
+  agents,
+}: {
+  onCancel: (item: ActionRequestItem) => void;
+  agents: AgentList;
+}) {
   const pending = useActions({ status: "pending", limit: PAGE_LIMIT });
   if (pending.isLoading) return <SkeletonList rows={3} className="mt-4" />;
   if (pending.isError || !pending.data) {
@@ -140,6 +159,7 @@ function PendingTab({ onCancel }: { onCancel: (item: ActionRequestItem) => void 
           <PendingActionRow
             key={item.id}
             item={item}
+            agents={agents}
             onCancel={() => onCancel(item)}
             last={index === items.length - 1}
             testID={`pending-action-${item.id}`}
@@ -155,7 +175,7 @@ function PendingTab({ onCancel }: { onCancel: (item: ActionRequestItem) => void 
   );
 }
 
-function HistoryTab() {
+function HistoryTab({ agents }: { agents: AgentList }) {
   const router = useRouter();
   const list = useActions({ limit: PAGE_LIMIT });
   if (list.isLoading) return <SkeletonList rows={4} className="mt-4" />;
@@ -195,6 +215,7 @@ function HistoryTab() {
               <HistoryActionRow
                 key={item.id}
                 item={item}
+                agents={agents}
                 onPress={() => router.push(actionRoute(item.id))}
                 last={index === group.items.length - 1}
                 testID={`history-action-${item.id}`}
@@ -264,6 +285,9 @@ export default function ActionCenterScreen() {
   const [tab, setTab] = useState<ActionTab>(() => coerceActionTabParam(params.tab));
   const summary = useActionsSummary();
   const cancel = useCancelAction();
+  // Read once here, never per row: an unpaired device has no list and the
+  // rows fall back to the plain source word.
+  const agents = useAgents();
 
   if (summary.isLoading) {
     return (
@@ -311,8 +335,8 @@ export default function ActionCenterScreen() {
         className="mt-4"
       />
 
-      {tab === "pending" ? <PendingTab onCancel={onCancel} /> : null}
-      {tab === "history" ? <HistoryTab /> : null}
+      {tab === "pending" ? <PendingTab onCancel={onCancel} agents={agents.data?.items} /> : null}
+      {tab === "history" ? <HistoryTab agents={agents.data?.items} /> : null}
       {tab === "permissions" ? <PermissionsTab /> : null}
     </Screen>
   );

@@ -50,6 +50,10 @@ import { useTodayTaskActions } from "./use-today-task-actions";
 
 vi.mock("@/queries/today", () => ({ useToday: vi.fn() }));
 vi.mock("@/queries/academic", () => ({ useAcademicToday: vi.fn() }));
+// Checkpoint 10.9 (ADR-082): the approval sheet's host reads the paired
+// device identity, whose provider module reaches SecureStore at import; the
+// hookless content rendered here never calls it, so the provider is stubbed.
+vi.mock("@/device-identity/provider", () => ({ useDeviceIdentity: vi.fn() }));
 vi.mock("@/queries/memory", () => ({
   useMemoriesForIntelligence: vi.fn(),
   useMemorySettings: vi.fn(),

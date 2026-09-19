@@ -21,9 +21,17 @@
 // `ActionApprovalSheetHost` is the leaf (hooks); `ActionRequestSummary` and
 // `ActionApprovalSheetContent` are hookless and are what the tests render
 // -- and what /actions/[id] reuses for its own Why / What-will-change blocks.
-import type { ActionRequestItem } from "@personal-os/schema";
+//
+// Checkpoint 10.9 (ADR-081 §6, ADR-082): an AGENT-sourced request shows the
+// fixed Why line with the agent named on the source chip, and the agent's
+// own reason quoted BELOW it under "Agent says" -- display text, never the
+// reason, never pressable. The host reads the agent list (the only hooked
+// component) and passes it down. Approve is device-bound: an unpaired
+// device sees an inert "Pair this device to approve" row instead.
+import type { ActionRequestItem, Agent } from "@personal-os/schema";
 import { useSyncExternalStore } from "react";
 import { View } from "react-native";
+import { agentAttribution } from "@/components/agents/agents-state";
 import {
   AppText,
   BottomSheet,
@@ -33,15 +41,18 @@ import {
   showToast,
   triggerHaptic,
 } from "@/components/ui";
+import { useDeviceIdentity } from "@/device-identity/provider";
 import { useApproveAction, useCancelAction } from "@/queries/actions";
+import { useAgents } from "@/queries/agents";
 import {
   actionChipStrip,
   actionDefinitionFor,
   actionErrorLabel,
-  actionReasonText,
-  actionSourceChip,
+  actionSourceChipFor,
+  agentReasonPresentation,
   whatWillChangeRows,
   whatWillChangeSpoken,
+  whyLineText,
 } from "./action-approval-sheet-state";
 
 export interface ActionApprovalSheetState {
@@ -111,15 +122,19 @@ export function resetActionApprovalSheetForTests(): void {
  */
 export function ActionRequestSummary({
   item,
+  agents,
   testID,
 }: {
   item: ActionRequestItem;
+  /** The registered agents, for naming an agent-sourced request's chip; omitted by a caller with no list. */
+  agents?: readonly Pick<Agent, "id" | "name" | "revoked_at">[];
   testID?: string;
 }) {
   const definition = actionDefinitionFor(item);
   const chips = actionChipStrip(definition);
-  const source = actionSourceChip(item.source);
-  const reason = actionReasonText(item);
+  const source = actionSourceChipFor(item.source, agentAttribution(item, agents));
+  const reason = whyLineText(item);
+  const agentSays = agentReasonPresentation(item);
   const rows = whatWillChangeRows(item);
   return (
     <View className="gap-3" testID={testID}>
@@ -150,6 +165,21 @@ export function ActionRequestSummary({
         </View>
       </View>
 
+      {agentSays ? (
+        <View
+          accessible
+          accessibilityLabel={`${agentSays.label}: ${agentSays.quote}`}
+          testID="action-agent-says"
+        >
+          <AppText variant="overline" tone="muted" className="pb-1">
+            {agentSays.label}
+          </AppText>
+          <AppText variant="body" tone="secondary" numberOfLines={4}>
+            {`\u201c${agentSays.quote}\u201d`}
+          </AppText>
+        </View>
+      ) : null}
+
       <View
         accessible
         accessibilityRole="summary"
@@ -174,12 +204,18 @@ export function ActionRequestSummary({
   );
 }
 
+/** The inert row an unpaired device sees where Approve would be (ADR-082). */
+export const PAIR_TO_APPROVE = "Pair this device to approve";
+
 export interface ActionApprovalSheetContentProps {
   item: ActionRequestItem;
   error: string | null;
   pending: boolean;
   onApprove: () => void;
   onCancel: () => void;
+  /** Whether this device holds a bearer token; approve and cancel are device-bound. */
+  paired?: boolean;
+  agents?: readonly Pick<Agent, "id" | "name" | "revoked_at">[];
 }
 
 /** Everything inside the sheet frame. Hookless. */
@@ -189,6 +225,8 @@ export function ActionApprovalSheetContent({
   pending,
   onApprove,
   onCancel,
+  paired = true,
+  agents,
 }: ActionApprovalSheetContentProps) {
   const definition = actionDefinitionFor(item);
   const actionable = item.status === "pending";
@@ -197,7 +235,7 @@ export function ActionApprovalSheetContent({
       <AppText variant="caption" tone="secondary">
         {definition.description}
       </AppText>
-      <ActionRequestSummary item={item} />
+      <ActionRequestSummary item={item} agents={agents} />
 
       {error ? (
         <ListRow
@@ -214,20 +252,33 @@ export function ActionApprovalSheetContent({
 
       {actionable ? (
         <View className="gap-2 pt-1">
-          <Button
-            label="Approve"
-            onPress={onApprove}
-            busy={pending}
-            variant="primary"
-            icon="check"
-            block
-            accessibilityLabel={`Approve: ${item.input_summary}`}
-            testID="action-approve"
-          />
+          {paired ? (
+            <Button
+              label="Approve"
+              onPress={onApprove}
+              busy={pending}
+              variant="primary"
+              icon="check"
+              block
+              accessibilityLabel={`Approve: ${item.input_summary}`}
+              testID="action-approve"
+            />
+          ) : (
+            <ListRow
+              title={PAIR_TO_APPROVE}
+              subtitle="Approving is bound to a paired device."
+              icon="link-variant-off"
+              iconTone="warning"
+              accessibilityLabel={`${PAIR_TO_APPROVE}. Approving is bound to a paired device.`}
+              inset
+              last
+              testID="action-pair-to-approve"
+            />
+          )}
           <Button
             label="Cancel"
             onPress={onCancel}
-            disabled={pending}
+            disabled={pending || !paired}
             variant="outline"
             haptic={false}
             block
@@ -264,6 +315,8 @@ export function ActionApprovalSheetHost() {
   );
   const approve = useApproveAction();
   const cancel = useCancelAction();
+  const paired = useDeviceIdentity().identity !== null;
+  const agents = useAgents();
   const item = current.item;
   const pending = approve.isPending || cancel.isPending;
 
@@ -311,6 +364,8 @@ export function ActionApprovalSheetHost() {
           pending={pending}
           onApprove={onApprove}
           onCancel={onCancel}
+          paired={paired}
+          agents={agents.data?.items}
         />
       ) : null}
     </BottomSheet>

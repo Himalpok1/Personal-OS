@@ -13,6 +13,7 @@ import {
   type ActionSource,
 } from "@personal-os/schema";
 import { formatDueLabel, formatWhenLabel } from "@/components/academic/format";
+import { agentAttributionLabel, type AgentAttribution } from "@/components/agents/agents-state";
 import type { IconName } from "@/components/ui/icon";
 import type { ChipTone } from "@/components/ui/status-chip";
 
@@ -21,7 +22,9 @@ import type { ChipTone } from "@/components/ui/status-chip";
 // for a value the REGISTRY or the request row carries -- the client derives
 // no risk, no reversibility and no status of its own. Nothing here is AI:
 // `reason` and `source` are client-authored at proposal time (§6) and are
-// rendered back verbatim.
+// rendered back verbatim -- except an AGENT's reason (Checkpoint 10.9,
+// ADR-081 §6), which is untrusted display text: it is quoted under "Agent
+// says", never rendered as the Why line and never interpreted.
 
 export interface ChipPresentation {
   label: string;
@@ -76,10 +79,53 @@ export const ACTION_SOURCE_LABEL: Readonly<Record<ActionSource, string>> = {
   briefing: "Briefing",
   academic: "Academics",
   manual: "You",
+  agent: "Agent",
 };
 
 export function actionSourceChip(source: ActionSource): ChipPresentation {
   return { label: ACTION_SOURCE_LABEL[source], tone: source === "manual" ? "neutral" : "info" };
+}
+
+/**
+ * The source chip with the agent named (Checkpoint 10.9): "Agent · Ray",
+ * "Agent (revoked)" or "Agent" when the list does not carry it. Every other
+ * source is unchanged.
+ */
+export function actionSourceChipFor(
+  source: ActionSource,
+  attribution: AgentAttribution | null,
+): ChipPresentation {
+  if (source === "agent" && attribution !== null) {
+    return { label: agentAttributionLabel(attribution), tone: "info" };
+  }
+  return actionSourceChip(source);
+}
+
+/** The FIXED Why line for an agent-sourced request: the agent's own words never stand as the reason. */
+export const AGENT_WHY_LINE = "An agent proposed this. Review it as you would any request.";
+
+export interface AgentReasonPresentation {
+  label: "Agent says";
+  /** The agent-authored reason, verbatim, for a quoted, inert line. */
+  quote: string;
+}
+
+/**
+ * For an agent-sourced request, the overline and the quote drawn BELOW the
+ * fixed Why line (ADR-081 §6); null for every other source. The text is
+ * display only: never a label, never a key, never pressable.
+ */
+export function agentReasonPresentation(
+  item: Pick<ActionRequestItem, "source" | "reason">,
+): AgentReasonPresentation | null {
+  if (item.source !== "agent") return null;
+  const quote = item.reason?.trim() ?? "";
+  return { label: "Agent says", quote: quote.length > 0 ? quote : "(no reason given)" };
+}
+
+/** The Why line: the client-authored reason, or the fixed line for an agent's request. */
+export function whyLineText(item: Pick<ActionRequestItem, "source" | "reason">): string {
+  return item.source === "agent" ? AGENT_WHY_LINE : actionReasonText(item);
 }
 
 /** The line under "Why": the client-authored reason, or the honest fallback for a bare manual request. */

@@ -2,11 +2,15 @@ import type { ActionListParams } from "@personal-os/api-client";
 import type { ActionPermission, ActionRequestCreate } from "@personal-os/schema";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
+import { requireDeviceToken, toastIfNotPaired, useDeviceToken } from "./device-token";
 
 // Agent Foundation & Action Framework hooks (Checkpoint 10.8, ADR-078).
 //
-// Perimeter-only, like the memory hooks: the action routes install no device
-// auth (ADR-078 §5), so no bearer token is threaded here.
+// Reads and proposals are perimeter-only, like the memory hooks. Since
+// Checkpoint 10.9 (ADR-082) approve, cancel and every permission change are
+// DEVICE-BOUND: the paired device's bearer rides on those three mutations,
+// and an unpaired device refuses them before any network call (the toast
+// "Pair this device first"). The query keys and invalidations are unchanged.
 //
 // The shape the framework fixes: a client PROPOSES (`useCreateActionRequest`
 // -> a pending row), and the owner APPROVES or CANCELS. Approval executes
@@ -116,28 +120,34 @@ export function useCreateActionRequest() {
  * than assuming success.
  */
 export function useApproveAction() {
+  const token = useDeviceToken();
   const invalidate = useInvalidateAfterExecution();
   return useMutation({
-    mutationFn: (id: string) => api.approveAction(id),
+    mutationFn: (id: string) => api.approveAction(requireDeviceToken(token), id),
     onSuccess: invalidate,
+    onError: toastIfNotPaired,
   });
 }
 
 /** `POST /actions/:id/cancel` -- nothing ran, so only the action caches (and Today) move. */
 export function useCancelAction() {
+  const token = useDeviceToken();
   const invalidate = useInvalidateAfterExecution();
   return useMutation({
-    mutationFn: (id: string) => api.cancelAction(id),
+    mutationFn: (id: string) => api.cancelAction(requireDeviceToken(token), id),
     onSuccess: invalidate,
+    onError: toastIfNotPaired,
   });
 }
 
 /** `PATCH /permissions/:permission` -- a revoke cancels every pending request that needed it. */
 export function useUpdatePermission() {
+  const token = useDeviceToken();
   const invalidate = useInvalidateAfterExecution();
   return useMutation({
     mutationFn: ({ permission, granted }: { permission: ActionPermission; granted: boolean }) =>
-      api.updatePermission(permission, { granted }),
+      api.updatePermission(requireDeviceToken(token), permission, { granted }),
     onSuccess: invalidate,
+    onError: toastIfNotPaired,
   });
 }

@@ -25,6 +25,10 @@ import {
 // The host's hook module reaches the API client (expo at import); mocked
 // whole -- the content under test never calls it.
 vi.mock("./use-today-task-actions", () => ({ useTodayTaskActions: vi.fn() }));
+// Checkpoint 10.9 (ADR-082): the approval sheet's host reads the paired
+// device identity, whose provider module reaches SecureStore at import; the
+// hookless content rendered here never calls it, so the provider is stubbed.
+vi.mock("@/device-identity/provider", () => ({ useDeviceIdentity: vi.fn() }));
 
 const HOST_TYPES = new Set<unknown>([View, Text, Pressable]);
 

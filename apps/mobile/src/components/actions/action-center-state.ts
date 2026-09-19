@@ -7,8 +7,9 @@ import {
   type ActionsSummary,
 } from "@personal-os/schema";
 import { formatDateLabel } from "@/components/academic/format";
+import { agentAttributionLabel, type AgentAttribution } from "@/components/agents/agents-state";
 import type { GradientName } from "@/components/ui/theme";
-import { ACTION_SOURCE_LABEL, actionReasonText } from "./action-approval-sheet-state";
+import { ACTION_SOURCE_LABEL, whyLineText } from "./action-approval-sheet-state";
 
 // Pure presentation for the Action Center screen (Checkpoint 10.8, ADR-078
 // §8): the hero's words and gradient, the three tabs, the history grouping.
@@ -65,9 +66,24 @@ export function pendingRowSubtitle(item: ActionRequestItem): string {
   return reason.length > 0 ? reason : `From ${ACTION_SOURCE_LABEL[item.source]}`;
 }
 
+/**
+ * The same line with an agent named first (Checkpoint 10.9): "Agent · Ray —
+ * <its reason>". The agent's reason is display text here as on the sheet;
+ * the prefix is what keeps its provenance visible in a list.
+ */
+export function pendingRowSubtitleFor(
+  item: ActionRequestItem,
+  attribution: AgentAttribution | null,
+): string {
+  if (item.source !== "agent" || attribution === null) return pendingRowSubtitle(item);
+  const reason = item.reason?.trim() ?? "";
+  const who = agentAttributionLabel(attribution);
+  return reason.length > 0 ? `${who} — ${reason}` : who;
+}
+
 /** What a screen reader hears for a pending row. */
 export function pendingRowSpoken(item: ActionRequestItem): string {
-  return `${item.input_summary}. ${actionReasonText(item)}. Opens the approval sheet`;
+  return `${item.input_summary}. ${whyLineText(item)}. Opens the approval sheet`;
 }
 
 /** Everything the list returned that is no longer waiting on the owner. */

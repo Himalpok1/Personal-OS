@@ -183,6 +183,12 @@ function AppStack() {
           all", not a tab -- the same 480px reasoning as Memory. */}
       <Stack.Screen name="actions/index" options={{ title: "Actions" }} />
       <Stack.Screen name="actions/[id]" options={{ title: "Action" }} />
+      {/* Checkpoint 10.9 (ADR-081 §9). The Agent Center is reached from the
+          Privacy & AI section of Settings, after Actions, not a tab -- the
+          same 480px reasoning as Memory and Actions. */}
+      <Stack.Screen name="agents/index" options={{ title: "Agents" }} />
+      <Stack.Screen name="agents/new" options={{ title: "New agent" }} />
+      <Stack.Screen name="agents/[id]" options={{ title: "Agent" }} />
       <Stack.Screen name="hardware-debug" options={{ title: "Hardware spike" }} />
     </Stack>
   );
