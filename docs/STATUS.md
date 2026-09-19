@@ -71,8 +71,12 @@ logged by an audit shell, every Docker removal by an event watcher, every config
 watchdog. Rollback images are saved as tarballs with keeper containers under a two-release
 retention policy (a real `image prune -a` took nothing of Personal OS's); the deploy key lives in
 a root-owned file (proven); a daily `pg_dump` + config backup is pulled to the owner's Mac (restore
-tested); 58 OS packages applied (Docker 29.8.1); NVMe SMART clean. **One owner step remains: the
-kernel/libc reboot, then `scripts/homelab/preflight.sh`.** Runbook `docs/HOMELAB-RUNBOOK.md`.**
+tested); 58 OS packages applied (Docker 29.8.1); NVMe SMART clean. **The kernel/libc reboot —
+the one owner step that remained — was completed by the owner and validated read-only on
+2026-09-19 (~06:31Z): kernel `7.0.0-31`, `reboot-required` gone, all four containers healthy,
+`/health` ok, 31 queues / 11 schedules, level 26, every integration active, the event watcher
+back via `@reboot`, `preflight.sh` YELLOW only for the NVMe AER line. Checkpoint 10.8.5 is
+CLOSED.** Runbook `docs/HOMELAB-RUNBOOK.md`.**
 **Checkpoint 10.9 — Agent Readiness & Agent Gateway — is IMPLEMENTED, VERIFIED (7,475 tests,
 23/23 tasks), LIVE-VERIFIED IN THE BROWSER with a scripted curl agent, INDEPENDENTLY REVIEWED
 (SAFE AFTER FIXES — two MAJORs, three MINORs, every required fix closed in-checkpoint), merged to
@@ -142,7 +146,7 @@ per-checkpoint acceptance evidence is in the Phase 10 entries below and in `docs
 |---|---|
 | Migration level | **26** (`0000`–`0025`); local `personalos`, local `personalos_test` and production agree (all `26 · 1789381000000`). 10.9 added `0025_agent_gateway` (ADR-081: `agents`, `agent_tool_calls`, `action_requests.agent_id`/`correlation_id`, the `principal='agent' ⟺ agent_id` pair CHECK, the `source` CHECK widened to `agent`), applied to production 2026-09-19 02:54Z from the 10.9 api image — **25 → 26 by row count**, tracked hash `5e29eb4e…` equal to the shipped file's SHA-256, both tables inspected column/constraint/index/grant by name. Previously: 10.8 added `0024_action_framework` (ADR-078, two tables), applied to production 2026-09-18 06:07Z from the 10.8 api image — 24 → 25 by row count, tracked hash equal to the shipped file's SHA-256. 10.8 added `0024_action_framework` (ADR-078, two tables), applied to production 2026-09-18 06:07Z from the 10.8 api image — 24 → 25 by row count, tracked hash equal to the shipped file's SHA-256. Previously: 10.7 added `0023_personal_memory_layer` (ADR-077, three tables), applied to production 2026-09-17 23:57Z from the 10.7 api image — 23 → 24 by row count, tracked hash equal to the shipped file's SHA-256. |
 | Serving commit | **api, worker and web at `79f943f`** (10.9; all three recreated 2026-09-19 02:55Z from `personal-os-10.9-release`, images `a2945aea86cd` / `55764b59a988` / `d7ae9fd7ab4b`; rollback `personal-os-{api,worker,web}:rollback-pre-10.9` = `f3f751c78576` / `4cf1639685fa` / `42815bbe7c6c` — the 10.8 api/web and the 10.4 worker — saved as tarballs with keeper containers, plus the `10.9` serving set); postgres on its 2026-08-30 image, last restarted 2026-09-18 19:30Z by the 10.8.5 Docker upgrade. Previous: api and web at `fcb4ea9` (10.8; recreated 2026-09-18 06:08Z from `personal-os-10.8-release`), worker at `965900f` (10.4). Previous: api and web at `436da0f` (10.7; recreated 2026-09-17 23:58Z from `personal-os-10.7-release`). Previous entry, for provenance: api at `3a90c0c`, web at `3928dd3` (10.6; the fix commit changed only `apps/mobile`, so `api`'s image is byte-equivalent to one built from `3928dd3` and was not rebuilt; api recreated 2026-09-17 10:08Z, web 10:19Z, both from `personal-os-10.6-release`); **worker at `965900f`** (10.4, untouched since — 10.5 and 10.6 changed nothing under `apps/worker`); postgres untouched since 2026-08-30. Provenance is by compose `working_dir`; the images carry no commit label. Rollback: `personal-os-{api,web}:rollback-pre-10.6` = the 10.5 images (`d293d6f813d7` / `7e8cce9615b3`), plus every earlier tag, all by resolved digest. |
-| Host (10.8.5) | **Shared home-lab box** since 2026-09-17 (`docs/HOMELAB-RUNBOOK.md` §1). **Ray = trusted operator** (ADR-079 §4), key bound to the audit shell (`~/.personal-os-ops/agent-ssh.log`). Rollback posture: `rollback-pre-10.9` (636 MB) and `10.9` (640 MB) image sets saved as tarballs (`~/personal-os-images/`, sha256-verified) + keeper containers under the two-label retention (the `rollback-pre-10.8`/`10.8` sets were retired by it, as designed); Personal OS tags exactly `10.9` / `latest` / `rollback-pre-10.9` per service. Backup (ADR-080): daily 03:30 `pg_dump` + globals + config bundle → `~/personal-os-backups/`, pulled 09:30 to the Mac's `~/PersonalOS-Backups/host/`; restore tested. Watchdog every 30 min + docker event watcher + change detection → ntfy `personal-os-ops`. Deploy key in `/etc/ssh/authorized_keys.d/himallinux` (root-owned, proven). Docker **29.8.1** (58 packages applied 2026-09-18 19:25Z; 18 phased-held); **reboot pending** (kernel 7.0.0-31, libc6 — still pending at the 10.9 preflight, 2026-09-19 02:47Z, YELLOW, no RED). NVMe SMART clean (0 critical, 0 media errors, 14 % used); ~1,500–2,400 correctable PCIe AER/day on the link (2,426 on 2026-09-19). Disk 22 %. Foreign containers grew again since 10.8.5: a `teslamate` stack (×4) and `agents-meetup` now run beside the dev-ops set — recorded, not acted on. |
+| Host (10.8.5) | **Shared home-lab box** since 2026-09-17 (`docs/HOMELAB-RUNBOOK.md` §1). **Ray = trusted operator** (ADR-079 §4), key bound to the audit shell (`~/.personal-os-ops/agent-ssh.log`). Rollback posture: `rollback-pre-10.9` (636 MB) and `10.9` (640 MB) image sets saved as tarballs (`~/personal-os-images/`, sha256-verified) + keeper containers under the two-label retention (the `rollback-pre-10.8`/`10.8` sets were retired by it, as designed); Personal OS tags exactly `10.9` / `latest` / `rollback-pre-10.9` per service. Backup (ADR-080): daily 03:30 `pg_dump` + globals + config bundle → `~/personal-os-backups/`, pulled 09:30 to the Mac's `~/PersonalOS-Backups/host/`; restore tested. Watchdog every 30 min + docker event watcher + change detection → ntfy `personal-os-ops`. Deploy key in `/etc/ssh/authorized_keys.d/himallinux` (root-owned, proven). Docker **29.8.1** (58 packages applied 2026-09-18 19:25Z; 18 phased-held); **rebooted by the owner 2026-09-19 (~06:15Z) onto kernel `7.0.0-31`** — `reboot-required` gone, validated read-only at 06:31Z (the *Post-reboot validation* record under 10.8.5). NVMe SMART clean (0 critical, 0 media errors, 14 % used); correctable PCIe AER on the link **35 in the first 17 minutes after the reboot** (was ~1,500–2,400/day; 2,426 on 2026-09-19 before it) — still YELLOW, watched. Disk 24 %. Foreign containers keep growing: `agents-meetup`, `teslamate-{database,mosquitto}`, `immich_{postgres,machine_learning,redis}`, `watchtower`, `ray-dashboard` + updater beside the dev-ops set — recorded, not acted on. |
 | Containers | all four `RestartCount=0`; api `(healthy)` within 7 s of the 10.9 recreation (02:55:29Z); worker `worker.started` with 31 queues / 11 schedules (02:55:46Z); postgres `postgres:17-alpine` untouched by 10.9 (last started 2026-09-18 19:30Z, the 10.8.5 Docker upgrade); `GET /health` → `ok` / `connected` / `stale:false` (2026-09-19 04:08Z) |
 | Rabbit R1 | `com.himal.personalos` **versionCode 34**, built from `79f943f` **locally** (10.9; `eas build --local`, `BUILD SUCCESSFUL in 4m 24s`, 113.9 MB; bundle `strings`-checked — 0 `localhost:3000`, 1 tailnet host, every Agent Center string; V2 signer `4601e3a2…` identical to the installed app's; `adb install -r` → `Success` 2026-09-19 03:07Z, `firstInstallTime` 2026-08-19 preserved, exact-alarm `allow`, notifications granted; the agent-attributed approval, Undo, register, token-once, trust, permission cards, activity, revoke and both colour schemes walked on-device, 0 crash lines, 0 uncaught JS errors). Previous: **versionCode 33**, built from `fcb4ea9` **locally** (10.8; `adb install -r` → `Success` 2026-09-18 01:53 local, `firstInstallTime` 2026-08-19 preserved, exact-alarm `allow`, notifications granted; the approval flow, Action Center, revoke/allow and undo walked on-device in light and dark, 0 crash lines). Previous: **versionCode 32**, built from `436da0f` **locally** (10.7; `adb install -r` → `Success` 2026-09-18 02:41Z, `firstInstallTime` 2026-08-19 preserved, exact-alarm `allow`, notifications granted; Memory Center create/edit/delete/toggle walked on-device in light and dark, 0 crash lines). Previous: **versionCode 31**, built from `3928dd3` **locally** (`eas build --local`, profile `production-internal`, the EAS-managed keystore fetched at build time — signer SHA-256 `4601e3a2…` identical to the installed app's, compared with `apksigner` before installing), `adb install -r` → `Success` with `firstInstallTime` 2026-08-19, exact-alarm appop `allow`, `POST_NOTIFICATIONS` preserved — no re-pair. versionCode 30 (from `3a90c0c`) **crashed on launch** (a worklet calling a JS-thread function) and was rolled back to 29 within minutes, then fixed; the 10.6 record has the full account. Today (light + dark), the briefing hero and assignment sheet on real data, Settings and Projects walked live; 0 crash lines on 31. |
 | Academic layer (10.2 + ADR-070a) | `GET /academic/today?tz=` · `GET /academic/courses[?include_past_terms=]` · `GET /academic/courses/:id` — a provider-agnostic read model computed over the Canvas tables (ADR-070), **current term only by default** (ADR-070a: the most recently started term, by date — `current_term: 2026 Fall` echoed on the wire), a deterministic Today card and `/academic` course screens, `score`/`grade` synced (ADR-068a; 165 of 355 real assignments carry a grade). **Live and validated**: Today `overdue 2 · due today 1 · due this week 8 · 8 unread` from the 6 Fall 2026 courses (was 11 overdue across 16 courses in 3 terms before the rule); `include_past_terms=true` still lists all 16. |
@@ -2776,7 +2780,7 @@ production action tables `action_requests 11 · permission_grants 2`.
 
 ---
 
-### Checkpoint 10.8.5 — Home Lab Reliability & Deployment Hardening: AUDITED, HOST-SIDE IMPLEMENTED, ROOT STEPS PENDING OWNER (2026-09-18)
+### Checkpoint 10.8.5 — Home Lab Reliability & Deployment Hardening: AUDITED, IMPLEMENTED, VALIDATED, MERGED (2026-09-18) — REBOOT VALIDATED, CLOSED (2026-09-19)
 
 **Objective (owner-directed, 2026-09-18).** An infrastructure checkpoint before 10.9: identify
 what deleted ~163 GB of Docker images (every rollback tag) mid-10.8-deployment and what dropped the
@@ -2943,9 +2947,10 @@ landed on top of the morning's work:
 - **OS updates applied by the owner** (`apply-os-updates.sh`, 2026-09-18 ~19:25Z): 58 packages
   incl. `docker-ce` 29.7.2 → **29.8.1**, `containerd.io` 2.3.5, compose 5.5.1; every container
   restarted once, all four Personal OS containers healthy within ~30 s, `/health` ok; 18
-  packages held back by Ubuntu's phased rollout. **The reboot did not happen in-session** — the
-  `sudo` prompt timed out while the owner was away; kernel 7.0.0-31 and libc6 wait on
-  `ssh -t personal-os 'sudo reboot'` then `scripts/homelab/preflight.sh`.
+  packages held back by Ubuntu's phased rollout. **The reboot did not happen in that session** —
+  the `sudo` prompt timed out while the owner was away; kernel 7.0.0-31 and libc6 waited on
+  `ssh -t personal-os 'sudo reboot'` then `scripts/homelab/preflight.sh`. **Done by the owner on
+  2026-09-19; validated below.**
 - **NVMe investigated** (`nvme-cli` installed by the owner): WD PC SN730 256 GB, fw 11110101,
   `critical_warning 0`, `media_errors 0`, `percentage_used 14 %`, `available_spare 100 %`,
   33,110 power-on hours, 2,853 power cycles, 62 unsafe shutdowns, 31 TB written, one benign
@@ -2964,6 +2969,45 @@ the repo copies (sha256). No TypeScript touched; test baseline unchanged at 7,27
 **Unchanged and reaffirmed:** ADR-018 (nothing new is public), ADR-024 as amended by ADR-080, ADR-029, ADR-055 (Personal OS monitoring not widened; the host
 watchdog is outside the product), ADR-058, the frozen Checkpoint 5.7 order (extended, not
 replaced).
+
+#### Post-reboot validation — COMPLETE (2026-09-19 ~06:31–06:33Z, read-only); Checkpoint 10.8.5 CLOSED
+
+**The owner rebooted the host** (`uptime` read `up 16 min` at 06:31:57Z — so the reboot landed at
+~06:15Z, about two hours after the 10.9 rollout finished). Everything below was read directly
+from the host, the containers, the database and the logs by `ssh personal-os` and
+`scripts/homelab/preflight.sh`; nothing was changed on the host, and **no corrective production
+action is required.** (The first `ssh` of the session timed out — the Mac's own Tailscale client
+was stopped, not the host; `Tailscale up` reconnected without re-authentication.)
+
+| Check | Evidence |
+|---|---|
+| Reboot completed | `uname -r` → **`7.0.0-31-generic`** (the kernel installed by `apply-os-updates.sh` on 2026-09-18); `/var/run/reboot-required` **absent** |
+| Containers | `personal-os-api-1` **Up 16 minutes (healthy)** · `personal-os-postgres-1` **Up 16 minutes (healthy)** · `personal-os-worker-1` Up 16 minutes · `personal-os-web-1` Up 16 minutes — all four came back with the host, images unchanged (`personal-os-{api,worker,web}` at the 10.9 build, `postgres:17-alpine`) |
+| `GET /health` | `{"status":"ok","db":"connected","worker":{"lastBeatAt":"2026-09-19T06:31:10.915Z","stale":false}}`; the public HTTPS route (`preflight.sh`'s "public https /health") answers the same |
+| Worker | `worker.started` with **31 queues / 11 schedules** (unchanged) |
+| Migration level | `drizzle.__drizzle_migrations` → **26 · 1789381000000** (unchanged) |
+| Integrations | `canvas_connections` **active** · `mail_connections` **active** · `health_connections` **active** · `calendar_connections` **active** |
+| Logs since boot | worker **0** warn/error; api **1** — a `pg-boss error` / `57P01 terminating connection due to administrator command`, i.e. Postgres shutting down for the reboot under the api's pg-boss connection; the api reconnected (the container log persists across a restart, which is why the pre-reboot line is visible) |
+| Docker event watcher | `docker-events-watch.sh _watch` running (two bash pids, as the `@reboot` cron entry starts it) — restarted correctly after the reboot |
+| Tailscale Serve | `preflight.sh` → `tailscale serve: 12 route lines` (intact) |
+| Rollback image sets | `image-store: newest=10.9 labels=10.9 rollback-pre-10.9` — both sets and their keeper containers survived the reboot |
+| Backups | `newest dump 11h old, 1 dumps, 6.3M` — the 03:30 job's output present and within window |
+| Deploy key | `deploy key present (2 keys in authorized_keys)` |
+| Agent audit | `190 commands today, 0 flagged` (Ray's polling, logged by the audit shell) |
+| Disk | `/` **24 %** (53 G of 233 G) |
+| `preflight.sh` verdict | **YELLOW** — the only YELLOW line is `nvme: 35 PCIe correctable errors today`; **every RED check is green** (disk, the four containers, `/health` + worker staleness, one `rollback-pre-*` tag per service, a complete saved set, the deploy key, no RW socket mount outside the allowlist, no `reboot-required`) |
+| NVMe AER | **35** correctable errors in the ~17 minutes after the reboot versus ~1,500–2,400 per day before it — substantially lower, still watched by the watchdog's daily count; SMART was clean at 10.8.5 (runbook §8) |
+| Foreign containers | `agents-meetup`, `teslamate-database-1`, `teslamate-mosquitto-1`, `immich_postgres`, `immich_machine_learning`, `immich_redis`, `watchtower`, `ray-dashboard-updater`, `ray-dashboard` — the shared-host set keeps changing; recorded, not acted on (ADR-079 §4) |
+
+**Checkpoint 10.8.5 is CLOSED (2026-09-19).** Every step of the brief is done and proven: root
+cause recorded (ADR-079), Ray's access kept and made visible, rollback artifacts saved and
+bounded, the deploy key durable in a root-owned file, a daily backup with a tested restore and an
+off-host pull (ADR-080), the OS updates applied and now **booted**, and the post-reboot host
+validated GREEN on every RED check. What stays open is recorded in the ledger as ordinary,
+owner-optional follow-ups, not as checkpoint work: `harden-ssh.sh --disable-password-auth`
+(the root-owned key file is proven), subscribing to ntfy `personal-os-ops`, `pcie_aspm=off` only
+if the AER count grows, `docs/SOURCE-DURABILITY.md` Option 2, and Ray's trusted-operator access
+(by decision, never to be restricted without the owner).
 
 ---
 
@@ -3752,9 +3796,11 @@ production token issued to anything outside this walk. **10.10 is not begun.**
   isolation, green on the re-run). Not touched by 10.8; a monotonic comparison (or one clock)
   would close it.
 - **NVMe PCIe correctable AER errors, ~1,500/day, 38,098 since the Aug 29 boot (found at
-  10.8.5).** The only disk, no backup (ADR-024). Correctable is not corruption, but the rate is a
-  hardware signal: `sudo nvme smart-log /dev/nvme0` after the reboot, reseat, or `pcie_aspm=off`.
-  The watchdog's `--report` prints the day's count.
+  10.8.5).** The only disk; backup since ADR-080. Correctable is not corruption, but the rate is a
+  hardware signal: SMART read clean at 10.8.5 (`critical_warning 0`, `media_errors 0`, 14 % used);
+  reseat or `pcie_aspm=off` remain the owner's options. The watchdog's `--report` prints the day's
+  count. *(2026-09-19: 35 in the first 17 minutes after the kernel reboot — substantially lower
+  than before it; the entry stays open until a full day's count confirms the trend.)*
 - **Ray can still do anything on the host — by design (ADR-079 §4, trusted operator).** The
   audit shell records it, the event watcher and the watchdog detect it, the saved images / root
   key file / backup make it recoverable. Not a defect; listed so no later checkpoint "fixes" it
@@ -3762,9 +3808,9 @@ production token issued to anything outside this walk. **10.10 is not begun.**
 - **`sshd` answers on `0.0.0.0:22` with password authentication enabled (10.8.5).** Stock config;
   the recovery path that worked on 2026-09-18. The root-owned deploy-key file is now proven, so
   `harden-ssh.sh --disable-password-auth` can be run whenever the owner wants.
-- **The kernel/libc reboot is pending (10.8.5).** `linux-image-7.0.0-31` and `libc6` are
-  installed but not booted; `ssh -t personal-os 'sudo reboot'` then `scripts/homelab/preflight.sh`.
-  The `sudo` prompt timed out in-session while the owner was away.
+- ~~**The kernel/libc reboot is pending (10.8.5).**~~ Closed 2026-09-19: the owner rebooted
+  the host onto `7.0.0-31`; `reboot-required` gone; validated read-only (the 10.8.5 *Post-reboot
+  validation* record), `preflight.sh` GREEN on every RED check.
 - **The off-host backup is not separately encrypted (ADR-080).** `.env` sits in
   `~/PersonalOS-Backups/host/` on the FileVault-encrypted Mac, mode 700. `docs/SOURCE-DURABILITY.md`
   Option 2 (an encrypted configuration copy) would close the gap for a second destination.
@@ -3844,13 +3890,15 @@ runtime is selected, no autonomous loop exists, no agent can approve, no memory 
 design direction. **10.10 is not begun** — its two hard prerequisites (every remaining mutating
 route device-bound, ADR-082 §6; a `posops_readonly` role) are unchanged and still open.
 
-**Checkpoint 10.8.5 — Home Lab Reliability & Deployment Hardening — is COMPLETE except for the
-reboot (2026-09-18, ADR-079 + ADR-080, PR #9 merged).** Root cause: the owner's own agent Ray,
-now a designated trusted operator with full visibility (audit shell, event watcher, change
-detection). Done and proven: saved/kept/bounded rollback images, a root-owned deploy-key file,
-daily backup with a tested restore and an off-host pull, 58 OS packages incl. Docker 29.8.1,
-NVMe SMART clean. **Pending the owner:** `ssh -t personal-os 'sudo reboot'` →
-`scripts/homelab/preflight.sh`.
+**Checkpoint 10.8.5 — Home Lab Reliability & Deployment Hardening — is COMPLETE and CLOSED
+(2026-09-18/19, ADR-079 + ADR-080, PR #9 merged).** Root cause: the owner's own agent Ray, now a
+designated trusted operator with full visibility (audit shell, event watcher, change detection).
+Done and proven: saved/kept/bounded rollback images, a root-owned deploy-key file, daily backup
+with a tested restore and an off-host pull, 58 OS packages incl. Docker 29.8.1, NVMe SMART clean,
+**and the kernel reboot — done by the owner 2026-09-19, validated read-only the same hour:
+kernel `7.0.0-31`, every container healthy, level 26, every integration active, the event
+watcher back, `preflight.sh` GREEN on every RED check, YELLOW only for the NVMe AER line.**
+Nothing is pending on it.
 
 **Checkpoint 10.8 — Agent Foundation & Action Framework — is IMPLEMENTED, VERIFIED (7,274
 tests, 23/23 tasks), INDEPENDENTLY REVIEWED (safe after fixes, all closed), merged to `main`
@@ -3945,7 +3993,7 @@ phase is in `docs/history/`; the one-line summary is:
 
 | **10.7** | Personal Memory & Preference Layer (ADR-077, migration `0023`): three flat tables, owner-only writes, computed suggestions, deterministic link-based influence on Focus Now and the briefing, Guard 6. **Deployed 2026-09-17/18, accepted on the Rabbit R1 (versionCode 32).** |
 | **10.8** | Agent Foundation & Action Framework (ADR-078, migration `0024`): a six-action registry in three reversible pairs, `permission_grants`, per-request owner approval with synchronous single-use execution, the request row as the audit trail, an Action Center, Guard 7. **Deployed 2026-09-18, accepted on the Rabbit R1 (versionCode 33).** |
-| **10.8.5** | Home Lab Reliability & Deployment Hardening (ADR-079/080): the image prune and dropped deploy key root-caused to the owner's trusted agent; saved/kept/bounded rollback images, an agent audit shell, a docker event watcher, a cron+ntfy watchdog, a root-owned deploy-key file, a daily backup with a tested restore; the kernel reboot still pending. **Merged 2026-09-18 (PR #9).** |
+| **10.8.5** | Home Lab Reliability & Deployment Hardening (ADR-079/080): the image prune and dropped deploy key root-caused to the owner's trusted agent; saved/kept/bounded rollback images, an agent audit shell, a docker event watcher, a cron+ntfy watchdog, a root-owned deploy-key file, a daily backup with a tested restore; the kernel reboot done by the owner and validated 2026-09-19. **Merged 2026-09-18 (PR #9); CLOSED 2026-09-19.** |
 | **10.9** | Agent Readiness & Agent Gateway (ADR-081/082/070b, migration `0025`): agent identity with `posa_` tokens and trust levels, the six read tools bound behind OFF-by-default per-principal permissions, atomic call/char/rate budgets, a full read audit, proposals through the Action Framework with device-bound approval, Guard 8, an Agent Center on mobile; no runtime selected. **Merged (`79f943f`, PR #10), deployed 2026-09-19 (api/worker/web, level 26), validated live with a temporary agent, accepted on the Rabbit R1 (versionCode 34).** |
 
 **Production is at migration level 26** and serves `api`, `worker` and `web` built from `79f943f` (10.9);
@@ -3978,10 +4026,11 @@ with a temporary agent (revoked; audit kept) and the Rabbit R1 runs versionCode 
 Center, the agent-attributed approval and Undo walked on-device. Nothing is in flight; no external
 runtime holds a token; 10.10 is not begun.
 
-**Checkpoint 10.8.5 is merged (`main` via PR #9) and live on the host; only the kernel reboot
-is outstanding.** The host is watched every 30 minutes, every Docker removal and every agent
-command is logged, and the first backup is on the Mac. The next deployment starts with
-`scripts/homelab/preflight.sh` and ends with `save-release-images.sh <checkpoint> --from-latest`.
+**Checkpoint 10.8.5 is merged (`main` via PR #9), live on the host, and CLOSED — the kernel
+reboot happened 2026-09-19 and the host validated clean afterwards.** The host is watched every
+30 minutes, every Docker removal and every agent command is logged, and the daily backup lands on
+the Mac. The next deployment starts with `scripts/homelab/preflight.sh` and ends with
+`save-release-images.sh <checkpoint> --from-latest`.
 
 **Checkpoint 10.8 is DEPLOYED, ACCEPTED and CLOSED.** `main` carries `fcb4ea9` (PR #8,
 fast-forward) plus the closing docs commit; production serves `api`+`web` at `fcb4ea9`, `worker`
@@ -4033,6 +4082,20 @@ removed from the primary checkout.
 ---
 
 ## Last verification
+
+**Checkpoint 10.8.5 post-reboot validation (2026-09-19 ~06:31–06:33Z), read directly from the
+host — read-only, nothing changed.** `ssh personal-os` (after restarting the Mac's own stopped
+Tailscale client) · `uname -r` `7.0.0-31-generic`, `up 16 min`, `/var/run/reboot-required` absent
+· `docker ps`: api `(healthy)`, postgres `(healthy)`, worker, web all `Up 16 minutes` on their
+10.9 / `postgres:17-alpine` images · `GET /health` `ok` / `connected` / `stale:false` locally and
+over the public HTTPS route · `worker.started` 31 queues / 11 schedules · migrations `26 ·
+1789381000000` · Canvas / Gmail / Health / Google Calendar all `active` · api 1 warn/error line
+since boot (the `57P01` Postgres-shutdown line from the reboot itself), worker 0 · `pgrep`
+shows `docker-events-watch.sh _watch` running · `scripts/homelab/preflight.sh` **YELLOW** only
+for `nvme: 35 PCIe correctable errors today`, every RED check green (disk 24 %, containers,
+`/health`, `image-store: newest=10.9 labels=10.9 rollback-pre-10.9`, backup `11h old`, deploy
+key present, agent audit `190 commands today, 0 flagged`, `tailscale serve: 12 route lines`) ·
+no corrective production action required.
 
 **Checkpoint 10.9 deployment (2026-09-19 02:47–04:10Z), read directly from the host, production
 and the device.** Preflight YELLOW (reboot pending, AER), no RED · git tag `rollback-pre-10.9` at
@@ -4310,12 +4373,12 @@ verbatim in `docs/history/superseded-present-state-2026-09-16.md` §4.
    the two 10.9-deployment ledger notes that only matter then (Today's pending card refreshes on
    focus, not by polling; the chars cap is unreachable on today's data).
 
-2. **Finish Checkpoint 10.8.5 — one owner step:** `ssh -t personal-os 'sudo reboot'` (kernel
-   7.0.0-31 + libc6; the `sudo` prompt timed out in-session), then `scripts/homelab/preflight.sh`
-   — expect all containers back, the event watcher restarted by `@reboot`, `tailscale serve`
-   intact, GREEN except the AER line. Optional, any time: `harden-ssh.sh --disable-password-auth`
-   (the root-owned key file is proven); subscribe to ntfy topic `personal-os-ops`; `pcie_aspm=off`
-   only if the AER count grows. Checkpoint 10.8 itself is deployed (level 25, `api`+`web` at `fcb4ea9`),
+2. **Checkpoint 10.8.5 is closed; nothing is pending on it.** The reboot happened 2026-09-19 and
+   the post-reboot read found all containers back, the event watcher restarted by `@reboot`,
+   `tailscale serve` intact, GREEN on every RED check with only the AER line YELLOW. Optional,
+   any time, owner's call: `harden-ssh.sh --disable-password-auth` (the root-owned key file is
+   proven); subscribe to ntfy topic `personal-os-ops`; `pcie_aspm=off` only if the AER count
+   grows. Checkpoint 10.8 itself is deployed (level 25, `api`+`web` at `fcb4ea9`),
    accepted on the Rabbit R1 (versionCode 33) and **CLOSED**; 10.4–10.7 and 10.9 likewise. Worth
    watching on real use: the first real memories the owner adds (the working-hours line will
    appear on the briefing only on a morning with a free block inside the window; a course-linked
