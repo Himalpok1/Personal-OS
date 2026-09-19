@@ -1,16 +1,44 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   GetCalendarContextInputSchema,
   GetItemContextInputSchema,
   GetTaskContextInputSchema,
   GetTodayContextInputSchema,
+  GetAcademicContextInputSchema,
+  GetAcademicContextOutputSchema,
+  GetCalendarContextOutputSchema,
+  GetTaskContextOutputSchema,
+  READ_TOOL_ACADEMIC_ASSIGNMENTS_MAX,
+  READ_TOOL_CALENDAR_ITEMS_MAX,
   READ_TOOL_INPUT_SCHEMAS,
   READ_TOOL_NAMES,
+  READ_TOOL_OUTPUT_SCHEMAS,
   SearchPersonalItemsInputSchema,
   TODAY_CONTEXT_CAPS,
   TODAY_CONTEXT_MAX_CHARS,
   TodayContextSchema,
 } from "./intelligence-tools.js";
+
+/** Every property name anywhere in a schema, via its JSON Schema projection. */
+function collectObjectKeys(schema: z.ZodTypeAny): string[] {
+  const json = z.toJSONSchema(schema, { io: "output", unrepresentable: "any" });
+  const keys: string[] = [];
+  const visit = (node: unknown): void => {
+    if (typeof node !== "object" || node === null) return;
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    const record = node as Record<string, unknown>;
+    if (typeof record["properties"] === "object" && record["properties"] !== null) {
+      keys.push(...Object.keys(record["properties"] as object));
+    }
+    Object.values(record).forEach(visit);
+  };
+  visit(json);
+  return keys;
+}
 
 // Checkpoint 9.7 (ADR-066). The Today context is a CLOSED allowlist in the
 // BriefInput tradition: its key set is pinned here so that adding a field --
@@ -161,6 +189,7 @@ describe("read-tool contract (Checkpoint 9.7, schemas only)", () => {
     get_today_context: { tz: "America/Chicago" },
     get_calendar_context: { tz: "America/Chicago", from: "2026-09-14", to: "2026-09-20" },
     get_task_context: { id: "0b8e6a5a-4a2c-4d3f-9a2b-1c2d3e4f5a6b" },
+    get_academic_context: { tz: "America/Chicago" },
   };
 
   it("names every tool search_* or get_* -- a write-shaped tool cannot be named", () => {
@@ -180,6 +209,49 @@ describe("read-tool contract (Checkpoint 9.7, schemas only)", () => {
     expect(READ_TOOL_INPUT_SCHEMAS.get_today_context).toBe(GetTodayContextInputSchema);
     expect(READ_TOOL_INPUT_SCHEMAS.get_calendar_context).toBe(GetCalendarContextInputSchema);
     expect(READ_TOOL_INPUT_SCHEMAS.get_task_context).toBe(GetTaskContextInputSchema);
+    expect(READ_TOOL_INPUT_SCHEMAS.get_academic_context).toBe(GetAcademicContextInputSchema);
+  });
+
+  it("carries a strict, body-free output schema for every tool (Checkpoint 10.9)", () => {
+    expect(Object.keys(READ_TOOL_OUTPUT_SCHEMAS).sort()).toEqual([...READ_TOOL_NAMES].sort());
+    for (const name of READ_TOOL_NAMES) {
+      const shape = READ_TOOL_OUTPUT_SCHEMAS[name];
+      expect(shape.safeParse({ not: "a", real: "output" }).success).toBe(false);
+    }
+    // The three outputs defined in 10.9 never carry a body, a description or a rule.
+    for (const schema of [
+      GetCalendarContextOutputSchema,
+      GetTaskContextOutputSchema,
+      GetAcademicContextOutputSchema,
+    ]) {
+      const keys = collectObjectKeys(schema);
+      for (const forbidden of ["body", "description", "rrule", "html_url", "source_base_url"]) {
+        expect(keys, forbidden).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it("converts every tool input/output to JSON Schema without throwing (the manifest)", () => {
+    for (const name of READ_TOOL_NAMES) {
+      expect(() =>
+        z.toJSONSchema(READ_TOOL_INPUT_SCHEMAS[name], { io: "input", unrepresentable: "any" }),
+      ).not.toThrow();
+      expect(() =>
+        z.toJSONSchema(READ_TOOL_OUTPUT_SCHEMAS[name], { io: "output", unrepresentable: "any" }),
+      ).not.toThrow();
+    }
+  });
+
+  it("caps academic and calendar outputs with an honest total", () => {
+    expect(READ_TOOL_CALENDAR_ITEMS_MAX).toBe(100);
+    expect(READ_TOOL_ACADEMIC_ASSIGNMENTS_MAX).toBe(40);
+    expect(
+      GetAcademicContextOutputSchema.shape.assignments.safeParse({
+        provenance: "first_party",
+        items: [],
+        total: 0,
+      }).success,
+    ).toBe(false);
   });
 
   it("bounds the calendar span and the search limit", () => {

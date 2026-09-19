@@ -65,6 +65,7 @@ describeIf("migration 0024 constraints", () => {
 
   afterEach(async () => {
     await db.query("delete from action_requests");
+    await db.query("delete from agents");
     await db.query("delete from permission_grants");
   });
 
@@ -156,6 +157,7 @@ describeIf("migration 0024 constraints", () => {
       for (const source of ["focus_now", "briefing", "academic", "manual"]) {
         await expect(insertRequest({ source })).resolves.toBeTruthy();
       }
+      // `agent` (0025) needs an agent row; agent-constraints.test.ts covers the pair.
     });
 
     it("REJECTS a status, source, principal or target_type outside the closed vocabularies", async () => {

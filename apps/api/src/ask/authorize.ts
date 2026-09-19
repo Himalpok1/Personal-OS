@@ -34,7 +34,7 @@ export interface CloudAskGrant {
   readonly grantedAt: string;
 }
 
-/** Objects actually minted by `authorizeCloudAsk`. Nothing else is ever added. */
+/** Objects actually minted by `authorizeCloudAsk` or `authorizeAgentRead`. Nothing else is ever added. */
 const grants = new WeakSet<object>();
 
 /** Whether the `ask` task route exists at all -- its presence IS the switch. */
@@ -76,6 +76,53 @@ export async function authorizeCloudAsk(
   db: Db,
 ): Promise<CloudAskGrant | null> {
   if (!(await askRouteEnabled(db))) return null;
+  const grant: CloudAskGrant = Object.freeze({
+    requestId: request.id,
+    grantedAt: new Date().toISOString(),
+  });
+  grants.add(grant);
+  return grant;
+}
+
+/**
+ * What the Agent Gateway hands over when it asks for a read grant: row
+ * FIELDS, never the `agents` table or an agent module -- this file stays free
+ * of agent imports (Guard 8), and the gateway stays unable to mint anything
+ * except through here.
+ */
+export interface AgentReadSubject {
+  readonly id: string;
+  readonly trustLevel: string;
+  readonly revokedAt: Date | null;
+}
+
+/**
+ * Checkpoint 10.9 (ADR-081): the SECOND and only other mint site. The Agent
+ * Gateway calls this for an authenticated agent principal before
+ * `buildTodayContext`, `buildCalendarContext` or `buildTaskContext` -- the
+ * same builders the Ask lane uses, unchanged, behind the same `assertGrant`.
+ *
+ * The agent's consent is evaluated here exactly as the `ask` row is for
+ * Cloud Ask: the agent must be live, its trust level must allow reads and
+ * the owner must have granted the permission the tool needs (the caller
+ * reads the grant rows; this function never touches a table). Returns
+ * `null` on any refusal, having read nothing. Still requires a live
+ * `FastifyRequest` for the reason the header comment gives. Never consults
+ * `ai_task_routes`: an agent reading through the gateway is not Cloud Ask.
+ *
+ * The grant type is deliberately still `CloudAskGrant`: one WeakSet, one
+ * `assertGrant`, and the forged-cast shape Guard 3 denies stays the
+ * only forge shape to deny.
+ */
+export async function authorizeAgentRead(
+  request: FastifyRequest,
+  subject: AgentReadSubject,
+  permissionGranted: boolean,
+): Promise<CloudAskGrant | null> {
+  if (subject.revokedAt !== null) return null;
+  if (subject.trustLevel !== "read" && subject.trustLevel !== "propose") return null;
+  if (!permissionGranted) return null;
+  if (typeof request.id !== "string" || request.id.length === 0) return null;
   const grant: CloudAskGrant = Object.freeze({
     requestId: request.id,
     grantedAt: new Date().toISOString(),

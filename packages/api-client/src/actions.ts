@@ -25,6 +25,10 @@ import { buildQuery, fetchJson } from "./client.js";
 // method that executes without an approve call, and `principal` is never
 // client-supplied (always `app`). Permissions are the owner's grants to the
 // `app` principal; a revoke cancels the pending requests that needed it.
+//
+// Checkpoint 10.9 (ADR-082): approve, cancel and every permission change are
+// DEVICE-BOUND -- `token` is the paired device's bearer (the devices.ts
+// idiom). Proposing and reading stay perimeter-only.
 
 export type {
   ActionListQuery,
@@ -71,25 +75,29 @@ export async function createActionRequest(
  * The owner's approval. Executes inside this request and returns the row in
  * its terminal state -- `completed`, or `failed` with an `error_class`.
  */
-export async function approveAction(baseUrl: string, id: string): Promise<ActionRequestItem> {
+export async function approveAction(
+  baseUrl: string,
+  token: string,
+  id: string,
+): Promise<ActionRequestItem> {
   return await fetchJson(
     baseUrl,
     `/actions/${encodeURIComponent(id)}/approve`,
     ActionRequestItemSchema,
-    {
-      method: "POST",
-    },
+    { method: "POST", headers: { Authorization: `Bearer ${token}` } },
   );
 }
 
-export async function cancelAction(baseUrl: string, id: string): Promise<ActionRequestItem> {
+export async function cancelAction(
+  baseUrl: string,
+  token: string,
+  id: string,
+): Promise<ActionRequestItem> {
   return await fetchJson(
     baseUrl,
     `/actions/${encodeURIComponent(id)}/cancel`,
     ActionRequestItemSchema,
-    {
-      method: "POST",
-    },
+    { method: "POST", headers: { Authorization: `Bearer ${token}` } },
   );
 }
 
@@ -99,6 +107,7 @@ export async function listPermissions(baseUrl: string): Promise<PermissionsRespo
 
 export async function updatePermission(
   baseUrl: string,
+  token: string,
   permission: ActionPermission,
   body: PermissionUpdate,
 ): Promise<PermissionUpdateResponse> {
@@ -106,6 +115,6 @@ export async function updatePermission(
     baseUrl,
     `/permissions/${encodeURIComponent(permission)}`,
     PermissionUpdateResponseSchema,
-    { method: "PATCH", body: JSON.stringify(body) },
+    { method: "PATCH", body: JSON.stringify(body), headers: { Authorization: `Bearer ${token}` } },
   );
 }

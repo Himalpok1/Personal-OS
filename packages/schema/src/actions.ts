@@ -79,7 +79,7 @@ export const ACTION_PERMISSION_LABELS: Record<
   },
 };
 
-/** `app` = Personal OS on the owner's behalf, from a client tap. `agent` is RESERVED. */
+/** `app` = Personal OS on the owner's behalf, from a client tap. `agent` = a registered agent principal through the Agent Gateway (Checkpoint 10.9, ADR-081). */
 export const ACTION_PRINCIPALS = ["app", "agent"] as const;
 export const ActionPrincipalSchema = z.enum(ACTION_PRINCIPALS);
 export type ActionPrincipal = z.infer<typeof ActionPrincipalSchema>;
@@ -97,8 +97,17 @@ export const ACTION_REQUEST_STATUSES = [
 export const ActionRequestStatusSchema = z.enum(ACTION_REQUEST_STATUSES);
 export type ActionRequestStatus = z.infer<typeof ActionRequestStatusSchema>;
 
-/** Where the proposal came from. Client-authored; never a model. */
-export const ACTION_SOURCES = ["focus_now", "briefing", "academic", "manual"] as const;
+/**
+ * Where the proposal came from. The four 10.8 members are client-authored;
+ * `agent` (Checkpoint 10.9, ADR-081) is written ONLY by the Agent Gateway
+ * for a request an authenticated agent principal proposed, and its `reason`
+ * is agent-authored UNTRUSTED display text (ADR-078 §6 amended). Widening
+ * this enum is the one deliberate change to a frozen 10.8 wire schema: the
+ * deployed client parses `source` strictly, and a `source: "agent"` row can
+ * only exist after the owner has registered an agent through the client
+ * that already understands it -- there is no other write path.
+ */
+export const ACTION_SOURCES = ["focus_now", "briefing", "academic", "manual", "agent"] as const;
 export const ActionSourceSchema = z.enum(ACTION_SOURCES);
 export type ActionSource = z.infer<typeof ActionSourceSchema>;
 
@@ -446,7 +455,9 @@ function createVariant<Id extends ActionId>(id: Id) {
 
 /**
  * `principal` is never client-supplied: POST /actions always writes `app`.
- * The `agent` principal has no write path in 10.8.
+ * The `agent` principal's ONLY write path is POST /agent/actions through the
+ * Agent Gateway (`AgentActionCreateSchema` in agents.ts), which sets it
+ * server-side.
  */
 export const ActionRequestCreateSchema = z.discriminatedUnion("action_id", [
   createVariant("create_calendar_event"),

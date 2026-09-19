@@ -103,6 +103,9 @@ Ordering below is the original log order: amendments (`ADR-046a`, `ADR-047a`, `A
 | [ADR-078](decisions/ADR-078.md) | Checkpoint 10.8: the Agent Foundation & Action Framework — a code-defined action registry (six actions, three reversible pairs), an application-level permission layer (`permission_grants`, grants gate requests never execution, app grants ship ON), per-request owner approval with synchronous single-use execution, the request row as the audit trail (migration 0024), and Guard 7 | Locked |
 | [ADR-079](decisions/ADR-079.md) | Checkpoint 10.8.5: the production host is a shared home-lab box — root cause of the 2026-09-18 image prune and the dropped deploy key (the owner's own agent Ray, a TRUSTED OPERATOR by decision); saved+referenced+bounded image rollback artifacts, a root-owned deployment-key file, an agent audit shell (visibility, not restriction), a docker event watcher and a cron+ntfy host watchdog with change detection | Locked |
 | [ADR-080](decisions/ADR-080.md) | Checkpoint 10.8.5: a minimal backup — daily `pg_dump` + globals + a configuration bundle on the host, pulled to the owner's Mac daily; restore tested (amends ADR-024) | Locked |
+| [ADR-081](decisions/ADR-081.md) | Checkpoint 10.9: the Agent Gateway — a versioned read-tool contract bound for the first time, agent identity with trust levels, per-principal read permissions, budgeted and audited tool calls, agent proposals through the Action Framework, Guard 8 (migration 0025) | Locked |
+| [ADR-082](decisions/ADR-082.md) | Checkpoint 10.9: approval, permission changes and agent management are bound to a paired device's bearer token (amends ADR-029) | Locked |
+| [ADR-070b](decisions/ADR-070b.md) | Amendment to ADR-070: academic data may leave through the Agent Gateway only under an owner-granted `academic.read` permission that ships OFF, as a narrow, link-free, third-party-flagged projection | Locked |
 
 ## Open later-phase decisions
 

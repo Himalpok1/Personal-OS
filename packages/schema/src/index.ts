@@ -34,3 +34,4 @@ export * from "./canvas.js";
 export * from "./academic.js";
 export * from "./memories.js";
 export * from "./actions.js";
+export * from "./agents.js";

@@ -10,6 +10,7 @@ import {
   uuid,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
+import { agents } from "./agents.js";
 
 // Checkpoint 10.8 (ADR-078): one row per action request -- and that row IS
 // the audit trail. There is no separate append-only log: every audit-shaped
@@ -45,9 +46,15 @@ import {
 //   `target_*`      a non-FK pointer to the row the action created or touched,
 //                   the inbox_items.entity_type/entity_id precedent -- an audit
 //                   pointer, not a relationship (ADR-074/077 still hold).
-//   `principal`     WHO requested it. Only `app` (the owner, through a client)
-//                   is writable in 10.8; `agent` is reserved. Approval is
-//                   always the owner's own tap, so there is no approved_by.
+//   `principal`     WHO requested it. `app` is the owner through a client;
+//                   `agent` is a registered agent through the Agent Gateway
+//                   (Checkpoint 10.9, ADR-081), in which case `agent_id` names
+//                   it (CHECK-paired) and `correlation_id` ties the proposal
+//                   to the tool calls that preceded it. Approval is always
+//                   the owner's own tap, so there is no approved_by.
+//   `source`        gains `agent` in 10.9; `source_ref` is then the agent's
+//                   id -- the projection of `agent_id` onto the wire shape
+//                   the deployed client already parses.
 //   `client_uuid`   the events/capture idempotency idiom: a retried POST gets
 //                   the existing row back.
 export const actionRequests = pgTable(
@@ -73,6 +80,8 @@ export const actionRequests = pgTable(
         onDelete: "set null",
       },
     ),
+    agentId: uuid("agent_id").references(() => agents.id),
+    correlationId: uuid("correlation_id"),
     requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
@@ -88,7 +97,11 @@ export const actionRequests = pgTable(
     ),
     check(
       "action_requests_source",
-      sql`${table.source} in ('focus_now','briefing','academic','manual')`,
+      sql`${table.source} in ('focus_now','briefing','academic','manual','agent')`,
+    ),
+    check(
+      "action_requests_agent_principal",
+      sql`(${table.principal} = 'agent') = (${table.agentId} is not null)`,
     ),
     check(
       "action_requests_target_type",
@@ -109,5 +122,6 @@ export const actionRequests = pgTable(
     index("action_requests_action_id_requested_at_idx").on(table.actionId, table.requestedAt),
     index("action_requests_reverses_request_id_idx").on(table.reversesRequestId),
     index("action_requests_target_idx").on(table.targetType, table.targetId),
+    index("action_requests_agent_id_requested_at_idx").on(table.agentId, table.requestedAt),
   ],
 );

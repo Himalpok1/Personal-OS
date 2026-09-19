@@ -45,4 +45,6 @@ export * from "./memory-settings.js";
 export * from "./memory-suggestions.js";
 export * from "./memories.js";
 export * from "./permission-grants.js";
+export * from "./agents.js";
+export * from "./agent-tool-calls.js";
 export * from "./action-requests.js";

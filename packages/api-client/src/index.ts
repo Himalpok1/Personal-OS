@@ -162,6 +162,16 @@ import {
   listPermissions,
   updatePermission,
 } from "./actions.js";
+import {
+  getAgent,
+  listAgentActivity,
+  listAgentPermissions,
+  listAgents,
+  registerAgent,
+  revokeAgent,
+  updateAgent,
+  updateAgentPermission,
+} from "./agents.js";
 import { transcribe } from "./transcribe.js";
 
 export { ApiClientError, type ZodLikeSchema } from "./client.js";
@@ -280,6 +290,22 @@ export type {
   PermissionUpdateResponse,
   PermissionsResponse,
 } from "./actions.js";
+export type {
+  Agent,
+  AgentActivityItem,
+  AgentActivityParams,
+  AgentActivityResponse,
+  AgentListResponse,
+  AgentPermission,
+  AgentPermissionGrantItem,
+  AgentPermissionUpdateResponse,
+  AgentPermissionsResponse,
+  AgentRegister,
+  AgentRegisterResponse,
+  AgentToolCall,
+  AgentTrustLevel,
+  AgentUpdate,
+} from "./agents.js";
 export type {
   MonitorIncidentListParams,
   MonitorTarget,
@@ -443,6 +469,16 @@ export function createApiClient(baseUrl: string) {
     cancelAction: cancelAction.bind(null, baseUrl),
     listPermissions: listPermissions.bind(null, baseUrl),
     updatePermission: updatePermission.bind(null, baseUrl),
+    // Checkpoint 10.9 (ADR-081/082) -- the owner's side of the Agent
+    // Gateway, every call device-bound. No agent-facing method exists here.
+    listAgents: listAgents.bind(null, baseUrl),
+    getAgent: getAgent.bind(null, baseUrl),
+    registerAgent: registerAgent.bind(null, baseUrl),
+    updateAgent: updateAgent.bind(null, baseUrl),
+    revokeAgent: revokeAgent.bind(null, baseUrl),
+    listAgentActivity: listAgentActivity.bind(null, baseUrl),
+    listAgentPermissions: listAgentPermissions.bind(null, baseUrl),
+    updateAgentPermission: updateAgentPermission.bind(null, baseUrl),
 
     getMonitorOverview: getMonitorOverview.bind(null, baseUrl),
     listMonitorIncidents: listMonitorIncidents.bind(null, baseUrl),

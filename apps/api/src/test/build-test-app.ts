@@ -35,6 +35,8 @@ import {
   memorySettings,
   memorySuggestions,
   actionRequests,
+  agentToolCalls,
+  agents,
   permissionGrants,
 } from "@personal-os/db";
 import type { FastifyInstance } from "fastify";
@@ -72,6 +74,10 @@ export async function truncateTestTables(app: FastifyInstance): Promise<void> {
   // non-FK target pointers, so it clears first; permission_grants has no FK.
   // A grant left behind would flip a default-ON permission for the next test.
   await app.db.delete(actionRequests);
+  // Checkpoint 10.9: agent_tool_calls and action_requests.agent_id both
+  // reference agents with NO cascade -- children first, then the agents.
+  await app.db.delete(agentToolCalls);
+  await app.db.delete(agents);
   await app.db.delete(permissionGrants);
   // Checkpoint 10.7: memories reference memory_suggestions, projects and
   // canvas_courses (all set null) -- clear them first so the singleton switch

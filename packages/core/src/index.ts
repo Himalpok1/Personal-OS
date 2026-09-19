@@ -19,6 +19,7 @@ export * from "./recurrence/task-presets.js";
 export * from "./parse-confidence.js";
 export * from "./task-lifecycle.js";
 export * from "./device-auth.js";
+export * from "./agent-auth.js";
 export * from "./quiet-hours.js";
 export * from "./transcription-confidence.js";
 export * from "./actionability.js";

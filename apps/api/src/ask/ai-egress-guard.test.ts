@@ -220,6 +220,11 @@ const EXPECTED_BODY_READERS = new Set([
   // related-captures join. routes/projects.ts is already on this list for
   // the identical reason.
   "apps/api/src/read-models/project-context.ts",
+  // Checkpoint 10.9 (ADR-081): the `get_task_context` read tool's row loader.
+  // It selects the task's SCHEDULE columns and never `body` or `rrule`
+  // (intelligence/task-context.ts projects it through a body-free strict
+  // schema); it is listed because it names the table at all.
+  "apps/api/src/read-models/task-context.ts",
 ]);
 
 const BODY_TABLE_REFERENCE = /\.from\(notes|\.from\(tasks|db\.query\.notes|db\.query\.tasks/;
@@ -490,7 +495,10 @@ const FORBIDDEN_ACADEMIC_LANE_IMPORTS: readonly [string, RegExp][] = [
   ['from "ai"', /from\s*["']ai["']/],
   ['import("ai")', /\bimport\s*\(\s*["'`]ai["'`]\s*\)/],
   ["@personal-os/ai-providers", /["']@personal-os\/ai-providers(?:\/[^"']*)?["']/],
-  ["an AI lane", /from\s*["'](?:\.{1,2}\/)*(?:intelligence|ask|focus|brief)\/[^"']+["']/],
+  // `agent` joined the alternation in Checkpoint 10.9 (Guard 8): the gateway
+  // may call INTO the academic/memory/action modules under its own rules, but
+  // none of them may reach back into it.
+  ["an AI lane", /from\s*["'](?:\.{1,2}\/)*(?:intelligence|ask|focus|brief|agent)\/[^"']+["']/],
 ];
 
 describe("academic data never reaches an AI lane (Checkpoint 10.2, Guard 5)", () => {
@@ -872,5 +880,212 @@ describe("the action framework never reaches an AI lane, and the executor never 
     const schema = readFileSync(path.join(REPO_ROOT, "packages/schema/src/actions.ts"), "utf8");
     expect(schema).toContain("ACTION_ID_VERB_PATTERN");
     expect(schema).toContain("requires_approval: z.literal(true)");
+  });
+});
+
+// ===========================================================================
+// GUARD 8 -- the Agent Gateway is a boundary, not a lane (Checkpoint 10.9,
+// ADR-081). It may read through the intelligence builders and propose through
+// the action service; it may never reach a model, a provider, a memory, a
+// credential, health, mail or a queue, and it may never approve. And nothing
+// may reach back into it.
+// ===========================================================================
+//
+//   (a) the agent modules (agent/**, the two route files, the auth plugin, the
+//       read model) import neither the AI SDK nor a provider package; no memory
+//       module or table; no academic module or canvas table EXCEPT
+//       agent/academic-tool.ts, the one projection ADR-070b permits, which only
+//       agent/tools.ts may import (behind the `academic.read` check); no
+//       health or mail read model or table; no credential / consent / device
+//       table; no queue token; and never `approveActionRequest` or
+//       `setPermissionGrant` -- an agent proposes, the owner approves, the
+//       owner grants. Their only write verbs are aimed at `agents` and
+//       `agentToolCalls`; the read model has none.
+//   (b) no AI lane, AI route file, other read model or worker file imports an
+//       agent module or names an agent table -- with ONE exemption: the
+//       retention job may name `agentToolCalls` (30-day sweep), never `agents`.
+//   (c) the second grant-mint site, `authorizeAgentRead`, is named by exactly
+//       two non-test files: ask/authorize.ts (the definition) and
+//       agent/tools.ts (the caller).
+//   (d) routes/agent.ts is guarded by the AGENT token hook and never imports
+//       the device hook; routes/devices.ts never imports the agent hook. The
+//       two principals cannot share a route.
+const AGENT_DIR = path.join(API_SRC, "agent");
+const AGENT_ROUTES = [
+  path.join(API_SRC, "routes/agent.ts"),
+  path.join(API_SRC, "routes/agents.ts"),
+];
+const AGENT_PLUGIN = path.join(API_SRC, "plugins/agent-auth.ts");
+const AGENT_READ_MODEL = path.join(API_SRC, "read-models/agents.ts");
+const AGENT_ACADEMIC_TOOL = path.join(AGENT_DIR, "academic-tool.ts");
+const AGENT_TOOLS = path.join(AGENT_DIR, "tools.ts");
+const RETENTION_JOB = path.join(WORKER_SRC, "jobs/retention-cleanup.ts");
+// `agentToolCalls`/`agent_tool_calls` as bare identifiers; `agents` only in a
+// table position (`.from(agents)`, `agents.id`) because the bare word is
+// ordinary prose in doc comments the line-comment stripper does not remove.
+const AGENT_TOOL_CALLS_IDENTIFIER = /\b(?:agentToolCalls|agent_tool_calls)\b/;
+const AGENTS_TABLE_IDENTIFIER =
+  /\.from\(agents\)|\.insert\(agents\)|\.update\(agents\)|\.delete\(agents\)|\bagents\.[a-z]|\bfrom\s+agents\b|\binto\s+agents\b/;
+const FORBIDDEN_AGENT_SPECIFIERS: readonly [string, RegExp][] = [
+  ["agent/*", /(?:^|\/)agent\/[^/]+(?:\.js)?$/],
+  ["routes/agent(s)", /(?:^|\/)routes\/agents?(?:\.js)?$/],
+  ["read-models/agents", /(?:^|\/)read-models\/agents(?:\.js)?$/],
+  ["plugins/agent-auth", /(?:^|\/)plugins\/agent-auth(?:\.js)?$/],
+  ["@personal-os/core/agent-auth", /^@personal-os\/core\/agent-auth$/],
+];
+// What the gateway may NOT import: the model-calling half of every lane. The
+// read-context/today-context builders and the grant module are the allowed
+// exceptions, by design -- they are the same functions Ask calls.
+const FORBIDDEN_GATEWAY_LANE_IMPORT =
+  /from\s*["'](?:\.{1,2}\/)*(?:ask\/(?!authorize\.js["'])|focus\/|brief\/)[^"']*["']/;
+const HEALTH_MAIL_TABLE_IDENTIFIER =
+  /\b(?:healthConnections|healthDailyMetrics|healthObservations|healthSessions|healthOauthStates|healthMetricStreams|healthSyncRuns|mailConnections|mailMessages|mailDigests|mailSyncCursors|mailOauthStates|mailSyncRuns|health_connections|health_daily_metrics|health_observations|health_sessions|health_oauth_states|health_metric_streams|health_sync_runs|mail_connections|mail_messages|mail_digests|mail_sync_cursors|mail_oauth_states|mail_sync_runs)\b/;
+const HEALTH_MAIL_READ_MODEL_SPECIFIER = /(?:^|\/)read-models\/(?:health|mail)[\w-]*(?:\.js)?$/;
+const APPROVE_OR_GRANT = /\b(?:approveActionRequest|setPermissionGrant)\b/;
+// A write verb whose argument is anything but the two agent tables.
+const WRITE_VERB_ARGUMENT = /\.(insert|update|delete)\(\s*([A-Za-z_]+)/g;
+const AGENT_WRITE_ALLOWED = new Set(["insert:agents", "insert:agentToolCalls", "update:agents"]);
+
+describe("the Agent Gateway is a boundary, not a lane (Checkpoint 10.9, Guard 8)", () => {
+  const laneFiles = [...AI_LANE_DIRS.flatMap((dir) => walk(dir)), ...AI_ROUTE_FILES];
+  const workerFiles = walk(WORKER_SRC);
+  // Tolerate the directory's absence in the walk so Guards 1-7 still run; the
+  // non-vacuity case below is what fails when the gateway is missing.
+  const agentFiles = [
+    ...(existsSync(AGENT_DIR) ? walk(AGENT_DIR) : []),
+    ...AGENT_ROUTES,
+    AGENT_PLUGIN,
+    AGENT_READ_MODEL,
+  ].filter((file) => existsSync(file));
+
+  it("walks the gateway, the routes, the plugin and the read model, so an empty directory cannot pass by finding nothing", () => {
+    const rels = agentFiles.map(relToRepo);
+    expect(rels).toContain("apps/api/src/agent/tools.ts");
+    expect(rels).toContain("apps/api/src/agent/academic-tool.ts");
+    expect(rels).toContain("apps/api/src/routes/agent.ts");
+    expect(rels).toContain("apps/api/src/routes/agents.ts");
+    expect(rels).toContain("apps/api/src/plugins/agent-auth.ts");
+    expect(rels).toContain("apps/api/src/read-models/agents.ts");
+    for (const file of agentFiles) expect(existsSync(file), relToRepo(file)).toBe(true);
+  });
+
+  it("(a) the gateway imports no model, provider, memory, academic (except its one projection), health, mail, credential or queue surface, and never approves or grants", () => {
+    const offenders: string[] = [];
+    for (const file of agentFiles) {
+      const rel = relToRepo(file);
+      const original = readFileSync(file, "utf8");
+      const code = stripLineComments(original);
+      for (const [label, pattern] of FORBIDDEN_ACADEMIC_LANE_IMPORTS) {
+        if (label === "an AI lane") continue; // replaced by the narrower rule below
+        if (pattern.test(code)) offenders.push(`${rel}: ${label}`);
+      }
+      if (FORBIDDEN_GATEWAY_LANE_IMPORT.test(code)) offenders.push(`${rel}: model-calling lane`);
+      if (NAMESPACE_IMPORT_FROM_DB.test(code)) offenders.push(`${rel}: import * as db`);
+      for (const specifier of importSpecifiers(original)) {
+        for (const [label, pattern] of FORBIDDEN_MEMORY_SPECIFIERS) {
+          if (pattern.test(specifier)) offenders.push(`${rel}: ${label}`);
+        }
+        if (file !== AGENT_ACADEMIC_TOOL) {
+          for (const [label, pattern] of FORBIDDEN_AI_LANE_SPECIFIERS) {
+            if (pattern.test(specifier)) offenders.push(`${rel}: ${label}`);
+          }
+        }
+        if (HEALTH_MAIL_READ_MODEL_SPECIFIER.test(specifier))
+          offenders.push(`${rel}: ${specifier}`);
+      }
+      const memory = MEMORY_TABLE_IDENTIFIER.exec(code);
+      if (memory) offenders.push(`${rel}: ${memory[0]}`);
+      if (file !== AGENT_ACADEMIC_TOOL) {
+        const canvas = CANVAS_TABLE_IDENTIFIER.exec(code);
+        if (canvas) offenders.push(`${rel}: ${canvas[0]}`);
+      }
+      const healthMail = HEALTH_MAIL_TABLE_IDENTIFIER.exec(code);
+      if (healthMail) offenders.push(`${rel}: ${healthMail[0]}`);
+      const offLimits =
+        OFF_LIMITS_TABLE_IDENTIFIER.exec(code) ?? OFF_LIMITS_DEVICES_IDENTIFIER.exec(code);
+      if (offLimits) offenders.push(`${rel}: ${offLimits[0]}`);
+      if (/\bboss\b|pg-boss|_QUEUE\b/.test(code)) offenders.push(`${rel}: queue`);
+      const approve = APPROVE_OR_GRANT.exec(code);
+      if (approve) offenders.push(`${rel}: ${approve[0]}`);
+      for (const match of code.matchAll(WRITE_VERB_ARGUMENT)) {
+        const key = `${match[1]}:${match[2]}`;
+        if (!AGENT_WRITE_ALLOWED.has(key)) offenders.push(`${rel}: .${match[1]}(${match[2]})`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("(a) the academic projection is imported by agent/tools.ts alone, and tools.ts gates every tool through READ_TOOL_PERMISSION", () => {
+    const importers = walk(API_SRC).filter((file) =>
+      importSpecifiers(readFileSync(file, "utf8")).some((s) =>
+        /(?:^|\/)academic-tool(?:\.js)?$/.test(s),
+      ),
+    );
+    expect(importers.map(relToRepo)).toEqual(["apps/api/src/agent/tools.ts"]);
+    const tools = stripLineComments(readFileSync(AGENT_TOOLS, "utf8"));
+    expect(tools).toContain("READ_TOOL_PERMISSION");
+    expect(tools).toContain("isPermissionGranted(");
+  });
+
+  it("(a) the agent read model contains no write verb -- writes live in agent/service.ts", () => {
+    const code = stripLineComments(readFileSync(AGENT_READ_MODEL, "utf8"));
+    const offenders: string[] = [];
+    for (const [label, pattern] of FORBIDDEN_INTELLIGENCE_WRITE_VERBS) {
+      if (pattern.test(code)) offenders.push(label);
+    }
+    expect(offenders).toEqual([]);
+    expect(code).toContain("agentToolCalls");
+  });
+
+  it("(b) no AI lane, AI route file, other read model or worker file imports an agent module or names an agent table", () => {
+    const offenders: string[] = [];
+    const siblings = walk(READ_MODELS_DIR).filter((f) => f !== AGENT_READ_MODEL);
+    expect(siblings.map(relToRepo)).toContain("apps/api/src/read-models/today.ts");
+    for (const file of [...laneFiles, ...workerFiles, ...siblings]) {
+      const rel = relToRepo(file);
+      const original = readFileSync(file, "utf8");
+      for (const specifier of importSpecifiers(original)) {
+        for (const [label, pattern] of FORBIDDEN_AGENT_SPECIFIERS) {
+          if (pattern.test(specifier)) offenders.push(`${rel}: ${label}`);
+        }
+      }
+      const code = stripLineComments(original);
+      const reexport = /export\s+(?:\*|\{[^}]*\})\s+from\s*["'][^"']*\/agents?(?:\.js)?["']/.exec(
+        code,
+      );
+      if (reexport) offenders.push(`${rel}: ${reexport[0]}`);
+      if (AGENTS_TABLE_IDENTIFIER.test(code)) offenders.push(`${rel}: agents`);
+      if (file === RETENTION_JOB) continue; // the one file that may name agentToolCalls
+      const calls = AGENT_TOOL_CALLS_IDENTIFIER.exec(code);
+      if (calls) offenders.push(`${rel}: ${calls[0]}`);
+    }
+    expect(offenders).toEqual([]);
+    // The exemption is real, not vacuous: the sweep names the table.
+    expect(stripLineComments(readFileSync(RETENTION_JOB, "utf8"))).toMatch(
+      AGENT_TOOL_CALLS_IDENTIFIER,
+    );
+  });
+
+  it("(c) authorizeAgentRead is named by exactly ask/authorize.ts and agent/tools.ts", () => {
+    const namers = [...walk(API_SRC), ...walk(WORKER_SRC)]
+      .filter((file) =>
+        /\bauthorizeAgentRead\b/.test(stripLineComments(readFileSync(file, "utf8"))),
+      )
+      .map(relToRepo)
+      .sort();
+    expect(namers).toEqual(["apps/api/src/agent/tools.ts", "apps/api/src/ask/authorize.ts"]);
+  });
+
+  it("(d) the agent routes are agent-token-bound and the device routes are device-token-bound, never crossed", () => {
+    const agentRoute = readFileSync(path.join(API_SRC, "routes/agent.ts"), "utf8");
+    expect(agentRoute).toContain("agentAuthPreHandler");
+    expect(agentRoute).not.toMatch(/deviceAuthPreHandler|device-auth/);
+    expect(agentRoute).not.toMatch(/\/approve\b/);
+    const devicesRoute = readFileSync(path.join(API_SRC, "routes/devices.ts"), "utf8");
+    expect(devicesRoute).not.toMatch(/agentAuthPreHandler|agent-auth/);
+    // The owner's agent-management routes are DEVICE-bound (ADR-082) and never agent-bound.
+    const agentsRoute = readFileSync(path.join(API_SRC, "routes/agents.ts"), "utf8");
+    expect(agentsRoute).toContain("deviceAuthPreHandler");
+    expect(agentsRoute).not.toMatch(/agentAuthPreHandler/);
   });
 });

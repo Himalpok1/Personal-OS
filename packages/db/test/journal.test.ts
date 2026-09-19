@@ -32,6 +32,7 @@ const HAND_WRITTEN_WITHOUT_SNAPSHOT = new Set([
   "0022_task_canvas_assignment_link",
   "0023_personal_memory_layer",
   "0024_action_framework",
+  "0025_agent_gateway",
 ]);
 
 interface JournalEntry {
